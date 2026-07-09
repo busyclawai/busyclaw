@@ -5,7 +5,7 @@ import { channelEndpointModeValues } from "../core/contracts";
 // Operational STATE for the app's own (code-declared) bots — the account-side of the split. No
 // credentials and no tenancy live here: code bots keep clients in memory, and whose data a
 // conversation is rides the claw it binds to. Registered (user-owned) bots live in the
-// channelConnections plugin's channel_connection table instead — the ssoProvider analog.
+// channel_registration table instead (channels() registrations mode) — the ssoProvider analog.
 export const channelEndpointFields = {
 	// id = hash(provider, endpointKey): the natural key IS the primary key (see core/id.ts).
 	id: field.string({ required: true, unique: true, immutable: true }),

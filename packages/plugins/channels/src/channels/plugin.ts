@@ -1,5 +1,4 @@
 import {
-	type Adapter,
 	configurationError,
 	type EuroclawCronFlag,
 	type EuroclawPlugin,
@@ -16,6 +15,10 @@ import {
 	type EndpointContext,
 } from "../core/contracts";
 import { dispatchWebhook, pollEndpoint } from "../core/dispatch";
+import {
+	buildRegistrationsPlugin,
+	type ChannelRegistrationsPluginApi,
+} from "../registrations/plugin";
 import { channelsModels } from "./schema";
 import {
 	type ChannelEndpointStateStore,
@@ -23,15 +26,63 @@ import {
 } from "./store";
 
 export type ChannelsPluginOptions = {
-	/** Plugin id override (default "euroclaw.channels"). */
+	/** Plugin id override (default "euroclaw.channels", or "euroclaw.channels.registrations"). */
 	id?: string;
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
+	/**
+	 * Opt in to BYO / user-registered bots (the SSO analog) INSTEAD of a shared app bot. Default OFF.
+	 * When enabled the `list` names the providers users register their OWN bots for: there is no
+	 * shared/default bot and no app-bot token secret, one webhook route serves the registrations, the
+	 * `channel_registration` table is contributed (ONLY now — the DB gate), and
+	 * `claw.api.channels.registrations` is exposed. Registrations are webhook-only. Enabling REQUIRES a
+	 * database (compile-time RequireDatabaseForPlugins + a runtime backstop). One channels() call is
+	 * shared-bot XOR BYO.
+	 */
+	registrations?: { enabled: boolean };
 };
 
+/** The `claw.api` shape registrations mode contributes; app-bot mode contributes none. */
+type ChannelsApi = ChannelRegistrationsPluginApi;
+
+/**
+ * The channels plugin data object — a base plugin that folds the registrations `$Api` and can carry the
+ * base `$RequiresDatabase` phantom (set when registrations is enabled → createClaw's
+ * RequireDatabaseForPlugins demands a database). Both builders satisfy this wide shape; `channels()`
+ * narrows to the mode-specific return type below.
+ */
 export type ChannelsPlugin<
 	HasCron extends EuroclawCronFlag = EuroclawCronFlag,
-> = EuroclawPlugin<HasCron, readonly string[]>;
+> = EuroclawPlugin<HasCron, readonly string[], ChannelsApi>;
+
+/** Registrations enabled at the type level — a literal `true` (a runtime-only boolean falls to the runtime gate). */
+type RegistrationsEnabled<Options> = Options extends {
+	registrations: { enabled: true };
+}
+	? true
+	: false;
+
+// The mode-specific return types (narrower than the wide ChannelsPlugin — they drive createClaw's folds):
+//   app-bot       → today's plugin (cron derived from the providers' poll flags), no api, no DB gate;
+//   registrations → the registrations api (required $Api, so InferPluginApi picks it up), $HasCron
+//                   "no-cron" (registrations never poll), $RequiresDatabase true (RequireDatabaseForPlugins).
+type AppBotChannelsPlugin<HasCron extends EuroclawCronFlag> = EuroclawPlugin<
+	HasCron,
+	readonly string[]
+>;
+type RegistrationsChannelsPlugin = EuroclawPlugin<
+	"no-cron",
+	readonly string[],
+	ChannelsApi
+> & {
+	readonly $Api: ChannelsApi;
+	readonly $RequiresDatabase: true;
+};
+
+type ChannelsReturn<List extends readonly PollAware[], Options> =
+	RegistrationsEnabled<Options> extends true
+		? RegistrationsChannelsPlugin
+		: AppBotChannelsPlugin<ChannelsCronFlag<List>>;
 
 /** A channel that may carry a compile-time poll marker (providers like telegram set it). */
 type PollAware = Channel & { readonly $poll?: boolean };
@@ -144,41 +195,19 @@ type RequireValidChannelNames<List extends readonly unknown[]> =
 
 // The webhook mounts for the app's own bots: a provider's unnamed bot answers on the bare path,
 // named bots each get their own segment — the genericOAuth `/oauth2/callback/:providerId` model.
-// User-registered bots are the channelConnections plugin's route, not these.
+// User-registered bots (channels() registrations mode) mount their own route, not these.
 const WEBHOOK_PATH = "/channels/:provider/webhook";
 const NAMED_WEBHOOK_PATH = "/channels/:provider/webhook/:name";
 
 /** A bot's endpoint key: its name, or the unnamed-bot constant. */
 const keyOf = (channel: Channel): string => channel.name ?? APP_ENDPOINT_KEY;
 
-/** Narrow the resolved adapter the assembly passes through the configure context's index signature. */
-export function contextAdapter(context: unknown): Adapter | undefined {
-	if (context === null || typeof context !== "object") return undefined;
-	const value = (context as { adapter?: unknown }).adapter;
-	if (value === null || typeof value !== "object") return undefined;
-	return value as Adapter;
-}
-
-/** One transport per provider — channelConnections resolves everything else from rows. */
-export function assertUniqueProviders(channels: readonly Channel[]): void {
-	const providers = new Set<string>();
-	for (const channel of channels) {
-		if (providers.has(channel.provider)) {
-			throw configurationError("duplicate channel provider", {
-				provider: channel.provider,
-				reason: "pass one transport per provider",
-			});
-		}
-		providers.add(channel.provider);
-	}
-}
-
 /** Distinct (provider, name) per app bot — the runtime mirror of RequireDistinctChannels. */
 function assertUniqueChannelKeys(channels: readonly Channel[]): void {
 	const keys = new Set<string>();
 	for (const channel of channels) {
 		// A name is the bot's webhook path segment — enforce that (and the segment charset keeps the
-		// connections/ binding-key prefix unforgeable).
+		// registrations/ binding-key prefix unforgeable).
 		if (channel.name !== undefined && !ENDPOINT_SEGMENT.test(channel.name)) {
 			throw configurationError("invalid channel name", {
 				name: channel.name,
@@ -200,27 +229,42 @@ function assertUniqueChannelKeys(channels: readonly Channel[]): void {
 }
 
 /**
- * The channels plugin — the app's own bots, the socialProviders/genericOAuth analog: one shared bot
- * per provider declared in code, serving every user of the app. Credentials stay in code; the
- * channel_endpoint table holds only operational state (poll cursor, last traffic, last error). For
- * user-registered bots see channelConnections (the SSO analog).
+ * The channels plugin. Two modes, one call, shared-bot XOR BYO:
+ *   - default — the app's own bots (the socialProviders/genericOAuth analog): one shared bot per
+ *     provider declared in code, serving every user of the app. Credentials resolve through the
+ *     one-door reader; the channel_endpoint table holds only operational state (poll cursor, last
+ *     traffic, last error).
+ *   - `{ registrations: { enabled: true } }` — user-registered bots (the SSO analog): the `list`
+ *     names the providers users register their OWN bots for. No shared/default bot, no app-bot token
+ *     secret, one webhook route, the channel_registration table (the DB gate), and
+ *     `claw.api.channels.registrations`. Registrations are webhook-only and require a database.
  */
-export function channels<const List extends readonly PollAware[]>(
+export function channels<
+	const List extends readonly PollAware[],
+	const Options extends ChannelsPluginOptions = Record<never, never>,
+>(
 	list: List & RequireDistinctChannels<List> & RequireValidChannelNames<List>,
-	options: ChannelsPluginOptions = {},
-): ChannelsPlugin<ChannelsCronFlag<List>> {
-	// buildChannelsPlugin sets $HasCron at runtime from the same poll-endpoint check AnyPoll folds at
-	// the type level, so this narrowing cast is sound — the one seam between runtime and the typed flag.
+	options: Options = {} as Options,
+): ChannelsReturn<List, Options> {
+	// The narrowing cast is the one seam between the runtime branch and the typed return:
+	// buildAppBotPlugin sets $HasCron from the same poll check AnyPoll folds; buildRegistrationsPlugin
+	// sets $RequiresDatabase from the same registrations flag RegistrationsEnabled folds.
+	if (options.registrations?.enabled) {
+		return buildRegistrationsPlugin(list, options, undefined) as ChannelsReturn<
+			List,
+			Options
+		>;
+	}
 	// No store and no secrets reader yet: both arrive at configure (the assembly's seam).
-	return buildChannelsPlugin(
+	return buildAppBotPlugin(
 		list,
 		options,
 		undefined,
 		undefined,
-	) as ChannelsPlugin<ChannelsCronFlag<List>>;
+	) as ChannelsReturn<List, Options>;
 }
 
-function buildChannelsPlugin(
+function buildAppBotPlugin(
 	list: readonly Channel[],
 	options: ChannelsPluginOptions,
 	store: ChannelEndpointStateStore | undefined,
@@ -242,7 +286,7 @@ function buildChannelsPlugin(
 	);
 	// Aggregate each app bot's declared secret name(s) so the assembly's required-names list enumerates
 	// them (boot coverage + claw.api.secrets.list). App-bot tokens resolve via the one-door reader — the
-	// declaration is the enumerable half; connections declare nothing (their tokens live in the rows).
+	// declaration is the enumerable half; registrations declare nothing (their tokens live in the rows).
 	const declaredSecrets = list.flatMap(
 		(channel) => channel.declaredSecrets ?? [],
 	);
@@ -261,14 +305,13 @@ function buildChannelsPlugin(
 		context: EuroclawPluginConfigureContext,
 	): ChannelsPlugin | undefined => {
 		if (store) return undefined;
-		const adapter = contextAdapter(context);
-		if (!adapter) return undefined;
+		if (!context.adapter) return undefined;
 		// Capture the one-door reader here — the only place it's in scope — and hand it to the rebuilt
 		// plugin so contextFor can thread it to each app bot's lazy token resolution.
-		return buildChannelsPlugin(
+		return buildAppBotPlugin(
 			list,
 			options,
-			createChannelEndpointStateStore(adapter, { now }),
+			createChannelEndpointStateStore(context.adapter, { now }),
 			context.secrets,
 		);
 	};

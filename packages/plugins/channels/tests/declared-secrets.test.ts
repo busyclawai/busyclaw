@@ -1,9 +1,8 @@
 // Each telegram app bot declares its own token secret name; the `channels` plugin aggregates those
-// into `plugin.secrets`, so the assembly's required-names list enumerates them. `channelConnections`
-// declares nothing — a connection's token lives in its row, not under a `secrets.get` name.
+// into `plugin.secrets`, so the assembly's required-names list enumerates them. Registrations mode
+// declares nothing — a registered bot's token lives in its row, not under a `secrets.get` name.
 import { collectSecretDeclarations } from "euroclaw";
 import { describe, expect, it } from "vitest";
-import { channelConnections } from "../src/connections/index";
 import { channels } from "../src/index";
 import { telegram } from "../src/telegram/index";
 
@@ -46,7 +45,9 @@ describe("channels — telegram secret declarations", () => {
 		});
 	});
 
-	it("channelConnections declares NOTHING — connection tokens live in the row", () => {
-		expect(channelConnections([telegram()]).secrets).toBeUndefined();
+	it("registrations mode declares NOTHING — registered-bot tokens live in the row", () => {
+		expect(
+			channels([telegram()], { registrations: { enabled: true } }).secrets,
+		).toBeUndefined();
 	});
 });

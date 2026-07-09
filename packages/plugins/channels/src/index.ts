@@ -1,10 +1,10 @@
-// @euroclaw/channels — the app's own bots (the socialProviders/genericOAuth analog): one shared bot
-// per provider, declared in code, serving every user of the app. This root export is the channels()
-// plugin plus the floor every provider and plugin builds on (the @better-auth/core/oauth2 analog).
+// @euroclaw/channels — the channels() plugin and the floor every provider builds on (the
+// @better-auth/core/oauth2 analog). channels([...]) is the app's own shared bots (the
+// socialProviders/genericOAuth analog); channels([...], { registrations: { enabled: true } }) flips the
+// same call to user-registered bots (the SSO analog) — one plugin, no separate export, no subpath.
 //
 // Deliberately NOT re-exported here (subpath isolation beats tree-shaking):
-//   import { channelConnections } from "@euroclaw/channels/connections"  — user-registered bots (SSO analog)
-//   import { telegram } from "@euroclaw/channels/telegram"               — providers
+//   import { telegram } from "@euroclaw/channels/telegram"  — providers
 
 export {
 	type ChannelsPlugin,

@@ -22,6 +22,7 @@ import type { ClawsStore } from "../claws/contracts";
 import type { EffectStore } from "../effects";
 import type { EntityField } from "../entity";
 import type { EventSink } from "../events";
+import type { Adapter } from "../storage";
 import type {
 	SecretDeclaration,
 	SecretProvider,
@@ -84,10 +85,10 @@ export type EuroclawCronTask<ClawLike = unknown> = {
 
 export type EuroclawCronFlag = "has-cron" | "no-cron" | "unknown-cron";
 
-// Core contributes the dependencies it OWNS (claws, effects, events) plus the resolved storage adapter.
-// A plugin that owns its own tables (e.g. skills) reads the adapter structurally from the index
-// signature and builds its OWN store from it — the assembly passes it in, so core stays agnostic about
-// what plugins exist and never creates a plugin's store.
+// Core contributes the dependencies it OWNS (claws, effects, events, secrets) plus the resolved storage
+// adapter. A plugin that owns its own tables (e.g. channels, skills) reads `adapter` and builds its OWN
+// store from it — the assembly passes it in, so core stays agnostic about what plugins exist and never
+// creates a plugin's store. Extra assembly-specific values still ride the index signature.
 export type EuroclawPluginConfigureContext = {
 	readonly clawsStore?: ClawsStore;
 	readonly effects?: EffectStore;
@@ -96,6 +97,9 @@ export type EuroclawPluginConfigureContext = {
 	 *  calls out (channels, sandbox egress) resolves credentials through `context.secrets.get(name)`
 	 *  rather than holding a token — same injection mechanism as `clawsStore`/`effects`/`events`. */
 	readonly secrets?: Secrets;
+	/** The resolved storage adapter (schema-aware, wrapped once by the assembly). A plugin that owns
+	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
+	readonly adapter?: Adapter;
 	readonly [key: string]: unknown;
 };
 
@@ -108,6 +112,9 @@ export type EuroclawPlugin<
 	id: string;
 	/** Phantom: whether this plugin definitely contributes cron tasks. */
 	$HasCron?: HasCron;
+	/** Phantom: whether this plugin owns a table and so needs a database. Set `true` and createClaw's
+	 *  RequireDatabaseForPlugins demands a `database` at compile time (with a runtime backstop). */
+	$RequiresDatabase?: boolean;
 	/** Phantom: route paths this plugin definitely contributes, for literal duplicate checks. */
 	$RoutePaths?: RoutePaths;
 	/** Phantom: named types this plugin introduces (folded onto `ec.$Infer`). */

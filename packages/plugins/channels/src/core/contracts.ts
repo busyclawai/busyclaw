@@ -1,7 +1,7 @@
 // The channels floor — the @better-auth/core/oauth2 analog: the Channel adapter contract, the
-// normalized endpoint view, and the message shapes. Both plugins (channels = the app's own bots,
-// channelConnections = user-registered bots) and every provider build on this module; nothing here
-// imports a plugin or a store.
+// normalized endpoint view, and the message shapes. Both channels() modes (app bots and registrations
+// = user-registered bots) and every provider build on this module; nothing here imports a plugin or a
+// store.
 
 import type {
 	BindConversationClawInput,
@@ -67,7 +67,7 @@ export type EndpointContext = {
 	/** Poll cursor from the endpoint's persisted state. */
 	cursor?: JsonValue;
 	/**
-	 * Bind defaults for conversations on this endpoint — set by channelConnections from the row
+	 * Bind defaults for conversations on this endpoint — set by registrations mode from the row
 	 * (organization on `claw.organizationId`). The app's own bots carry none: conversations create bare personal
 	 * claws, and hosts that want placement pre-bind through the public bindConversation api.
 	 */
@@ -76,9 +76,9 @@ export type EndpointContext = {
 };
 
 /**
- * What dispatch reports back after handling traffic on an endpoint. Each plugin maps events onto its
- * own table (channels → channel_endpoint state, channelConnections → the connection row) — the engine
- * never touches storage.
+ * What dispatch reports back after handling traffic on an endpoint. Each mode maps events onto its
+ * own table (app bots → channel_endpoint state, registrations → the channel_registration row) — the
+ * engine never touches storage.
  */
 export type EndpointEvent =
 	| { kind: "received" }
@@ -92,16 +92,17 @@ export type PersistEndpointEvent = (event: EndpointEvent) => Promise<unknown>;
  * constant (webhook: `/channels/:provider/webhook`); additional bots of the same provider carry a
  * `name`, which becomes their endpoint key and their path segment
  * (`/channels/:provider/webhook/:name`) — the genericOAuth model, where the discriminator is in the
- * callback URL. App bots own the BARE binding-key namespace; registered connections bind under a
- * `connections/` prefix, so the two plugins' binding spaces are disjoint by construction.
+ * callback URL. App bots own the BARE binding-key namespace; registered bots bind under a
+ * `registrations/` prefix, so the two modes' binding spaces are disjoint by construction.
  */
 export const APP_ENDPOINT_KEY = "default";
 
 /**
- * Names and connection keys are URL path segments (`/webhook/:name`,
- * `/connections/:endpointKey/webhook`), so they must be single segments — telegram's own
- * secret_token charset. This also makes the `connections/` binding-key prefix unforgeable: a raw
- * name can never contain a slash.
+ * An app-bot name is a webhook path segment (`/webhook/:name`) and a registration's endpointKey is its
+ * binding-key segment (`registrations/${endpointKey}`) — both must be single segments (telegram's own
+ * secret_token charset), which also keeps the `registrations/` binding-key prefix unforgeable: a raw
+ * key can never contain a slash. A registration's endpointKey is NOT in its webhook URL — registrations
+ * share one URL per provider and are resolved from the request (`Channel.identify`).
  */
 export const ENDPOINT_SEGMENT = /^[A-Za-z0-9_-]+$/;
 
@@ -126,15 +127,15 @@ export interface Channel {
 	 * The secret name(s) this transport's APP bot resolves through the one-door reader
 	 * (`secrets.get(name)`) — e.g. telegram's `tokenRef ?? "TELEGRAM_BOT_TOKEN"`. The `channels`
 	 * plugin AGGREGATES these into its `plugin.secrets` declarations so the required-names list
-	 * (`claw.api.secrets.list` / boot coverage) enumerates them. `channelConnections` deliberately
-	 * does NOT — a registered connection's token lives in its row (`endpoint.secret`), not a
+	 * (`claw.api.secrets.list` / boot coverage) enumerates them. channels() in registrations mode
+	 * deliberately does NOT — a registered bot's token lives in its row (`endpoint.secret`), not a
 	 * `secrets.get` name. Absent for a pure transport with no app-bot credential of its own.
 	 */
 	readonly declaredSecrets?: readonly SecretDeclaration[];
 	/**
 	 * Assert the code-declared configuration is usable (credentials present after env fallbacks).
 	 * channels() calls this at construction so a dead app bot fails at startup, not on first traffic;
-	 * channelConnections never calls it — a bare transport's credentials live on the rows.
+	 * registrations mode never calls it — a bare transport's credentials live on the rows.
 	 */
 	validate?: () => void;
 	/**
@@ -146,6 +147,18 @@ export interface Channel {
 		request: InboundRequest;
 		endpoint: EndpointContext;
 	}) => boolean | Promise<boolean>;
+	/**
+	 * Registrations mode ONLY (one webhook URL per provider — no key in the path): return the secret the
+	 * provider echoes in the request that names WHICH registration this is, so the store can select the
+	 * row by its `webhookSecret` without a URL key. Telegram returns its `X-Telegram-Bot-Api-Secret-Token`
+	 * header — a unique secret per registration both selects the row and (via the subsequent `verify`
+	 * against that same secret) authenticates it. `undefined` ⇒ no registration is named, so the request is
+	 * refused (404); a provider that omits `identify` entirely can't be a registration transport. App-bot
+	 * mode never calls this — its bots are keyed by the URL path.
+	 */
+	identify?: (
+		request: InboundRequest,
+	) => string | undefined | Promise<string | undefined>;
 	/** Parse a raw request into normalized inbound messages. */
 	parseInbound: (input: {
 		request: InboundRequest;

@@ -1,9 +1,9 @@
-// Type tests (vitest typecheck mode). Prove that both plugins derive their cron requirement at
-// compile time: channels() from the providers' poll flags, channelConnections() from its poll
-// option. A passing run means each @ts-expect-error errored.
+// Type tests (vitest typecheck mode). Prove that channels() derives its cron requirement at compile
+// time — app-bot mode from the providers' poll flags, and registrations mode never (webhook-only, so it
+// contributes no cron). A passing run means each @ts-expect-error errored.
+import { memoryAdapter } from "@euroclaw/storage-core";
 import { createClaw, type RuntimeConfig } from "euroclaw";
 import { describe, test } from "vitest";
-import { channelConnections } from "../src/connections/index";
 import { type Channel, channels } from "../src/index";
 import { telegram } from "../src/telegram/index";
 
@@ -54,29 +54,21 @@ describe("channels cron-handler requirement", () => {
 	});
 });
 
-describe("channelConnections cron-handler requirement", () => {
-	test("webhook-only connections need no cronHandler", () => {
-		createClaw({ model, plugins: [channelConnections([telegram()])] });
+describe("channels registrations need no cron", () => {
+	test("registrations are webhook-only — no cronHandler required (a database is)", () => {
 		createClaw({
+			database: memoryAdapter(),
+			model,
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+		// an app bot alongside a BYO registration set still needs no cronHandler
+		createClaw({
+			database: memoryAdapter(),
 			model,
 			plugins: [
 				channels([telegram()]),
-				channelConnections([telegram()], { poll: false }),
+				channels([telegram()], { registrations: { enabled: true } }),
 			],
-		});
-	});
-
-	test("enabling poll requires cronHandler, statically", () => {
-		// @ts-expect-error — poll-mode connections need the cron, so cronHandler is required
-		createClaw({
-			model,
-			plugins: [channelConnections([telegram()], { poll: true })],
-		});
-		// with a cronHandler it type-checks
-		createClaw({
-			cronHandler: { secret: "s" },
-			model,
-			plugins: [channelConnections([telegram()], { poll: true })],
 		});
 	});
 });
@@ -103,7 +95,7 @@ describe("channel naming requirement", () => {
 
 	test("a name must be a URL path segment, statically", () => {
 		// @ts-expect-error — "/" is not a path-segment character
-		channels([telegram({ name: "connections/sneaky", tokenRef: "R" })]);
+		channels([telegram({ name: "registrations/sneaky", tokenRef: "R" })]);
 		// @ts-expect-error — neither is a space
 		channels([telegram({ name: "sales bot", tokenRef: "R" })]);
 		// the full segment alphabet compiles

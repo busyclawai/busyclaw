@@ -118,7 +118,21 @@ describe("telegram channel", () => {
 		expect(await channel.verify?.(headers("wrong"))).toBe(false);
 	});
 
-	it("derives a registered connection's secret from its row token, unless webhookSecret overrides", async () => {
+	it("identifies a registration by the secret_token telegram echoes in the header", async () => {
+		const channel = telegram();
+		const at = (value: string | null) =>
+			channel.identify?.({
+				headers: {
+					get: (name) =>
+						name === "x-telegram-bot-api-secret-token" ? value : null,
+				},
+				rawBody: "{}",
+			});
+		expect(await at("route-token")).toBe("route-token");
+		expect(await at(null)).toBeUndefined();
+	});
+
+	it("derives a registered bot's secret from its row token, unless webhookSecret overrides", async () => {
 		const channel = telegram(); // bare transport — nothing configured in code
 		const row = (
 			overrides: Partial<EndpointContext>,
@@ -126,7 +140,7 @@ describe("telegram channel", () => {
 			request: { headers: { get: () => string | null }; rawBody: string };
 			endpoint: EndpointContext;
 		}) => {
-			const connection: EndpointContext = {
+			const registration: EndpointContext = {
 				provider: "telegram",
 				endpointKey: "acme-bot",
 				mode: "webhook",
@@ -134,7 +148,7 @@ describe("telegram channel", () => {
 			};
 			return (value) => ({
 				request: { headers: { get: () => value }, rawBody: "{}" },
-				endpoint: connection,
+				endpoint: registration,
 			});
 		};
 
@@ -153,9 +167,9 @@ describe("telegram channel", () => {
 		).toBe(false);
 	});
 
-	it("fails closed when a connection has no token to derive a secret from", async () => {
+	it("fails closed when a registration has no token to derive a secret from", async () => {
 		const channel = telegram();
-		// a registered connection (not the app-bot key) with neither a stored secret nor a
+		// a registered bot (not the app-bot key) with neither a stored secret nor a
 		// webhookSecret — nothing to verify against, so fail closed and loud. (The app bot's own
 		// no-token case fails loud with "telegram bot has no token" — covered below.)
 		await expect(
@@ -314,7 +328,7 @@ describe("telegram channel", () => {
 		expect(api.calls[0]?.body).toMatchObject({ offset: 5 });
 	});
 
-	it("uses the connection row's token for registered bots", async () => {
+	it("uses the registration row's token for registered bots", async () => {
 		const api = fakeApi();
 		const channel = telegram({ fetch: api.fetch }); // transport only — no code token
 		await channel.send({
@@ -332,7 +346,7 @@ describe("telegram channel", () => {
 		);
 	});
 
-	it("never serves a connection with the app bot's token, even under a colliding key", async () => {
+	it("never serves a registration with the app bot's token, even under a colliding key", async () => {
 		const api = fakeApi();
 		// the app bot could resolve its own token for the "default" key — the adversarial case
 		const channel = telegram({ fetch: api.fetch });
@@ -340,9 +354,9 @@ describe("telegram channel", () => {
 			message: { externalConversationId: "9", text: "reply" },
 			endpoint: {
 				provider: "telegram",
-				// a connection registered as "default" arrives under the namespaced binding key, so it can
+				// a registration keyed "default" arrives under the namespaced binding key, so it can
 				// never satisfy the code-key comparison — the row credential wins
-				endpointKey: "connections/default",
+				endpointKey: "registrations/default",
 				mode: "webhook",
 				secret: "row-token",
 			},

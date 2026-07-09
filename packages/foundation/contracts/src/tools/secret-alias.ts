@@ -56,7 +56,7 @@ export const secretAliasSchema = secretAliasEntity.storage;
 export type SecretAliasPointer = { provider: string; ref: string };
 
 /**
- * The per-org alias store PORT — mirrors ChannelConnectionsStore (per-org rows over the generic
+ * The per-org alias store PORT — mirrors ChannelRegistrationsStore (per-org rows over the generic
  * Adapter). The impl catches a "table/relation does not exist" DB error and rethrows a clear
  * `configurationError` (enabled-but-not-migrated), failing LOUD rather than falling through — a
  * missing table when an org HAS an alias could otherwise resolve the WRONG credential.

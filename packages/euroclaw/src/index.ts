@@ -218,6 +218,36 @@ type RequireDatabaseForDynamicSecretAliases<Config> = Config extends {
 		: MissingDatabaseForDynamicSecretAliasesError
 	: unknown;
 
+type MissingDatabaseForPluginError = {
+	readonly "ERROR: a plugin needs a database (e.g. channels registrations contributes a table)": never;
+	readonly "FIX: pass database to createClaw, or disable the plugin feature that needs it": never;
+};
+
+/**
+ * The `$HasCron`→RequireCronHandler fold, for storage: a plugin marks itself with a `$RequiresDatabase:
+ * true` phantom when it owns a table that has nowhere to live without a database (channels registrations
+ * sets it when enabled). Read the marker off the plugin tuple — a required-field match, so a plugin that
+ * doesn't set it contributes `never` — and reject at compile time an owning config that passes no
+ * `database`. The runtime configurationError in createClaw backstops JS / `as any` callers. Resolves to
+ * `unknown` (no-op) when no plugin requires a database or one is present.
+ */
+type PluginRequiresDatabase<Config> = Config extends {
+	plugins: readonly (infer Plugin)[];
+}
+	? Plugin extends { $RequiresDatabase: infer Requires }
+		? Requires
+		: never
+	: never;
+
+type RequireDatabaseForPlugins<Config> =
+	true extends PluginRequiresDatabase<Config>
+		? Config extends { database: infer Database }
+			? [Database] extends [undefined]
+				? MissingDatabaseForPluginError
+				: unknown
+			: MissingDatabaseForPluginError
+		: unknown;
+
 export type Claw<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly api: ClawApi<Config> & InferPluginApi<Config>;
 	readonly $context: ClawContext<Config> & {
@@ -393,7 +423,8 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		RequireCronHandler<Config> &
 		RequireUniquePluginRoutePaths<Config> &
 		RequireNoCoreColumnCollision<Config> &
-		RequireDatabaseForDynamicSecretAliases<Config>,
+		RequireDatabaseForDynamicSecretAliases<Config> &
+		RequireDatabaseForPlugins<Config>,
 ): Claw<ResolvedConfig<Config>> {
 	const adapter = config.database
 		? resolveDatabase(config.database)
@@ -409,6 +440,20 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			{
 				reason:
 					"pass database to createClaw, or set dynamicSecretAliases.enabled to false",
+			},
+		);
+	}
+	// A plugin that owns a table (channels registrations) marks itself $RequiresDatabase — its table has
+	// nowhere to live without one. Runtime backstop for the compile-time RequireDatabaseForPlugins guard.
+	if (
+		!adapter &&
+		pluginList.some((plugin) => plugin.$RequiresDatabase === true)
+	) {
+		throw configurationError(
+			"a plugin needs a database (e.g. channels registrations contributes a table)",
+			{
+				reason:
+					"pass database to createClaw, or disable the plugin feature that needs it",
 			},
 		);
 	}

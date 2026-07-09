@@ -6,7 +6,6 @@ import { createPiiMappingStore } from "@euroclaw/storage-durable";
 import type { wrapLanguageModel } from "ai";
 import { createClaw, getEuroclawTables } from "euroclaw";
 import { describe, expect, it, vi } from "vitest";
-import { channelConnections } from "../src/connections/index";
 import { type Channel, channels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
 
@@ -37,18 +36,31 @@ function appBot() {
 }
 
 describe("channels ↔ euroclaw integration", () => {
-	it("collects each plugin's own table via getEuroclawTables", () => {
+	it("collects each mode's own table via getEuroclawTables", () => {
 		const withPlugins = getEuroclawTables({
-			plugins: [channels([appBot()]), channelConnections([telegram()])],
+			plugins: [
+				channels([appBot()]),
+				channels([telegram()], { registrations: { enabled: true } }),
+			],
 		});
-		// channels owns operational state only — no credentials, no tenancy
+		// app-bot channels owns operational state only — no credentials, no tenancy
 		expect(withPlugins.channel_endpoint?.fields.cursor).toBeDefined();
 		expect(withPlugins.channel_endpoint?.fields.secret).toBeUndefined();
 		expect(withPlugins.channel_endpoint?.fields.organizationId).toBeUndefined();
-		// channelConnections owns the registration row — the ssoProvider analog
-		expect(withPlugins.channel_connection?.fields.secret).toBeDefined();
-		expect(withPlugins.channel_connection?.fields.webhookSecret).toBeDefined();
-		expect(withPlugins.channel_connection?.fields.organizationId).toBeDefined();
+		// registrations mode owns the registration row — the ssoProvider analog
+		expect(withPlugins.channel_registration?.fields.secret).toBeDefined();
+		expect(
+			withPlugins.channel_registration?.fields.webhookSecret,
+		).toBeDefined();
+		expect(
+			withPlugins.channel_registration?.fields.organizationId,
+		).toBeDefined();
+		// registrations are webhook-only — no poll columns on the row
+		expect(withPlugins.channel_registration?.fields.cursor).toBeUndefined();
+		expect(
+			withPlugins.channel_registration?.fields.lastPolledAt,
+		).toBeUndefined();
+		expect(withPlugins.channel_registration?.fields.mode).toBeUndefined();
 		// conversation_binding stayed core (the `account` analog), keyed by endpoint
 		expect(withPlugins.conversation_binding?.fields.endpointKey).toBeDefined();
 		expect(
@@ -56,14 +68,27 @@ describe("channels ↔ euroclaw integration", () => {
 		).toBeUndefined();
 	});
 
+	it("gates channel_registration on the registrations flag (mirrors dynamicSecretAliases)", () => {
+		// OFF (app-bot mode) → channel_endpoint, never channel_registration
+		const off = getEuroclawTables({ plugins: [channels([telegram()])] });
+		expect(off.channel_endpoint).toBeDefined();
+		expect(off.channel_registration).toBeUndefined();
+		// ON (BYO mode) → channel_registration, never channel_endpoint
+		const on = getEuroclawTables({
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+		expect(on.channel_registration).toBeDefined();
+		expect(on.channel_endpoint).toBeUndefined();
+	});
+
 	it("does not put channel tables in core — only the plugins bring them", () => {
 		const core = getEuroclawTables({});
 		expect(core.channel_endpoint).toBeUndefined();
-		expect(core.channel_connection).toBeUndefined();
+		expect(core.channel_registration).toBeUndefined();
 		expect(core.conversation_binding).toBeDefined();
 	});
 
-	it("wires both plugins into createClaw and exposes the connections api", async () => {
+	it("wires both modes into createClaw and exposes the registrations api", async () => {
 		const db = memoryAdapter();
 		const claw = createClaw({
 			database: db,
@@ -72,16 +97,18 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			plugins: [channels([appBot()]), channelConnections([telegram()])],
+			plugins: [
+				channels([appBot()]),
+				channels([telegram()], { registrations: { enabled: true } }),
+			],
 		});
-		// the connections namespace is present (no getEuroclawTables collision at construction)
-		expect(claw.api.channels.connections).toBeDefined();
+		// the registrations namespace is present (no getEuroclawTables collision at construction)
+		expect(claw.api.channels.registrations).toBeDefined();
 
 		// register a user's bot at runtime through the public api, read it back
-		const created = await claw.api.channels.connections.register({
+		const created = await claw.api.channels.registrations.register({
 			provider: "telegram",
 			endpointKey: "acme-bot",
-			mode: "webhook",
 			secret: "bot-token",
 			webhookSecret: "hook",
 			organizationId: "org-acme",
@@ -91,15 +118,15 @@ describe("channels ↔ euroclaw integration", () => {
 			organizationId: "org-acme",
 		});
 		expect(
-			await claw.api.channels.connections.getByKey({
+			await claw.api.channels.registrations.getByKey({
 				provider: "telegram",
 				endpointKey: "acme-bot",
 			}),
 		).toMatchObject({ id: created.id });
 	});
 
-	it("keeps an app bot and a same-named connection in disjoint binding spaces", async () => {
-		// The adversarial shape the connections/ namespace exists for: same provider, same human name,
+	it("keeps an app bot and a same-named registration in disjoint binding spaces", async () => {
+		// The adversarial shape the registrations/ namespace exists for: same provider, same human name,
 		// same external chat id — arriving through BOTH ingresses of one real assembled claw.
 		const apiCalls: string[] = [];
 		const fakeFetch = async (url: string) => {
@@ -120,13 +147,14 @@ describe("channels ↔ euroclaw integration", () => {
 				channels([
 					telegram({ fetch: fakeFetch, name: "sales", tokenRef: "SALES_BOT" }),
 				]),
-				channelConnections([telegram({ fetch: fakeFetch })]),
+				channels([telegram({ fetch: fakeFetch })], {
+					registrations: { enabled: true },
+				}),
 			],
 		});
-		await claw.api.channels.connections.register({
+		await claw.api.channels.registrations.register({
 			provider: "telegram",
 			endpointKey: "sales",
-			mode: "webhook",
 			secret: "row-token",
 			webhookSecret: "hook",
 		});
@@ -135,12 +163,12 @@ describe("channels ↔ euroclaw integration", () => {
 		const namedRoute = plugins
 			.flatMap((plugin) => plugin.routes ?? [])
 			.find((route) => route.path === "/channels/:provider/webhook/:name");
-		const connectionRoute = plugins
+		const registrationRoute = plugins
 			.flatMap((plugin) => plugin.routes ?? [])
 			.find((route) =>
-				route.path.startsWith("/channels/:provider/connections/"),
+				route.path.startsWith("/channels/:provider/registrations/"),
 			);
-		if (!namedRoute || !connectionRoute)
+		if (!namedRoute || !registrationRoute)
 			throw new Error("expected both webhook routes");
 
 		const update = JSON.stringify({
@@ -163,13 +191,14 @@ describe("channels ↔ euroclaw integration", () => {
 			params: { name: "sales", provider: "telegram" },
 			request: request(telegramWebhookSecret("app-token")),
 		});
-		const viaConnection = await connectionRoute.handler({
+		const viaRegistration = await registrationRoute.handler({
 			claw,
-			params: { endpointKey: "sales", provider: "telegram" },
+			// no key in the path — the row is resolved from the secret_token telegram echoes ("hook")
+			params: { provider: "telegram" },
 			request: request("hook"),
 		});
 		expect(viaApp.status).toBe(200);
-		expect(viaConnection.status).toBe(200);
+		expect(viaRegistration.status).toBe(200);
 
 		// two bindings, two claws — the same chat id never merged across the two ingresses
 		const bindings = claw.$context.clawsStore?.conversationBindings;
@@ -179,14 +208,14 @@ describe("channels ↔ euroclaw integration", () => {
 			endpointKey: "sales",
 			externalConversationId: "777",
 		});
-		const connectionBinding = await bindings.getByExternal({
+		const registrationBinding = await bindings.getByExternal({
 			provider: "telegram",
-			endpointKey: "connections/sales",
+			endpointKey: "registrations/sales",
 			externalConversationId: "777",
 		});
 		expect(appBinding).toBeTruthy();
-		expect(connectionBinding).toBeTruthy();
-		expect(appBinding?.clawId).not.toBe(connectionBinding?.clawId);
+		expect(registrationBinding).toBeTruthy();
+		expect(appBinding?.clawId).not.toBe(registrationBinding?.clawId);
 
 		// and each ingress replied with ITS OWN credential — no token bleed either way
 		expect(apiCalls.some((url) => url.includes("/botapp-token/"))).toBe(true);
@@ -289,11 +318,13 @@ describe("channels ↔ euroclaw integration", () => {
 		).rejects.toThrow(/telegram bot has no token/);
 	});
 
-	it("keeps bare telegram() valid as a connections transport — no startup token check", () => {
+	it("keeps bare telegram() valid as a registrations transport — no startup token check", () => {
 		vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
 		try {
 			// credentials live on the rows; the transport itself needs none
-			expect(() => channelConnections([telegram()])).not.toThrow();
+			expect(() =>
+				channels([telegram()], { registrations: { enabled: true } }),
+			).not.toThrow();
 		} finally {
 			vi.unstubAllEnvs();
 		}

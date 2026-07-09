@@ -1,5 +1,5 @@
-// The shared dispatch engine — protocol only. The calling plugin resolves the endpoint (code
-// declaration for channels, connection row for channelConnections), assembles the normalized
+// The shared dispatch engine — protocol only. The calling mode resolves the endpoint (code
+// declaration for app bots, registration row for registrations mode), assembles the normalized
 // EndpointContext, and supplies a persist sink for state events; the engine owns the
 // verify → parse → bind → relay → reply round-trip and never touches storage.
 

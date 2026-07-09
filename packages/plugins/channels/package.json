@@ -2,7 +2,7 @@
 	"name": "@euroclaw/channels",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Channels for euroclaw: the app's own bots via channels() (one shared bot per provider, declared in code), user-registered bots via channelConnections() (credentials in the row, per-organization), and first-party providers on subpaths.",
+	"description": "Channels for euroclaw: the app's own shared bots via channels() (declared in code), or user-registered bots via channels([...], { registrations: { enabled: true } }) (credentials in the row, per-organization), plus first-party providers on subpaths.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
@@ -21,10 +21,6 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
-		},
-		"./connections": {
-			"types": "./dist/connections/index.d.ts",
-			"import": "./dist/connections/index.js"
 		},
 		"./telegram": {
 			"types": "./dist/telegram/index.d.ts",

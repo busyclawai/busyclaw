@@ -159,10 +159,10 @@ type TelegramName<Config> = Config extends { name: infer N extends string }
  * The Telegram channel. As the app's own bot (channels plugin) its token resolves lazily on first
  * traffic through the one-door reader the plugin threads onto the endpoint — `secrets.get(tokenRef)`,
  * defaulting to `TELEGRAM_BOT_TOKEN` for the unnamed bot; webhook verification derives from that
- * token, so nothing else is required. Bare `telegram()` is also the pure transport for
- * channelConnections: every endpoint-specific value (token, webhook secret, organization, defaults)
- * resolves from the connection row via the EndpointContext. The `$poll` marker lets `channels()`
- * derive its cron requirement at compile time; the overloads keep it a literal without a cast.
+ * token, so nothing else is required. Bare `telegram()` is also the pure transport for registrations
+ * mode: every endpoint-specific value (token, webhook secret, organization, defaults) resolves from the
+ * registration row via the EndpointContext. The `$poll` marker lets `channels()` derive its cron
+ * requirement at compile time; the overloads keep it a literal without a cast.
  */
 export function telegram(): Channel & {
 	readonly provider: "telegram";
@@ -199,7 +199,7 @@ export function telegram(
 	const appTokenSecret = tokenRef ?? DEFAULT_APP_BOT_TOKEN_SECRET;
 
 	// The app-bot secret DECLARATION — the `channels` plugin aggregates it into `plugin.secrets` so the
-	// required-names list enumerates this bot's token. (channelConnections ignores it: a connection's
+	// required-names list enumerates this bot's token. (registrations mode ignores it: a registered bot's
 	// token lives in its row, not under a `secrets.get` name.)
 	const declaredSecret = {
 		name: appTokenSecret,
@@ -278,10 +278,19 @@ export function telegram(
 		// only available at the plugin's configure), so a missing token can no longer be caught at
 		// startup — it fails LOUD on first traffic instead (tokenFor throws "telegram bot has no token").
 
+		// Registrations mode: the secret_token telegram echoes IS the per-registration identity. The
+		// plugin looks the row up by its webhookSecret == this value, so one URL serves every registered
+		// bot; `verify` below then re-checks the same header (the match is also the authentication).
+		identify(request) {
+			return (
+				request.headers.get("x-telegram-bot-api-secret-token") ?? undefined
+			);
+		},
+
 		async verify({ request, endpoint }) {
-			// A connection row's explicit webhookSecret wins; otherwise the secret derives from the bot
+			// A registration row's explicit webhookSecret wins; otherwise the secret derives from the bot
 			// token (telegramWebhookSecret) — no second credential to configure. For the app bot, tokenFor
-			// fails LOUD when no token resolves ("telegram bot has no token"); for a connection with
+			// fails LOUD when no token resolves ("telegram bot has no token"); for a registration with
 			// neither a stored secret nor a webhookSecret we still fail CLOSED and loudly here — an open
 			// webhook would relay attacker text straight into a model run, and a missing credential is a
 			// setup gap, not a bad request.
@@ -293,7 +302,7 @@ export function telegram(
 				throw configurationError("telegram webhook endpoint has no secret", {
 					endpointKey: endpoint.endpointKey,
 					reason:
-						"pass a bot token (the secret_token derives from it) or set webhookSecret on the connection",
+						"pass a bot token (the secret_token derives from it) or set webhookSecret on the registration",
 				});
 			}
 			return request.headers.get("x-telegram-bot-api-secret-token") === secret;

@@ -125,7 +125,7 @@ describe("channels plugin — named bots (the genericOAuth model)", () => {
 	it("runtime-rejects a non-segment bot name (the compile-time walk's mirror)", () => {
 		// widened to Channel[] so the literal-name walk can't see it — runtime must
 		const bad: Channel[] = [
-			telegram({ name: "connections/sneaky", tokenRef: "SNEAKY" }),
+			telegram({ name: "registrations/sneaky", tokenRef: "SNEAKY" }),
 		];
 		expect(() => channels(bad)).toThrow(/invalid channel name/);
 	});
