@@ -1,0 +1,47 @@
+{
+	"name": "@euroclaw/secret-store",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "User-managed secret resolution for euroclaw: pasted values as (scope, scopeId, name) rows, served through the one-door reader as a data-tier provider — personal beats org-wide, store beats env.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"directory": "packages/plugins/secret-store"
+	},
+	"bugs": {
+		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/contracts": "workspace:*",
+		"@noble/hashes": "2.2.0",
+		"arktype": "2.2.0"
+	},
+	"devDependencies": {
+		"@euroclaw/secrets": "workspace:*",
+		"@euroclaw/storage-core": "workspace:*"
+	}
+}

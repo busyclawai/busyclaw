@@ -31,7 +31,7 @@ describe("validateSecretsAtBoot — warn-only coverage", () => {
 	it("warns on an unresolvable declared name; a resolvable one is covered", async () => {
 		const providers = [
 			env({
-				source: { DIRECT_HIT: "v", BACKEND: "b" },
+				vars: { DIRECT_HIT: "v", BACKEND: "b" },
 				aliases: { INLINE_NAME: "BACKEND" },
 			}),
 		];

@@ -1,0 +1,23 @@
+export {
+	SECRET_STORE_PROVIDER_NAME,
+	type SecretStoreOptions,
+	type SecretStorePlugin,
+	secretStore,
+} from "./plugin";
+export {
+	setStoredSecretInput,
+	setStoredSecretInputOptions,
+	storedSecretEntity,
+	storedSecretFields,
+	storedSecretKindValues,
+	storedSecretModels,
+	storedSecretRecord,
+	storedSecretSchema,
+} from "./schema";
+export {
+	createStoredSecretsStore,
+	type SetStoredSecretInput,
+	type StoredSecretRecord,
+	type StoredSecretsStore,
+	type StoredSecretsStoreOptions,
+} from "./store";

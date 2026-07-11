@@ -5,16 +5,18 @@
 // name across config + plugin fails loud; and the env default survives a plugin contribution.
 // See docs/plans/secrets-provider-registry.md § Providers from plugins.
 
-import type { EuroclawPlugin, SecretProvider, Secrets } from "@euroclaw/contracts";
+import type {
+	EuroclawPlugin,
+	SecretProvider,
+	Secrets,
+} from "@euroclaw/contracts";
 import { env } from "@euroclaw/secrets";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClaw } from "../src/index";
 import { textModel } from "./fixtures";
 
 /** A get-only stub provider that resolves one known ref to a token; everything else is a miss. */
-function stubProvider(
-	overrides: Partial<SecretProvider> = {},
-): SecretProvider {
+function stubProvider(overrides: Partial<SecretProvider> = {}): SecretProvider {
 	return {
 		name: "stub",
 		capability: { manage: false },
@@ -106,5 +108,4 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 			value: "stub-token",
 		});
 	});
-
 });

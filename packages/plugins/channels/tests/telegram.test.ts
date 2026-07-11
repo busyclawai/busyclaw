@@ -15,7 +15,7 @@ import {
 // This shared reader resolves the unnamed bot's TELEGRAM_BOT_TOKEN to "app-token" — what the derived
 // verify secret and the /botapp-token/ URLs below check against.
 const appTokenSecrets = buildSecrets([
-	env({ source: { TELEGRAM_BOT_TOKEN: "app-token" } }),
+	env({ vars: { TELEGRAM_BOT_TOKEN: "app-token" } }),
 ]);
 
 const endpoint: EndpointContext = {
@@ -186,7 +186,7 @@ describe("telegram channel", () => {
 
 	it("resolves the app bot's token through the one-door reader (secrets.get)", async () => {
 		const secrets = buildSecrets([
-			env({ source: { TELEGRAM_BOT_TOKEN: "env-token" } }),
+			env({ vars: { TELEGRAM_BOT_TOKEN: "env-token" } }),
 		]);
 		const api = fakeApi();
 		const channel = telegram({ fetch: api.fetch }); // no inline token — the reader supplies it
@@ -215,7 +215,7 @@ describe("telegram channel", () => {
 		const secrets = buildSecrets([
 			env({
 				aliases: { TELEGRAM_BOT_TOKEN: "PROD_TELEGRAM" },
-				source: { PROD_TELEGRAM: "prod-token" },
+				vars: { PROD_TELEGRAM: "prod-token" },
 			}),
 		]);
 		const channel = telegram();
@@ -235,7 +235,7 @@ describe("telegram channel", () => {
 		// its ref, never the base, so two bots can't collide.
 		const secrets = buildSecrets([
 			env({
-				source: {
+				vars: {
 					TELEGRAM_BOT_TOKEN: "default-token",
 					SALES_BOT: "sales-token",
 				},
@@ -273,7 +273,7 @@ describe("telegram channel", () => {
 	});
 
 	it("fails loud when the reader resolves no token for the app bot", async () => {
-		const secrets = buildSecrets([env({ source: {} })]); // reader resolves nothing
+		const secrets = buildSecrets([env({ vars: {} })]); // reader resolves nothing
 		const channel = telegram();
 		await expect(
 			channel.send({

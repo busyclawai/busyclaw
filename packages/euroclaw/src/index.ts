@@ -416,7 +416,8 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	// `??` not `||` — an explicit `secretProviders: []` stays none; only an ABSENT `secretProviders`
 	// defaults to env. Plugin-contributed providers merge AFTER the config ones (env default resolves
 	// before the merge) and are read STATICALLY off the raw plugin list — the reader is built before
-	// `configure` runs, so consumers close over the complete chain. `buildSecrets` fails loud on a
+	// `configure` runs, so consumers close over the complete chain. buildSecrets then orders
+	// data-tier providers (runtime-managed rows) before config-tier ones and fails loud on a
 	// duplicate name across both.
 	const providers = [
 		...(config.secretProviders ?? [env()]),

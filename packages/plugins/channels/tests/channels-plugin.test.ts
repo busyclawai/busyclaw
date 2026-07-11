@@ -66,7 +66,7 @@ describe("channels plugin — named bots (the genericOAuth model)", () => {
 			]),
 			buildSecrets([
 				env({
-					source: {
+					vars: {
 						TELEGRAM_BOT_TOKEN: "support-token",
 						TELEGRAM_BOT_TOKEN_SALES: "sales-token",
 					},

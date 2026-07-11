@@ -24,19 +24,21 @@ import {
 export type EnvOptions = {
 	/** Provider key. Defaults to `"env"`; set it only for a 2nd env-like provider or a clearer key. */
 	name?: string;
-	/** The environment map to read. Defaults to the env GLOBAL (`globalThis.process?.env`) — no
-	 *  `node:process` import, so foundation-safe. An edge runtime without `process.env` reads `{}`. */
-	source?: Record<string, string | undefined>;
+	/** The environment variables to read — they ARE env vars, so the literal name (and it avoids the
+	 *  codebase's other `source` meanings: spec source, `req.source`; wrangler calls this `vars` too).
+	 *  Defaults to the env GLOBAL (`globalThis.process?.env`) — no `node:process` import, so
+	 *  foundation-safe. An edge runtime without `process.env` reads `{}`. */
+	vars?: Record<string, string | undefined>;
 	/** Per-provider remap of euroclaw's canonical name → this backend's key; pass-through if absent. */
 	aliases?: Record<string, string>;
 };
 
 /** The environment-variable secret provider: reads a plain token out of the env map. Get-only
- *  (`capability.manage: false`) — euroclaw never writes env vars. `source` is captured at call time
+ *  (`capability.manage: false`) — euroclaw never writes env vars. `vars` is captured at call time
  *  from the env global unless one is passed, so no `node:*` is imported. */
 export function env(options: EnvOptions = {}): SecretProvider {
-	const source =
-		options.source ??
+	const vars =
+		options.vars ??
 		(globalThis as { process?: { env?: Record<string, string | undefined> } })
 			.process?.env ??
 		{};
@@ -45,7 +47,7 @@ export function env(options: EnvOptions = {}): SecretProvider {
 		aliases: options.aliases,
 		capability: { manage: false },
 		get: async (ref: string): Promise<SecretMaterial | null> => {
-			const value = source[ref];
+			const value = vars[ref];
 			return value == null ? null : { kind: "token", value };
 		},
 	};
@@ -59,6 +61,10 @@ export function env(options: EnvOptions = {}): SecretProvider {
  * `get(name, ctx)`: for each provider IN ORDER remap the canonical `name` through that provider's
  * own `aliases` (pass-through when absent), then `await provider.get(key, ctx)`; the FIRST non-null
  * material wins. `null` when nothing resolves it — the caller fails loud if it required it.
+ *
+ * The order is the listing order WITHIN a tier, but `tier: "data"` providers (runtime-managed rows —
+ * the secret-store plugin) always resolve BEFORE `"config"` ones (deployment infra: env/vault/ssm):
+ * data beats config, as a provider property rather than a resolver special case.
  *
  * Provider `name`s must be DISTINCT across the chain — a duplicate is a `configurationError` thrown
  * loud at build time (the connection/audit key must be unambiguous).
@@ -74,12 +80,17 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 		}
 		seen.add(provider.name);
 	}
+	// A stable partition, not a sort — listing order is preserved within each tier.
+	const ordered = [
+		...providers.filter((provider) => provider.tier === "data"),
+		...providers.filter((provider) => provider.tier !== "data"),
+	];
 
 	const get = async (
 		name: string,
 		ctx: ResolveContext = {},
 	): Promise<SecretMaterial | null> => {
-		for (const provider of providers) {
+		for (const provider of ordered) {
 			const key = provider.aliases?.[name] ?? name;
 			const material = await provider.get(key, ctx);
 			if (material !== null) return material;

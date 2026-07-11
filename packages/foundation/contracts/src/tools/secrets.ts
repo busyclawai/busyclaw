@@ -73,6 +73,11 @@ export type SecretProvider = {
 	aliases?: Record<string, string>;
 	/** get-only vs set/delete/list — declared, not assumed. `env` is get-only (`manage: false`). */
 	capability: { manage: boolean };
+	/** Chain tier. `"data"` = rows a user/org manages at runtime (the secret-store plugin); `"config"`
+	 *  (the default when absent) = deployment infra (env/vault/ssm). `buildSecrets` resolves data-tier
+	 *  providers BEFORE config-tier regardless of listing order (stable within a tier) — the
+	 *  data-beats-config precedence, declared as a provider property, not special-cased. */
+	tier?: "data" | "config";
 };
 
 /** The ONE door every subsystem resolves credentials through — built once from the provider chain

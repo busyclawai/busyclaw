@@ -246,6 +246,25 @@ importers:
         specifier: workspace:*
         version: link:../../euroclaw
 
+  packages/plugins/secret-store:
+    dependencies:
+      '@euroclaw/contracts':
+        specifier: workspace:*
+        version: link:../../foundation/contracts
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
+      arktype:
+        specifier: 2.2.0
+        version: 2.2.0
+    devDependencies:
+      '@euroclaw/secrets':
+        specifier: workspace:*
+        version: link:../../foundation/secrets
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../../storage/core
+
   packages/plugins/skills:
     dependencies:
       '@euroclaw/contracts':

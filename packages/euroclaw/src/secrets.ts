@@ -2,7 +2,11 @@
 // coverage validation. Resolution itself lives in @euroclaw/secrets (buildSecrets, wired in
 // index.ts). See docs/plans/secrets-provider-registry.md.
 
-import type { EuroclawPlugin, SecretDeclaration, Secrets } from "@euroclaw/contracts";
+import type {
+	EuroclawPlugin,
+	SecretDeclaration,
+	Secrets,
+} from "@euroclaw/contracts";
 
 /**
  * Collect the required-secret-name declarations across all plugins into a deduped set (first plugin

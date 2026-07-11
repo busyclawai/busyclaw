@@ -6,14 +6,14 @@ import {
 import { describe, expect, it } from "vitest";
 import { buildSecrets, env } from "../src/index";
 
-/** Read the env global the way `env()` does — used only to prove the default-source path. */
+/** Read the env global the way `env()` does — used only to prove the default-vars path. */
 const envGlobal = (): Record<string, string | undefined> | undefined =>
 	(globalThis as { process?: { env?: Record<string, string | undefined> } })
 		.process?.env;
 
 describe("env — the environment provider", () => {
-	it("reads a value out of its source as token material", async () => {
-		const provider = env({ source: { GITHUB_TOKEN: "ghp_abc" } });
+	it("reads a value out of its vars as token material", async () => {
+		const provider = env({ vars: { GITHUB_TOKEN: "ghp_abc" } });
 		expect(await provider.get("GITHUB_TOKEN", {})).toEqual({
 			kind: "token",
 			value: "ghp_abc",
@@ -21,14 +21,16 @@ describe("env — the environment provider", () => {
 	});
 
 	it("returns null for a missing key (env var unset)", async () => {
-		expect(await env({ source: {} }).get("MISSING", {})).toBeNull();
+		expect(await env({ vars: {} }).get("MISSING", {})).toBeNull();
 	});
 
 	it("returns null for an explicitly-undefined key", async () => {
-		expect(await env({ source: { EMPTY: undefined } }).get("EMPTY", {})).toBeNull();
+		expect(
+			await env({ vars: { EMPTY: undefined } }).get("EMPTY", {}),
+		).toBeNull();
 	});
 
-	it("defaults its name to \"env\", and takes a custom name", () => {
+	it('defaults its name to "env", and takes a custom name', () => {
 		expect(env().name).toBe("env");
 		expect(env({ name: "ci-env" }).name).toBe("ci-env");
 	});
@@ -37,13 +39,16 @@ describe("env — the environment provider", () => {
 		expect(env().capability.manage).toBe(false);
 	});
 
-	it("defaults source to the env global (globalThis.process.env)", async () => {
+	it("defaults vars to the env global (globalThis.process.env)", async () => {
 		const store = envGlobal();
 		if (!store) return; // edge runtime without process.env resolves nothing — nothing to assert
 		const key = "EUROCLAW_SECRETS_ENV_PROBE";
 		store[key] = "probe";
 		try {
-			expect(await env().get(key, {})).toEqual({ kind: "token", value: "probe" });
+			expect(await env().get(key, {})).toEqual({
+				kind: "token",
+				value: "probe",
+			});
 		} finally {
 			delete store[key];
 		}
@@ -68,18 +73,24 @@ describe("buildSecrets — the one-door resolver", () => {
 
 	it("resolves down the chain — the first non-null provider wins", async () => {
 		const secrets = buildSecrets([
-			env({ name: "a", source: { SHARED: "from-a" } }),
-			env({ name: "b", source: { SHARED: "from-b", ONLY_B: "b-only" } }),
+			env({ name: "a", vars: { SHARED: "from-a" } }),
+			env({ name: "b", vars: { SHARED: "from-b", ONLY_B: "b-only" } }),
 		]);
-		expect(await secrets.get("SHARED")).toEqual({ kind: "token", value: "from-a" });
-		expect(await secrets.get("ONLY_B")).toEqual({ kind: "token", value: "b-only" });
+		expect(await secrets.get("SHARED")).toEqual({
+			kind: "token",
+			value: "from-a",
+		});
+		expect(await secrets.get("ONLY_B")).toEqual({
+			kind: "token",
+			value: "b-only",
+		});
 		expect(await secrets.get("NOWHERE")).toBeNull();
 	});
 
 	it("applies a provider's aliases (canonical → backend key); pass-through when unaliased", async () => {
 		const secrets = buildSecrets([
 			env({
-				source: { PROD_TELEGRAM: "prod-token", GITHUB_TOKEN: "gh" },
+				vars: { PROD_TELEGRAM: "prod-token", GITHUB_TOKEN: "gh" },
 				aliases: { TELEGRAM_BOT_TOKEN: "PROD_TELEGRAM" },
 			}),
 		]);
@@ -89,18 +100,28 @@ describe("buildSecrets — the one-door resolver", () => {
 			value: "prod-token",
 		});
 		// unaliased: the name passes through unchanged
-		expect(await secrets.get("GITHUB_TOKEN")).toEqual({ kind: "token", value: "gh" });
+		expect(await secrets.get("GITHUB_TOKEN")).toEqual({
+			kind: "token",
+			value: "gh",
+		});
 		// an alias whose backend key is unset resolves to null (the caller fails loud)
 		expect(await secrets.get("SLACK_TOKEN")).toBeNull();
 	});
 
 	it("remaps per provider — each provider's own aliases apply to its own get", async () => {
 		const secrets = buildSecrets([
-			env({ name: "a", source: {}, aliases: { API_KEY: "A_KEY" } }), // A_KEY unset → miss
-			env({ name: "b", source: { B_KEY: "from-b" }, aliases: { API_KEY: "B_KEY" } }),
+			env({ name: "a", vars: {}, aliases: { API_KEY: "A_KEY" } }), // A_KEY unset → miss
+			env({
+				name: "b",
+				vars: { B_KEY: "from-b" },
+				aliases: { API_KEY: "B_KEY" },
+			}),
 		]);
 		// A remaps API_KEY→A_KEY (miss), then B remaps API_KEY→B_KEY (hit)
-		expect(await secrets.get("API_KEY")).toEqual({ kind: "token", value: "from-b" });
+		expect(await secrets.get("API_KEY")).toEqual({
+			kind: "token",
+			value: "from-b",
+		});
 	});
 
 	it("forwards the remapped key and ctx to the provider", async () => {
@@ -114,10 +135,41 @@ describe("buildSecrets — the one-door resolver", () => {
 				return null;
 			},
 		};
-		await buildSecrets([spy]).get("CANON", { organizationId: "org_1", actor: "user_1" });
+		await buildSecrets([spy]).get("CANON", {
+			organizationId: "org_1",
+			actor: "user_1",
+		});
 		expect(calls).toEqual([
 			{ ref: "backend-key", ctx: { organizationId: "org_1", actor: "user_1" } },
 		]);
+	});
+
+	it("orders data-tier providers before config-tier, stable within each tier", async () => {
+		const dataProvider = (
+			name: string,
+			vars: Record<string, string>,
+		): SecretProvider => ({
+			name,
+			tier: "data",
+			capability: { manage: true },
+			get: async (ref) =>
+				ref in vars ? { kind: "token", value: vars[ref] ?? "" } : null,
+		});
+		// data providers listed LAST — they must still resolve first; env (config, absent tier)
+		// serves only what no data provider has.
+		const secrets = buildSecrets([
+			env({ vars: { SHARED: "from-env", ENV_ONLY: "env-only" } }),
+			dataProvider("rows-a", { SHARED: "from-rows-a" }),
+			dataProvider("rows-b", { SHARED: "from-rows-b" }),
+		]);
+		expect(await secrets.get("SHARED")).toEqual({
+			kind: "token",
+			value: "from-rows-a", // data beats config; listing order preserved within the data tier
+		});
+		expect(await secrets.get("ENV_ONLY")).toEqual({
+			kind: "token",
+			value: "env-only",
+		});
 	});
 
 	it("fails loud on a duplicate provider name — a configurationError", () => {
@@ -141,7 +193,7 @@ describe("buildSecrets — the one-door resolver", () => {
 	});
 
 	it("has — true iff some provider resolves the name", async () => {
-		const secrets = buildSecrets([env({ source: { PRESENT: "v" } })]);
+		const secrets = buildSecrets([env({ vars: { PRESENT: "v" } })]);
 		expect(await secrets.has("PRESENT")).toBe(true);
 		expect(await secrets.has("ABSENT")).toBe(false);
 	});
