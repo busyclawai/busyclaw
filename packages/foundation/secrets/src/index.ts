@@ -98,9 +98,43 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 		return null;
 	};
 
-	return {
-		get,
-		has: async (name: string, ctx: ResolveContext = {}): Promise<boolean> =>
-			(await get(name, ctx)) !== null,
+	const has = async (
+		name: string,
+		ctx: ResolveContext = {},
+	): Promise<boolean> => (await get(name, ctx)) !== null;
+
+	// require — the mandatory-credential branch: resolve, else fail loud; assert the kind when asked.
+	const requireSecret = async <
+		K extends SecretMaterial["kind"] = SecretMaterial["kind"],
+	>(
+		name: string,
+		options: ResolveContext & { kind?: K } = {},
+	): Promise<Extract<SecretMaterial, { kind: K }>> => {
+		const { kind, ...ctx } = options;
+		const material = await get(name, ctx);
+		if (material === null) {
+			throw configurationError(
+				`secret "${name}" is required but resolves nowhere — configure a provider that resolves it (env var, vault, …)`,
+				{ name },
+			);
+		}
+		if (kind !== undefined && material.kind !== kind) {
+			throw configurationError(
+				`secret "${name}" resolved as ${material.kind} material but ${kind} was required`,
+				{ name, expected: kind, actual: material.kind },
+			);
+		}
+		// The two guards above prove the kind (or none was asked) — narrow to the requested variant.
+		return material as Extract<SecretMaterial, { kind: K }>;
 	};
+
+	// with — a thin reader that pre-binds `bound` under every call; a later explicit ctx wins per field.
+	const withCtx = (bound: ResolveContext): Secrets => ({
+		get: (name, ctx) => get(name, { ...bound, ...ctx }),
+		has: (name, ctx) => has(name, { ...bound, ...ctx }),
+		require: (name, options) => requireSecret(name, { ...bound, ...options }),
+		with: (ctx) => withCtx({ ...bound, ...ctx }),
+	});
+
+	return { get, has, require: requireSecret, with: withCtx };
 }

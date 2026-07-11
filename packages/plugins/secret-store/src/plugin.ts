@@ -112,14 +112,12 @@ export function secretStore(
 					"pass secretStore({ key }) or connect the plugin through createClaw so it can resolve EUROCLAW_SECRET_STORE_KEY via the one-door reader",
 			});
 		}
-		const material = await reader.get(SECRET_STORE_KEY_NAME);
-		if (material === null || material.kind !== "token") {
-			throw configurationError("secret store master key is unresolvable", {
-				name: SECRET_STORE_KEY_NAME,
-				reason:
-					"set the env var (32 bytes hex) or configure a provider that resolves it — with rows present there is no degraded mode",
-			});
-		}
+		// require packages the null+kind dance: fail loud naming the key if nothing resolves it, and
+		// assert token material (the return narrows, so `.value` is reachable). parseSecretStoreKey
+		// still validates the hex shape below — a resolved-but-malformed key fails there.
+		const material = await reader.require(SECRET_STORE_KEY_NAME, {
+			kind: "token",
+		});
 		return parseSecretStoreKey(material.value);
 	};
 	const cipher = createSecretCipher(resolveKey);

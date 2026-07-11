@@ -198,3 +198,97 @@ describe("buildSecrets — the one-door resolver", () => {
 		expect(await secrets.has("ABSENT")).toBe(false);
 	});
 });
+
+describe("secrets.require — the fail-loud, kind-narrowing branch", () => {
+	it("throws (configurationError naming the secret) when nothing resolves it", async () => {
+		const secrets = buildSecrets([env({ vars: {} })]);
+		await expect(secrets.require("MISSING")).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/MISSING.*resolves nowhere/),
+		});
+	});
+
+	it("returns the material when it resolves — get, but non-null", async () => {
+		const secrets = buildSecrets([env({ vars: { PRESENT: "v" } })]);
+		expect(await secrets.require("PRESENT")).toEqual({
+			kind: "token",
+			value: "v",
+		});
+	});
+
+	it("throws on a kind mismatch — a wrong-kind result is never silently returned", async () => {
+		const basic: SecretProvider = {
+			name: "basic",
+			capability: { manage: false },
+			get: async () => ({ kind: "basic", username: "u", password: "p" }),
+		};
+		await expect(
+			buildSecrets([basic]).require("CREDS", { kind: "token" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/basic material but token was required/),
+		});
+	});
+
+	it("narrows to the requested kind — the token value is reachable with no second check", async () => {
+		const secrets = buildSecrets([env({ vars: { TOK: "t" } })]);
+		const material = await secrets.require("TOK", { kind: "token" });
+		// `material` is `{ kind: "token"; value }` — `.value` needs no `.kind` guard.
+		expect(material.value).toBe("t");
+	});
+});
+
+describe("secrets.with — a pre-bound reader", () => {
+	it("pre-binds ctx onto get so a per-actor provider resolves the bound actor (the store-row shape)", async () => {
+		// A provider that returns a different value per actor — the personal-row shape.
+		const perActor: SecretProvider = {
+			name: "per-actor",
+			tier: "data",
+			capability: { manage: true },
+			get: async (ref, ctx) =>
+				ctx.actor === "alice" ? { kind: "token", value: `alice:${ref}` } : null,
+		};
+		const secrets = buildSecrets([perActor]);
+		// No bound actor ⇒ the provider has nothing for it.
+		expect(await secrets.get("TOKEN")).toBeNull();
+		// with({ actor }) threads the actor to every call — the invoker/endpoint per-turn shape.
+		expect(await secrets.with({ actor: "alice" }).get("TOKEN")).toEqual({
+			kind: "token",
+			value: "alice:TOKEN",
+		});
+	});
+
+	it("merges a later explicit ctx over the bound one — last-wins per field", async () => {
+		const calls: ResolveContext[] = [];
+		const spy: SecretProvider = {
+			name: "spy",
+			capability: { manage: false },
+			get: async (_ref, ctx) => {
+				calls.push(ctx);
+				return null;
+			},
+		};
+		const bound = buildSecrets([spy]).with({
+			organizationId: "org",
+			actor: "alice",
+		});
+		await bound.get("X", { actor: "bob" });
+		expect(calls).toEqual([{ organizationId: "org", actor: "bob" }]);
+	});
+
+	it("pre-binds ctx onto require too", async () => {
+		const calls: ResolveContext[] = [];
+		const spy: SecretProvider = {
+			name: "spy",
+			capability: { manage: false },
+			get: async (_ref, ctx) => {
+				calls.push(ctx);
+				return { kind: "token", value: "v" };
+			},
+		};
+		await buildSecrets([spy])
+			.with({ actor: "alice" })
+			.require("X", { kind: "token" });
+		expect(calls).toEqual([{ actor: "alice" }]);
+	});
+});

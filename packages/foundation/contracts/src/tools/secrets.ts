@@ -86,6 +86,18 @@ export type SecretProvider = {
 export type Secrets = {
 	get: (name: string, ctx?: ResolveContext) => Promise<SecretMaterial | null>;
 	has: (name: string, ctx?: ResolveContext) => Promise<boolean>;
+	/** Like {@link get} but FAILS LOUD (`configurationError` naming the secret) when nothing resolves
+	 *  it — the mandatory-credential branch, packaged so callers stop hand-rolling the null check.
+	 *  Pass `kind` to also require a material kind (token|basic): a wrong-kind result throws too, and
+	 *  the return type NARROWS to that variant (so `.value` is reachable without a second check). */
+	require: <K extends SecretMaterial["kind"] = SecretMaterial["kind"]>(
+		name: string,
+		options?: ResolveContext & { kind?: K },
+	) => Promise<Extract<SecretMaterial, { kind: K }>>;
+	/** A reader with `ctx` pre-bound onto get/has/require — the invoker's per-turn shape and channels'
+	 *  endpoint threading, generalized. A later explicit ctx MERGES over the bound one (last-wins per
+	 *  field), and `.with` chains (each call merges onto the accumulated ctx). */
+	with: (ctx: ResolveContext) => Secrets;
 };
 
 /** A `{ provider, ref }` pointer into the provider registry — the reusable ref vocabulary store

@@ -322,7 +322,10 @@ describe("encryption at rest", () => {
 			provider.get("LOCKED", { actor: "alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
-			message: expect.stringMatching(/master key is unresolvable/),
+			// secrets.require names the key and fails loud when nothing resolves it.
+			message: expect.stringMatching(
+				/EUROCLAW_SECRET_STORE_KEY.*resolves nowhere/,
+			),
 		});
 	});
 
