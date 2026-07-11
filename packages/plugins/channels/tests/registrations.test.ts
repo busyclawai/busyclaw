@@ -308,12 +308,13 @@ describe("channels() registrations mode", () => {
 		expect(ok.status).toBe(200);
 		expect(recorded.relayed).toEqual(["hello"]);
 		// the row's organization + claw defaults drove the bind — tenancy never touched transport identity,
-		// and the binding key is namespaced so it can never collide with an app bot's
+		// and the binding key is namespaced so it can never collide with an app bot's. The org places the
+		// claw via the standard (scope, scopeId) boundary; createdBy is filled at bind time from the actor.
 		expect(recorded.binds).toMatchObject([
 			{
 				provider: "fake",
 				endpointKey: "registrations/acme-bot",
-				claw: { organizationId: "org-acme", name: "Acme bot" },
+				claw: { scope: "organization", scopeId: "org-acme", name: "Acme bot" },
 			},
 		]);
 	});

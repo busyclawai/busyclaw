@@ -144,10 +144,13 @@ export function buildRegistrationsPlugin(
 	const clawDefaults = (
 		row: ChannelRegistrationRecord,
 	): BindConversationClawInput | undefined => {
+		// The registration's org (an org-scoped BYO bot) places its conversations' claws under that org:
+		// organizationId → the standard (scope, scopeId) boundary. Organizationless registrations carry no
+		// placement and the claw defaults to personal at create. `createdBy` is filled at bind time.
 		const merged = {
 			...row.claw,
 			...(row.organizationId !== undefined
-				? { organizationId: row.organizationId }
+				? { scope: "organization", scopeId: row.organizationId }
 				: {}),
 		};
 		if (Object.keys(merged).length === 0) return undefined;

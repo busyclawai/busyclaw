@@ -7,6 +7,7 @@ import type {
 	appendMessageInputOptions,
 	bindConversationInput,
 	bindConversationResult,
+	bindConversationClawInputOptions,
 	bindConversationThreadInputOptions,
 	checkpointFields,
 	checkpointKindValues,
@@ -142,8 +143,11 @@ export type ConversationBindingLookup = {
 };
 
 // ── bindConversation protocol types ───────────────────────────────────────────────────────────────
-/** Claw bind defaults ARE claw-creation input — see bindConversationClawInput in schema. */
-export type BindConversationClawInput = CreateClawInput;
+/** Claw bind defaults are claw-creation input with `createdBy` optional — see bindConversationClawInput in schema. */
+export type BindConversationClawInput = EntitySchemaInput<
+	typeof clawFields,
+	typeof bindConversationClawInputOptions
+>;
 export type BindConversationThreadInput = EntitySchemaInput<
 	typeof threadFields,
 	typeof bindConversationThreadInputOptions

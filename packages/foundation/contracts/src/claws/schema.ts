@@ -294,10 +294,18 @@ export const createConversationBindingInput = conversationBindingEntity.schema(
 // Protocol, not product: these derive purely from the entities above, so they live here — channel
 // plugins validate against them without depending on the euroclaw assembly.
 
-// Claw bind defaults ARE claw-creation input (bindConversation spreads them into claws.create); the
-// alias keeps the domain name without duplicating the schema. Tenancy is optional claw-creation
-// data, never part of the binding's identity.
-export const bindConversationClawInput = createClawInput;
+// Claw bind defaults are claw-creation input with `createdBy` OPTIONAL: bindConversation fills the
+// creator from the acting identity (the external actor, falling back to the endpoint) at bind time,
+// so endpoint/registration defaults never carry it — they describe placement (scope/scopeId) and
+// naming, not who created the claw. Tenancy is optional placement data, never part of the binding's
+// identity. (claws.create still REQUIRES createdBy — a stored claw always has a creator.)
+export const bindConversationClawInputOptions = {
+	omit: ["status", "createdAt", "updatedAt"],
+	optional: ["id", "context", "scope", "scopeId", "createdBy"],
+} as const;
+export const bindConversationClawInput = clawEntity.schema(
+	bindConversationClawInputOptions,
+);
 
 export const bindConversationThreadInputOptions = {
 	omit: [

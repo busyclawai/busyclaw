@@ -75,7 +75,7 @@ describe("dispatch engine", () => {
 			claw: fakeClaw(recorded),
 			channel,
 			endpoint: endpoint({
-				claw: { organizationId: "acme", name: "Support bot" },
+				claw: { scope: "organization", scopeId: "acme", name: "Support bot" },
 			}),
 			request: { headers: { get: () => null }, rawBody: "hello" },
 			persist: eventSink(events),
@@ -90,7 +90,7 @@ describe("dispatch engine", () => {
 				provider: "fake",
 				endpointKey: "default",
 				externalConversationId: "chat-1",
-				claw: { organizationId: "acme", name: "Support bot" },
+				claw: { scope: "organization", scopeId: "acme", name: "Support bot" },
 			},
 		]);
 		expect(events).toEqual([{ kind: "received" }]);

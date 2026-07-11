@@ -220,9 +220,10 @@ export function telegram(
 		endpoint: EndpointContext,
 	): Promise<string | undefined> => {
 		if (appTokenResolved) return appToken;
-		const material = await endpoint.secrets?.get(appTokenSecret, {
-			organizationId: endpoint.claw?.organizationId,
-		});
+		// The app bot's token is deployment-level: its conversations create bare PERSONAL claws, which
+		// carry no org (a claw is now `createdBy` + `(scope, scopeId)`; org lives in the org plugin's
+		// resolution context, never on the claw row). So resolve without claw-derived org context.
+		const material = await endpoint.secrets?.get(appTokenSecret);
 		appToken = material?.kind === "token" ? material.value : undefined;
 		appTokenResolved = true;
 		return appToken;

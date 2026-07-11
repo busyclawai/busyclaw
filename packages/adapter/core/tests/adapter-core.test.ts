@@ -16,7 +16,7 @@ describe("@euroclaw/adapter-core", () => {
 			new Request("https://app.test/api/euroclaw/create-claw", {
 				body: JSON.stringify({
 					id: "claw-1",
-					organizationId: "organization-1",
+					createdBy: "user-1",
 				}),
 				method: "POST",
 			}),
@@ -24,7 +24,7 @@ describe("@euroclaw/adapter-core", () => {
 
 		expect(post.status).toBe(200);
 		await expect(post.json()).resolves.toMatchObject({
-			data: { id: "claw-1", organizationId: "organization-1" },
+			data: { id: "claw-1", createdBy: "user-1" },
 			ok: true,
 		});
 		const get = await handler(
