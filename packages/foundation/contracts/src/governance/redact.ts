@@ -7,8 +7,8 @@ import { type } from "arktype";
 import type { EntityRecord } from "../entity";
 import { entity, field } from "../entity";
 import {
-	MEMORY_NAMESPACE_CONTEXT_KEY,
-	ORGANIZATION_CONTEXT_KEY,
+	SCOPE_CONTEXT_KEY,
+	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 	type TurnContext,
 } from "./boundary";
@@ -51,9 +51,12 @@ export const piiMappingFields = {
 	placeholder: field.string({ required: true, index: true }),
 	original: field.string({ required: true, pii: "contains" }),
 	kind: field.enum(piiKindValues, { required: true, index: true }),
-	subjectId: field.string({ index: true }),
-	organizationId: field.string({ index: true }),
-	memoryNamespace: field.string({ index: true }),
+	// Containment: the (scope, scopeId) container this was redacted in — `claw:<clawId>` today,
+	// `memory:<kbId>` / `task:<taskId>` later. A placeholder rehydrates ONLY within the same
+	// container. Optional (a context-less redaction has no container). `scopeId` is a unique entity
+	// id, so the container implies its tenant — pii carries NO organizationId, ever.
+	scope: field.string({ index: true }),
+	scopeId: field.string({ index: true }),
 	createdAt: field.string({ required: true }),
 } as const;
 
@@ -64,24 +67,43 @@ export type PiiMapping = EntityRecord<typeof piiMappingFields>;
 /** The storage schema backing durable PiiMappingStore. */
 export const piiMappingSchema = piiMappingEntity.storage;
 
-/** The re-identification store: placeholder → original PII, scoped for erasure. */
+// The subject junction — a single PII value can be about SEVERAL data-subjects (a shared address).
+// Subject is the ERASURE axis (right-to-be-forgotten), decoupled from containment: many-to-many, and
+// NOT part of the rehydration key. Linked to a mapping by its unique `placeholder`.
+export const piiSubjectFields = {
+	placeholder: field.string({ required: true, index: true }),
+	subjectId: field.string({ required: true, index: true }),
+} as const;
+
+export const piiSubjectEntity = entity("pii_subject", piiSubjectFields);
+export const piiSubject = piiSubjectEntity.record;
+export type PiiSubject = EntityRecord<typeof piiSubjectFields>;
+
+/** The storage schema backing the durable subject junction. */
+export const piiSubjectSchema = piiSubjectEntity.storage;
+
+/** The re-identification store: placeholder → original PII, contained by (scope, scopeId), with a
+ *  subject junction for erasure. */
 export type PiiMappingStore = {
 	durable?: boolean;
-	save: (mapping: PiiMapping) => void | Promise<void>;
+	/** Save a mapping plus its subject rows (the erasure junction). */
+	save: (
+		mapping: PiiMapping,
+		subjectIds?: readonly string[],
+	) => void | Promise<void>;
+	/** placeholder → original, but only within the SAME container (scope, scopeId). */
 	resolve: (
 		placeholder: string,
 		ctx?: RehydrationContext,
 	) => string | null | Promise<string | null>;
-	deleteForSubject: (
-		subjectId: string,
-		ctx?: Pick<RedactionContext, "organizationId">,
-	) => void | Promise<void>;
+	/** Right-to-be-forgotten: delete every mapping this subject appears on (multi-subject safe). */
+	deleteForSubject: (subjectId: string) => void | Promise<void>;
 };
 
 export const redactionContext = type({
-	"subjectId?": "string | undefined",
-	"organizationId?": "string | undefined",
-	"memoryNamespace?": "string | undefined",
+	"scope?": "string | undefined",
+	"scopeId?": "string | undefined",
+	"subjectIds?": "string[] | undefined",
 });
 export type RedactionContext = typeof redactionContext.infer;
 
@@ -91,18 +113,16 @@ export type RehydrationContext = typeof rehydrationContext.infer;
 export function redactionContextFrom(
 	ctx: TurnContext,
 ): RedactionContext | undefined {
+	const scope = ctx[SCOPE_CONTEXT_KEY];
+	const scopeId = ctx[SCOPE_ID_CONTEXT_KEY];
 	const subjectId = ctx[SUBJECT_CONTEXT_KEY];
-	const organizationId = ctx[ORGANIZATION_CONTEXT_KEY];
-	const memoryNamespace = ctx[MEMORY_NAMESPACE_CONTEXT_KEY];
 	const out: RedactionContext = {};
-	if (typeof subjectId === "string") out.subjectId = subjectId;
-	if (typeof organizationId === "string") out.organizationId = organizationId;
-	if (typeof memoryNamespace === "string") {
-		out.memoryNamespace = memoryNamespace;
-	}
-	return out.subjectId === undefined &&
-		out.organizationId === undefined &&
-		out.memoryNamespace === undefined
+	if (typeof scope === "string") out.scope = scope;
+	if (typeof scopeId === "string") out.scopeId = scopeId;
+	if (typeof subjectId === "string") out.subjectIds = [subjectId];
+	return out.scope === undefined &&
+		out.scopeId === undefined &&
+		out.subjectIds === undefined
 		? undefined
 		: out;
 }

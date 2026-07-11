@@ -102,73 +102,66 @@ function suite(
 suite("memory adapter", () => memoryAdapter());
 
 describe("createPiiMappingStore", () => {
-	it("persists and resolves mappings by memory namespace", async () => {
+	it("contains rehydration to a container and forgets a subject across containers", async () => {
 		const store = createPiiMappingStore(memoryAdapter());
-		await store.save({
-			placeholder: "{{pii:abc}}",
-			original: "alice@example.com",
-			kind: "email",
-			memoryNamespace: "memory-a",
-			subjectId: "u1",
-			organizationId: "organization-a",
-			createdAt: "2026-01-01T00:00:00Z",
-		});
-		await store.save({
-			placeholder: "{{pii:abc}}",
-			original: "bob@example.com",
-			kind: "email",
-			memoryNamespace: "memory-b",
-			subjectId: "u2",
-			organizationId: "organization-b",
-			createdAt: "2026-01-01T00:00:00Z",
-		});
-		await store.save({
-			placeholder: "{{pii:abc}}",
-			original: "carol@example.com",
-			kind: "email",
-			memoryNamespace: "memory-a",
-			subjectId: "u1",
-			organizationId: "organization-b",
-			createdAt: "2026-01-01T00:00:00Z",
-		});
+		await store.save(
+			{
+				placeholder: "{{pii:aaa}}",
+				original: "alice@example.com",
+				kind: "email",
+				scope: "claw",
+				scopeId: "a",
+				createdAt: "2026-01-01T00:00:00Z",
+			},
+			["u1"],
+		);
+		await store.save(
+			{
+				placeholder: "{{pii:bbb}}",
+				original: "bob@example.com",
+				kind: "email",
+				scope: "claw",
+				scopeId: "b",
+				createdAt: "2026-01-01T00:00:00Z",
+			},
+			["u2"],
+		);
+		// One value about TWO subjects (a shared address), in container claw:a.
+		await store.save(
+			{
+				placeholder: "{{pii:ccc}}",
+				original: "123 Main St",
+				kind: "address",
+				scope: "claw",
+				scopeId: "a",
+				createdAt: "2026-01-01T00:00:00Z",
+			},
+			["u1", "u2"],
+		);
 
+		// Rehydration only within the SAME container.
 		expect(
-			await store.resolve("{{pii:abc}}", {
-				memoryNamespace: "memory-a",
-				subjectId: "u1",
-				organizationId: "organization-a",
-			}),
+			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "a" }),
 		).toBe("alice@example.com");
 		expect(
-			await store.resolve("{{pii:abc}}", {
-				memoryNamespace: "memory-b",
-				subjectId: "u2",
-				organizationId: "organization-b",
-			}),
-		).toBe("bob@example.com");
-		expect(await store.resolve("{{pii:abc}}")).toBeNull();
-		await store.deleteForSubject("u1", { organizationId: "organization-a" });
+			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "b" }),
+		).toBeNull();
+		expect(await store.resolve("{{pii:aaa}}")).toBeNull();
 		expect(
-			await store.resolve("{{pii:abc}}", {
-				memoryNamespace: "memory-a",
-				subjectId: "u1",
-				organizationId: "organization-a",
-			}),
+			await store.resolve("{{pii:bbb}}", { scope: "claw", scopeId: "b" }),
+		).toBe("bob@example.com");
+
+		// Erase u1 → alice's mapping AND the shared value (u1+u2) both gone; bob's untouched.
+		await store.deleteForSubject("u1");
+		expect(
+			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "a" }),
 		).toBeNull();
 		expect(
-			await store.resolve("{{pii:abc}}", {
-				memoryNamespace: "memory-b",
-				subjectId: "u2",
-				organizationId: "organization-b",
-			}),
-		).toBe("bob@example.com");
+			await store.resolve("{{pii:ccc}}", { scope: "claw", scopeId: "a" }),
+		).toBeNull();
 		expect(
-			await store.resolve("{{pii:abc}}", {
-				memoryNamespace: "memory-a",
-				subjectId: "u1",
-				organizationId: "organization-b",
-			}),
-		).toBe("carol@example.com");
+			await store.resolve("{{pii:bbb}}", { scope: "claw", scopeId: "b" }),
+		).toBe("bob@example.com");
 	});
 });
 

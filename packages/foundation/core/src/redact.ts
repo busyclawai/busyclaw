@@ -32,40 +32,48 @@ function newPlaceholder(): string {
 	return `{{pii:${bytesToHex(randomBytes(16))}}}`;
 }
 
-function scopeKey(ctx?: RedactionContext): string {
-	return [
-		ctx?.organizationId ?? "",
-		ctx?.subjectId ?? "",
-		ctx?.memoryNamespace ?? "",
-	].join(":");
-}
-
 export function createMemoryPiiMappingStore(): PiiMappingStore {
-	const byKey = new Map<string, PiiMapping>();
-	const keyFor = (placeholder: string, ctx?: RedactionContext): string =>
-		`${scopeKey(ctx)}:${placeholder}`;
+	// placeholder → mapping (the placeholder is a unique 128-bit token). Rehydration additionally
+	// requires the CONTAINER (scope, scopeId) to match — a placeholder that travels into another
+	// container is inert. Subjects are a separate index for erasure only.
+	const byPlaceholder = new Map<string, PiiMapping>();
+	const subjectToPlaceholders = new Map<string, Set<string>>();
+	const sameContainer = (
+		mapping: PiiMapping,
+		ctx?: RehydrationContext,
+	): boolean => mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
 	return {
 		durable: false,
-		save(mapping) {
+		save(mapping, subjectIds) {
 			const valid = piiMapping(mapping);
 			if (valid instanceof type.errors) {
 				throw validationError("invalid PII mapping", valid.summary);
 			}
-			byKey.set(keyFor(valid.placeholder, valid), valid);
+			byPlaceholder.set(valid.placeholder, valid);
+			for (const subjectId of subjectIds ?? []) {
+				let set = subjectToPlaceholders.get(subjectId);
+				if (set === undefined) {
+					set = new Set<string>();
+					subjectToPlaceholders.set(subjectId, set);
+				}
+				set.add(valid.placeholder);
+			}
 		},
 		resolve(placeholder, ctx) {
-			return byKey.get(keyFor(placeholder, ctx))?.original ?? null;
+			const mapping = byPlaceholder.get(placeholder);
+			return mapping !== undefined && sameContainer(mapping, ctx)
+				? mapping.original
+				: null;
 		},
-		deleteForSubject(subjectId, ctx) {
-			for (const [key, mapping] of byKey) {
-				if (
-					mapping.subjectId === subjectId &&
-					(ctx?.organizationId === undefined ||
-						mapping.organizationId === ctx.organizationId)
-				) {
-					byKey.delete(key);
-				}
+		deleteForSubject(subjectId) {
+			const placeholders = subjectToPlaceholders.get(subjectId);
+			if (placeholders === undefined) return;
+			for (const placeholder of placeholders) byPlaceholder.delete(placeholder);
+			// The value is gone — drop it from every other subject's index too.
+			for (const set of subjectToPlaceholders.values()) {
+				for (const placeholder of placeholders) set.delete(placeholder);
 			}
+			subjectToPlaceholders.delete(subjectId);
 		},
 	};
 }
@@ -139,15 +147,17 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		let last = 0;
 		for (const span of spans) {
 			const placeholder = newPlaceholder();
-			await mappings.save({
-				placeholder,
-				original: span.value,
-				kind: span.kind,
-				subjectId: ctx?.subjectId,
-				organizationId: ctx?.organizationId,
-				memoryNamespace: ctx?.memoryNamespace,
-				createdAt: now(),
-			});
+			await mappings.save(
+				{
+					placeholder,
+					original: span.value,
+					kind: span.kind,
+					scope: ctx?.scope,
+					scopeId: ctx?.scopeId,
+					createdAt: now(),
+				},
+				ctx?.subjectIds,
+			);
 			out += text.slice(last, span.start) + placeholder;
 			last = span.end;
 		}

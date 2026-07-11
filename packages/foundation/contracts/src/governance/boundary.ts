@@ -106,6 +106,12 @@ export const RUN_ID_CONTEXT_KEY = "euroclaw__runId";
 export const SUBJECT_CONTEXT_KEY = "euroclaw__subjectId";
 export const ORGANIZATION_CONTEXT_KEY = "euroclaw__organizationId";
 export const MEMORY_NAMESPACE_CONTEXT_KEY = "euroclaw__memoryNamespace";
+// The redaction CONTAINMENT ref — a polymorphic (scope, scopeId) pointing at the container a
+// redaction happened in (`claw:<clawId>` today, `memory:<kbId>` / `task:<taskId>` later). A PII
+// placeholder rehydrates only within the same container. `scopeId` is a unique entity id, so the
+// container implies its tenant — redaction stays org-blind (no organizationId anywhere in pii).
+export const SCOPE_CONTEXT_KEY = "euroclaw__scope";
+export const SCOPE_ID_CONTEXT_KEY = "euroclaw__scopeId";
 // How the run started — stamped by the runtime from mechanical fact (sendMessage/api.run =
 // interactive; engine/scheduled runs = autonomous), never claimed by a caller. Policies read it
 // to attenuate borrowed authority: an autonomous run has no human present to confirm.

@@ -3,16 +3,21 @@ import {
 	configurationError,
 	type PiiMapping,
 	type PiiMappingStore,
+	type PiiSubject,
 	piiMapping as piiMappingRecord,
 	piiMappingSchema,
+	piiSubject as piiSubjectRecord,
+	piiSubjectSchema,
 	validationError,
 } from "@euroclaw/contracts";
 import { schemaAdapter } from "@euroclaw/storage-core";
 import { type } from "arktype";
 
 export type PiiMappingStoreOptions = {
-	/** The table/model PII mappings live in. Default "pii_mapping". */
+	/** The table PII mappings live in. Default "pii_mapping". */
 	model?: string;
+	/** The subject junction table. Default "pii_subject". */
+	subjectModel?: string;
 };
 
 function validateMapping(value: unknown): PiiMapping {
@@ -23,113 +28,117 @@ function validateMapping(value: unknown): PiiMapping {
 	return valid;
 }
 
-function mappingWhere(
-	mapping: Pick<
-		PiiMapping,
-		"memoryNamespace" | "placeholder" | "subjectId" | "organizationId"
-	>,
-): Where[] {
+function validateSubject(value: unknown): PiiSubject {
+	const valid = piiSubjectRecord(value);
+	if (valid instanceof type.errors) {
+		throw validationError("PII subject invalid", valid.summary);
+	}
+	return valid;
+}
+
+/** The exact-row predicate for an upsert: the placeholder plus its container. */
+function mappingWhere(mapping: PiiMapping): Where[] {
 	const where: Where[] = [{ field: "placeholder", value: mapping.placeholder }];
-	if (mapping.organizationId !== undefined) {
-		where.push({
-			field: "organizationId",
-			value: mapping.organizationId,
-			connector: "AND",
-		});
+	if (mapping.scope !== undefined) {
+		where.push({ field: "scope", value: mapping.scope, connector: "AND" });
 	}
-	if (mapping.subjectId !== undefined) {
-		where.push({
-			field: "subjectId",
-			value: mapping.subjectId,
-			connector: "AND",
-		});
-	}
-	if (mapping.memoryNamespace !== undefined) {
-		where.push({
-			field: "memoryNamespace",
-			value: mapping.memoryNamespace,
-			connector: "AND",
-		});
+	if (mapping.scopeId !== undefined) {
+		where.push({ field: "scopeId", value: mapping.scopeId, connector: "AND" });
 	}
 	return where;
 }
 
-function sameScope(
+/** Containment: a placeholder rehydrates only within the same (scope, scopeId) container. The decode
+ *  normalizes SQL NULL columns to absent, which is what the === comparison expects. */
+function sameContainer(
 	mapping: PiiMapping,
 	ctx: Parameters<PiiMappingStore["resolve"]>[1],
 ): boolean {
-	return (
-		mapping.organizationId === ctx?.organizationId &&
-		mapping.subjectId === ctx?.subjectId &&
-		mapping.memoryNamespace === ctx?.memoryNamespace
-	);
+	return mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
 }
 
 export function createPiiMappingStore(
 	adapter: Adapter,
 	options: PiiMappingStoreOptions = {},
 ): PiiMappingStore {
-	// Persist through the schema-aware adapter (the options.model override rides modelName — the
-	// engine-sql precedent). The decode normalizes SQL NULL scope columns to absent, which is what
-	// the === scope comparison expects — hand-rolled reads broke on real SQL backends here.
-	const table = piiMappingSchema.pii_mapping;
-	if (!table) throw configurationError("pii_mapping schema missing", {});
+	const mappingTable = piiMappingSchema.pii_mapping;
+	const subjectTable = piiSubjectSchema.pii_subject;
+	if (!mappingTable || !subjectTable) {
+		throw configurationError("pii schema missing", {});
+	}
+	const model = options.model ?? "pii_mapping";
+	const subjectModel = options.subjectModel ?? "pii_subject";
+	// Both tables ride one schema-aware adapter (options overrides ride modelName — the engine-sql
+	// precedent). The store owns the mapping + its subject junction (the erasure axis).
 	const db = schemaAdapter(adapter, {
-		pii_mapping: { ...table, modelName: options.model ?? "pii_mapping" },
+		pii_mapping: { ...mappingTable, modelName: model },
+		pii_subject: { ...subjectTable, modelName: subjectModel },
 	});
-	const model = "pii_mapping";
 	return {
 		durable: true,
 
-		async save(mapping) {
+		async save(mapping, subjectIds) {
 			const valid = validateMapping(mapping);
 			const existing = (
 				await db.findMany<PiiMapping>({
-					model,
+					model: "pii_mapping",
 					where: [{ field: "placeholder", value: valid.placeholder }],
 				})
 			)
 				.map(validateMapping)
-				.find((row) => sameScope(row, valid));
+				.find((row) => sameContainer(row, valid));
 			if (existing) {
 				await db.update({
-					model,
+					model: "pii_mapping",
 					where: mappingWhere(valid),
 					update: valid,
 				});
-				return;
+			} else {
+				await db.create({ model: "pii_mapping", data: valid });
 			}
-			await db.create({ model, data: valid });
+			for (const subjectId of subjectIds ?? []) {
+				await db.create({
+					model: "pii_subject",
+					data: { placeholder: valid.placeholder, subjectId },
+				});
+			}
 		},
 
 		async resolve(placeholder, ctx) {
 			const row = (
 				await db.findMany<PiiMapping>({
-					model,
+					model: "pii_mapping",
 					where: [{ field: "placeholder", value: placeholder }],
 				})
 			)
 				.map(validateMapping)
-				.find((mapping) => sameScope(mapping, ctx));
+				.find((mapping) => sameContainer(mapping, ctx));
 			return row?.original ?? null;
 		},
 
-		async deleteForSubject(
-			subjectId: string,
-			ctx?: { organizationId?: string },
-		) {
-			const where: Where[] = [{ field: "subjectId", value: subjectId }];
-			if (ctx?.organizationId !== undefined) {
-				where.push({
-					field: "organizationId",
-					value: ctx.organizationId,
-					connector: "AND",
+		async deleteForSubject(subjectId: string) {
+			// Find every mapping this subject appears on (multi-subject safe), then erase the value —
+			// the placeholder becomes permanently un-rehydratable — and all of that value's subject rows.
+			const placeholders = new Set(
+				(
+					await db.findMany<PiiSubject>({
+						model: "pii_subject",
+						where: [{ field: "subjectId", value: subjectId }],
+					})
+				)
+					.map(validateSubject)
+					.map((row) => row.placeholder),
+			);
+			for (const placeholder of placeholders) {
+				await db.deleteMany({
+					model: "pii_mapping",
+					where: [{ field: "placeholder", value: placeholder }],
+				});
+				await db.deleteMany({
+					model: "pii_subject",
+					where: [{ field: "placeholder", value: placeholder }],
 				});
 			}
-			await db.deleteMany({
-				model,
-				where,
-			});
 		},
 	};
 }

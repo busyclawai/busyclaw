@@ -2,11 +2,11 @@ import {
 	type ApprovalRecord,
 	type ApprovalStore,
 	type Detector,
-	MEMORY_NAMESPACE_CONTEXT_KEY,
-	ORGANIZATION_CONTEXT_KEY,
 	type PiiMapping,
 	type PiiMappingStore,
 	type PiiSpan,
+	SCOPE_CONTEXT_KEY,
+	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
@@ -136,11 +136,13 @@ describe("euroclaw governance — the neutral pipeline", () => {
 		expect(JSON.stringify(entries)).not.toContain("alice@personal.com");
 	});
 
-	it("passes trusted subject and organization context into redaction", async () => {
+	it("passes trusted container + subject context into redaction", async () => {
 		const saved: PiiMapping[] = [];
+		const savedSubjects: (readonly string[] | undefined)[] = [];
 		const mappings: PiiMappingStore = {
-			save: (mapping) => {
+			save: (mapping, subjectIds) => {
 				saved.push(mapping);
+				savedSubjects.push(subjectIds);
 			},
 			resolve: (placeholder) =>
 				saved.find((mapping) => mapping.placeholder === placeholder)
@@ -151,22 +153,19 @@ describe("euroclaw governance — the neutral pipeline", () => {
 			redactor: createStoredRedactor({ detector: emailDetector, mappings }),
 			resolveContext: (ctx) => ({
 				...ctx,
-				[MEMORY_NAMESPACE_CONTEXT_KEY]: "memory-1",
+				[SCOPE_CONTEXT_KEY]: "claw",
+				[SCOPE_ID_CONTEXT_KEY]: "claw-1",
 				[SUBJECT_CONTEXT_KEY]: "subject-1",
-				[ORGANIZATION_CONTEXT_KEY]: "organization-1",
 			}),
 		});
 
 		await ec.handleToolCall({ name: "x", args: { email: "a@b.com" } });
 
-		expect(saved[0]).toMatchObject({
-			memoryNamespace: "memory-1",
-			subjectId: "subject-1",
-			organizationId: "organization-1",
-		});
+		expect(saved[0]).toMatchObject({ scope: "claw", scopeId: "claw-1" });
+		expect(savedSubjects[0]).toEqual(["subject-1"]);
 	});
 
-	it("scopes placeholders and rehydration by memoryNamespace", async () => {
+	it("scopes placeholders and rehydration by container", async () => {
 		const mappings = createMemoryPiiMappingStore();
 		const redactor = createStoredRedactor({
 			detector: emailDetector,
@@ -174,28 +173,26 @@ describe("euroclaw governance — the neutral pipeline", () => {
 		});
 
 		const first = await redactor.redactValue("email a@b.com", {
-			memoryNamespace: "memory-a",
+			scope: "claw",
+			scopeId: "a",
 		});
 		const second = await redactor.redactValue("email a@b.com", {
-			memoryNamespace: "memory-b",
+			scope: "claw",
+			scopeId: "b",
 		});
 
 		expect(first).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
 		expect(second).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
 		expect(first).not.toBe(second);
 		expect(
-			await redactor.rehydrateValue(first, {
-				memoryNamespace: "memory-a",
-			}),
+			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "a" }),
 		).toBe("email a@b.com");
 		expect(
-			await redactor.rehydrateValue(first, {
-				memoryNamespace: "memory-b",
-			}),
+			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "b" }),
 		).toBe(first);
 	});
 
-	it("deletes subject mappings across memory namespaces", async () => {
+	it("deletes a subject's mappings across containers (multi-subject safe)", async () => {
 		const mappings = createMemoryPiiMappingStore();
 		const redactor = createStoredRedactor({
 			detector: emailDetector,
@@ -203,25 +200,23 @@ describe("euroclaw governance — the neutral pipeline", () => {
 		});
 
 		const first = await redactor.redactValue("email a@b.com", {
-			memoryNamespace: "memory-a",
-			subjectId: "subject-1",
+			scope: "claw",
+			scopeId: "a",
+			subjectIds: ["subject-1"],
 		});
 		const second = await redactor.redactValue("email a@b.com", {
-			memoryNamespace: "memory-b",
-			subjectId: "subject-1",
+			scope: "claw",
+			scopeId: "b",
+			subjectIds: ["subject-1"],
 		});
 
 		await mappings.deleteForSubject("subject-1");
 
 		expect(
-			await redactor.rehydrateValue(first, {
-				memoryNamespace: "memory-a",
-			}),
+			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "a" }),
 		).toBe(first);
 		expect(
-			await redactor.rehydrateValue(second, {
-				memoryNamespace: "memory-b",
-			}),
+			await redactor.rehydrateValue(second, { scope: "claw", scopeId: "b" }),
 		).toBe(second);
 	});
 

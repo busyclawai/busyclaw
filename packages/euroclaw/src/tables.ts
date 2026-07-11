@@ -16,6 +16,7 @@ import {
 	entity,
 	factsOverlaySchema,
 	piiMappingSchema,
+	piiSubjectSchema,
 	policySliceSchema,
 	registeredToolSchema,
 	runCheckpointSchema,
@@ -32,6 +33,7 @@ const CORE_TABLES: SchemaDeclaration = {
 	...approvalSchema,
 	...effectSchema,
 	...piiMappingSchema,
+	...piiSubjectSchema,
 	...runCheckpointSchema,
 	...teamSchema,
 	// The tool registry is PRODUCT (rows), not a plugin — siblings of approvals/run_checkpoint.
