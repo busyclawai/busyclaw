@@ -23,8 +23,8 @@ import { recordedActiveSkillRefs, resolveActiveSkill } from "./resolution";
 
 export const skillReasonCodes = defineReasonCodes({
 	ACTIVE_SKILL_FORBIDDEN: "The actor cannot activate this skill.",
-	ACTIVE_SKILL_ORGANIZATION_REQUIRED:
-		"A organization is required to resolve active database-backed skills.",
+	ACTIVE_SKILL_OUT_OF_SCOPE:
+		"An active skill lives in a boundary this context cannot stand inside.",
 	ACTIVE_SKILL_UNAVAILABLE: "An active skill is not enabled or trusted.",
 	NO_ACTIVE_SKILL: "No active skill permits this tool call.",
 	SKILL_TOOL_NOT_ALLOWED: "The active skills do not permit this tool.",
@@ -152,10 +152,10 @@ export function buildSkillsPlugin<
 					skillById,
 					store,
 				});
-				if (resolution.status === "organization_required") {
+				if (resolution.status === "out_of_scope") {
 					return deny(
-						"ACTIVE_SKILL_ORGANIZATION_REQUIRED",
-						`active skill "${refLabel(ref)}" requires organization context`,
+						"ACTIVE_SKILL_OUT_OF_SCOPE",
+						`active skill "${refLabel(ref)}" is outside this context's boundaries`,
 					);
 				}
 				if (resolution.status === "unavailable") {

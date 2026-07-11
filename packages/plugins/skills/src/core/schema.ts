@@ -55,12 +55,6 @@ export const skillPackageSourceValues = [
 	"upload",
 	"local",
 ] as const;
-export const skillInstallationVisibilityValues = [
-	"private",
-	"team",
-	"organization",
-	"public",
-] as const;
 export const skillInstallationStatusValues = [
 	"quarantined",
 	"installed",
@@ -106,9 +100,6 @@ export const skillProposalStatusValues = [
 
 export const skillPackageSource = type(
 	"'builtin' | 'registry' | 'upload' | 'local'",
-);
-export const skillInstallationVisibility = type(
-	"'private' | 'team' | 'organization' | 'public'",
 );
 export const skillInstallationStatus = type(
 	"'quarantined' | 'installed' | 'trusted' | 'enabled' | 'disabled' | 'archived'",
@@ -176,13 +167,16 @@ export const skillInstallationFields = {
 	packageId: field.string({ required: true, index: true }),
 	version: field.string({ required: true, index: true }),
 	digest: field.string({ required: true, index: true }),
-	organizationId: field.string({ required: true, index: true }),
-	teamId: field.string({ index: true }),
-	ownerActorId: field.string({ index: true }),
-	visibility: field.enum(skillInstallationVisibilityValues, {
-		required: true,
-		index: true,
-	}),
+	// An installation is a SHAREABLE resource (the claws shape): `createdBy` is immutable — who
+	// installed it (accountability, erasure attribution). The access boundary `(scope, scopeId)` is
+	// MUTABLE — an installation can be re-shared over its life (installed personal, promoted
+	// org-wide). `scope` is an OPAQUE string this table never interprets; the old
+	// visibility + organizationId/teamId/ownerActorId columns double-encoded exactly this pair
+	// (visibility named the boundary KIND, the triple named its ID). Default at create:
+	// scope="personal", scopeId=createdBy.
+	createdBy: field.string({ required: true, index: true, immutable: true }),
+	scope: field.string({ required: true, index: true }),
+	scopeId: field.string({ required: true, index: true }),
 	status: field.enum(skillInstallationStatusValues, {
 		required: true,
 		index: true,
@@ -193,9 +187,11 @@ export const skillInstallationFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
+// A grant row — the shares junction on an installation. Whose boundary the grant lives in is
+// transitive via `installationId` (the thread→claw shape); the principal (type, id) names the
+// grantee, orthogonal to tenancy.
 export const skillAclFields = {
 	id: field.string({ required: true, unique: true }),
-	organizationId: field.string({ required: true, index: true }),
 	installationId: field.string({
 		required: true,
 		index: true,
@@ -213,9 +209,10 @@ export const skillAclFields = {
 	createdAt: field.string({ required: true }),
 } as const;
 
+// An activation is anchored by the claw/thread/run it activates for and the installation it
+// activates — both sides carry the boundary, so the row itself is tenancy-free.
 export const skillActivationFields = {
 	id: field.string({ required: true, unique: true }),
-	organizationId: field.string({ required: true, index: true }),
 	clawId: field.string({ required: true, index: true }),
 	threadId: field.string({ index: true }),
 	runId: field.string({ index: true }),
@@ -234,9 +231,10 @@ export const skillActivationFields = {
 	createdAt: field.string({ required: true }),
 } as const;
 
+// A read is an audit row: who read what, from where. Anchored by `readBy` and the optional
+// claw/thread/run/installation refs — no tenancy stamp of its own.
 export const skillReadFields = {
 	id: field.string({ required: true, unique: true }),
-	organizationId: field.string({ required: true, index: true }),
 	clawId: field.string({ index: true }),
 	threadId: field.string({ index: true }),
 	runId: field.string({ index: true }),
@@ -256,9 +254,13 @@ export const skillReadFields = {
 	createdAt: field.string({ required: true }),
 } as const;
 
+// A proposal's `(scope, scopeId)` is the review inbox — the boundary whose admins decide it. For
+// share proposals it is DERIVED from the target installation at creation (server-set, never a
+// caller claim); future create-proposals will carry the boundary the creation targets.
 export const skillProposalFields = {
 	id: field.string({ required: true, unique: true }),
-	organizationId: field.string({ required: true, index: true }),
+	scope: field.string({ required: true, index: true }),
+	scopeId: field.string({ required: true, index: true }),
 	targetInstallationId: field.string({ index: true }),
 	proposerActorId: field.string({ required: true, index: true }),
 	kind: field.enum(skillProposalKindValues, { required: true, index: true }),
@@ -300,7 +302,9 @@ export const createSkillPackageInputOptions = {
 } as const;
 export const createSkillInstallationInputOptions = {
 	omit: ["createdAt", "updatedAt"],
-	optional: ["id", "visibility", "status"],
+	// scope/scopeId default in the store (scope="personal", scopeId=createdBy) — an installation is
+	// personal to its installer until re-shared; `createdBy` is required (someone installed it).
+	optional: ["id", "scope", "scopeId", "status"],
 } as const;
 export const createSkillAclInputOptions = {
 	omit: ["createdAt"],

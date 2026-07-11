@@ -1,27 +1,21 @@
-export { skillInstallationVisibility } from "../core";
-
 import { type } from "arktype";
-import {
-	nonEmptyString,
-	skillAclRecord,
-	skillInstallationVisibility,
-	skillProposalRecord,
-} from "../core";
+import { nonEmptyString, skillAclRecord, skillProposalRecord } from "../core";
 
-// Identity fields (ids, organizationId, actor refs) must be non-empty — enforced at the schema so the
+// Identity fields (ids, boundary refs, actor refs) must be non-empty — enforced at the schema so the
 // API layer parses instead of re-checking each field with assertNonEmptyString.
 const nes = nonEmptyString;
 const optionalNes = nonEmptyString.or("undefined");
 
+// `createdBy` is who installs (accountability, claws parity); `(scope, scopeId)` is the boundary
+// the installation lands in — omit both to install personal to the installer (the store default).
 export const installSkillInput = type({
+	createdBy: nes,
 	"digest?": optionalNes,
 	"initialStatus?": "'installed' | 'quarantined' | undefined",
-	"ownerActorId?": optionalNes,
 	packageId: nes,
-	"teamId?": optionalNes,
-	organizationId: nes,
+	"scope?": optionalNes,
+	"scopeId?": optionalNes,
 	"version?": optionalNes,
-	"visibility?": skillInstallationVisibility.or("undefined"),
 }).narrow(
 	(value, ctx) =>
 		value.version !== undefined ||
@@ -31,14 +25,12 @@ export const installSkillInput = type({
 
 export const trustSkillInstallationInput = type({
 	installationId: nes,
-	organizationId: nes,
 	trustedBy: nes,
 });
 
 export const enableSkillInstallationInput = type({
 	enabledBy: nes,
 	installationId: nes,
-	organizationId: nes,
 });
 
 // public grants carry no principalId; every other principal type requires a non-empty one.
@@ -52,14 +44,12 @@ const grantPrincipal = type({
 
 export const grantActivationInput = type({
 	installationId: nes,
-	organizationId: nes,
 }).and(grantPrincipal);
 
 export const requestShareInput = type({
 	installationId: nes,
 	"reason?": optionalNes,
 	requestedBy: nes,
-	organizationId: nes,
 }).and(grantPrincipal);
 
 export const shareSkillInput = type({
@@ -67,7 +57,6 @@ export const shareSkillInput = type({
 	installationId: nes,
 	"reason?": optionalNes,
 	requestedBy: nes,
-	organizationId: nes,
 }).and(grantPrincipal);
 
 export const shareSkillResult = type({

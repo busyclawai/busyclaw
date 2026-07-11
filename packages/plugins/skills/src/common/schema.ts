@@ -3,7 +3,7 @@ export { skillManifest, skillManifests } from "../core";
 import { type } from "arktype";
 import { nonEmptyString, skillManifest } from "../core";
 
-// Identity fields (ids, organizationId, actor refs) must be non-empty — enforced at the schema so the
+// Identity fields (ids, boundary refs, actor refs) must be non-empty — enforced at the schema so the
 // API layer parses instead of re-checking each field with assertNonEmptyString.
 const nes = nonEmptyString;
 const optionalNes = nonEmptyString.or("undefined");
@@ -14,13 +14,16 @@ export const activeSkillIdRef = nonEmptyString;
 export const activeSkillInstallationRef = type({
 	installationId: nonEmptyString,
 });
-export const activeSkillOrganizationRef = type({
+// Pins a skillId lookup to ONE explicit `(scope, scopeId)` boundary (was the organization ref —
+// generalized so a skill can be pinned to a personal/team/organization boundary alike).
+export const activeSkillScopeRef = type({
 	skillId: nonEmptyString,
-	organizationId: nonEmptyString,
+	scope: nonEmptyString,
+	scopeId: nonEmptyString,
 });
 export const activeSkillRef = activeSkillIdRef
 	.or(activeSkillInstallationRef)
-	.or(activeSkillOrganizationRef);
+	.or(activeSkillScopeRef);
 export const activeSkillRefs = activeSkillRef.array();
 
 export const activeSkillResolution = type({
@@ -29,7 +32,9 @@ export const activeSkillResolution = type({
 	ref: activeSkillRef,
 })
 	.or({ status: "'missing'", ref: activeSkillRef })
-	.or({ status: "'organization_required'", ref: activeSkillRef })
+	// The ref names a boundary this context cannot stand inside (replaces organization_required:
+	// with additive org, "no organization" is no longer an error — personal skills resolve fine).
+	.or({ status: "'out_of_scope'", ref: activeSkillRef })
 	.or({ status: "'forbidden'", ref: activeSkillRef })
 	.or({ status: "'unavailable'", ref: activeSkillRef });
 
@@ -41,16 +46,18 @@ export const activateSkillInput = type({
 	"threadId?": optionalNes,
 });
 
+// Trusted principal facts for the ladder. Org/team are ADDITIVE — absent until the host's identity
+// wiring supplies them; an org-less deployment activates personal skills.
 export const activateSkillContext = type({
 	activatedBy: nes,
 	"teamId?": optionalNes,
-	organizationId: nes,
+	"organizationId?": optionalNes,
 });
 
 export const readSkillContext = type({
 	readBy: nes,
 	"teamId?": optionalNes,
-	organizationId: nes,
+	"organizationId?": optionalNes,
 });
 
 export const readSkillInput = type({
@@ -60,7 +67,6 @@ export const readSkillInput = type({
 	"runId?": optionalNes,
 	"skillId?": optionalNes,
 	"source?": sourceEnum,
-	"organizationId?": optionalNes,
 	"threadId?": optionalNes,
 }).narrow((value, ctx) => {
 	// Exactly one of id / installationId / skillId identifies the skill to read.

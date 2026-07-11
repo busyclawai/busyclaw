@@ -138,29 +138,29 @@ describe("@euroclaw/skills (simple)", () => {
 	});
 
 	it("creates and reads private personal skills through read ACL", async () => {
+		// No organization anywhere: a personal skill is created and read org-free (org is additive).
 		const api = createSimpleSkillsApi(createSkillsStore(db()), {
 			readContext: {
 				readBy: "actor-1",
-				organizationId: "organization-1",
 			},
 		});
 		const personal = await api.createPersonal({
+			createdBy: "actor-1",
 			digest: "sha256:read-personal",
 			manifest: {
 				id: "read-personal",
 				description: "Read personal",
 				allowedTools: ["send_email"],
 			},
-			ownerActorId: "actor-1",
 			packageId: "actor-1.read-personal",
-			organizationId: "organization-1",
 			version: "1.0.0",
 		});
 		expect(personal.installation).toMatchObject({
+			createdBy: "actor-1",
 			enabledBy: "actor-1",
-			ownerActorId: "actor-1",
+			scope: "personal",
+			scopeId: "actor-1",
 			status: "enabled",
-			visibility: "private",
 		});
 		expect(personal.grant).toMatchObject({
 			permission: "activate",
@@ -187,7 +187,6 @@ describe("@euroclaw/skills (simple)", () => {
 				runId: "run-1",
 				skillId: "read-personal",
 				source: "user",
-				organizationId: "organization-1",
 				threadId: "thread-1",
 			},
 		});
@@ -197,22 +196,21 @@ describe("@euroclaw/skills (simple)", () => {
 		const store = createSkillsStore(db(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
+		// An org-less activation context: personal skills need no organization at all.
 		const api = createSimpleSkillsApi(store, {
 			activationContext: {
 				activatedBy: "actor-1",
-				organizationId: "organization-1",
 			},
 		});
 		const personal = await api.createPersonal({
+			createdBy: "actor-1",
 			digest: "sha256:activate",
 			manifest: {
 				id: "email-only",
 				description: "Email only",
 				allowedTools: ["send_email"],
 			},
-			ownerActorId: "actor-1",
 			packageId: "actor-1.email-only",
-			organizationId: "organization-1",
 			version: "1.0.0",
 		});
 
@@ -233,30 +231,29 @@ describe("@euroclaw/skills (simple)", () => {
 		const api = createSimpleSkillsApi(createSkillsStore(db()), {
 			activationContext: {
 				activatedBy: "actor-1",
-				organizationId: "organization-1",
 			},
 		});
 		const personal = await api.createPersonal({
+			createdBy: "actor-2",
 			digest: "sha256:spoof",
 			manifest: {
 				id: "email-only",
 				description: "Email only",
 				allowedTools: ["send_email"],
 			},
-			ownerActorId: "actor-2",
 			packageId: "actor-2.email-only",
-			organizationId: "organization-1",
 			version: "1.0.0",
 		});
 
+		// The caller claims to be actor-2 in the INPUT; the trusted context says actor-1, who cannot
+		// stand inside personal:actor-2 — out-of-boundary reads as "not found" (existence-hiding).
 		await expect(
 			api.activate({
 				activatedBy: "actor-2",
 				clawId: "claw-1",
 				installationId: personal.installation.id,
-				organizationId: "organization-1",
 			} as never),
-		).rejects.toThrow(/actor cannot activate this skill/);
+		).rejects.toThrow(/installation not found/);
 	});
 
 	it("requires trusted activation context", async () => {
@@ -449,7 +446,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		await store.acl.grant({
@@ -457,7 +456,6 @@ describe("@euroclaw/skills (simple)", () => {
 			permission: "activate",
 			principalId: "organization-1",
 			principalType: "organization",
-			organizationId: "organization-1",
 		});
 		const ec = createGovernance({
 			plugins: [
@@ -508,7 +506,9 @@ describe("@euroclaw/skills (simple)", () => {
 				packageId: pkg.packageId,
 				version: pkg.version,
 				digest: pkg.digest,
-				organizationId: "organization-1",
+				createdBy: "admin-1",
+				scope: "organization",
+				scopeId: "organization-1",
 				status: "enabled",
 			});
 			await store.acl.grant({
@@ -520,7 +520,6 @@ describe("@euroclaw/skills (simple)", () => {
 					? { principalId: "organization-1" }
 					: {}),
 				principalType,
-				organizationId: "organization-1",
 			});
 			const ec = createGovernance({
 				plugins: [
@@ -564,7 +563,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: foreignPkg.packageId,
 			version: foreignPkg.version,
 			digest: foreignPkg.digest,
-			organizationId: "organization-2",
+			createdBy: "admin-2",
+			scope: "organization",
+			scopeId: "organization-2",
 			status: "enabled",
 		});
 		const unscopedPkg = await store.packages.create({
@@ -583,7 +584,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: unscopedPkg.packageId,
 			version: unscopedPkg.version,
 			digest: unscopedPkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		const pkg = await store.packages.create({
@@ -602,7 +605,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		await store.acl.grant({
@@ -610,7 +615,6 @@ describe("@euroclaw/skills (simple)", () => {
 			permission: "activate",
 			principalId: "organization-1",
 			principalType: "organization",
-			organizationId: "organization-1",
 		});
 		await store.activations.create({
 			activatedBy: "actor-2",
@@ -620,7 +624,6 @@ describe("@euroclaw/skills (simple)", () => {
 			runId: "run-1",
 			skillId: "foreign-email",
 			source: "user",
-			organizationId: "organization-2",
 			threadId: "thread-2",
 		});
 		await store.activations.create({
@@ -631,7 +634,6 @@ describe("@euroclaw/skills (simple)", () => {
 			runId: "run-1",
 			skillId: "unscoped-email",
 			source: "user",
-			organizationId: "organization-1",
 		});
 		await store.activations.create({
 			activatedBy: "actor-1",
@@ -641,7 +643,6 @@ describe("@euroclaw/skills (simple)", () => {
 			runId: "run-1",
 			skillId: "email-only",
 			source: "user",
-			organizationId: "organization-1",
 			threadId: "thread-1",
 		});
 		const ec = createGovernance({
@@ -665,7 +666,7 @@ describe("@euroclaw/skills (simple)", () => {
 		expect(ran).toBe(true);
 	});
 
-	it("resolves organization refs past unauthorized matching installations", async () => {
+	it("resolves bare skill ids past unauthorized matching installations", async () => {
 		const store = createSkillsStore(db());
 		const firstPkg = await store.packages.create({
 			packageId: "team.first-email",
@@ -683,7 +684,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: firstPkg.packageId,
 			version: firstPkg.version,
 			digest: firstPkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		const secondPkg = await store.packages.create({
@@ -702,7 +705,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: secondPkg.packageId,
 			version: secondPkg.version,
 			digest: secondPkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		await store.acl.grant({
@@ -710,7 +715,6 @@ describe("@euroclaw/skills (simple)", () => {
 			permission: "activate",
 			principalId: "organization-1",
 			principalType: "organization",
-			organizationId: "organization-1",
 		});
 		const ec = createGovernance({
 			plugins: [
@@ -750,7 +754,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		const ec = createGovernance({
@@ -776,13 +782,21 @@ describe("@euroclaw/skills (simple)", () => {
 		});
 	});
 
-	it("denies database-backed skills without organization context", async () => {
+	it("denies scope-pinned refs outside the caller's boundaries", async () => {
 		const store = createSkillsStore(db());
+		// The ref pins organization:organization-1, but the context carries no organization fact —
+		// it cannot stand inside that boundary.
 		const ec = createGovernance({
 			plugins: [
 				skillsPlugin({
 					enforceAllowedTools: true,
-					active: [{ skillId: "email-only", organizationId: "organization-1" }],
+					active: [
+						{
+							skillId: "email-only",
+							scope: "organization",
+							scopeId: "organization-1",
+						},
+					],
 					skills: [],
 					store,
 				}),
@@ -792,7 +806,7 @@ describe("@euroclaw/skills (simple)", () => {
 		await expect(
 			ec.handleToolCall({ name: "send_email", args: {} }),
 		).resolves.toMatchObject({
-			reasonCode: "ACTIVE_SKILL_ORGANIZATION_REQUIRED",
+			reasonCode: "ACTIVE_SKILL_OUT_OF_SCOPE",
 			status: "denied",
 		});
 	});
@@ -816,7 +830,9 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "installed",
 		});
 		const ec = createGovernance({

@@ -4,7 +4,6 @@ import {
 	skillAclRecord,
 	skillInstallationRecord,
 	skillInstallationStatus,
-	skillInstallationVisibility,
 	skillManifest,
 	skillPackageRecord,
 	skillPackageSource,
@@ -29,13 +28,14 @@ export const readSkillResult = type({
 	read: skillReadRecord,
 });
 
+// A personal skill needs only its creator — the installation lands in the personal:createdBy
+// boundary (no organization anywhere; org is additive).
 export const createPersonalSkillInput = type({
+	createdBy: nes,
 	digest: nes,
 	manifest: skillManifest,
-	ownerActorId: nes,
 	packageId: nes,
 	"source?": "'local' | 'upload' | undefined",
-	organizationId: nes,
 	version: nes,
 });
 
@@ -46,13 +46,15 @@ export const createPersonalSkillResult = type({
 	readGrant: skillAclRecord,
 });
 
+// Installed entries list ONE boundary at a time (exact single-scope, like the store); omit the
+// pair to browse static skills only.
 export const skillCatalogInput = type({
 	"includeStatic?": "boolean | undefined",
 	"publisher?": optionalNes,
 	"source?": skillPackageSource.or("undefined"),
 	"status?": skillInstallationStatus.or("undefined"),
-	"organizationId?": optionalNes,
-	"visibility?": skillInstallationVisibility.or("undefined"),
+	"scope?": optionalNes,
+	"scopeId?": optionalNes,
 });
 
 export const skillCatalogEntry = type({
@@ -67,7 +69,7 @@ export const skillCatalogEntry = type({
 	"source?": skillPackageSource.or("undefined"),
 	"installationId?": "string | undefined",
 	"status?": skillInstallationStatus.or("undefined"),
-	"organizationId?": "string | undefined",
+	"scope?": "string | undefined",
+	"scopeId?": "string | undefined",
 	"version?": "string | undefined",
-	"visibility?": skillInstallationVisibility.or("undefined"),
 });

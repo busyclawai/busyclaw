@@ -15,10 +15,15 @@ import type {
 	SkillManifest,
 	SkillsApiOptions,
 } from "../common/contracts";
-import { hasActivationGrant, hasReadGrant } from "../common/grants";
+import {
+	hasActivationGrant,
+	hasReadGrant,
+	withinScope,
+} from "../common/grants";
 import { assertSkillManifest } from "../common/manifest";
 import { requireSkillsStore } from "../common/plugin";
 import {
+	contextScopePairs,
 	packageAndManifestForInstallation,
 	statusAllowsActivation,
 } from "../common/resolution";
@@ -187,7 +192,9 @@ function activationTurnContext(input: ActivateSkillContext): TurnContext {
 	return {
 		[ACTOR_CONTEXT_KEY]: input.activatedBy,
 		...(input.teamId !== undefined ? { [TEAM_CONTEXT_KEY]: input.teamId } : {}),
-		[ORGANIZATION_CONTEXT_KEY]: input.organizationId,
+		...(input.organizationId !== undefined
+			? { [ORGANIZATION_CONTEXT_KEY]: input.organizationId }
+			: {}),
 	};
 }
 
@@ -195,7 +202,9 @@ function readTurnContext(input: ReadSkillContext): TurnContext {
 	return {
 		[ACTOR_CONTEXT_KEY]: input.readBy,
 		...(input.teamId !== undefined ? { [TEAM_CONTEXT_KEY]: input.teamId } : {}),
-		[ORGANIZATION_CONTEXT_KEY]: input.organizationId,
+		...(input.organizationId !== undefined
+			? { [ORGANIZATION_CONTEXT_KEY]: input.organizationId }
+			: {}),
 	};
 }
 
@@ -210,9 +219,10 @@ async function assertActivatableInstallation(input: {
 	const installation = await input.store.installations.get(
 		input.activation.installationId,
 	);
+	// Out-of-boundary reads as "not found" (existence-hiding, as the old organization gate had it).
 	if (
 		!installation ||
-		installation.organizationId !== input.activationContext.organizationId
+		!withinScope(activationTurnContext(input.activationContext), installation)
 	) {
 		throw validationError(
 			"activate skill input invalid",
@@ -258,7 +268,6 @@ export async function createReadRecord(input: {
 	readBy: string;
 	skillId: string;
 	store: SkillsStore;
-	organizationId: string;
 	version?: string;
 }): Promise<SkillReadRecord> {
 	return input.store.reads.create({
@@ -270,7 +279,6 @@ export async function createReadRecord(input: {
 		runId: input.read.runId,
 		skillId: input.skillId,
 		source: input.read.source ?? "user",
-		organizationId: input.organizationId,
 		threadId: input.read.threadId,
 		version: input.version,
 	});
@@ -282,7 +290,8 @@ async function readInstalledSkill(input: {
 	readContext: ReadSkillContext;
 	store: SkillsStore;
 }): Promise<ReadSkillResult> {
-	if (input.installation.organizationId !== input.readContext.organizationId) {
+	// Out-of-boundary reads as "not found" (existence-hiding, as the old organization gate had it).
+	if (!withinScope(readTurnContext(input.readContext), input.installation)) {
 		throw validationError("read skill input invalid", "installation not found");
 	}
 	if (!statusAllowsActivation(input.installation)) {
@@ -321,7 +330,6 @@ async function readInstalledSkill(input: {
 		readBy: input.readContext.readBy,
 		skillId: resolved.manifest.id,
 		store: input.store,
-		organizationId: input.installation.organizationId,
 		version: resolved.pkg.version,
 	});
 	return assertReadSkillResult({
@@ -339,12 +347,6 @@ async function readInstalledSkillById(input: {
 	readContext: ReadSkillContext;
 	store: SkillsStore;
 }): Promise<ReadSkillResult> {
-	if (
-		input.read.organizationId !== undefined &&
-		input.read.organizationId !== input.readContext.organizationId
-	) {
-		throw validationError("read skill input invalid", "organization mismatch");
-	}
 	if (input.read.installationId !== undefined) {
 		const installation = await input.store.installations.get(
 			input.read.installationId,
@@ -366,45 +368,50 @@ async function readInstalledSkillById(input: {
 	if (skillId === undefined) {
 		throw validationError("read skill input invalid", "skill id is required");
 	}
+	// A bare skillId searches the reader's own boundaries (personal/team/organization from the
+	// trusted read context) — enabled first, then trusted, as before.
 	let sawMatchingSkill = false;
+	const readCtx = readTurnContext(input.readContext);
 	for (const status of ["enabled", "trusted"] as const) {
-		const installations = await input.store.installations.listForOrganization({
-			status,
-			organizationId: input.readContext.organizationId,
-		});
-		for (const installation of installations) {
-			const resolved = await packageAndManifestForInstallation({
-				installation,
-				store: input.store,
+		for (const pair of contextScopePairs(readCtx)) {
+			const installations = await input.store.installations.listForScope({
+				status,
+				scope: pair.scope,
+				scopeId: pair.scopeId,
 			});
-			if (!resolved || resolved.manifest.id !== skillId) continue;
-			sawMatchingSkill = true;
-			if (
-				await hasReadGrant({
-					ctx: readTurnContext(input.readContext),
+			for (const installation of installations) {
+				const resolved = await packageAndManifestForInstallation({
 					installation,
 					store: input.store,
-				})
-			) {
-				const read = await createReadRecord({
-					digest: resolved.pkg.digest,
-					installationId: installation.id,
-					packageId: resolved.pkg.packageId,
-					read: input.read,
-					readBy: input.readContext.readBy,
-					skillId: resolved.manifest.id,
-					store: input.store,
-					organizationId: installation.organizationId,
-					version: resolved.pkg.version,
 				});
-				return assertReadSkillResult({
-					id: resolved.manifest.id,
-					installation,
-					kind: "installed",
-					manifest: resolved.manifest,
-					package: resolved.pkg,
-					read,
-				});
+				if (!resolved || resolved.manifest.id !== skillId) continue;
+				sawMatchingSkill = true;
+				if (
+					await hasReadGrant({
+						ctx: readCtx,
+						installation,
+						store: input.store,
+					})
+				) {
+					const read = await createReadRecord({
+						digest: resolved.pkg.digest,
+						installationId: installation.id,
+						packageId: resolved.pkg.packageId,
+						read: input.read,
+						readBy: input.readContext.readBy,
+						skillId: resolved.manifest.id,
+						store: input.store,
+						version: resolved.pkg.version,
+					});
+					return assertReadSkillResult({
+						id: resolved.manifest.id,
+						installation,
+						kind: "installed",
+						manifest: resolved.manifest,
+						package: resolved.pkg,
+						read,
+					});
+				}
 			}
 		}
 	}
@@ -418,11 +425,18 @@ async function installedCatalogEntries(input: {
 	catalog: SkillCatalogInput;
 	store: SkillsStore | undefined;
 }): Promise<SkillCatalogEntry[]> {
-	if (!input.store || input.catalog.organizationId === undefined) return [];
-	const installations = await input.store.installations.listForOrganization({
+	// Installed entries list ONE boundary at a time — both halves of the pair name it.
+	if (
+		!input.store ||
+		input.catalog.scope === undefined ||
+		input.catalog.scopeId === undefined
+	) {
+		return [];
+	}
+	const installations = await input.store.installations.listForScope({
 		status: input.catalog.status,
-		organizationId: input.catalog.organizationId,
-		visibility: input.catalog.visibility,
+		scope: input.catalog.scope,
+		scopeId: input.catalog.scopeId,
 	});
 	const out: SkillCatalogEntry[] = [];
 	for (const installation of installations) {
@@ -456,9 +470,9 @@ async function installedCatalogEntries(input: {
 				publisher: resolved.pkg.publisher,
 				source: resolved.pkg.source,
 				status: installation.status,
-				organizationId: installation.organizationId,
+				scope: installation.scope,
+				scopeId: installation.scopeId,
 				version: resolved.pkg.version,
-				visibility: installation.visibility,
 			}),
 		);
 	}
@@ -500,7 +514,6 @@ export function createSimpleSkillsApi(
 							readBy: readContext.readBy,
 							skillId: staticManifest.id,
 							store,
-							organizationId: readContext.organizationId,
 						});
 					}
 					return assertReadSkillResult({
@@ -527,33 +540,30 @@ export function createSimpleSkillsApi(
 				digest: valid.digest,
 				manifest: valid.manifest,
 				packageId: valid.packageId,
-				publisher: valid.ownerActorId,
+				publisher: valid.createdBy,
 				source: valid.source ?? "local",
 				version: valid.version,
 			});
+			// The store defaults the boundary to personal:createdBy — exactly what "personal" means.
 			const installation = await resolvedStore().installations.create({
+				createdBy: valid.createdBy,
 				digest: pkg.digest,
-				enabledBy: valid.ownerActorId,
-				ownerActorId: valid.ownerActorId,
+				enabledBy: valid.createdBy,
 				packageId: pkg.packageId,
 				status: "enabled",
-				organizationId: valid.organizationId,
 				version: pkg.version,
-				visibility: "private",
 			});
 			const grant = await resolvedStore().acl.grant({
 				installationId: installation.id,
 				permission: "activate",
-				principalId: valid.ownerActorId,
+				principalId: valid.createdBy,
 				principalType: "actor",
-				organizationId: valid.organizationId,
 			});
 			const readGrant = await resolvedStore().acl.grant({
 				installationId: installation.id,
 				permission: "read",
-				principalId: valid.ownerActorId,
+				principalId: valid.createdBy,
 				principalType: "actor",
-				organizationId: valid.organizationId,
 			});
 			return assertCreatePersonalSkillResult({
 				grant,
@@ -581,7 +591,6 @@ export function createSimpleSkillsApi(
 				runId: valid.runId,
 				skillId: manifest.id,
 				source: valid.source ?? "user",
-				organizationId: activationContext.organizationId,
 				threadId: valid.threadId,
 			});
 		},

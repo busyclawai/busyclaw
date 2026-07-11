@@ -51,8 +51,9 @@ describe("createClaw plugin APIs", () => {
 			status: "enabled",
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
-			visibility: "team",
+			createdBy: "admin-1",
+			scope: "team",
+			scopeId: "team-1",
 		});
 		expect(
 			await claw.api.skills.acl.grant({
@@ -60,7 +61,6 @@ describe("createClaw plugin APIs", () => {
 				permission: "activate",
 				principalId: "team-1",
 				principalType: "team",
-				organizationId: "organization-1",
 			}),
 		).toMatchObject({ permission: "activate" });
 		expect(
@@ -156,7 +156,9 @@ describe("createClaw plugin APIs", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
+			createdBy: "admin-1",
+			scope: "organization",
+			scopeId: "organization-1",
 			status: "enabled",
 		});
 		await claw.api.skills.acl.grant({
@@ -164,7 +166,6 @@ describe("createClaw plugin APIs", () => {
 			permission: "activate",
 			principalId: "organization-1",
 			principalType: "organization",
-			organizationId: "organization-1",
 		});
 		await claw.api.skills.activate({
 			clawId: "claw-1",
@@ -199,7 +200,7 @@ describe("createClaw plugin APIs", () => {
 			expect(tables[model]).toBeDefined();
 		}
 		// a persisted skills column survives the round-trip through the plugin's declaration
-		expect(tables.skill_installation?.fields.visibility).toBeDefined();
+		expect(tables.skill_installation?.fields.scope).toBeDefined();
 		// core tables are still intact alongside the plugin's
 		expect(tables.claw).toBeDefined();
 	});

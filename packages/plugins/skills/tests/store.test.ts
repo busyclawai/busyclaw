@@ -39,13 +39,15 @@ describe("createSkillsStore", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			organizationId: "organization-1",
-			teamId: "team-1",
-			ownerActorId: "actor-1",
+			createdBy: "actor-1",
+			scope: "team",
+			scopeId: "team-1",
 		});
 		expect(installation).toMatchObject({
 			status: "installed",
-			visibility: "private",
+			createdBy: "actor-1",
+			scope: "team",
+			scopeId: "team-1",
 		});
 		expect(
 			await store.installations.updateStatus("install-1", {
@@ -54,15 +56,15 @@ describe("createSkillsStore", () => {
 			}),
 		).toMatchObject({ status: "trusted", trustedBy: "admin-1" });
 		expect(
-			await store.installations.listForOrganization({
+			await store.installations.listForScope({
 				status: "trusted",
-				organizationId: "organization-1",
+				scope: "team",
+				scopeId: "team-1",
 			}),
 		).toHaveLength(1);
 
 		const acl = await store.acl.grant({
 			id: "acl-1",
-			organizationId: "organization-1",
 			installationId: "install-1",
 			principalType: "team",
 			principalId: "team-1",
@@ -74,13 +76,11 @@ describe("createSkillsStore", () => {
 				permission: "activate",
 				principalId: "team-1",
 				principalType: "team",
-				organizationId: "organization-1",
 			}),
 		).toMatchObject([{ id: "acl-1" }]);
 
 		const activation = await store.activations.create({
 			id: "activation-1",
-			organizationId: "organization-1",
 			clawId: "claw-1",
 			threadId: "thread-1",
 			runId: "run-1",
@@ -97,7 +97,6 @@ describe("createSkillsStore", () => {
 
 		const read = await store.reads.create({
 			id: "read-1",
-			organizationId: "organization-1",
 			clawId: "claw-1",
 			threadId: "thread-1",
 			runId: "run-1",
@@ -119,13 +118,17 @@ describe("createSkillsStore", () => {
 
 		const proposal = await store.proposals.create({
 			id: "proposal-1",
-			organizationId: "organization-1",
+			scope: "team",
+			scopeId: "team-1",
 			targetInstallationId: "install-1",
 			proposerActorId: "actor-1",
 			kind: "patch",
 			state: { manifestPatch: { allowedTools: ["summarize"] } },
 		});
 		expect(proposal).toMatchObject({ status: "pending" });
+		expect(
+			await store.proposals.listForScope({ scope: "team", scopeId: "team-1" }),
+		).toMatchObject([{ id: "proposal-1" }]);
 		expect(
 			await store.proposals.updateStatus("proposal-1", {
 				status: "approved",

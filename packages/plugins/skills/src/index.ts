@@ -52,7 +52,6 @@ export type {
 	SkillInstallationStatus,
 	SkillInstallationStatusPatch,
 	SkillInstallationStore,
-	SkillInstallationVisibility,
 	SkillManifest,
 	SkillPackageRecord,
 	SkillPackageSource,
@@ -70,7 +69,6 @@ export type {
 export {
 	skillAclPrincipalType,
 	skillInstallationStatus,
-	skillInstallationVisibility,
 	skillManifest,
 	skillManifestLimits,
 	skillManifests,

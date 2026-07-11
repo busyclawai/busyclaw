@@ -13,7 +13,6 @@ import type {
 	skillActivationSourceValues,
 	skillInstallationFields,
 	skillInstallationStatusValues,
-	skillInstallationVisibilityValues,
 	skillManifest,
 	skillPackageFields,
 	skillPackageSourceValues,
@@ -26,8 +25,6 @@ import type {
 
 export type SkillManifest = typeof skillManifest.infer;
 export type SkillPackageSource = (typeof skillPackageSourceValues)[number];
-export type SkillInstallationVisibility =
-	(typeof skillInstallationVisibilityValues)[number];
 export type SkillInstallationStatus =
 	(typeof skillInstallationStatusValues)[number];
 export type SkillAclPrincipalType =
@@ -100,10 +97,13 @@ export type SkillInstallationStore = {
 		input: CreateSkillInstallationInput,
 	) => Promise<SkillInstallationRecord>;
 	get: (id: string) => Promise<SkillInstallationRecord | null>;
-	listForOrganization: (input: {
+	// EXACT single-scope listing (the store-filter shape) — one boundary at a time. The union across
+	// a caller's boundaries is the caller's job (resolution walks its context's pairs; the full
+	// membership-expanding union is app-authz's).
+	listForScope: (input: {
 		status?: SkillInstallationStatus;
-		organizationId: string;
-		visibility?: SkillInstallationVisibility;
+		scope: string;
+		scopeId: string;
 	}) => Promise<SkillInstallationRecord[]>;
 	updateStatus: (
 		id: string,
@@ -119,7 +119,6 @@ export type SkillAclStore = {
 		permission?: SkillAclPermission;
 		principalId?: string;
 		principalType: SkillAclPrincipalType;
-		organizationId: string;
 	}) => Promise<SkillAclRecord[]>;
 };
 
@@ -140,9 +139,11 @@ export type SkillReadStore = {
 export type SkillProposalStore = {
 	create: (input: CreateSkillProposalInput) => Promise<SkillProposalRecord>;
 	get: (id: string) => Promise<SkillProposalRecord | null>;
-	listForOrganization: (input: {
+	// The review inbox for one boundary — exact single-scope, like installations.
+	listForScope: (input: {
 		status?: SkillProposalStatus;
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 	}) => Promise<SkillProposalRecord[]>;
 	updateStatus: (
 		id: string,

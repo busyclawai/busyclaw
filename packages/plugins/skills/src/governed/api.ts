@@ -106,16 +106,17 @@ async function packageForInstall(input: {
 	return pkg;
 }
 
+// By-id reach, the claws shape — the old caller-supplied organization match was a claim, not
+// authorization; real access policy over these lifecycle methods is app-authz's.
 async function requireInstallation(input: {
 	installationId: string;
 	label: string;
 	store: SkillsStore;
-	organizationId: string;
 }): Promise<SkillInstallationRecord> {
 	const installation = await input.store.installations.get(
 		input.installationId,
 	);
-	if (!installation || installation.organizationId !== input.organizationId) {
+	if (!installation) {
 		throw validationError(input.label, "installation not found");
 	}
 	return installation;
@@ -129,7 +130,6 @@ async function createShareProposal(input: {
 		installationId: input.share.installationId,
 		label: "request share input invalid",
 		store: input.store,
-		organizationId: input.share.organizationId,
 	});
 	return input.store.proposals.create({
 		kind: "share",
@@ -148,7 +148,10 @@ async function createShareProposal(input: {
 				: {}),
 		},
 		targetInstallationId: installation.id,
-		organizationId: input.share.organizationId,
+		// The review inbox is the target installation's boundary — derived from the row, never a
+		// caller claim.
+		scope: installation.scope,
+		scopeId: installation.scopeId,
 	});
 }
 
@@ -160,14 +163,12 @@ async function grantShare(input: {
 		installationId: input.share.installationId,
 		label: "share skill input invalid",
 		store: input.store,
-		organizationId: input.share.organizationId,
 	});
 	return input.store.acl.grant({
 		installationId: installation.id,
 		permission: "activate",
 		principalId: input.share.principalId,
 		principalType: input.share.principalType,
-		organizationId: input.share.organizationId,
 	});
 }
 
@@ -185,14 +186,13 @@ export function createGovernedSkillsApi(
 				store: resolvedStore(),
 			});
 			return resolvedStore().installations.create({
+				createdBy: valid.createdBy,
 				digest: pkg.digest,
-				ownerActorId: valid.ownerActorId,
 				packageId: pkg.packageId,
+				scope: valid.scope,
+				scopeId: valid.scopeId,
 				status: valid.initialStatus ?? "installed",
-				teamId: valid.teamId,
-				organizationId: valid.organizationId,
 				version: pkg.version,
-				visibility: valid.visibility,
 			});
 		},
 		async trustInstallation(input) {
@@ -201,7 +201,6 @@ export function createGovernedSkillsApi(
 				installationId: valid.installationId,
 				label: "trust skill installation input invalid",
 				store: resolvedStore(),
-				organizationId: valid.organizationId,
 			});
 			if (
 				installation.status !== "installed" &&
@@ -232,7 +231,6 @@ export function createGovernedSkillsApi(
 				installationId: valid.installationId,
 				label: "enable skill installation input invalid",
 				store: resolvedStore(),
-				organizationId: valid.organizationId,
 			});
 			if (installation.status !== "trusted") {
 				throw validationError(
@@ -260,14 +258,12 @@ export function createGovernedSkillsApi(
 				installationId: valid.installationId,
 				label: "grant activation input invalid",
 				store: resolvedStore(),
-				organizationId: valid.organizationId,
 			});
 			return resolvedStore().acl.grant({
 				installationId: valid.installationId,
 				permission: "activate",
 				principalId: valid.principalId,
 				principalType: valid.principalType,
-				organizationId: valid.organizationId,
 			});
 		},
 		async requestShare(input) {
@@ -314,8 +310,8 @@ export function createGovernedSkillsApi(
 		installations: {
 			create: (input) => resolvedStore().installations.create(input),
 			get: ({ id }) => resolvedStore().installations.get(id),
-			listForOrganization: (input) =>
-				resolvedStore().installations.listForOrganization(input),
+			listForScope: (input) =>
+				resolvedStore().installations.listForScope(input),
 			updateStatus: ({ id, patch }) =>
 				resolvedStore().installations.updateStatus(id, patch),
 		},
@@ -341,8 +337,7 @@ export function createGovernedSkillsApi(
 		proposals: {
 			create: (input) => resolvedStore().proposals.create(input),
 			get: ({ id }) => resolvedStore().proposals.get(id),
-			listForOrganization: (input) =>
-				resolvedStore().proposals.listForOrganization(input),
+			listForScope: (input) => resolvedStore().proposals.listForScope(input),
 			updateStatus: ({ id, patch }) =>
 				resolvedStore().proposals.updateStatus(id, patch),
 		},

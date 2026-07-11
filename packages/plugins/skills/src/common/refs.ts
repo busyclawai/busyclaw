@@ -4,12 +4,12 @@ import type { ActiveSkillRef, ActiveSkillSelection } from "./contracts";
 import {
 	activeSkillIdRef,
 	activeSkillInstallationRef,
-	activeSkillOrganizationRef,
 	activeSkillRefs,
+	activeSkillScopeRef,
 } from "./schema";
 
 type ActiveSkillInstallationRef = typeof activeSkillInstallationRef.infer;
-type ActiveSkillOrganizationRef = typeof activeSkillOrganizationRef.infer;
+type ActiveSkillScopeRef = typeof activeSkillScopeRef.infer;
 
 export function parseInstallationRef(
 	value: ActiveSkillRef,
@@ -20,12 +20,10 @@ export function parseInstallationRef(
 	return valid instanceof ark.errors ? null : valid;
 }
 
-export function parseOrganizationRef(
+export function parseScopeRef(
 	value: ActiveSkillRef,
-): ActiveSkillOrganizationRef | null {
-	const valid = activeSkillOrganizationRef(value) as
-		| ActiveSkillOrganizationRef
-		| ark.errors;
+): ActiveSkillScopeRef | null {
+	const valid = activeSkillScopeRef(value) as ActiveSkillScopeRef | ark.errors;
 	return valid instanceof ark.errors ? null : valid;
 }
 
@@ -40,8 +38,8 @@ function assertActiveSkillRefContent(ref: ActiveSkillRef): ActiveSkillRef {
 	}
 	const installationRef = parseInstallationRef(ref);
 	if (installationRef) return installationRef;
-	const organizationRef = parseOrganizationRef(ref);
-	if (organizationRef) return organizationRef;
+	const scopeRef = parseScopeRef(ref);
+	if (scopeRef) return scopeRef;
 	throw validationError(
 		"active skill ref invalid",
 		"unrecognized active skill ref",
@@ -70,14 +68,14 @@ function uniqueActiveSkillRefs(
 	const seen = new Set<string>();
 	for (const ref of input) {
 		const installationRef = parseInstallationRef(ref);
-		const organizationRef = parseOrganizationRef(ref);
+		const scopeRef = parseScopeRef(ref);
 		const key =
 			typeof ref === "string"
 				? `id:${ref}`
 				: installationRef
 					? `installation:${installationRef.installationId}`
-					: organizationRef
-						? `organization:${organizationRef.organizationId}:skill:${organizationRef.skillId}`
+					: scopeRef
+						? `scope:${scopeRef.scope}:${scopeRef.scopeId}:skill:${scopeRef.skillId}`
 						: "invalid";
 		if (seen.has(key)) continue;
 		seen.add(key);
@@ -88,12 +86,12 @@ function uniqueActiveSkillRefs(
 
 export function refLabel(ref: ActiveSkillRef): string {
 	const installationRef = parseInstallationRef(ref);
-	const organizationRef = parseOrganizationRef(ref);
+	const scopeRef = parseScopeRef(ref);
 	return typeof ref === "string"
 		? ref
 		: installationRef
 			? installationRef.installationId
-			: organizationRef
-				? `${organizationRef.organizationId}:${organizationRef.skillId}`
+			: scopeRef
+				? `${scopeRef.scope}:${scopeRef.scopeId}:${scopeRef.skillId}`
 				: "unknown";
 }

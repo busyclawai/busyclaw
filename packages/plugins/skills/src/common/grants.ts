@@ -15,71 +15,63 @@ function contextString(ctx: TurnContext, key: string): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-// Grant resolution: does the actor (or its team / organization / a public grant) hold `permission` on the
-// installation? Shared by active-skill resolution (the gate) and the governed lifecycle API.
+/**
+ * Container satisfaction — can this context "stand inside" the installation's `(scope, scopeId)`
+ * boundary? String equality against the runtime-stamped context facts (actor/team/organization),
+ * never a membership lookup — the skills plugin stays org-blind; whoever stamped the fact resolved
+ * the membership. Replaces the old hard organization gate. Unknown scope kinds fail CLOSED until
+ * the policy layer learns them; `global` is the one deliberate pass (a row explicitly shared with
+ * everyone).
+ */
+export function withinScope(
+	ctx: TurnContext,
+	boundary: { scope: string; scopeId: string },
+): boolean {
+	switch (boundary.scope) {
+		case "personal":
+			return contextString(ctx, ACTOR_CONTEXT_KEY) === boundary.scopeId;
+		case "team":
+			return contextString(ctx, TEAM_CONTEXT_KEY) === boundary.scopeId;
+		case "organization":
+			return contextString(ctx, ORGANIZATION_CONTEXT_KEY) === boundary.scopeId;
+		case "global":
+			return true;
+		default:
+			return false;
+	}
+}
+
+// Grant resolution: the container gate first (the boundary the installation lives in), then the ACL
+// ladder — does the actor (or its team / organization / a public grant) hold `permission` on the
+// installation? A grant never reaches OUTSIDE the container: sharing with an actor who cannot stand
+// inside the boundary stays impossible, exactly as the old organization gate had it. Shared by
+// active-skill resolution (the gate) and the governed lifecycle API.
 export async function hasSkillGrant(input: {
 	ctx: TurnContext;
 	installation: SkillInstallationRecord;
 	permission: SkillAclPermission;
 	store: SkillsStore;
 }): Promise<boolean> {
-	const organizationId = contextString(input.ctx, ORGANIZATION_CONTEXT_KEY);
-	if (
-		organizationId === undefined ||
-		organizationId !== input.installation.organizationId
-	) {
-		return false;
-	}
+	if (!withinScope(input.ctx, input.installation)) return false;
+	const grants = await input.store.acl.listForInstallation(
+		input.installation.id,
+	);
 	const actorId = contextString(input.ctx, ACTOR_CONTEXT_KEY);
-	if (actorId !== undefined) {
-		const actorGrants = await input.store.acl.listForPrincipal({
-			permission: input.permission,
-			principalId: actorId,
-			principalType: "actor",
-			organizationId,
-		});
-		if (
-			actorGrants.some(
-				(grant) => grant.installationId === input.installation.id,
-			)
-		) {
-			return true;
-		}
-	}
 	const teamId = contextString(input.ctx, TEAM_CONTEXT_KEY);
-	if (teamId !== undefined) {
-		const teamGrants = await input.store.acl.listForPrincipal({
-			permission: input.permission,
-			principalId: teamId,
-			principalType: "team",
-			organizationId,
-		});
-		if (
-			teamGrants.some((grant) => grant.installationId === input.installation.id)
-		) {
-			return true;
-		}
-	}
-	const organizationGrants = await input.store.acl.listForPrincipal({
-		permission: input.permission,
-		principalId: organizationId,
-		principalType: "organization",
-		organizationId,
-	});
-	if (
-		organizationGrants.some(
-			(grant) => grant.installationId === input.installation.id,
-		)
-	) {
-		return true;
-	}
-	const publicGrants = await input.store.acl.listForPrincipal({
-		permission: input.permission,
-		principalType: "public",
-		organizationId,
-	});
-	return publicGrants.some(
-		(grant) => grant.installationId === input.installation.id,
+	const organizationId = contextString(input.ctx, ORGANIZATION_CONTEXT_KEY);
+	return grants.some(
+		(grant) =>
+			grant.permission === input.permission &&
+			(grant.principalType === "public" ||
+				(grant.principalType === "actor" &&
+					actorId !== undefined &&
+					grant.principalId === actorId) ||
+				(grant.principalType === "team" &&
+					teamId !== undefined &&
+					grant.principalId === teamId) ||
+				(grant.principalType === "organization" &&
+					organizationId !== undefined &&
+					grant.principalId === organizationId)),
 	);
 }
 

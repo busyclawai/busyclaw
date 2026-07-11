@@ -39,7 +39,12 @@ describe("euroclaw core skills", () => {
 			required: true,
 			type: "json",
 		});
-		expect(skillsSchema.skill_installation.fields.visibility).toMatchObject({
+		expect(skillsSchema.skill_installation.fields.scope).toMatchObject({
+			index: true,
+			required: true,
+			type: "string",
+		});
+		expect(skillsSchema.skill_installation.fields.createdBy).toMatchObject({
 			index: true,
 			required: true,
 			type: "string",

@@ -11,7 +11,6 @@ import type {
 	SkillInstallationRecord,
 	SkillInstallationStatus,
 	SkillInstallationStatusPatch,
-	SkillInstallationVisibility,
 	SkillManifest,
 	SkillPackageRecord,
 	SkillPackageSource,
@@ -76,10 +75,10 @@ export type SkillsApi = SimpleSkillsApi & {
 			input: CreateSkillInstallationInput,
 		) => Promise<SkillInstallationRecord>;
 		get: (input: { id: string }) => Promise<SkillInstallationRecord | null>;
-		listForOrganization: (input: {
+		listForScope: (input: {
 			status?: SkillInstallationStatus;
-			organizationId: string;
-			visibility?: SkillInstallationVisibility;
+			scope: string;
+			scopeId: string;
 		}) => Promise<SkillInstallationRecord[]>;
 		updateStatus: (input: {
 			id: string;
@@ -96,7 +95,6 @@ export type SkillsApi = SimpleSkillsApi & {
 			permission?: SkillAclPermission;
 			principalId?: string;
 			principalType: SkillAclPrincipalType;
-			organizationId: string;
 		}) => Promise<SkillAclRecord[]>;
 	};
 	activations: {
@@ -114,9 +112,10 @@ export type SkillsApi = SimpleSkillsApi & {
 	proposals: {
 		create: (input: CreateSkillProposalInput) => Promise<SkillProposalRecord>;
 		get: (input: { id: string }) => Promise<SkillProposalRecord | null>;
-		listForOrganization: (input: {
+		listForScope: (input: {
 			status?: SkillProposalStatus;
-			organizationId: string;
+			scope: string;
+			scopeId: string;
 		}) => Promise<SkillProposalRecord[]>;
 		updateStatus: (input: {
 			id: string;
