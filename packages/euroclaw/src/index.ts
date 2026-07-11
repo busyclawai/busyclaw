@@ -106,11 +106,12 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	>;
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
 	models?: ClawModelsConfig;
-	/** The ordered secret-provider chain the one-door reader resolves through (`@euroclaw/secrets`).
-	 *  Absent ⇒ `[env()]` (read the env global); `[]` is explicit-none (nothing resolves). The reader
-	 *  is built once and both backs registered-tool credentials (below) and is injected into the plugin
-	 *  configure context. */
-	secrets?: SecretProvider[];
+	/** The ordered secret-provider chain the one-door reader resolves through (`@euroclaw/secrets`) —
+	 *  the same concept as the plugin push field (`plugin.secretProviders`): two delivery slots, one
+	 *  merge. Absent ⇒ `[env()]` (read the env global); `[]` is explicit-none (nothing resolves). The
+	 *  reader (`secrets`) is built once and both backs registered-tool credentials (below) and is
+	 *  injected into the plugin configure context. */
+	secretProviders?: SecretProvider[];
 	/** Escape-hatch credential resolver for registered-tool invocation — wins over the `secrets`
 	 *  reader when provided. euroclaw stores no secrets; absent ⇒ credentials resolve through the
 	 *  `secrets` reader (env-backed by default), and a still-unresolved credential fails loud at call
@@ -464,12 +465,13 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			? createSecretAliasStore(adapter)
 			: undefined;
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
-	// `??` not `||` — an explicit `secrets: []` stays none; only an ABSENT `secrets` defaults to env.
-	// Plugin-contributed providers merge AFTER the config ones (env default resolves before the merge)
-	// and are read STATICALLY off the raw plugin list — the reader is built before `configure` runs, so
-	// consumers close over the complete chain. `buildSecrets` fails loud on a duplicate name across both.
+	// `??` not `||` — an explicit `secretProviders: []` stays none; only an ABSENT `secretProviders`
+	// defaults to env. Plugin-contributed providers merge AFTER the config ones (env default resolves
+	// before the merge) and are read STATICALLY off the raw plugin list — the reader is built before
+	// `configure` runs, so consumers close over the complete chain. `buildSecrets` fails loud on a
+	// duplicate name across both.
 	const providers = [
-		...(config.secrets ?? [env()]),
+		...(config.secretProviders ?? [env()]),
 		...pluginList.flatMap((plugin) => plugin.secretProviders ?? []),
 	];
 	const secrets: Secrets = buildSecrets(

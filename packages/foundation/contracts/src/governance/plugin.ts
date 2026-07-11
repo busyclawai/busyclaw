@@ -141,7 +141,7 @@ export type EuroclawPlugin<
 	/** Secret backends this plugin OFFERS (`secrets` above declares NEEDS; this declares OFFERS). Read
 	 *  STATICALLY off the plugin object BEFORE the resolver is built (the assembly builds `secrets`
 	 *  before any plugin's `configure` runs) — never registered imperatively. Merged after
-	 *  `config.secrets`; duplicate provider names fail loud in buildSecrets. */
+	 *  `config.secretProviders`; duplicate provider names fail loud in buildSecrets. */
 	secretProviders?: readonly SecretProvider[];
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];

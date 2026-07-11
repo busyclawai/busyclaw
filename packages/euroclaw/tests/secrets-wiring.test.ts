@@ -1,5 +1,5 @@
 // The secrets assembly-wiring proof: `createClaw` builds the one-door `@euroclaw/secrets` reader
-// (`buildSecrets(config.secrets ?? [env()])`) and flows it two ways — it backs registered-tool
+// (`buildSecrets(config.secretProviders ?? [env()])`) and flows it two ways — it backs registered-tool
 // credential resolution (absent `resolveSecret` ⇒ env-backed, keyed by the registration `source`),
 // and it is injected into the plugin `configure` context. This is the POSTURE FLIP: an absent
 // resolver no longer fails every authed tool loud — it reads env; a still-unresolved value fails loud.
@@ -164,7 +164,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 			organization: (ctx) =>
 				typeof ctx.org === "string" ? ctx.org : undefined,
 			plugins: [policyPlugin],
-			// no `resolveSecret`, no `secrets` ⇒ the [env()] default backs the credential.
+			// no `resolveSecret`, no `secretProviders` ⇒ the [env()] default backs the credential.
 		});
 
 		const result = await claw.$context.runtime.run("get pet 7", runCtx);

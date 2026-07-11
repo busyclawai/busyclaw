@@ -142,7 +142,7 @@ describe("channels ↔ euroclaw integration", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			// the named app bot resolves its token via its own tokenRef → "app-token"
-			secrets: [env({ source: { SALES_BOT: "app-token" } })],
+			secretProviders: [env({ source: { SALES_BOT: "app-token" } })],
 			plugins: [
 				channels([
 					telegram({ fetch: fakeFetch, name: "sales", tokenRef: "SALES_BOT" }),
@@ -245,7 +245,7 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			secrets: [env({ source: { TELEGRAM_BOT_TOKEN: "env-token" } })],
+			secretProviders: [env({ source: { TELEGRAM_BOT_TOKEN: "env-token" } })],
 			plugins: [channels([telegram({ fetch: fakeFetch })])],
 		});
 
@@ -290,7 +290,7 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			secrets: [env({ source: {} })], // the reader resolves nothing
+			secretProviders: [env({ source: {} })], // the reader resolves nothing
 			plugins: [channels([telegram()])],
 		});
 		const route = (claw.$context.plugins ?? [])

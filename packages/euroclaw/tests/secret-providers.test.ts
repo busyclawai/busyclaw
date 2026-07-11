@@ -1,9 +1,9 @@
 // Plugins can contribute secret PROVIDERS (resolvers, never values) via the declared
 // `plugin.secretProviders` field. The assembly reads them STATICALLY off the raw plugin list and
-// merges them AFTER `config.secrets ?? [env()]`, into the same one-door reader every subsystem
-// resolves through. This proves: a plugin provider resolves via the one door; a duplicate name
-// across config + plugin fails loud; the env default survives a plugin contribution; and the per-org
-// DB-alias layer still wins over a plugin-contributed provider's direct name.
+// merges them AFTER `config.secretProviders ?? [env()]`, into the same one-door reader every
+// subsystem resolves through. This proves: a plugin provider resolves via the one door; a duplicate
+// name across config + plugin fails loud; the env default survives a plugin contribution; and the
+// per-org DB-alias layer still wins over a plugin-contributed provider's direct name.
 // See docs/plans/secrets-provider-registry.md § Providers from plugins.
 
 import type { EuroclawPlugin, SecretProvider, Secrets } from "@euroclaw/contracts";
@@ -67,12 +67,12 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		});
 	});
 
-	it("(2) a duplicate provider name across config.secrets and a plugin fails loud", () => {
+	it("(2) a duplicate provider name across config.secretProviders and a plugin fails loud", () => {
 		// The plugin's provider reuses the config provider's name ("env") → buildSecrets rejects it.
 		expect(() =>
 			createClaw({
 				model: textModel("done"),
-				secrets: [env()],
+				secretProviders: [env()],
 				plugins: [
 					{
 						id: "dup-provider",
@@ -83,7 +83,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		).toThrow(/duplicate secret provider name/);
 	});
 
-	it("(3) absent config.secrets: the env default AND a plugin provider both resolve", async () => {
+	it("(3) absent config.secretProviders: the env default AND a plugin provider both resolve", async () => {
 		vi.stubEnv("ENV_BACKED", "from-env");
 		const capture = captureSecrets();
 		const providerPlugin: EuroclawPlugin = {
@@ -91,7 +91,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 			secretProviders: [stubProvider()],
 		};
 
-		// No `secrets` ⇒ `[env()]` default resolves BEFORE the plugin merge; both coexist.
+		// No `secretProviders` ⇒ `[env()]` default resolves BEFORE the plugin merge; both coexist.
 		createClaw({
 			model: textModel("done"),
 			plugins: [providerPlugin, capture.plugin],
@@ -129,7 +129,9 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 			database: db,
 			redactor,
 			dynamicSecretAliases: { enabled: true },
-			secrets: [env({ source: { VAULT_BACKEND: "resolved-from-alias" } })],
+			secretProviders: [
+				env({ source: { VAULT_BACKEND: "resolved-from-alias" } }),
+			],
 			plugins: [providerPlugin],
 		});
 		await claw.api.secrets.setAlias({

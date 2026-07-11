@@ -8,7 +8,7 @@ resolves each on demand from where it actually lives (env / vault / SSM …).
 This package ships the `env()` provider and the `[env()]` default only:
 
 - `buildSecrets(providers = [env()])` — the one-door resolver over an ordered provider chain. The
-  default `[env()]` IS the "absent `secrets` → read env" default: `buildSecrets()` returns an
+  default `[env()]` IS the "absent `secretProviders` → read env" default: `buildSecrets()` returns an
   env-backed resolver with zero config. `get(name, ctx)` remaps the canonical `name` through each
   provider's own `aliases` (pass-through when absent), then returns the FIRST non-null material down
   the chain; `null` when unresolved (the caller fails loud if it required it). `has(name, ctx)` is

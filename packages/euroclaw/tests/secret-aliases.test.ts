@@ -67,7 +67,9 @@ describe("createClaw — DB-wins resolution through the one-door reader", () => 
 			database: db,
 			redactor,
 			dynamicSecretAliases: { enabled: true },
-			secrets: [env({ source: { VAULT_BACKEND: "resolved-from-alias" } })],
+			secretProviders: [
+				env({ source: { VAULT_BACKEND: "resolved-from-alias" } }),
+			],
 		});
 		await claw.api.secrets.setAlias({
 			organizationId: "org-a",
@@ -99,7 +101,9 @@ describe("claw.api.secrets — the admin surface", () => {
 			database: db,
 			redactor,
 			dynamicSecretAliases: { enabled: true },
-			secrets: [env({ source: { INLINE_ONE: "v", VAULT_BACKEND: "secret" } })],
+			secretProviders: [
+				env({ source: { INLINE_ONE: "v", VAULT_BACKEND: "secret" } }),
+			],
 			plugins: [
 				{
 					id: "declarer",

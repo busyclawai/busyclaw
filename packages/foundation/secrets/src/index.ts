@@ -72,7 +72,8 @@ export type BuildSecretsOptions = {
 
 /**
  * Build the one-door resolver over an ordered provider chain. The default `[env()]` IS the "absent
- * `secrets` → read env" default: `buildSecrets()` returns an env-backed resolver with zero config.
+ * `secretProviders` → read env" default: `buildSecrets()` returns an env-backed resolver with zero
+ * config.
  *
  * `get(name, ctx)`:
  *   0. **per-org DB alias** (only with `options.aliases` AND `ctx.organizationId`): look up a pointer;
