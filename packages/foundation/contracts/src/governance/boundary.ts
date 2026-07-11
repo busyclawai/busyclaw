@@ -105,7 +105,6 @@ export const THREAD_ID_CONTEXT_KEY = "euroclaw__threadId";
 export const RUN_ID_CONTEXT_KEY = "euroclaw__runId";
 export const SUBJECT_CONTEXT_KEY = "euroclaw__subjectId";
 export const ORGANIZATION_CONTEXT_KEY = "euroclaw__organizationId";
-export const MEMORY_NAMESPACE_CONTEXT_KEY = "euroclaw__memoryNamespace";
 // The redaction CONTAINMENT ref — a polymorphic (scope, scopeId) pointing at the container a
 // redaction happened in (`claw:<clawId>` today, `memory:<kbId>` / `task:<taskId>` later). A PII
 // placeholder rehydrates only within the same container. `scopeId` is a unique entity id, so the

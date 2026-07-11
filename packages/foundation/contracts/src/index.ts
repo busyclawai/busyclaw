@@ -256,7 +256,6 @@ export {
 	CLAW_ID_CONTEXT_KEY,
 	gateDecision,
 	handleResult,
-	MEMORY_NAMESPACE_CONTEXT_KEY,
 	modelCall,
 	modelMessage,
 	ORGANIZATION_CONTEXT_KEY,

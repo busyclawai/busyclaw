@@ -62,9 +62,7 @@ export const clawFields = {
 	status: field.enum(clawStatusValues, { required: true }),
 	name: field.string(),
 	instructions: field.string({ pii: "possible" }),
-	context: field.jsonObject({ required: true }),
-	memoryNamespace: field.string(),
-	createdAt: field.string({ required: true, immutable: true }),
+	context: field.jsonObject({ required: true }),	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;
 
