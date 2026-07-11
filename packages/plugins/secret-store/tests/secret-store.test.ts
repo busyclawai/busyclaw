@@ -1,27 +1,44 @@
 // The secret-store plugin end-to-end at the unit seam: the (scope, scopeId, name) rows, the
-// nearest-scope provider walk over the context's OWN boundaries, and the data-tier precedence in
-// buildSecrets. Wiring mirrors production: the provider is read STATICALLY off the plugin object,
-// the store arrives at configure (tests hand a schema-wrapped memory adapter, the channels pattern).
+// nearest-scope provider walk over the context's OWN boundaries, the data-tier precedence in
+// buildSecrets, and AES-GCM at rest (values sealed on write, opened only in the provider's read
+// path). Wiring mirrors production: the provider is read STATICALLY off the plugin object, the
+// store + reader arrive at configure (tests hand a schema-wrapped memory adapter, the channels
+// pattern).
 
 import type { Adapter } from "@euroclaw/contracts";
 import { buildSecrets, env } from "@euroclaw/secrets";
 import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
+	createSecretCipher,
 	createStoredSecretsStore,
+	parseSecretStoreKey,
+	SECRET_STORE_KEY_NAME,
 	type SecretStoreOptions,
 	secretStore,
 	storedSecretSchema,
 } from "../src/index";
 
-/** A plugin configured against a fresh in-memory table, plus the store as the seeding surface
- *  (same adapter — the plugin's internal store and this one read/write the same rows). */
+// 32 bytes, hex — the shape parseSecretStoreKey demands.
+const TEST_KEY = "0123456789abcdef".repeat(4);
+const OTHER_KEY = "fedcba9876543210".repeat(4);
+
+const cipherFor = (key: string) =>
+	createSecretCipher(async () => parseSecretStoreKey(key));
+
+/** A plugin configured against a fresh in-memory table (config key by default; tests override),
+ *  plus a same-key store over the same adapter as the seeding surface. */
 function connectedStore(options: SecretStoreOptions = {}) {
-	const plugin = secretStore(options);
+	const plugin = secretStore({ key: TEST_KEY, ...options });
 	const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
 	plugin.configure?.({ adapter: db });
 	const [provider] = plugin.secretProviders;
-	return { db, plugin, provider, store: createStoredSecretsStore(db) };
+	return {
+		db,
+		plugin,
+		provider,
+		store: createStoredSecretsStore(db, { cipher: cipherFor(TEST_KEY) }),
+	};
 }
 
 // A stub adapter whose reads throw — infrastructure failure and the enabled-but-not-migrated case.
@@ -57,6 +74,11 @@ describe("secretStore() — the plugin shape", () => {
 			capability: { manage: true },
 		});
 	});
+
+	it("rejects a malformed config key loud at construction", () => {
+		expect(() => secretStore({ key: "too-short" })).toThrow(/not valid hex/);
+		expect(() => secretStore({ key: "abcd" })).toThrow(/wrong length/);
+	});
 });
 
 describe("stored-secrets store — (scope, scopeId, name) rows", () => {
@@ -71,12 +93,11 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 			scope: "personal",
 			scopeId: "alice",
 			kind: "value",
-			value: "v1",
 		});
 	});
 
 	it("upserts by the natural key — a re-set rotates the value in place", async () => {
-		const { store } = connectedStore();
+		const { provider, store } = connectedStore();
 		const first = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v1",
@@ -88,7 +109,10 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 			createdBy: "alice",
 		});
 		expect(second.id).toBe(first.id);
-		expect(second.value).toBe("v2");
+		expect(await provider.get("MY_NOTION_TOKEN", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "v2",
+		});
 	});
 
 	it("rejects a set without a value — the store writes value-kind rows", async () => {
@@ -154,7 +178,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			}),
 		).toBeNull();
 
-		const broken = secretStore();
+		const broken = secretStore({ key: TEST_KEY });
 		broken.configure?.({ adapter: failingAdapter("connection refused") });
 		const [brokenProvider] = broken.secretProviders;
 		await expect(brokenProvider.get("ANY", { actor: "alice" })).rejects.toThrow(
@@ -163,7 +187,7 @@ describe("the store provider — nearest-scope resolution", () => {
 	});
 
 	it("wraps a missing-table error into a clear configurationError (not-migrated)", async () => {
-		const plugin = secretStore();
+		const plugin = secretStore({ key: TEST_KEY });
 		plugin.configure?.({
 			adapter: failingAdapter("SqliteError: no such table: stored_secret"),
 		});
@@ -179,7 +203,7 @@ describe("the store provider — nearest-scope resolution", () => {
 	});
 
 	it("fails loud when resolved before configure wires a database", async () => {
-		const plugin = secretStore();
+		const plugin = secretStore({ key: TEST_KEY });
 		const [provider] = plugin.secretProviders;
 		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
 			{
@@ -239,6 +263,126 @@ describe("data-tier precedence through buildSecrets", () => {
 		expect(await secrets.get("SHARED_NAME", { actor: "bob" })).toEqual({
 			kind: "token",
 			value: "from-env",
+		});
+	});
+});
+
+describe("encryption at rest", () => {
+	it("roundtrips through the provider — set seals, get opens", async () => {
+		const { provider, store } = connectedStore();
+		await store.set({
+			name: "ROUNDTRIP",
+			value: "plain-secret",
+			createdBy: "alice",
+		});
+		expect(await provider.get("ROUNDTRIP", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "plain-secret",
+		});
+	});
+
+	it("never rests plaintext — the raw row holds hex(nonce ‖ ciphertext+tag)", async () => {
+		const { db, store } = connectedStore();
+		await store.set({
+			name: "AT_REST",
+			value: "plain-secret",
+			createdBy: "alice",
+		});
+		const raw = await db.findOne<{ value?: string }>({
+			model: "stored_secret",
+			where: [
+				{ field: "scope", value: "personal" },
+				{ field: "scopeId", value: "alice", connector: "AND" },
+				{ field: "name", value: "AT_REST", connector: "AND" },
+			],
+		});
+		const sealed = raw?.value;
+		if (sealed === undefined) throw new Error("expected a sealed value");
+		expect(sealed).not.toBe("plain-secret");
+		expect(sealed).not.toContain("plain-secret");
+		// the documented encoding: hex, 12-byte nonce + ciphertext + 16-byte GCM tag ⇒ ≥ 56 hex chars
+		expect(sealed).toMatch(/^[0-9a-f]+$/);
+		expect(sealed.length).toBeGreaterThanOrEqual(56);
+		// and it is EXACTLY the sealed form — the same-key cipher opens it back to the plaintext
+		expect(await cipherFor(TEST_KEY).open(sealed)).toBe("plain-secret");
+	});
+
+	it("an unresolvable master key with rows present fails loud — never ciphertext, never null", async () => {
+		// Rows exist (sealed under TEST_KEY by the seeding store)…
+		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const seeder = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+		});
+		await seeder.set({ name: "LOCKED", value: "material", createdBy: "alice" });
+		// …but the plugin has no config key and its reader resolves nothing.
+		const plugin = secretStore();
+		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
+		const [provider] = plugin.secretProviders;
+		await expect(
+			provider.get("LOCKED", { actor: "alice" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/master key is unresolvable/),
+		});
+	});
+
+	it("a wrong (rotated) master key fails loud on decrypt — never garbage material", async () => {
+		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const seeder = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+		});
+		await seeder.set({
+			name: "ROTATED",
+			value: "material",
+			createdBy: "alice",
+		});
+		const plugin = secretStore({ key: OTHER_KEY });
+		plugin.configure?.({ adapter: db });
+		const [provider] = plugin.secretProviders;
+		await expect(
+			provider.get("ROTATED", { actor: "alice" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/cannot decrypt stored secret/),
+		});
+	});
+
+	it("short-circuits its own master-key name — env serves it, the store row is never consulted", async () => {
+		// The production shape: no config key, the key lives in env, and the reader includes the
+		// store provider itself (data tier ⇒ consulted FIRST for every name — including the key's,
+		// which without the short-circuit would recurse: get → decrypt → resolve key → get …).
+		const plugin = secretStore();
+		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const [provider] = plugin.secretProviders;
+		const reader = buildSecrets([
+			env({ vars: { [SECRET_STORE_KEY_NAME]: TEST_KEY } }),
+			provider,
+		]);
+		plugin.configure?.({ adapter: db, secrets: reader });
+		// An adversarial row CLAIMING the key's name — resolution must never surface it.
+		const seeder = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+		});
+		await seeder.set({
+			name: SECRET_STORE_KEY_NAME,
+			value: "not-the-key",
+			createdBy: "alice",
+		});
+		await seeder.set({
+			name: "USER_TOKEN",
+			value: "sealed",
+			createdBy: "alice",
+		});
+
+		// The key name resolves from ENV (the short-circuit made the data tier a miss)…
+		expect(await reader.get(SECRET_STORE_KEY_NAME, { actor: "alice" })).toEqual(
+			{ kind: "token", value: TEST_KEY },
+		);
+		// …and a normal name resolves THROUGH that same reader-resolved key: the full loop — store
+		// row → decrypt → lazy key via env — with no recursion and no hang.
+		expect(await reader.get("USER_TOKEN", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "sealed",
 		});
 	});
 });

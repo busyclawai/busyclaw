@@ -10,6 +10,7 @@ import {
 } from "@euroclaw/contracts";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
+import type { SecretCipher } from "./crypto";
 import {
 	setStoredSecretInput,
 	type setStoredSecretInputOptions,
@@ -30,10 +31,12 @@ export type StoredSecretsStore = {
 	 * Upsert a value-kind row by its `(scope, scopeId, name)` natural key — re-setting a name inside
 	 * the same boundary rotates the value in place. Boundary defaults: `scope ?? "personal"`,
 	 * `scopeId ?? createdBy` — a secret is personal to its creator until saved wider (the one scope
-	 * literal in this store; mirrors claws/skills create).
+	 * literal in this store; mirrors claws/skills create). The value is SEALED before it touches the
+	 * adapter — the returned record (like the row) carries the encoded form, never plaintext.
 	 */
 	set: (input: SetStoredSecretInput) => Promise<StoredSecretRecord>;
-	/** Exact single-boundary lookup — the provider's scope walk issues one of these per rung. */
+	/** Exact single-boundary lookup — the provider's scope walk issues one of these per rung. The
+	 *  row's `value` is the SEALED form; only the provider's read path opens it. */
 	get: (
 		scope: string,
 		scopeId: string,
@@ -42,6 +45,9 @@ export type StoredSecretsStore = {
 };
 
 export type StoredSecretsStoreOptions = {
+	/** Seals values on the write path — REQUIRED so plaintext structurally cannot reach the adapter
+	 *  (the plugin builds one over its master key; tests build one over a fixed key). */
+	cipher: SecretCipher;
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
 };
@@ -125,8 +131,9 @@ const keyWhere = (scope: string, scopeId: string, name: string): Where[] => [
  *  through the configure context; tests wrap manually). */
 export function createStoredSecretsStore(
 	db: Adapter,
-	options: StoredSecretsStoreOptions = {},
+	options: StoredSecretsStoreOptions,
 ): StoredSecretsStore {
+	const { cipher } = options;
 	const now = options.now ?? (() => new Date().toISOString());
 
 	const findByKey = (
@@ -156,6 +163,9 @@ export function createStoredSecretsStore(
 			// store (mirrors claws.create / the skills installation store).
 			const scope = valid.scope ?? "personal";
 			const scopeId = valid.scopeId ?? valid.createdBy;
+			// Seal BEFORE any adapter call — plaintext never at rest. An unresolvable master key
+			// propagates loud out of the write (configurationError from the cipher), never a raw row.
+			const sealed = await cipher.seal(valid.value);
 			const existing = await findByKey(scope, scopeId, valid.name);
 			const stamp = now();
 			if (existing) {
@@ -165,7 +175,7 @@ export function createStoredSecretsStore(
 						model: MODEL,
 						where: [whereEq("id", prev.id)],
 						// The store owns updatedAt; the value is the only column a re-set rotates.
-						update: { value: valid.value, updatedAt: stamp },
+						update: { value: sealed, updatedAt: stamp },
 					}),
 				);
 				if (!updated) {
@@ -180,7 +190,7 @@ export function createStoredSecretsStore(
 				scopeId,
 				name: valid.name,
 				kind: "value",
-				value: valid.value,
+				value: sealed,
 				createdAt: stamp,
 				updatedAt: stamp,
 			});

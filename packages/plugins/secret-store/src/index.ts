@@ -1,4 +1,10 @@
 export {
+	createSecretCipher,
+	parseSecretStoreKey,
+	SECRET_STORE_KEY_NAME,
+	type SecretCipher,
+} from "./crypto";
+export {
 	SECRET_STORE_PROVIDER_NAME,
 	type SecretStoreOptions,
 	type SecretStorePlugin,

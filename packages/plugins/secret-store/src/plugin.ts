@@ -6,8 +6,15 @@ import {
 	type SecretMaterial,
 	type SecretProvider,
 	type SecretProviderPlugin,
+	type Secrets,
 	stateError,
 } from "@euroclaw/contracts";
+import {
+	createSecretCipher,
+	parseSecretStoreKey,
+	SECRET_STORE_KEY_NAME,
+	type SecretCipher,
+} from "./crypto";
 import { storedSecretModels } from "./schema";
 import {
 	createStoredSecretsStore,
@@ -18,6 +25,11 @@ import {
 export type SecretStoreOptions = {
 	/** Plugin id override — the channels/skills convention. */
 	id?: string;
+	/** The at-rest master key: 32 bytes hex-encoded (64 chars), validated loud at construction.
+	 *  Absent ⇒ the plugin resolves `EUROCLAW_SECRET_STORE_KEY` through the one-door reader captured
+	 *  at configure — lazily, on first seal/open — so the key itself lives in env/vault and the
+	 *  plugin stays a one-door citizen. */
+	key?: string;
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
 };
@@ -32,7 +44,10 @@ export type SecretStorePlugin = SecretProviderPlugin & {
 /** The provider key rows resolve under — what an audit records for a store-resolved credential. */
 export const SECRET_STORE_PROVIDER_NAME = "store";
 
-function materialOf(row: StoredSecretRecord): SecretMaterial {
+async function materialOf(
+	row: StoredSecretRecord,
+	cipher: SecretCipher,
+): Promise<SecretMaterial> {
 	// Pointer rows have no write surface yet (they land WITH their target-gate, a later slice) — one
 	// in the table can only mean out-of-band tampering or a version skew. Refuse loud, never guess.
 	if (row.kind === "pointer") {
@@ -49,15 +64,17 @@ function materialOf(row: StoredSecretRecord): SecretMaterial {
 			scopeId: row.scopeId,
 		});
 	}
-	return { kind: "token", value: row.value };
+	// Rows hold the SEALED form only; an unresolvable key or failed decrypt propagates loud out of
+	// `open` (configurationError) — never ciphertext, never a miss.
+	return { kind: "token", value: await cipher.open(row.value) };
 }
 
 /**
  * The secret-store plugin — a plugin that IS a secret backend (the composed-integration case the
  * `secretProviders` push field exists for): ONE plugin contributing the `stored_secret` table
  * (`schema`) and the `"store"` provider (`secretProviders`), atomically. Users paste token values
- * into rows; every consumer resolves them through the one door like any other provider — nothing is
- * special-cased.
+ * into rows — AES-256-GCM-encrypted at rest ({@link createSecretCipher}) — and every consumer
+ * resolves them through the one door like any other provider; nothing is special-cased.
  *
  * `get(name, ctx)` walks the context's OWN boundaries nearest-first, one exact single-scope lookup
  * per rung (the skills-resolution shape — never a membership-expanding union):
@@ -66,16 +83,46 @@ function materialOf(row: StoredSecretRecord): SecretMaterial {
  * still resolves. `tier: "data"` puts the store BEFORE env/vault in the chain (data beats config —
  * the precedence the deleted per-org DB-alias layer had, now a provider property).
  *
+ * The plugin is BOTH provider and consumer: it serves rows through `secretProviders` AND resolves
+ * its own master key through the `context.secrets` reader captured at configure (lazily, at first
+ * use). The bootstrap guard that makes that safe: `get` short-circuits the master-key NAME to a
+ * miss, so key resolution falls through to env/vault and can never re-enter this table.
+ *
  * Two-phase wiring, deliberately: the provider OBJECT is created here (the assembly reads
  * `secretProviders` STATICALLY off the raw plugin list, before any `configure` runs), while the
- * store it reads arrives at `configure` (the adapter is only in scope there) — so `get` resolves
- * through a slot `configure` fills. A rebuilt-plugin configure (the channels pattern) would NOT
- * work here: the rebuilt object's providers are never re-read.
+ * store and reader it uses arrive at `configure` — so `get` resolves through slots `configure`
+ * fills. A rebuilt-plugin configure (the channels pattern) would NOT work here: the rebuilt
+ * object's providers are never re-read.
  */
 export function secretStore(
 	options: SecretStoreOptions = {},
 ): SecretStorePlugin {
 	let store: StoredSecretsStore | undefined;
+	let reader: Secrets | undefined;
+
+	// A config key fails loud HERE (bad config surfaces at construction, the channels validate
+	// posture); the reader path stays lazy — the one-door reader only exists once configure ran.
+	const configKey =
+		options.key !== undefined ? parseSecretStoreKey(options.key) : undefined;
+	const resolveKey = async (): Promise<Uint8Array> => {
+		if (configKey) return configKey;
+		if (!reader) {
+			throw configurationError("secret store has no master key source", {
+				reason:
+					"pass secretStore({ key }) or connect the plugin through createClaw so it can resolve EUROCLAW_SECRET_STORE_KEY via the one-door reader",
+			});
+		}
+		const material = await reader.get(SECRET_STORE_KEY_NAME);
+		if (material === null || material.kind !== "token") {
+			throw configurationError("secret store master key is unresolvable", {
+				name: SECRET_STORE_KEY_NAME,
+				reason:
+					"set the env var (32 bytes hex) or configure a provider that resolves it — with rows present there is no degraded mode",
+			});
+		}
+		return parseSecretStoreKey(material.value);
+	};
+	const cipher = createSecretCipher(resolveKey);
 
 	const requireStore = (): StoredSecretsStore => {
 		if (!store) {
@@ -97,10 +144,14 @@ export function secretStore(
 			name: string,
 			ctx: ResolveContext,
 		): Promise<SecretMaterial | null> => {
+			// Bootstrap short-circuit — CRITICAL because data-tier means this provider is consulted
+			// FIRST for every name: the store's own master key must never resolve FROM the store
+			// (get → decrypt → resolve key → get …). Immediately a miss; env/vault/config own it.
+			if (name === SECRET_STORE_KEY_NAME) return null;
 			const rows = requireStore();
 			if (ctx.actor !== undefined) {
 				const personal = await rows.get("personal", ctx.actor, name);
-				if (personal) return materialOf(personal);
+				if (personal) return materialOf(personal, cipher);
 			}
 			// team rung: ResolveContext carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,
 			// but nothing threads it into secret resolution) — insert `(team, ctx.team)` here when it
@@ -111,7 +162,7 @@ export function secretStore(
 					ctx.organizationId,
 					name,
 				);
-				if (orgWide) return materialOf(orgWide);
+				if (orgWide) return materialOf(orgWide, cipher);
 			}
 			return null;
 		},
@@ -121,8 +172,14 @@ export function secretStore(
 		context: EuroclawPluginConfigureContext,
 	): EuroclawPlugin | undefined => {
 		if (context.adapter) {
-			store = createStoredSecretsStore(context.adapter, { now: options.now });
+			store = createStoredSecretsStore(context.adapter, {
+				cipher,
+				now: options.now,
+			});
 		}
+		// Captured for the lazy master key — the two-role pattern: this plugin is a provider AND a
+		// consumer of the one door.
+		reader = context.secrets;
 		return undefined;
 	};
 

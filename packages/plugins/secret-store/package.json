@@ -37,6 +37,7 @@
 	},
 	"dependencies": {
 		"@euroclaw/contracts": "workspace:*",
+		"@noble/ciphers": "2.2.0",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"
 	},
