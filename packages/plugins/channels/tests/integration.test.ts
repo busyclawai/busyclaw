@@ -1,6 +1,7 @@
 import { field } from "@euroclaw/contracts";
 import { createStoredRedactor, noopDetector } from "@euroclaw/core";
 import { env } from "@euroclaw/secrets";
+import { secrets } from "@euroclaw/secrets-plugin";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createPiiMappingStore } from "@euroclaw/storage-durable";
 import type { wrapLanguageModel } from "ai";
@@ -142,8 +143,8 @@ describe("channels ↔ euroclaw integration", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			// the named app bot resolves its token via its own tokenRef → "app-token"
-			secretProviders: [env({ vars: { SALES_BOT: "app-token" } })],
 			plugins: [
+				secrets([env({ vars: { SALES_BOT: "app-token" } })]),
 				channels([
 					telegram({ fetch: fakeFetch, name: "sales", tokenRef: "SALES_BOT" }),
 				]),
@@ -245,8 +246,10 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			secretProviders: [env({ vars: { TELEGRAM_BOT_TOKEN: "env-token" } })],
-			plugins: [channels([telegram({ fetch: fakeFetch })])],
+			plugins: [
+				secrets([env({ vars: { TELEGRAM_BOT_TOKEN: "env-token" } })]),
+				channels([telegram({ fetch: fakeFetch })]),
+			],
 		});
 
 		const update = JSON.stringify({
@@ -290,8 +293,8 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			secretProviders: [env({ vars: {} })], // the reader resolves nothing
-			plugins: [channels([telegram()])],
+			// secrets([env({})]) REPLACES the env default (marker) — nothing resolves, deterministically.
+			plugins: [secrets([env({ vars: {} })]), channels([telegram()])],
 		});
 		const route = (claw.$context.plugins ?? [])
 			.flatMap((plugin) => plugin.routes ?? [])

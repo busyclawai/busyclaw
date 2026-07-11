@@ -41,6 +41,7 @@
 	"devDependencies": {
 		"@euroclaw/core": "workspace:*",
 		"@euroclaw/policy-cedar": "workspace:*",
+		"@euroclaw/secrets-plugin": "workspace:*",
 		"@euroclaw/skills": "workspace:*",
 		"@euroclaw/storage-core": "workspace:*",
 		"ai": "5.0.203"

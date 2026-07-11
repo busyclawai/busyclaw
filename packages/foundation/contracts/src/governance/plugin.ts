@@ -144,6 +144,12 @@ export type EuroclawPlugin<
 	/** Phantom: whether this plugin owns a table and so needs a database. Set `true` and createClaw's
 	 *  RequireDatabaseForPlugins demands a `database` at compile time (with a runtime backstop). */
 	$RequiresDatabase?: boolean;
+	/** Set by the `secrets()` plugin: this plugin OWNS the deployment secret-provider base, so its
+	 *  `secrets.providers` REPLACE the assembly's zero-config env default (it includes `env()` itself
+	 *  unless you passed replacements — `secrets([vault()])` drops env, `secrets([env(), vault()])`
+	 *  keeps it). A generic provider-contributing plugin leaves this unset — its `secrets.providers`
+	 *  ADD to the base. At most one plugin should set it. Read statically by the assembly. */
+	$providesSecretBase?: boolean;
 	/** Phantom: route paths this plugin definitely contributes, for literal duplicate checks. */
 	$RoutePaths?: RoutePaths;
 	/** Phantom: named types this plugin introduces (folded onto `ec.$Infer`). */

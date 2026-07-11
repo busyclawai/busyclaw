@@ -21,8 +21,8 @@ import {
 } from "@noble/ciphers/utils.js";
 
 /** The canonical name the master key resolves under (through the one-door reader) when no
- *  `secretStore({ key })` is configured. The store provider SHORT-CIRCUITS this name to a miss —
- *  the key must come from another provider (env/vault) or config, never from its own table. */
+ *  `secrets([], { store: { key } })` is configured. The store provider SHORT-CIRCUITS this name to a
+ *  miss — the key must come from another provider (env/vault) or config, never from its own table. */
 export const SECRET_STORE_KEY_NAME = "EUROCLAW_SECRET_STORE_KEY";
 
 const KEY_BYTES = 32; // AES-256

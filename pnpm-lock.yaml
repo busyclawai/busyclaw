@@ -99,6 +99,9 @@ importers:
       '@euroclaw/policy-cedar':
         specifier: workspace:*
         version: link:../policy/cedar
+      '@euroclaw/secrets-plugin':
+        specifier: workspace:*
+        version: link:../plugins/secrets
       '@euroclaw/skills':
         specifier: workspace:*
         version: link:../plugins/skills
@@ -199,6 +202,9 @@ importers:
       '@euroclaw/secrets':
         specifier: workspace:*
         version: link:../../foundation/secrets
+      '@euroclaw/secrets-plugin':
+        specifier: workspace:*
+        version: link:../secrets
       '@euroclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
@@ -246,11 +252,14 @@ importers:
         specifier: workspace:*
         version: link:../../euroclaw
 
-  packages/plugins/secret-store:
+  packages/plugins/secrets:
     dependencies:
       '@euroclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
+      '@euroclaw/secrets':
+        specifier: workspace:*
+        version: link:../../foundation/secrets
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -261,9 +270,6 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@euroclaw/secrets':
-        specifier: workspace:*
-        version: link:../../foundation/secrets
       '@euroclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core

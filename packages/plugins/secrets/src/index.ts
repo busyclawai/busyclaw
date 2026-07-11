@@ -6,9 +6,9 @@ export {
 } from "./crypto";
 export {
 	SECRET_STORE_PROVIDER_NAME,
+	secrets,
+	type SecretsPluginOptions,
 	type SecretStoreOptions,
-	type SecretStorePlugin,
-	secretStore,
 } from "./plugin";
 export {
 	setStoredSecretInput,

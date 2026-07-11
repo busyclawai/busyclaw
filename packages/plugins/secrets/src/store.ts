@@ -78,10 +78,10 @@ function isMissingTableError(err: unknown): boolean {
 function wrapMissingTable(err: unknown): never {
 	if (isMissingTableError(err)) {
 		throw configurationError(
-			"stored_secret table isn't in your database — run the migration for the secret-store plugin",
+			"stored_secret table isn't in your database — run the migration for the secrets() store",
 			{
 				reason:
-					"connecting secretStore() adds stored_secret to the generated schema — run generate + migrate to create it",
+					"enabling secrets({ store }) adds stored_secret to the generated schema — run generate + migrate to create it",
 				cause: errorMessage(err),
 			},
 		);

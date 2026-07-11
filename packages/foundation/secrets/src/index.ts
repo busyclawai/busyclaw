@@ -54,9 +54,9 @@ export function env(options: EnvOptions = {}): SecretProvider {
 }
 
 /**
- * Build the one-door resolver over an ordered provider chain. The default `[env()]` IS the "absent
- * `secretProviders` → read env" default: `buildSecrets()` returns an env-backed resolver with zero
- * config.
+ * Build the one-door resolver over an ordered provider chain. The default `[env()]` IS the zero-config
+ * "read env" base (the assembly passes `[env()]` when no `secrets()` base-owner plugin is present):
+ * `buildSecrets()` returns an env-backed resolver with zero config.
  *
  * `get(name, ctx)`: for each provider IN ORDER remap the canonical `name` through that provider's
  * own `aliases` (pass-through when absent), then `await provider.get(key, ctx)`; the FIRST non-null

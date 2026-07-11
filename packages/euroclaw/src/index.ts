@@ -12,7 +12,6 @@ import {
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
-	type SecretProvider,
 	type SecretResolver,
 	type Secrets,
 } from "@euroclaw/contracts";
@@ -95,12 +94,6 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	>;
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
 	models?: ClawModelsConfig;
-	/** The ordered secret-provider chain the one-door reader resolves through (`@euroclaw/secrets`) —
-	 *  the same concept as the plugin push field (`plugin.secrets.providers`): two delivery slots, one
-	 *  merge. Absent ⇒ `[env()]` (read the env global); `[]` is explicit-none (nothing resolves). The
-	 *  reader (`secrets`) is built once and both backs registered-tool credentials (below) and is
-	 *  injected into the plugin configure context. */
-	secretProviders?: SecretProvider[];
 	/** Escape-hatch credential resolver for registered-tool invocation — wins over the `secrets`
 	 *  reader when provided. euroclaw stores no secrets; absent ⇒ credentials resolve through the
 	 *  `secrets` reader (env-backed by default), and a still-unresolved credential fails loud at call
@@ -416,14 +409,19 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		);
 	}
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
-	// `??` not `||` — an explicit `secretProviders: []` stays none; only an ABSENT `secretProviders`
-	// defaults to env. Plugin-contributed providers merge AFTER the config ones (env default resolves
-	// before the merge) and are read STATICALLY off the raw plugin list — the reader is built before
-	// `configure` runs, so consumers close over the complete chain. buildSecrets then orders
-	// data-tier providers (runtime-managed rows) before config-tier ones and fails loud on a
-	// duplicate name across both.
+	// The zero-config base is env (assembly-built, always available with no config). The `secrets()`
+	// plugin OWNS the deployment base (`$providesSecretBase`), so when it is present its providers
+	// REPLACE that env default — it re-includes env unless you passed replacements (`secrets([vault()])`
+	// drops it). A generic provider-contributing plugin leaves the marker unset, so its providers ADD to
+	// the base. All contributions are read STATICALLY off the raw plugin list — the reader is built
+	// before `configure` runs, so consumers close over the complete chain. buildSecrets then orders
+	// data-tier providers (runtime-managed rows) before config-tier ones and fails loud on a duplicate
+	// name across the whole chain.
+	const ownsBase = pluginList.some(
+		(plugin) => plugin.$providesSecretBase === true,
+	);
 	const providers = [
-		...(config.secretProviders ?? [env()]),
+		...(ownsBase ? [] : [env()]),
 		...pluginList.flatMap((plugin) => plugin.secrets?.providers ?? []),
 	];
 	const secrets: Secrets = buildSecrets(providers);
