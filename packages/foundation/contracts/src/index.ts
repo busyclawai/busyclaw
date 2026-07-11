@@ -384,27 +384,13 @@ export type {
 	RegisteredToolStore,
 	SpecRegistrationStore,
 } from "./tools/registry-ports";
-// ── per-org secret aliases: the pointer entity + store port (opt-in; impl in storage-durable,
-//    DB-wins resolution + boot validation + claw.api.secrets in the assembly) ──
-export type {
-	SecretAliasPointer,
-	SecretAliasRecord,
-	SecretAliasStore,
-	SecretAliasUpsert,
-} from "./tools/secret-alias";
-export {
-	secretAliasEntity,
-	secretAliasFields,
-	secretAliasRecord,
-	secretAliasSchema,
-	secretAliasUpsert,
-} from "./tools/secret-alias";
 // ── secret resolution: the invoker's credential port + the one-door resolver (Secrets/
 //    SecretProvider/ResolveContext); providers + resolver impl live in @euroclaw/secrets ──
 export type {
 	ResolveContext,
 	SecretDeclaration,
 	SecretMaterial,
+	SecretPointer,
 	SecretProvider,
 	SecretRequest,
 	SecretResolver,

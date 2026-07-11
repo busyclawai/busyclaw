@@ -12,7 +12,6 @@ import {
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
-	type SecretAliasStore,
 	type SecretProvider,
 	type SecretResolver,
 	type Secrets,
@@ -32,7 +31,6 @@ import {
 	createClawsStore,
 	createEffectStore,
 	createRegistryStores,
-	createSecretAliasStore,
 	type RegistryStores,
 } from "@euroclaw/storage-durable";
 import { type as ark } from "arktype";
@@ -64,11 +62,8 @@ export type {
 	ClawCronHandlerConfig,
 	ClawCronHandlerSecretConfig,
 	ClawCronHandlerUnsafeConfig,
-	ClawSecretsApi,
 	ClawSendInput,
 	ClawSendResult,
-	SecretListEntry,
-	SecretStatus,
 } from "./api";
 export {
 	bindConversationClawInput,
@@ -93,12 +88,6 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 > & {
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
-	/** Opt-in per-org DB-backed secret aliases (the better-auth `dynamicAccessControl` model). Default
-	 *  OFF. Enabling contributes the `secret_alias` table to the generated schema (run a migration),
-	 *  activates the DB-wins resolution layer + the inline/DB duplicate warning, and exposes
-	 *  `claw.api.secrets`. Enabling REQUIRES a database — enforced at compile time
-	 *  (RequireDatabaseForDynamicSecretAliases) with a runtime configurationError backstop. */
-	dynamicSecretAliases?: { enabled?: boolean };
 	engine?: ClawEngineFactory<
 		Runtime<Config>,
 		ClawEngineHandle,
@@ -196,27 +185,6 @@ type RequireUniquePluginRoutePaths<Config> = Config extends {
 	? HasDuplicateRoutePath<ConcatRoutePaths<Plugins>> extends true
 		? DuplicatePluginRoutePathError
 		: unknown
-	: unknown;
-
-type MissingDatabaseForDynamicSecretAliasesError = {
-	readonly "ERROR: dynamicSecretAliases.enabled requires a database": never;
-	readonly "FIX: pass database to createClaw, or set dynamicSecretAliases.enabled to false": never;
-};
-
-/**
- * `createClaw` constraint: `dynamicSecretAliases.enabled` needs a place to keep the `secret_alias`
- * table, so reject at compile time an enabled config that passes no `database`. The runtime
- * configurationError in createClaw backstops JS / `as any` callers who dodge the types. Resolves to
- * `unknown` (no-op) when disabled or when a database is present.
- */
-type RequireDatabaseForDynamicSecretAliases<Config> = Config extends {
-	dynamicSecretAliases: { enabled: true };
-}
-	? Config extends { database: infer Database }
-		? [Database] extends [undefined]
-			? MissingDatabaseForDynamicSecretAliasesError
-			: unknown
-		: MissingDatabaseForDynamicSecretAliasesError
 	: unknown;
 
 type MissingDatabaseForPluginError = {
@@ -424,26 +392,12 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		RequireCronHandler<Config> &
 		RequireUniquePluginRoutePaths<Config> &
 		RequireNoCoreColumnCollision<Config> &
-		RequireDatabaseForDynamicSecretAliases<Config> &
 		RequireDatabaseForPlugins<Config>,
 ): Claw<ResolvedConfig<Config>> {
 	const adapter = config.database
 		? resolveDatabase(config.database)
 		: undefined;
 	const pluginList = (config.plugins ?? []) as readonly EuroclawPlugin[];
-	// Opt-in per-org DB aliases. Runtime backstop for the compile-time guard above: an enabled config
-	// with no database has nowhere to keep the secret_alias table — fail loud (JS / `as any` callers).
-	const dynamicSecretAliasesEnabled =
-		config.dynamicSecretAliases?.enabled === true;
-	if (dynamicSecretAliasesEnabled && !adapter) {
-		throw configurationError(
-			"dynamicSecretAliases.enabled requires a database",
-			{
-				reason:
-					"pass database to createClaw, or set dynamicSecretAliases.enabled to false",
-			},
-		);
-	}
 	// A plugin that owns a table (channels registrations) marks itself $RequiresDatabase — its table has
 	// nowhere to live without one. Runtime backstop for the compile-time RequireDatabaseForPlugins guard.
 	if (
@@ -458,12 +412,6 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			},
 		);
 	}
-	// The per-org alias store rides the same adapter as the tool registry (product durable state), only
-	// when the feature is enabled — a disabled deployment never touches the table.
-	const secretAliasStore: SecretAliasStore | undefined =
-		dynamicSecretAliasesEnabled && adapter
-			? createSecretAliasStore(adapter)
-			: undefined;
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
 	// `??` not `||` — an explicit `secretProviders: []` stays none; only an ABSENT `secretProviders`
 	// defaults to env. Plugin-contributed providers merge AFTER the config ones (env default resolves
@@ -474,24 +422,13 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		...(config.secretProviders ?? [env()]),
 		...pluginList.flatMap((plugin) => plugin.secretProviders ?? []),
 	];
-	const secrets: Secrets = buildSecrets(
-		providers,
-		// DB-wins layer: only when enabled. The store's missing-table error propagates out of `get`
-		// (fail loud) — the resolver never falls through to a possibly-WRONG credential.
-		secretAliasStore
-			? {
-					aliases: (organizationId, name) =>
-						secretAliasStore.get(organizationId, name),
-				}
-			: {},
-	);
+	const secrets: Secrets = buildSecrets(providers);
 	// Fail fast at init if any plugin/host schema collides with a core column — the same collection the
 	// `generate` CLI runs, so a bad registration surfaces here, not at migration time. The merged
 	// tables also drive the schema-aware adapter handed to plugins below.
 	const tables = getEuroclawTables({
 		models: config.models,
 		plugins: pluginList,
-		dynamicSecretAliases: config.dynamicSecretAliases,
 	});
 	const modelFields = collectModelFields(pluginList, config.models);
 	const clawAdditionalFields = modelFields.claw;
@@ -561,8 +498,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	];
 	assertCronHandler({ cronHandler: config.cronHandler, plugins });
 	assertUniquePluginRoutes(plugins);
-	// The required-secret names plugins declare — always-on (needs no table), feeds boot coverage and
-	// `claw.api.secrets.list`.
+	// The required-secret names plugins declare — always-on (needs no table), feeds boot coverage.
 	const secretDeclarations = collectSecretDeclarations(plugins);
 	const context: Claw<ResolvedConfig<Config>>["$context"] = {
 		audit: runtime.audit,
@@ -576,7 +512,6 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		runs: engine?.runs,
 		runtime,
 		secrets,
-		secretAliases: secretAliasStore,
 		secretDeclarations,
 	};
 	const baseApi = createClawApi({ context, newId });
@@ -586,15 +521,12 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	} as Claw<ResolvedConfig<Config>>["api"];
 
 	// Boot validation — warn-only, fired fire-and-forget (createClaw is sync so it cannot await; the
-	// scan queries the alias store). It NEVER fails boot: a rejected promise is caught and warned. Only
-	// runs when there's something to check — a declaration to cover, or the DB layer to scan for
-	// inline/DB duplicates — so the common no-declarations/disabled path stays cost-free.
-	if (secretDeclarations.length > 0 || secretAliasStore) {
+	// probe walks the provider chain). It NEVER fails boot: a rejected promise is caught and warned.
+	// Only runs when there's a declaration to cover, so the common no-declarations path stays cost-free.
+	if (secretDeclarations.length > 0) {
 		void validateSecretsAtBoot({
 			declarations: secretDeclarations,
-			providers,
 			secrets,
-			aliasStore: secretAliasStore,
 			warn: (warning) => console.warn(`euroclaw secrets: ${warning.message}`),
 		}).catch((err) => {
 			console.warn(

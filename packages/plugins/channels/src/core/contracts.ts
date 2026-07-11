@@ -127,9 +127,9 @@ export interface Channel {
 	 * The secret name(s) this transport's APP bot resolves through the one-door reader
 	 * (`secrets.get(name)`) — e.g. telegram's `tokenRef ?? "TELEGRAM_BOT_TOKEN"`. The `channels`
 	 * plugin AGGREGATES these into its `plugin.secrets` declarations so the required-names list
-	 * (`claw.api.secrets.list` / boot coverage) enumerates them. channels() in registrations mode
-	 * deliberately does NOT — a registered bot's token lives in its row (`endpoint.secret`), not a
-	 * `secrets.get` name. Absent for a pure transport with no app-bot credential of its own.
+	 * (boot coverage) enumerates them. channels() in registrations mode deliberately does NOT — a
+	 * registered bot's token lives in its row (`endpoint.secret`), not a `secrets.get` name. Absent
+	 * for a pure transport with no app-bot credential of its own.
 	 */
 	readonly declaredSecrets?: readonly SecretDeclaration[];
 	/**

@@ -419,10 +419,8 @@ async function callApiRoute(input: {
 	);
 }
 
-// The generic client covers the FLAT routed methods (clawApiRouteList / ClawApiMethod). It does NOT
-// include the nested `claw.api.secrets` namespace — that is a server-side product surface the host
-// wires to its own frontend HTTP layer (see docs/plans/secrets-per-org-aliases.md), so it is excluded
-// from ClawApiMethod and from the generic route machinery here.
+// The generic client covers the FLAT routed methods (clawApiRouteList / ClawApiMethod) — every
+// base api method is a single callable route today.
 export function createClawClient(
 	options: ClawClientOptions = {},
 ): Pick<ClawApi, ClawApiMethod> {

@@ -25,8 +25,6 @@ import type {
 	MessageRecord,
 	PolicySliceRecord,
 	RegisteredToolRecord,
-	SecretAliasRecord,
-	SecretAliasStore,
 	SecretDeclaration,
 	Secrets,
 	ThreadRecord,
@@ -113,42 +111,11 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly runs?: ClawRunReadModel;
 	readonly plugins?: readonly EuroclawPlugin[];
 	readonly registry?: RegistryStores;
-	/** The one-door reader (env + inline chain + DB-wins layer) — `claw.api.secrets.list` reads it to
-	 *  tell "inline" from "missing". */
+	/** The one-door reader (the full provider chain) — exposed so hosts and plugin api namespaces
+	 *  resolve credentials the same way the runtime does. */
 	readonly secrets?: Secrets;
-	/** The per-org alias store — present ONLY when `dynamicSecretAliases.enabled` (backs
-	 *  `claw.api.secrets`; absent ⇒ the admin methods fail loud). */
-	readonly secretAliases?: SecretAliasStore;
-	/** The collected required-secret-name declarations across plugins (`claw.api.secrets.list`). */
+	/** The collected required-secret-name declarations across plugins (feeds boot coverage). */
 	readonly secretDeclarations?: readonly SecretDeclaration[];
-};
-
-/** One required-secret row `claw.api.secrets.list()` returns. `status`: `configured` = a per-org DB
- *  alias points at it; `inline` = resolvable via an inline provider alias or a direct provider value;
- *  `missing` = resolves nowhere (set an alias or the env var). */
-export type SecretStatus = "configured" | "inline" | "missing";
-export type SecretListEntry = {
-	name: string;
-	description?: string;
-	status: SecretStatus;
-	alias?: { provider: string; ref: string };
-};
-
-/** The `claw.api.secrets` admin namespace — available ONLY when `dynamicSecretAliases.enabled` (the
- *  methods fail loud otherwise). Org-scoped; the host authorizes WHO may call it (the `secret_alias`
- *  row is pointer-only, so it carries no actor column). */
-export type ClawSecretsApi = {
-	list: (input: { organizationId: string }) => Promise<SecretListEntry[]>;
-	setAlias: (input: {
-		organizationId: string;
-		name: string;
-		provider: string;
-		ref: string;
-	}) => Promise<SecretAliasRecord>;
-	deleteAlias: (input: {
-		organizationId: string;
-		name: string;
-	}) => Promise<void>;
 };
 
 export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
@@ -273,17 +240,10 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	) => Promise<EngineRunHandle>;
 	getRun: (input: { id: string }) => Promise<EngineRunRecord | null>;
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
-
-	// Per-org secret aliases (opt-in): list the required names + their status, and manage the
-	// pointer-only `(org, name) → { provider, ref }` alias rows. A NESTED namespace (`claw.api.secrets.
-	// list()`), so it is excluded from the flat method→route machinery below (ClawApiMethod); the host
-	// wires it to its own frontend HTTP layer. Fails loud unless `dynamicSecretAliases.enabled`.
-	readonly secrets: ClawSecretsApi;
 };
 
-/** The FLAT api methods — the ones the method→route machinery maps. Excludes the nested `secrets`
- *  namespace (it is not a single callable route). */
-export type ClawApiMethod = keyof Omit<ClawApi, "secrets">;
+/** The FLAT api methods — the ones the method→route machinery maps. */
+export type ClawApiMethod = keyof ClawApi;
 export type ClawApiHttpMethod = "GET" | "POST";
 export type ClawApiInputSchema = (input: unknown) => unknown;
 export type ClawApiRouteDefinition<
@@ -527,36 +487,6 @@ function requireRegistry(registry: RegistryStores | undefined): RegistryStores {
 		});
 	}
 	return registry;
-}
-
-function requireSecretAliases(
-	store: SecretAliasStore | undefined,
-): SecretAliasStore {
-	if (!store) {
-		throw configurationError(
-			"claw.api.secrets requires dynamicSecretAliases enabled with a database",
-			{
-				reason:
-					"set dynamicSecretAliases: { enabled: true } and pass a database to createClaw, then run the migration",
-			},
-		);
-	}
-	return store;
-}
-
-/** A registered spec needs a credential (named after its registration `source` — how the invoker
- *  keys tool credentials) iff some operation declares a non-empty security requirement. The binding
- *  is opaque JSON, so we peek `.security` structurally (a `[{}]`/`[]` alternative means public). */
-function bindingNeedsCredential(binding: unknown): boolean {
-	if (binding === null || typeof binding !== "object") return false;
-	const security = (binding as { security?: unknown }).security;
-	if (!Array.isArray(security)) return false;
-	return security.some(
-		(requirement) =>
-			requirement !== null &&
-			typeof requirement === "object" &&
-			Object.keys(requirement).length > 0,
-	);
 }
 
 function assertNoReservedContext(ctx: unknown): void {
@@ -814,69 +744,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 		getRun: ({ id }) => requireRuns(context.runs).get(id),
 		listRunEvents: ({ runId }) => requireRuns(context.runs).events(runId),
-
-		secrets: {
-			async list({ organizationId }) {
-				const store = requireSecretAliases(context.secretAliases);
-				// Required names = plugin declarations (with descriptions) ∪ the org's registered-spec
-				// credential names (sources of secured specs). First-seen wins the description.
-				const required = new Map<string, string | undefined>();
-				for (const declaration of context.secretDeclarations ?? []) {
-					if (!required.has(declaration.name)) {
-						required.set(declaration.name, declaration.description);
-					}
-				}
-				if (context.registry) {
-					const rows =
-						await context.registry.registeredTools.listByOrganization(
-							organizationId,
-						);
-					for (const row of rows) {
-						if (
-							bindingNeedsCredential(row.binding) &&
-							!required.has(row.source)
-						) {
-							required.set(row.source, undefined);
-						}
-					}
-				}
-				const entries: SecretListEntry[] = [];
-				for (const [name, description] of required) {
-					const alias = await store.get(organizationId, name);
-					// "inline" is probed WITHOUT org (DB layer skipped) — a DB alias is the "configured"
-					// case above; here we only ask whether the inline chain / direct provider resolves it.
-					const status: SecretStatus = alias
-						? "configured"
-						: (await context.secrets?.has(name))
-							? "inline"
-							: "missing";
-					entries.push({
-						name,
-						...(description !== undefined ? { description } : {}),
-						status,
-						...(alias
-							? { alias: { provider: alias.provider, ref: alias.ref } }
-							: {}),
-					});
-				}
-				return entries;
-			},
-			// async so the disabled-guard configurationError is a REJECTION (not a sync throw), uniform
-			// with `list` above.
-			async setAlias({ organizationId, name, provider, ref }) {
-				return requireSecretAliases(context.secretAliases).set(
-					organizationId,
-					name,
-					{ provider, ref },
-				);
-			},
-			async deleteAlias({ organizationId, name }) {
-				return requireSecretAliases(context.secretAliases).delete(
-					organizationId,
-					name,
-				);
-			},
-		},
 	} satisfies ClawApi;
 
 	// The claws store is typed against the base claw contract, but at runtime it persists and returns

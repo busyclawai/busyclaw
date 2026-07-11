@@ -68,7 +68,7 @@ describe("channels ↔ euroclaw integration", () => {
 		).toBeUndefined();
 	});
 
-	it("gates channel_registration on the registrations flag (mirrors dynamicSecretAliases)", () => {
+	it("gates channel_registration on the registrations flag (the opt-in table pattern)", () => {
 		// OFF (app-bot mode) → channel_endpoint, never channel_registration
 		const off = getEuroclawTables({ plugins: [channels([telegram()])] });
 		expect(off.channel_endpoint).toBeDefined();

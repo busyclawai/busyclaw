@@ -20,7 +20,6 @@ import {
 	policySliceSchema,
 	registeredToolSchema,
 	runCheckpointSchema,
-	secretAliasSchema,
 	specRegistrationSchema,
 } from "@euroclaw/contracts";
 import type { SchemaDeclaration } from "@euroclaw/storage-core";
@@ -70,20 +69,14 @@ export function collectModelFields(
  * The full table set for the `generate` CLI: euroclaw's core tables plus every field a plugin or the
  * host registers. A model key matching a core table extends it (adds columns); a new key becomes its
  * own table. Redefining a core column throws — schema is additive, never a rewrite.
- *
- * `secret_alias` is OPT-IN — included ONLY when `dynamicSecretAliases.enabled` (the better-auth
- * `dynamicAccessControl`/`organizationRole` model). A disabled deployment's generated schema and
- * migrations never mention it, so hosts who don't use DB-backed aliases run no extra migration.
  */
 export function getEuroclawTables(config: {
 	plugins?: readonly EuroclawPlugin[];
 	models?: ClawModelsConfig;
-	dynamicSecretAliases?: { enabled?: boolean };
 }): SchemaDeclaration {
 	const extra = collectModelFields(config.plugins ?? [], config.models);
 	const tables: SchemaDeclaration = {
 		...CORE_TABLES,
-		...(config.dynamicSecretAliases?.enabled ? secretAliasSchema : {}),
 	};
 	for (const [model, fields] of Object.entries(extra)) {
 		if (Object.keys(fields).length === 0) continue;

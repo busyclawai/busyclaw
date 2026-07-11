@@ -135,8 +135,8 @@ export type EuroclawPlugin<
 		readonly [model: string]: { readonly fields: Record<string, EntityField> };
 	};
 	/** Secret names this plugin needs — the enumerable half of runtime `secrets.get`. The assembly
-	 *  collects these across plugins into the required-names set (boot coverage + `claw.api.secrets`).
-	 *  Always-on: needs no table, runs whether or not `dynamicSecretAliases` is enabled. */
+	 *  collects these across plugins into the required-names set the boot coverage warning walks.
+	 *  Always-on: needs no table. */
 	secrets?: readonly SecretDeclaration[];
 	/** Secret backends this plugin OFFERS (`secrets` above declares NEEDS; this declares OFFERS). Read
 	 *  STATICALLY off the plugin object BEFORE the resolver is built (the assembly builds `secrets`

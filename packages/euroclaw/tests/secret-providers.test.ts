@@ -2,15 +2,14 @@
 // `plugin.secretProviders` field. The assembly reads them STATICALLY off the raw plugin list and
 // merges them AFTER `config.secretProviders ?? [env()]`, into the same one-door reader every
 // subsystem resolves through. This proves: a plugin provider resolves via the one door; a duplicate
-// name across config + plugin fails loud; the env default survives a plugin contribution; and the
-// per-org DB-alias layer still wins over a plugin-contributed provider's direct name.
+// name across config + plugin fails loud; and the env default survives a plugin contribution.
 // See docs/plans/secrets-provider-registry.md § Providers from plugins.
 
 import type { EuroclawPlugin, SecretProvider, Secrets } from "@euroclaw/contracts";
 import { env } from "@euroclaw/secrets";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, textModel } from "./fixtures";
+import { textModel } from "./fixtures";
 
 /** A get-only stub provider that resolves one known ref to a token; everything else is a miss. */
 function stubProvider(
@@ -108,49 +107,4 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		});
 	});
 
-	it("(4) the per-org DB-alias layer wins over a plugin-contributed provider's direct name", async () => {
-		const { db, redactor } = durableRedactor();
-		const providerPlugin: EuroclawPlugin = {
-			id: "stub-provider",
-			secretProviders: [
-				stubProvider({
-					name: "stub",
-					// Resolves the canonical name DIRECTLY — the fall-through path when no alias applies.
-					get: async (ref) =>
-						ref === "SOME_TOKEN"
-							? { kind: "token", value: "from-plugin-direct" }
-							: null,
-				}),
-			],
-		};
-
-		const claw = createClaw({
-			model: textModel("ok"),
-			database: db,
-			redactor,
-			dynamicSecretAliases: { enabled: true },
-			secretProviders: [
-				env({ source: { VAULT_BACKEND: "resolved-from-alias" } }),
-			],
-			plugins: [providerPlugin],
-		});
-		await claw.api.secrets.setAlias({
-			organizationId: "org-a",
-			name: "SOME_TOKEN",
-			provider: "env",
-			ref: "VAULT_BACKEND",
-		});
-		const reader = claw.$context.secrets;
-		expect(reader).toBeDefined();
-
-		// org-a has a DB alias → SOME_TOKEN routes to env's VAULT_BACKEND, NOT the plugin's direct value.
-		expect(
-			await reader?.get("SOME_TOKEN", { organizationId: "org-a" }),
-		).toEqual({ kind: "token", value: "resolved-from-alias" });
-		// org-b has no alias → the chain falls through and the plugin provider resolves the direct name,
-		// proving the plugin provider really is in the merged chain.
-		expect(
-			await reader?.get("SOME_TOKEN", { organizationId: "org-b" }),
-		).toEqual({ kind: "token", value: "from-plugin-direct" });
-	});
 });

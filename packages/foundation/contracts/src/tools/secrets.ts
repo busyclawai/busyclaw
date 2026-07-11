@@ -83,8 +83,15 @@ export type Secrets = {
 	has: (name: string, ctx?: ResolveContext) => Promise<boolean>;
 };
 
+/** A `{ provider, ref }` pointer into the provider registry — the reusable ref vocabulary store
+ *  implementations share (a stored row that REDIRECTS resolution instead of holding a value).
+ *  `provider` names a `SecretProvider` in the chain; `ref` is the key WITHIN that backend, passed
+ *  straight to `provider.get(ref)` (already the backend key — the provider's own `aliases` remap
+ *  does NOT apply on top). */
+export type SecretPointer = { provider: string; ref: string };
+
 /** A secret NAME a plugin needs — the enumerable half of the runtime `secrets.get(name)`. Plugins
  *  declare these on `plugin.secrets`; the assembly collects them across plugins into the required-
- *  names set the boot coverage warning walks and `claw.api.secrets.list()` surfaces. Declaration
- *  only — a declared name may still be configured later at runtime (never fails boot). */
+ *  names set the boot coverage warning walks. Declaration only — a declared name may still be
+ *  configured later at runtime (never fails boot). */
 export type SecretDeclaration = { name: string; description?: string };

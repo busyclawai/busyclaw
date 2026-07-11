@@ -285,8 +285,8 @@ function buildAppBotPlugin(
 		(channel) => channel.supports.poll && channel.mode === "poll",
 	);
 	// Aggregate each app bot's declared secret name(s) so the assembly's required-names list enumerates
-	// them (boot coverage + claw.api.secrets.list). App-bot tokens resolve via the one-door reader — the
-	// declaration is the enumerable half; registrations declare nothing (their tokens live in the rows).
+	// them (boot coverage). App-bot tokens resolve via the one-door reader — the declaration is the
+	// enumerable half; registrations declare nothing (their tokens live in the rows).
 	const declaredSecrets = list.flatMap(
 		(channel) => channel.declaredSecrets ?? [],
 	);
