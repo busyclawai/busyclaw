@@ -27,10 +27,10 @@ describe("model extension — derived types", () => {
 		expectTypeOf<ClawA["priority"]>().toEqualTypeOf<number | undefined>();
 		expectTypeOf<ClawA["id"]>().toEqualTypeOf<string>(); // base field still present
 		expectTypeOf<CreateA["priority"]>().toEqualTypeOf<number | undefined>();
-		// tenancy is opt-in claw data, not a required core column
-		expectTypeOf<CreateA["organizationId"]>().toEqualTypeOf<
-			string | undefined
-		>();
+		// a claw's creator is a required core column; its (scope, scopeId) access boundary is optional
+		// on input — the store defaults it to personal/creator, and it stays mutable for re-sharing
+		expectTypeOf<CreateA["createdBy"]>().toEqualTypeOf<string>();
+		expectTypeOf<CreateA["scope"]>().toEqualTypeOf<string | undefined>();
 		expectTypeOf<ClawA>().not.toHaveProperty("nope"); // undeclared field never appears
 	});
 

@@ -198,6 +198,9 @@ export function createClawsStore(
 				const record = assertClawRecord({
 					...valid,
 					id: valid.id ?? newId(),
+					// A claw is personal to its creator until re-shared (scope is mutable).
+					scope: valid.scope ?? "personal",
+					scopeId: valid.scopeId ?? valid.createdBy,
 					status: "active",
 					context: valid.context ?? {},
 					createdAt: ts,
@@ -239,9 +242,6 @@ export function createClawsStore(
 				const record = assertThreadRecord({
 					id: valid.id ?? newId(),
 					clawId: valid.clawId,
-					organizationId: valid.organizationId,
-					teamId: valid.teamId,
-					ownerActorId: valid.ownerActorId,
 					title: valid.title,
 					status: "active",
 					currentSequence: 0,

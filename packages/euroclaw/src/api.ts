@@ -637,15 +637,21 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			const existingThread = args.threadId
 				? await requireThreadRecord(clawsStore, args.threadId)
 				: undefined;
-			// A fresh binding creates a personal claw owned by the external actor; tenancy (optional)
-			// rides the claw defaults. Binding an existing claw/thread makes that claw the source of truth.
+			// A fresh binding creates a claw whose creator is the external actor; it defaults to
+			// personal scope (see claws.create). Binding an existing claw/thread makes that claw the
+			// source of truth.
 			const claw = args.clawId
 				? await requireClawRecord(clawsStore, args.clawId)
 				: existingThread
 					? await requireClawRecord(clawsStore, existingThread.clawId)
 					: await clawsStore.claws.create({
 							...args.claw,
-							ownerActorId: args.claw?.ownerActorId ?? args.externalActorId,
+							// The external user is the creator; fall back to the bot endpoint when the
+							// conversation carries no actor (createdBy is required — a claw has a creator).
+							createdBy:
+								args.claw?.createdBy ??
+								args.externalActorId ??
+								args.endpointKey,
 						});
 
 			const thread = existingThread
@@ -653,24 +659,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				: await clawsStore.threads.create({
 						...(args.thread ?? {}),
 						clawId: claw.id,
-						ownerActorId: args.thread?.ownerActorId ?? args.externalActorId,
-						teamId: args.thread?.teamId ?? claw.teamId,
-						organizationId: claw.organizationId,
 					});
 
-			if (
-				thread.clawId !== claw.id ||
-				thread.organizationId !== claw.organizationId
-			) {
+			if (thread.clawId !== claw.id) {
 				throw validationError(
 					"bind conversation input invalid",
-					"thread does not match conversation claw or organization",
-					{
-						clawId: claw.id,
-						clawOrganizationId: claw.organizationId,
-						threadClawId: thread.clawId,
-						threadOrganizationId: thread.organizationId,
-					},
+					"thread does not match conversation claw",
+					{ clawId: claw.id, threadClawId: thread.clawId },
 				);
 			}
 

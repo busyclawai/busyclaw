@@ -50,24 +50,27 @@ export const checkpointKind = type(
 );
 
 export const clawFields = {
-	// Identity + ownership are set at create and never updated — immutable (the update input derives
-	// around them, and the storage layer rejects an update that touches them).
 	id: field.string({ required: true, unique: true, immutable: true }),
-	// Tenancy is opt-in, not core-required (better-auth: the user table has no org column; tenancy
-	// arrives with the organization plugin). Hosts that partition by organization set it; a personal claw
-	// may carry only its owner.
-	organizationId: field.string({ index: true, immutable: true }),
-	teamId: field.string({ index: true, immutable: true }),
-	ownerActorId: field.string({ index: true, immutable: true }),
+	// A claw is a SHAREABLE agent resource. `createdBy` is immutable — who made it (accountability,
+	// erasure attribution). The access boundary `(scope, scopeId)` is MUTABLE — a claw can be re-shared
+	// over its life (created personal, promoted org-wide). `scope` is an OPAQUE string the core never
+	// interprets ("personal"/"team"/"organization"/"global" mean nothing to core — the org plugin
+	// interprets them, keeping core org-blind). Default at create: scope="personal", scopeId=createdBy.
+	createdBy: field.string({ required: true, index: true, immutable: true }),
+	scope: field.string({ required: true, index: true }),
+	scopeId: field.string({ required: true, index: true }),
 	status: field.enum(clawStatusValues, { required: true }),
 	name: field.string(),
 	instructions: field.string({ pii: "possible" }),
-	context: field.jsonObject({ required: true }),	createdAt: field.string({ required: true, immutable: true }),
+	context: field.jsonObject({ required: true }),
+	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;
 
 export const threadFields = {
-	// Identity + ownership are fixed at create; only status and the message cursor advance.
+	// A thread's access is its claw's — transitive via `clawId`, no own scope columns (same as
+	// messages/tool_calls are descendants). Identity is fixed at create; only status and the message
+	// cursor advance.
 	id: field.string({ required: true, unique: true, immutable: true }),
 	clawId: field.string({
 		required: true,
@@ -75,10 +78,6 @@ export const threadFields = {
 		immutable: true,
 		references: { model: "claw", field: "id" },
 	}),
-	// Follows the claw's (optional) tenancy — see clawFields.organizationId.
-	organizationId: field.string({ index: true, immutable: true }),
-	teamId: field.string({ index: true, immutable: true }),
-	ownerActorId: field.string({ index: true, immutable: true }),
 	title: field.string(),
 	status: field.enum(threadStatusValues, { required: true }),
 	currentMessageId: field.string(),
@@ -184,7 +183,7 @@ export const conversationBindingFields = {
 	// The account-table analog (better-auth keys accounts by providerId + accountId, with no organization in
 	// the key): the BOT scopes external conversation ids — telegram DM chat ids repeat across bots — so
 	// the natural key is (provider, endpointKey, externalConversationId). Whose data a conversation is
-	// lives on the claw the binding points at (claw.organizationId), not here.
+	// lives on the claw the binding points at (its createdBy/scope), not here.
 	id: field.string({ required: true, unique: true }),
 	provider: field.string({ required: true, index: true }),
 	endpointKey: field.string({ required: true, index: true }),
@@ -233,7 +232,9 @@ export const conversationBindingRecord = conversationBindingEntity.record;
 
 export const createClawInputOptions = {
 	omit: ["status", "createdAt", "updatedAt"],
-	optional: ["id", "context"],
+	// scope/scopeId default in the store (scope="personal", scopeId=createdBy) — a claw is personal to
+	// its creator until re-shared; `createdBy` is required (a claw always has a creator).
+	optional: ["id", "context", "scope", "scopeId"],
 } as const;
 export const createClawInput = clawEntity.schema(createClawInputOptions);
 
@@ -301,7 +302,6 @@ export const bindConversationClawInput = createClawInput;
 export const bindConversationThreadInputOptions = {
 	omit: [
 		"clawId",
-		"organizationId",
 		"status",
 		"currentMessageId",
 		"currentSequence",

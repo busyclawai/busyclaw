@@ -21,8 +21,7 @@ describe("createClaw model extension", () => {
 		});
 
 		const created = await claw.api.createClaw({
-			organizationId: "organization-1",
-			ownerActorId: "actor-1",
+			createdBy: "actor-1",
 			priority: 7,
 			squad: "growth",
 		});
@@ -49,8 +48,7 @@ describe("createClaw model extension", () => {
 		});
 
 		const created = await claw.api.createClaw({
-			organizationId: "organization-1",
-			ownerActorId: "actor-1",
+			createdBy: "actor-1",
 			tag: "vip",
 		});
 		expect(created).toMatchObject({ tag: "vip" });

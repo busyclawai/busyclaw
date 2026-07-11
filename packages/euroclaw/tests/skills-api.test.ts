@@ -132,12 +132,11 @@ describe("createClaw plugin APIs", () => {
 		});
 		await claw.api.createClaw({
 			id: "claw-1",
-			organizationId: "organization-1",
+			createdBy: "actor-1",
 		});
 		await claw.api.createThread({
 			id: "thread-1",
 			clawId: "claw-1",
-			organizationId: "organization-1",
 		});
 
 		const pkg = await claw.api.skills.packages.create({
