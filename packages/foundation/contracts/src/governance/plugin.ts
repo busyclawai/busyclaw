@@ -163,15 +163,19 @@ export type EuroclawPlugin<
 	schema?: {
 		readonly [model: string]: { readonly fields: Record<string, EntityField> };
 	};
-	/** Secret names this plugin needs — the enumerable half of runtime `secrets.get`. The assembly
-	 *  collects these across plugins into the required-names set the boot coverage warning walks.
-	 *  Always-on: needs no table. */
-	secrets?: readonly SecretDeclaration[];
-	/** Secret backends this plugin OFFERS (`secrets` above declares NEEDS; this declares OFFERS). Read
-	 *  STATICALLY off the plugin object BEFORE the resolver is built (the assembly builds `secrets`
-	 *  before any plugin's `configure` runs) — never registered imperatively. Merged after
-	 *  `config.secretProviders`; duplicate provider names fail loud in buildSecrets. */
-	secretProviders?: readonly SecretProvider[];
+	/** What this plugin OFFERS and EXPECTS from the one-door reader — grouped under one namespace so the
+	 *  bare `secrets` no longer overloads the offers/needs/reader senses.
+	 *  - `providers`: secret backends this plugin contributes, read STATICALLY off the raw plugin object
+	 *    BEFORE the reader is built (the assembly builds it before any `configure` runs) — never
+	 *    registered imperatively. Merged after the assembly's env default; duplicate provider names fail
+	 *    loud in buildSecrets.
+	 *  - `expects`: canonical names this plugin expects to resolve — the enumerable half of runtime
+	 *    `secrets.get`, feeding warn-only boot coverage (nothing fails when one is unresolved). Always-on,
+	 *    needs no table. Named `expects` (not needs/requires) because coverage is a warning, not a gate. */
+	secrets?: {
+		providers?: readonly SecretProvider[];
+		expects?: readonly SecretDeclaration[];
+	};
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];
 	/** Boundary before-gates this plugin installs (decide across tool/model boundaries). */
@@ -194,11 +198,11 @@ export type EuroclawPlugin<
 };
 
 /** Producer-side narrowing for factories whose plugin's point is offering a secret backend
- *  (a composed integration: provider + routes + schema in ONE plugin). Required and non-empty —
- *  a "provider plugin" that provides nothing cannot compile. Assignable to EuroclawPlugin (an
- *  intersection, not a union: the container field stays optional/wide, `plugins: []` stays homogeneous). */
+ *  (a composed integration: provider + routes + schema in ONE plugin). `secrets.providers` is required
+ *  and non-empty — a "provider plugin" that provides nothing cannot compile. Assignable to EuroclawPlugin
+ *  (an intersection, not a union: the container field stays optional/wide, `plugins: []` stays homogeneous). */
 export type SecretProviderPlugin = EuroclawPlugin & {
-	secretProviders: readonly [SecretProvider, ...SecretProvider[]];
+	secrets: { providers: readonly [SecretProvider, ...SecretProvider[]] };
 };
 
 /** Union → intersection (a ubiquitous TS idiom — not better-auth-specific). */

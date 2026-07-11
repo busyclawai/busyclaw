@@ -1,5 +1,5 @@
 // Plugins can contribute secret PROVIDERS (resolvers, never values) via the declared
-// `plugin.secretProviders` field. The assembly reads them STATICALLY off the raw plugin list and
+// `plugin.secrets.providers` field. The assembly reads them STATICALLY off the raw plugin list and
 // merges them AFTER `config.secretProviders ?? [env()]`, into the same one-door reader every
 // subsystem resolves through. This proves: a plugin provider resolves via the one door; a duplicate
 // name across config + plugin fails loud; and the env default survives a plugin contribution.
@@ -53,7 +53,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		const capture = captureSecrets();
 		const providerPlugin: EuroclawPlugin = {
 			id: "stub-provider",
-			secretProviders: [stubProvider()],
+			secrets: { providers: [stubProvider()] },
 		};
 
 		createClaw({
@@ -77,7 +77,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 				plugins: [
 					{
 						id: "dup-provider",
-						secretProviders: [stubProvider({ name: "env" })],
+						secrets: { providers: [stubProvider({ name: "env" })] },
 					},
 				],
 			}),
@@ -89,7 +89,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		const capture = captureSecrets();
 		const providerPlugin: EuroclawPlugin = {
 			id: "stub-provider",
-			secretProviders: [stubProvider()],
+			secrets: { providers: [stubProvider()] },
 		};
 
 		// No `secretProviders` ⇒ `[env()]` default resolves BEFORE the plugin merge; both coexist.

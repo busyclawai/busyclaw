@@ -34,7 +34,7 @@ export type SecretStoreOptions = {
 	now?: () => string;
 };
 
-/** The plugin `secretStore()` returns — a SecretProviderPlugin (non-empty `secretProviders`)
+/** The plugin `secretStore()` returns — a SecretProviderPlugin (non-empty `secrets.providers`)
  *  narrowed for createClaw's folds: contributes no cron, and its table needs a database. */
 export type SecretStorePlugin = SecretProviderPlugin & {
 	$HasCron: "no-cron";
@@ -71,8 +71,8 @@ async function materialOf(
 
 /**
  * The secret-store plugin — a plugin that IS a secret backend (the composed-integration case the
- * `secretProviders` push field exists for): ONE plugin contributing the `stored_secret` table
- * (`schema`) and the `"store"` provider (`secretProviders`), atomically. Users paste token values
+ * `secrets.providers` push field exists for): ONE plugin contributing the `stored_secret` table
+ * (`schema`) and the `"store"` provider (`secrets.providers`), atomically. Users paste token values
  * into rows — AES-256-GCM-encrypted at rest ({@link createSecretCipher}) — and every consumer
  * resolves them through the one door like any other provider; nothing is special-cased.
  *
@@ -83,13 +83,13 @@ async function materialOf(
  * still resolves. `tier: "data"` puts the store BEFORE env/vault in the chain (data beats config —
  * the precedence the deleted per-org DB-alias layer had, now a provider property).
  *
- * The plugin is BOTH provider and consumer: it serves rows through `secretProviders` AND resolves
+ * The plugin is BOTH provider and consumer: it serves rows through `secrets.providers` AND resolves
  * its own master key through the `context.secrets` reader captured at configure (lazily, at first
  * use). The bootstrap guard that makes that safe: `get` short-circuits the master-key NAME to a
  * miss, so key resolution falls through to env/vault and can never re-enter this table.
  *
  * Two-phase wiring, deliberately: the provider OBJECT is created here (the assembly reads
- * `secretProviders` STATICALLY off the raw plugin list, before any `configure` runs), while the
+ * `secrets.providers` STATICALLY off the raw plugin list, before any `configure` runs), while the
  * store and reader it uses arrive at `configure` — so `get` resolves through slots `configure`
  * fills. A rebuilt-plugin configure (the channels pattern) would NOT work here: the rebuilt
  * object's providers are never re-read.
@@ -191,7 +191,8 @@ export function secretStore(
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: storedSecretModels,
-		secretProviders: [provider],
+		// The "store" backend this plugin OFFERS — read statically off the raw plugin, before configure.
+		secrets: { providers: [provider] },
 		configure,
 	};
 }

@@ -32,7 +32,7 @@ function connectedStore(options: SecretStoreOptions = {}) {
 	const plugin = secretStore({ key: TEST_KEY, ...options });
 	const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
 	plugin.configure?.({ adapter: db });
-	const [provider] = plugin.secretProviders;
+	const [provider] = plugin.secrets.providers;
 	return {
 		db,
 		plugin,
@@ -67,7 +67,7 @@ describe("secretStore() — the plugin shape", () => {
 		expect(plugin.id).toBe("euroclaw.secret-store");
 		expect(plugin.$RequiresDatabase).toBe(true);
 		expect(plugin.schema?.stored_secret).toBeDefined();
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		expect(provider).toMatchObject({
 			name: "store",
 			tier: "data",
@@ -180,7 +180,7 @@ describe("the store provider — nearest-scope resolution", () => {
 
 		const broken = secretStore({ key: TEST_KEY });
 		broken.configure?.({ adapter: failingAdapter("connection refused") });
-		const [brokenProvider] = broken.secretProviders;
+		const [brokenProvider] = broken.secrets.providers;
 		await expect(brokenProvider.get("ANY", { actor: "alice" })).rejects.toThrow(
 			/connection refused/,
 		);
@@ -191,7 +191,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		plugin.configure?.({
 			adapter: failingAdapter("SqliteError: no such table: stored_secret"),
 		});
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
 			{
 				code: "EUROCLAW_CONFIGURATION_ERROR",
@@ -204,7 +204,7 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("fails loud when resolved before configure wires a database", async () => {
 		const plugin = secretStore({ key: TEST_KEY });
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
 			{
 				code: "EUROCLAW_CONFIGURATION_ERROR",
@@ -317,7 +317,7 @@ describe("encryption at rest", () => {
 		// …but the plugin has no config key and its reader resolves nothing.
 		const plugin = secretStore();
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		await expect(
 			provider.get("LOCKED", { actor: "alice" }),
 		).rejects.toMatchObject({
@@ -338,7 +338,7 @@ describe("encryption at rest", () => {
 		});
 		const plugin = secretStore({ key: OTHER_KEY });
 		plugin.configure?.({ adapter: db });
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		await expect(
 			provider.get("ROTATED", { actor: "alice" }),
 		).rejects.toMatchObject({
@@ -353,7 +353,7 @@ describe("encryption at rest", () => {
 		// which without the short-circuit would recurse: get → decrypt → resolve key → get …).
 		const plugin = secretStore();
 		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
-		const [provider] = plugin.secretProviders;
+		const [provider] = plugin.secrets.providers;
 		const reader = buildSecrets([
 			env({ vars: { [SECRET_STORE_KEY_NAME]: TEST_KEY } }),
 			provider,

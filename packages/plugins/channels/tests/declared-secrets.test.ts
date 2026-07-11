@@ -1,6 +1,6 @@
 // Each telegram app bot declares its own token secret name; the `channels` plugin aggregates those
-// into `plugin.secrets`, so the assembly's required-names list enumerates them. Registrations mode
-// declares nothing — a registered bot's token lives in its row, not under a `secrets.get` name.
+// into `plugin.secrets.expects`, so the assembly's required-names list enumerates them. Registrations
+// mode declares nothing — a registered bot's token lives in its row, not under a `secrets.get` name.
 import { collectSecretDeclarations } from "euroclaw";
 import { describe, expect, it } from "vitest";
 import { channels } from "../src/index";
@@ -9,7 +9,7 @@ import { telegram } from "../src/telegram/index";
 describe("channels — telegram secret declarations", () => {
 	it("declares the unnamed app bot's canonical token name", () => {
 		const plugin = channels([telegram()]);
-		expect(plugin.secrets).toEqual([
+		expect(plugin.secrets?.expects).toEqual([
 			{ name: "TELEGRAM_BOT_TOKEN", description: "Telegram app-bot token" },
 		]);
 	});
@@ -18,7 +18,7 @@ describe("channels — telegram secret declarations", () => {
 		const plugin = channels([
 			telegram({ name: "sales", tokenRef: "SALES_TOKEN" }),
 		]);
-		expect(plugin.secrets).toEqual([
+		expect(plugin.secrets?.expects).toEqual([
 			{ name: "SALES_TOKEN", description: 'Telegram bot token for "sales"' },
 		]);
 	});
@@ -28,7 +28,7 @@ describe("channels — telegram secret declarations", () => {
 			telegram({}),
 			telegram({ name: "sales", tokenRef: "SALES_TOKEN" }),
 		]);
-		expect(plugin.secrets).toEqual([
+		expect(plugin.secrets?.expects).toEqual([
 			{ name: "TELEGRAM_BOT_TOKEN", description: "Telegram app-bot token" },
 			{ name: "SALES_TOKEN", description: 'Telegram bot token for "sales"' },
 		]);

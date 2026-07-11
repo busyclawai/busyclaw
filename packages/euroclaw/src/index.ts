@@ -96,7 +96,7 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
 	models?: ClawModelsConfig;
 	/** The ordered secret-provider chain the one-door reader resolves through (`@euroclaw/secrets`) —
-	 *  the same concept as the plugin push field (`plugin.secretProviders`): two delivery slots, one
+	 *  the same concept as the plugin push field (`plugin.secrets.providers`): two delivery slots, one
 	 *  merge. Absent ⇒ `[env()]` (read the env global); `[]` is explicit-none (nothing resolves). The
 	 *  reader (`secrets`) is built once and both backs registered-tool credentials (below) and is
 	 *  injected into the plugin configure context. */
@@ -424,7 +424,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	// duplicate name across both.
 	const providers = [
 		...(config.secretProviders ?? [env()]),
-		...pluginList.flatMap((plugin) => plugin.secretProviders ?? []),
+		...pluginList.flatMap((plugin) => plugin.secrets?.providers ?? []),
 	];
 	const secrets: Secrets = buildSecrets(providers);
 	// Fail fast at init if any plugin/host schema collides with a core column — the same collection the

@@ -406,7 +406,11 @@ function buildAppBotPlugin(
 		id: options.id ?? "euroclaw.channels",
 		$HasCron: pollTargets.length > 0 ? "has-cron" : "no-cron",
 		schema: channelsModels,
-		...(declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
+		// Each app bot's token name is a coverage EXPECTATION (boot warns if unresolvable); registrations
+		// declare none — their tokens live in the rows, not under a `secrets.get` name.
+		...(declaredSecrets.length > 0
+			? { secrets: { expects: declaredSecrets } }
+			: {}),
 		configure,
 	};
 }

@@ -17,7 +17,7 @@ export function collectSecretDeclarations(
 ): SecretDeclaration[] {
 	const byName = new Map<string, SecretDeclaration>();
 	for (const plugin of plugins) {
-		for (const declaration of plugin.secrets ?? []) {
+		for (const declaration of plugin.secrets?.expects ?? []) {
 			if (!byName.has(declaration.name))
 				byName.set(declaration.name, declaration);
 		}

@@ -13,10 +13,12 @@ import {
 describe("collectSecretDeclarations", () => {
 	it("dedupes by name across plugins — the first declaration keeps its description", () => {
 		const declarations = collectSecretDeclarations([
-			{ id: "a", secrets: [{ name: "X", description: "first" }] },
+			{ id: "a", secrets: { expects: [{ name: "X", description: "first" }] } },
 			{
 				id: "b",
-				secrets: [{ name: "X", description: "second" }, { name: "Y" }],
+				secrets: {
+					expects: [{ name: "X", description: "second" }, { name: "Y" }],
+				},
 			},
 			{ id: "c" },
 		]);
