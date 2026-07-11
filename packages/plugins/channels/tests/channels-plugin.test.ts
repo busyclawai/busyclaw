@@ -131,8 +131,9 @@ describe("channels plugin — named bots (the genericOAuth model)", () => {
 	});
 
 	it("mounts no named route when every bot is unnamed", () => {
-		const plugin = channels([telegram({})]);
-		expect(plugin.routes?.map((route) => route.path)).toEqual([
+		// Routes are the RUNTIME half now — configure builds them over the arriving store/reader.
+		const runtime = configured(channels([telegram({})]));
+		expect(runtime.routes?.map((route) => route.path)).toEqual([
 			"/channels/:provider/webhook",
 		]);
 	});

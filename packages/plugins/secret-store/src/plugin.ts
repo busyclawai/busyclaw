@@ -1,7 +1,7 @@
 import {
 	configurationError,
-	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
+	type EuroclawPluginRuntime,
 	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,
@@ -168,17 +168,20 @@ export function secretStore(
 		},
 	};
 
+	// THE deliberate two-role exception (docs/plans/secrets-provider-registry.md (g)): this plugin's
+	// PROVIDER object is STATIC — the assembly reads `secrets.providers` off the raw plugin before any
+	// configure runs — yet the store + master-key reader it needs only arrive at configure. A provider
+	// can't take a per-call surface, so `configure` fills the closure slots the provider reads. It adds
+	// no routes/cron/api, so it returns `undefined` (the runtime half is empty).
 	const configure = (
 		context: EuroclawPluginConfigureContext,
-	): EuroclawPlugin | undefined => {
+	): EuroclawPluginRuntime | undefined => {
 		if (context.adapter) {
 			store = createStoredSecretsStore(context.adapter, {
 				cipher,
 				now: options.now,
 			});
 		}
-		// Captured for the lazy master key — the two-role pattern: this plugin is a provider AND a
-		// consumer of the one door.
 		reader = context.secrets;
 		return undefined;
 	};

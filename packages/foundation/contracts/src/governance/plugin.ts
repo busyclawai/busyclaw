@@ -51,6 +51,11 @@ export type EuroclawRouteContext<ClawLike = unknown> = {
 	request: EuroclawRouteRequest;
 	claw: ClawLike;
 	params: Record<string, string>;
+	/** The one-door secret reader, threaded by the HTTP adapter from the assembled claw so a route
+	 *  handler resolves credentials at CALL time (`ctx.secrets.get(name)`) rather than closing over a
+	 *  configure-captured reader. Optional because the adapter dispatches with whatever claw it is
+	 *  handed — a partial claw (tests, a bare handler) carries no `$context.secrets`. */
+	secrets?: Secrets;
 };
 
 export type EuroclawRoute<ClawLike = unknown> = {
@@ -74,6 +79,10 @@ export type EuroclawCronContext<ClawLike = unknown> = {
 	claw: ClawLike;
 	request?: EuroclawRouteRequest;
 	limit?: number;
+	/** The one-door secret reader, threaded by the HTTP adapter from the assembled claw (same as
+	 *  {@link EuroclawRouteContext}) so a cron handler resolves credentials at CALL time. Optional for
+	 *  the same reason — the adapter may dispatch with a partial claw. */
+	secrets?: Secrets;
 };
 
 export type EuroclawCronTask<ClawLike = unknown> = {
@@ -95,12 +104,32 @@ export type EuroclawPluginConfigureContext = {
 	readonly events?: EventSink;
 	/** The one-door secret reader (`@euroclaw/secrets`, built once by the assembly). A plugin that
 	 *  calls out (channels, sandbox egress) resolves credentials through `context.secrets.get(name)`
-	 *  rather than holding a token — same injection mechanism as `clawsStore`/`effects`/`events`. */
-	readonly secrets?: Secrets;
+	 *  rather than holding a token — same injection mechanism as `clawsStore`/`effects`/`events`.
+	 *  REQUIRED: the reader is constitutive (the assembly always builds it over the env default), so a
+	 *  plugin never has to `?.`-chain it. `adapter` stays optional — a no-database claw is a real state. */
+	readonly secrets: Secrets;
 	/** The resolved storage adapter (schema-aware, wrapped once by the assembly). A plugin that owns
 	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
 	readonly adapter?: Adapter;
 	readonly [key: string]: unknown;
+};
+
+/**
+ * The RUNTIME half of a plugin — the surfaces that depend on host-created stores/context and so are
+ * produced by `configure`, not declared statically. `configure(ctx)` returns ONLY this (never a whole
+ * plugin): the STATIC fields (id, schema, `secrets`, gates, $phantoms) are read off the raw object
+ * BEFORE configure runs, so returning a changed one would silently no-op — making that unrepresentable
+ * is the point. Handlers close over the configure `ctx` argument; no mutable-slot capture, no `?.`.
+ */
+export type EuroclawPluginRuntime<
+	Api extends Record<string, unknown> = Record<never, never>,
+> = {
+	/** Product API namespaces this plugin contributes (the composition layer merges them). */
+	api?: (context: unknown) => Api;
+	/** Adapter routes this plugin contributes. Framework adapters decide how to expose them. */
+	routes?: readonly EuroclawRoute[];
+	/** Scheduled work this plugin contributes. Framework adapters expose the cron trigger. */
+	cron?: readonly EuroclawCronTask[];
 };
 
 /** A euroclaw plugin: a plain data object. Only `id` is required. */
@@ -149,10 +178,13 @@ export type EuroclawPlugin<
 	boundaryGates?: BoundaryGate[];
 	/** After-gates this plugin installs (observe). */
 	afterGates?: AfterGate[];
-	/** Compose this plugin against host-created stores/context before runtime gates are installed. */
+	/** Compose this plugin against host-created stores/context, returning ONLY the RUNTIME half
+	 *  ({@link EuroclawPluginRuntime}) — routes/cron/api built over the store/reader that arrive here.
+	 *  Returns `undefined` when a plugin has nothing runtime to add (a static-only plugin skips
+	 *  `configure` entirely). It CANNOT return changed static fields — that shape is unrepresentable. */
 	configure?: (
 		context: EuroclawPluginConfigureContext,
-	) => EuroclawPlugin | undefined;
+	) => EuroclawPluginRuntime<Api> | undefined;
 	/** Product API namespaces this plugin contributes. The composition layer owns merging/conflicts. */
 	api?: (context: unknown) => Api;
 	/** Adapter routes this plugin contributes. Framework adapters decide how to expose them. */

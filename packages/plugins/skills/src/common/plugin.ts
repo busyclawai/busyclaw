@@ -4,6 +4,7 @@ import {
 	defineReasonCodes,
 	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
+	type EuroclawPluginRuntime,
 	type GateDecision,
 	type ToolCall,
 	type TurnContext,
@@ -93,32 +94,44 @@ export function buildSkillsPlugin<
 			? undefined
 			: parseActiveSkillSelection(staticActiveSelection, allSkillIds);
 
+	// The skills store rides a mutable slot: a host-supplied `config.store` wins, else `configure`
+	// builds one from the adapter. Both the allowed-tools GATE (a static decide-gate, so it cannot be
+	// returned from configure) and the api read it — the same two-role capture the secret-store
+	// provider uses. No adapter and no host store ⇒ the slot stays undefined and only static skills
+	// resolve. `configure` fills it and returns the api as the runtime half; nothing rebuilds the plugin.
+	let store = config.store;
+
 	const resolveActiveSkillRefs = async (
 		ctx: TurnContext,
 	): Promise<ActiveSkillRef[]> => {
 		if (typeof config.active !== "function") {
-			return (
-				staticActive ?? recordedActiveSkillRefs({ ctx, store: config.store })
-			);
+			return staticActive ?? recordedActiveSkillRefs({ ctx, store });
 		}
 		const selection = await config.active(ctx);
 		return selection === undefined || selection === "recorded"
-			? recordedActiveSkillRefs({ ctx, store: config.store })
+			? recordedActiveSkillRefs({ ctx, store })
 			: parseActiveSkillSelection(selection, allSkillIds);
 	};
 	const configure = (
 		context: EuroclawPluginConfigureContext,
-	): ReturnType<typeof buildSkillsPlugin<Skills, TApi>> | undefined => {
+	): EuroclawPluginRuntime<{ readonly skills: TApi }> | undefined => {
 		// Core stays skills-agnostic: the assembly passes the resolved adapter through the configure
 		// context's index signature, and this plugin builds its OWN store from it — nothing outside this
-		// package creates a skills store. A host-supplied store wins; no adapter means static-only skills.
-		if (config.store) return undefined;
-		const adapter = contextAdapter(context);
-		if (!adapter) return undefined;
-		return buildSkillsPlugin(
-			{ ...config, store: createSkillsStore(adapter) },
-			apiFactory,
-		);
+		// package creates a skills store. A host-supplied store already filled the slot; otherwise build
+		// one from the adapter (absent ⇒ static-only skills). The api reads the slot at call time.
+		if (!store) {
+			const adapter = contextAdapter(context);
+			if (adapter) store = createSkillsStore(adapter);
+		}
+		return {
+			api: () => ({
+				skills: apiFactory(store, {
+					activationContext: config.activationContext,
+					readContext: config.readContext,
+					staticSkills: skills,
+				}),
+			}),
+		};
 	};
 
 	// The subtractive allowed-tools gate: a tool is denied unless an active skill lists it. Skills
@@ -142,7 +155,6 @@ export function buildSkillsPlugin<
 			}
 
 			const allowedTools = new Set<string>();
-			const store = config.store;
 			const activeLabels: string[] = [];
 			for (const ref of activeSkillRefs) {
 				activeLabels.push(refLabel(ref));
@@ -197,14 +209,8 @@ export function buildSkillsPlugin<
 		// The tables this plugin owns — collected by getEuroclawTables into the migration schema. The
 		// same models back the skills store, so registering the plugin is what puts skills on disk.
 		schema: skillsModels,
+		// The api is the RUNTIME half — `configure` returns it, closing over the store slot it fills.
 		configure,
-		api: () => ({
-			skills: apiFactory(config.store, {
-				activationContext: config.activationContext,
-				readContext: config.readContext,
-				staticSkills: skills,
-			}),
-		}),
 		gates: config.enforceAllowedTools ? [allowedToolsGate] : [],
 	};
 }

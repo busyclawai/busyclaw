@@ -5,6 +5,7 @@ import {
 	bindConversationThreadInput,
 	configurationError,
 	type EuroclawPluginConfigureContext,
+	type EuroclawPluginRuntime,
 	type EuroclawRoute,
 	type EuroclawRouteContext,
 	validationError,
@@ -83,7 +84,6 @@ const WEBHOOK_PATH = "/channels/:provider/registrations/webhook";
 export function buildRegistrationsPlugin(
 	list: readonly Channel[],
 	options: ChannelsPluginOptions,
-	store: ChannelRegistrationsStore | undefined,
 ): ChannelsPlugin {
 	assertUniqueProviders(list);
 	if (list.length === 0) {
@@ -113,31 +113,6 @@ export function buildRegistrationsPlugin(
 	const byProvider = new Map(
 		list.map((channel) => [channel.provider, channel]),
 	);
-
-	const requireStore = (): ChannelRegistrationsStore => {
-		if (!store) {
-			throw configurationError(
-				"channels registrations require a database adapter",
-				{
-					reason:
-						"pass a database to createClaw so registrations can be registered and resolved",
-				},
-			);
-		}
-		return store;
-	};
-
-	const configure = (
-		context: EuroclawPluginConfigureContext,
-	): ChannelsPlugin | undefined => {
-		if (store) return undefined;
-		if (!context.adapter) return undefined;
-		return buildRegistrationsPlugin(
-			list,
-			options,
-			createChannelRegistrationsStore(context.adapter, { now }),
-		);
-	};
 
 	// The row's bind-defaults JSON crossed a trust boundary (the registration api wrote it), so the
 	// claw/thread defaults are arktype-validated here before they reach bindConversation.
@@ -199,82 +174,120 @@ export function buildRegistrationsPlugin(
 		thread: threadDefaults(row),
 	});
 
-	const register = async (
-		input: RegisterChannelRegistrationInput,
-	): Promise<ChannelRegistrationRecord> => {
-		if (!byProvider.has(input.provider)) {
-			throw configurationError("unknown channel provider", {
-				provider: input.provider,
-				reason:
-					"pass this provider's channel to channels([...], { registrations: { enabled: true } })",
-			});
-		}
-		// Registrations are webhook-only. Drop any stray `mode` a widened/JS caller passes, and reject a
-		// poll mode loudly — the whole poll surface is gone for registrations.
-		const { mode, ...registration } =
-			input as RegisterChannelRegistrationInput & {
-				mode?: unknown;
-			};
-		if (mode === "poll") {
-			throw configurationError("channel registrations are webhook-only", {
-				provider: input.provider,
-				reason:
-					"a registration is always a webhook — drop mode (registrations no longer poll)",
-			});
-		}
-		// The endpointKey is the registration's binding-key segment (`registrations/${endpointKey}`),
-		// never a URL segment now — enforce the segment shape so the prefix stays unforgeable (no slash).
-		if (!ENDPOINT_SEGMENT.test(input.endpointKey)) {
-			throw configurationError("invalid registration key", {
-				endpointKey: input.endpointKey,
-				provider: input.provider,
-				reason: "an endpointKey is a single segment: A-Z a-z 0-9 _ -",
-			});
-		}
-		return requireStore().register(registration);
-	};
+	// The RUNTIME half: the channel_registration store arrives at configure, so the webhook route AND
+	// the management api are built HERE, closing over that store — no plugin rebuild, no captured slots.
+	// An absent adapter leaves the store undefined; every store-backed method fails loud (requireStore).
+	const configure = (
+		context: EuroclawPluginConfigureContext,
+	): EuroclawPluginRuntime<ChannelRegistrationsPluginApi> | undefined => {
+		const store = context.adapter
+			? createChannelRegistrationsStore(context.adapter, { now })
+			: undefined;
+		const requireStore = (): ChannelRegistrationsStore => {
+			if (!store) {
+				throw configurationError(
+					"channels registrations require a database adapter",
+					{
+						reason:
+							"pass a database to createClaw so registrations can be registered and resolved",
+					},
+				);
+			}
+			return store;
+		};
 
-	const webhookRoute: EuroclawRoute = {
-		id: "channels:registrations:webhook",
-		method: "POST",
-		path: WEBHOOK_PATH,
-		handler: async ({ claw, params, request }: EuroclawRouteContext) => {
-			const channel = byProvider.get(params.provider ?? "");
-			// identify is guaranteed present (asserted at build), but narrow for the type.
-			if (!channel?.identify) {
-				return { status: 404, body: { ok: false, error: "unknown provider" } };
+		const register = async (
+			input: RegisterChannelRegistrationInput,
+		): Promise<ChannelRegistrationRecord> => {
+			if (!byProvider.has(input.provider)) {
+				throw configurationError("unknown channel provider", {
+					provider: input.provider,
+					reason:
+						"pass this provider's channel to channels([...], { registrations: { enabled: true } })",
+				});
 			}
-			// Read the body once, then hand the same bytes to identify (may parse it) and dispatch.
-			const rawBody = await request.text();
-			const inbound = { headers: request.headers, rawBody };
-			const secret = await channel.identify(inbound);
-			if (secret === undefined) {
-				return {
-					status: 404,
-					body: { ok: false, error: "unidentified registration" },
+			// Registrations are webhook-only. Drop any stray `mode` a widened/JS caller passes, and reject
+			// a poll mode loudly — the whole poll surface is gone for registrations.
+			const { mode, ...registration } =
+				input as RegisterChannelRegistrationInput & {
+					mode?: unknown;
 				};
+			if (mode === "poll") {
+				throw configurationError("channel registrations are webhook-only", {
+					provider: input.provider,
+					reason:
+						"a registration is always a webhook — drop mode (registrations no longer poll)",
+				});
 			}
-			const row = await requireStore().getBySecret(channel.provider, secret);
-			// Absent and revoked look identical from outside — don't leak registry state.
-			if (row?.status !== "active") {
-				return {
-					status: 404,
-					body: { ok: false, error: "unknown registration" },
-				};
+			// The endpointKey is the registration's binding-key segment (`registrations/${endpointKey}`),
+			// never a URL segment now — enforce the segment shape so the prefix stays unforgeable (no slash).
+			if (!ENDPOINT_SEGMENT.test(input.endpointKey)) {
+				throw configurationError("invalid registration key", {
+					endpointKey: input.endpointKey,
+					provider: input.provider,
+					reason: "an endpointKey is a single segment: A-Z a-z 0-9 _ -",
+				});
 			}
-			const result = await dispatchWebhook({
-				claw: requireClaw(claw),
-				channel,
-				endpoint: contextFor(row),
-				request: inbound,
-				persist: (event) =>
-					requireStore().record(
-						{ provider: row.provider, endpointKey: row.endpointKey },
-						event,
-					),
-			});
-			return { status: result.status, body: result.body };
-		},
+			return requireStore().register(registration);
+		};
+
+		const webhookRoute: EuroclawRoute = {
+			id: "channels:registrations:webhook",
+			method: "POST",
+			path: WEBHOOK_PATH,
+			handler: async ({ claw, params, request }: EuroclawRouteContext) => {
+				const channel = byProvider.get(params.provider ?? "");
+				// identify is guaranteed present (asserted at build), but narrow for the type.
+				if (!channel?.identify) {
+					return { status: 404, body: { ok: false, error: "unknown provider" } };
+				}
+				// Read the body once, then hand the same bytes to identify (may parse it) and dispatch.
+				const rawBody = await request.text();
+				const inbound = { headers: request.headers, rawBody };
+				const secret = await channel.identify(inbound);
+				if (secret === undefined) {
+					return {
+						status: 404,
+						body: { ok: false, error: "unidentified registration" },
+					};
+				}
+				const row = await requireStore().getBySecret(channel.provider, secret);
+				// Absent and revoked look identical from outside — don't leak registry state.
+				if (row?.status !== "active") {
+					return {
+						status: 404,
+						body: { ok: false, error: "unknown registration" },
+					};
+				}
+				const result = await dispatchWebhook({
+					claw: requireClaw(claw),
+					channel,
+					endpoint: contextFor(row),
+					request: inbound,
+					persist: (event) =>
+						requireStore().record(
+							{ provider: row.provider, endpointKey: row.endpointKey },
+							event,
+						),
+				});
+				return { status: result.status, body: result.body };
+			},
+		};
+
+		return {
+			routes: [webhookRoute],
+			api: () => ({
+				channels: {
+					registrations: {
+						register,
+						get: ({ id }) => requireStore().get(id),
+						getByKey: (input) => requireStore().getByKey(input),
+						list: (filter) => requireStore().list(filter),
+						revoke: (input) => requireStore().revoke(input),
+					},
+				},
+			}),
+		};
 	};
 
 	return {
@@ -282,19 +295,7 @@ export function buildRegistrationsPlugin(
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: channelRegistrationsModels,
+		// The webhook route and the management api are the RUNTIME half — configure returns them.
 		configure,
-		routes: [webhookRoute],
-		cron: [],
-		api: () => ({
-			channels: {
-				registrations: {
-					register,
-					get: ({ id }) => requireStore().get(id),
-					getByKey: (input) => requireStore().getByKey(input),
-					list: (filter) => requireStore().list(filter),
-					revoke: (input) => requireStore().revoke(input),
-				},
-			},
-		}),
 	};
 }

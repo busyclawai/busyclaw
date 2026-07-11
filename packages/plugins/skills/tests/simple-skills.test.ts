@@ -275,7 +275,9 @@ describe("@euroclaw/skills (simple)", () => {
 		});
 		const plugin = skillsPlugin({ active: ["email-only"], skills: [skill] });
 
-		expect(plugin.api?.({}).skills).toBeDefined();
+		// The api is the RUNTIME half now — configure (no adapter ⇒ static-only) yields it.
+		const runtime = plugin.configure?.({});
+		expect(runtime?.api?.({}).skills).toBeDefined();
 	});
 
 	it("permits tools declared by active skills", async () => {

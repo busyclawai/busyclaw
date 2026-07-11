@@ -274,6 +274,8 @@ async function runCronTasks(input: {
 			claw: input.claw,
 			limit: input.limit,
 			request: input.request,
+			// Thread the one-door reader from the assembled claw (absent on a partial claw).
+			secrets: input.claw.$context?.secrets,
 		});
 		results.push({ id: task.id, ...result });
 	}
@@ -491,6 +493,8 @@ export function toRequestHandler(
 					claw,
 					params: matched.params,
 					request,
+					// Thread the one-door reader from the assembled claw (absent on a partial claw).
+					secrets: claw.$context?.secrets,
 				}),
 			);
 		} catch (error) {

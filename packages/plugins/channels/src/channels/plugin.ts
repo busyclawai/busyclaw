@@ -3,9 +3,9 @@ import {
 	type EuroclawCronFlag,
 	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
+	type EuroclawPluginRuntime,
 	type EuroclawRoute,
 	type EuroclawRouteContext,
-	type Secrets,
 } from "@euroclaw/contracts";
 import { requireClaw } from "../core/claw";
 import {
@@ -250,25 +250,19 @@ export function channels<
 	// buildAppBotPlugin sets $HasCron from the same poll check AnyPoll folds; buildRegistrationsPlugin
 	// sets $RequiresDatabase from the same registrations flag RegistrationsEnabled folds.
 	if (options.registrations?.enabled) {
-		return buildRegistrationsPlugin(list, options, undefined) as ChannelsReturn<
+		return buildRegistrationsPlugin(list, options) as ChannelsReturn<
 			List,
 			Options
 		>;
 	}
-	// No store and no secrets reader yet: both arrive at configure (the assembly's seam).
-	return buildAppBotPlugin(
-		list,
-		options,
-		undefined,
-		undefined,
-	) as ChannelsReturn<List, Options>;
+	// The store and the one-door reader both arrive at configure (the assembly's seam) — the app-bot
+	// plugin builds its runtime half (routes/cron) there, closing over that context.
+	return buildAppBotPlugin(list, options) as ChannelsReturn<List, Options>;
 }
 
 function buildAppBotPlugin(
 	list: readonly Channel[],
 	options: ChannelsPluginOptions,
-	store: ChannelEndpointStateStore | undefined,
-	secrets: Secrets | undefined,
 ): ChannelsPlugin {
 	assertUniqueChannelKeys(list);
 	// Every channel here is an app bot — fail at startup, not on first traffic, if one is unusable
@@ -291,119 +285,121 @@ function buildAppBotPlugin(
 		(channel) => channel.declaredSecrets ?? [],
 	);
 
-	const requireStore = (): ChannelEndpointStateStore => {
-		if (!store) {
-			throw configurationError("channels requires a database adapter", {
-				reason:
-					"pass a database to createClaw so channels can persist endpoint state",
-			});
-		}
-		return store;
-	};
-
+	// The RUNTIME half: the endpoint-state store and the one-door reader both arrive at configure, so
+	// the webhook routes + poll cron are built HERE, closing over the configure `context` argument —
+	// no plugin rebuild, no captured slots. An absent adapter leaves the store undefined and the
+	// handlers fail loud on first traffic (requireStore), exactly as before.
 	const configure = (
 		context: EuroclawPluginConfigureContext,
-	): ChannelsPlugin | undefined => {
-		if (store) return undefined;
-		if (!context.adapter) return undefined;
-		// Capture the one-door reader here — the only place it's in scope — and hand it to the rebuilt
-		// plugin so contextFor can thread it to each app bot's lazy token resolution.
-		return buildAppBotPlugin(
-			list,
-			options,
-			createChannelEndpointStateStore(context.adapter, { now }),
-			context.secrets,
-		);
-	};
-
-	// A bot's normalized view: no per-connection secret VALUE (an app bot keeps its client in memory),
-	// but it DOES carry the one-door secret READER so the channel can resolve its own token lazily
-	// (secrets.get) on the send/webhook path; no bind defaults (conversations create bare personal
-	// claws — placement is the host's logic through the public bindConversation api); cursor from the
-	// state row under the bot's key.
-	const contextFor = async (channel: Channel): Promise<EndpointContext> => {
-		const state = await requireStore().get({
-			provider: channel.provider,
-			endpointKey: keyOf(channel),
-		});
-		return {
-			provider: channel.provider,
-			endpointKey: keyOf(channel),
-			mode: channel.mode,
-			cursor: state?.cursor,
-			secrets,
-		};
-	};
-
-	const persistFor =
-		(channel: Channel) =>
-		(event: Parameters<ChannelEndpointStateStore["record"]>[1]) =>
-			requireStore().record(
-				{
-					provider: channel.provider,
-					endpointKey: keyOf(channel),
-					mode: channel.mode,
-				},
-				event,
-			);
-
-	const webhookHandler =
-		(keyFrom: (params: Record<string, string>) => string) =>
-		async ({ claw, params, request }: EuroclawRouteContext) => {
-			const channel = byKey.get(`${params.provider ?? ""}:${keyFrom(params)}`);
-			if (!channel) {
-				return { status: 404, body: { ok: false, error: "unknown channel" } };
+	): EuroclawPluginRuntime<ChannelsApi> | undefined => {
+		const store = context.adapter
+			? createChannelEndpointStateStore(context.adapter, { now })
+			: undefined;
+		const secrets = context.secrets;
+		const requireStore = (): ChannelEndpointStateStore => {
+			if (!store) {
+				throw configurationError("channels requires a database adapter", {
+					reason:
+						"pass a database to createClaw so channels can persist endpoint state",
+				});
 			}
-			const rawBody = await request.text();
-			const result = await dispatchWebhook({
-				claw: requireClaw(claw),
-				channel,
-				endpoint: await contextFor(channel),
-				request: { headers: request.headers, rawBody },
-				persist: persistFor(channel),
-			});
-			return { status: result.status, body: result.body };
+			return store;
 		};
 
-	const webhookRoutes: EuroclawRoute[] = [
-		{
-			id: "channels:webhook",
-			method: "POST",
-			path: WEBHOOK_PATH,
-			handler: webhookHandler(() => APP_ENDPOINT_KEY),
-		},
-		// Mounted only when a named bot exists — each named bot answers on its own path segment.
-		...(hasNamed
-			? [
-					{
-						id: "channels:webhook:named",
-						method: "POST" as const,
-						path: NAMED_WEBHOOK_PATH,
-						handler: webhookHandler((params) => params.name ?? ""),
-					},
-				]
-			: []),
-	];
+		// A bot's normalized view: no per-connection secret VALUE (an app bot keeps its client in
+		// memory), but it DOES carry the one-door secret READER so the channel can resolve its own token
+		// lazily (secrets.get) on the send/webhook path; no bind defaults (conversations create bare
+		// personal claws — placement is the host's logic through the public bindConversation api);
+		// cursor from the state row under the bot's key.
+		const contextFor = async (channel: Channel): Promise<EndpointContext> => {
+			const state = await requireStore().get({
+				provider: channel.provider,
+				endpointKey: keyOf(channel),
+			});
+			return {
+				provider: channel.provider,
+				endpointKey: keyOf(channel),
+				mode: channel.mode,
+				cursor: state?.cursor,
+				secrets,
+			};
+		};
 
-	const pollTask = {
-		id: "channels:poll",
-		handler: async ({ claw, limit }: { claw: unknown; limit?: number }) => {
-			let processed = 0;
-			for (const channel of pollTargets) {
-				const result = await pollEndpoint({
+		const persistFor =
+			(channel: Channel) =>
+			(event: Parameters<ChannelEndpointStateStore["record"]>[1]) =>
+				requireStore().record(
+					{
+						provider: channel.provider,
+						endpointKey: keyOf(channel),
+						mode: channel.mode,
+					},
+					event,
+				);
+
+		const webhookHandler =
+			(keyFrom: (params: Record<string, string>) => string) =>
+			async ({ claw, params, request }: EuroclawRouteContext) => {
+				const channel = byKey.get(`${params.provider ?? ""}:${keyFrom(params)}`);
+				if (!channel) {
+					return { status: 404, body: { ok: false, error: "unknown channel" } };
+				}
+				const rawBody = await request.text();
+				const result = await dispatchWebhook({
 					claw: requireClaw(claw),
 					channel,
 					endpoint: await contextFor(channel),
-					limit,
+					request: { headers: request.headers, rawBody },
 					persist: persistFor(channel),
 				});
-				processed += result.processed;
-			}
-			return {
-				processed,
-				status: processed > 0 ? ("processed" as const) : ("idle" as const),
+				return { status: result.status, body: result.body };
 			};
-		},
+
+		const webhookRoutes: EuroclawRoute[] = [
+			{
+				id: "channels:webhook",
+				method: "POST",
+				path: WEBHOOK_PATH,
+				handler: webhookHandler(() => APP_ENDPOINT_KEY),
+			},
+			// Mounted only when a named bot exists — each named bot answers on its own path segment.
+			...(hasNamed
+				? [
+						{
+							id: "channels:webhook:named",
+							method: "POST" as const,
+							path: NAMED_WEBHOOK_PATH,
+							handler: webhookHandler((params) => params.name ?? ""),
+						},
+					]
+				: []),
+		];
+
+		const pollTask = {
+			id: "channels:poll",
+			handler: async ({ claw, limit }: { claw: unknown; limit?: number }) => {
+				let processed = 0;
+				for (const channel of pollTargets) {
+					const result = await pollEndpoint({
+						claw: requireClaw(claw),
+						channel,
+						endpoint: await contextFor(channel),
+						limit,
+						persist: persistFor(channel),
+					});
+					processed += result.processed;
+				}
+				return {
+					processed,
+					status: processed > 0 ? ("processed" as const) : ("idle" as const),
+				};
+			},
+		};
+
+		return {
+			routes: hasWebhook ? webhookRoutes : [],
+			cron: pollTargets.length > 0 ? [pollTask] : [],
+		};
 	};
 
 	return {
@@ -412,7 +408,5 @@ function buildAppBotPlugin(
 		schema: channelsModels,
 		...(declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
 		configure,
-		routes: hasWebhook ? webhookRoutes : [],
-		cron: pollTargets.length > 0 ? [pollTask] : [],
 	};
 }

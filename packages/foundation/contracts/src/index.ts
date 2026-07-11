@@ -280,6 +280,7 @@ export type {
 	EuroclawHttpMethod,
 	EuroclawPlugin,
 	EuroclawPluginConfigureContext,
+	EuroclawPluginRuntime,
 	EuroclawRoute,
 	EuroclawRouteContext,
 	EuroclawRouteRequest,

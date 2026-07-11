@@ -410,15 +410,18 @@ describe("channels() registrations mode", () => {
 	});
 
 	it("mounts one shared registrations webhook route (no key in path) and no cron", () => {
-		const plugin = channels([fakeChannel()], {
+		const base = channels([fakeChannel()], {
 			registrations: { enabled: true },
 		});
-		expect(plugin.routes?.map((route) => route.path)).toEqual([
+		// The static markers ride the plugin object; the webhook route is the RUNTIME half (configure).
+		expect(base.$HasCron).toBe("no-cron");
+		expect(base.$RequiresDatabase).toBe(true);
+		const runtime = configured(base);
+		expect(runtime.routes?.map((route) => route.path)).toEqual([
 			"/channels/:provider/registrations/webhook",
 		]);
-		expect(plugin.cron).toEqual([]);
-		expect(plugin.$HasCron).toBe("no-cron");
-		expect(plugin.$RequiresDatabase).toBe(true);
+		// Registrations never poll — the runtime half contributes no cron.
+		expect(runtime.cron ?? []).toEqual([]);
 	});
 
 	it("declares no app-bot token secret in registrations mode — tokens live in the rows", () => {

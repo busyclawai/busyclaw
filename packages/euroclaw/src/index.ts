@@ -288,8 +288,11 @@ function configurePlugins(input: {
 	plugins: readonly EuroclawPlugin[];
 }): EuroclawPlugin[] {
 	return input.plugins.map((plugin) => {
-		const configured = plugin.configure?.(input.context);
-		return configured ?? plugin;
+		// configure returns only the RUNTIME half (routes/cron/api built over the arriving store/reader);
+		// merge it over the static plugin. The static fields (schema, secrets, gates, $phantoms) are the
+		// plugin's own — the runtime half can only add/replace routes/cron/api, never a static field.
+		const runtime = plugin.configure?.(input.context);
+		return runtime ? { ...plugin, ...runtime } : plugin;
 	});
 }
 
