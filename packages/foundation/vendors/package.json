@@ -28,7 +28,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "rm -rf dist && tsc",
+		"build": "tsc",
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
