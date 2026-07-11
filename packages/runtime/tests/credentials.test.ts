@@ -1,9 +1,6 @@
-import type {
-	SecretMaterial,
-	SecretRequest,
-	SecretResolver,
-} from "@euroclaw/contracts";
+import type { ResolveContext, SecretMaterial, Secrets } from "@euroclaw/contracts";
 import { EuroclawError } from "@euroclaw/contracts";
+import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
 import {
 	applyCredentials,
@@ -42,69 +39,77 @@ function binding(security: OpenApiBinding["security"]): OpenApiBinding {
 	};
 }
 
-/** A fake resolver: map scheme → material, or the sentinel "throw" for an infra failure. */
-function resolver(table: Record<string, SecretMaterial | "throw">): {
-	fn: SecretResolver;
-	seen: SecretRequest[];
+/** A fake one-door reader keyed by the registration SOURCE name (one credential per registration —
+ *  the invoker resolves `secrets.get(source, ctx)`, never per scheme). Records the (ref, ctx) it was
+ *  asked for; the sentinel "throw" is an infra failure the reader must surface, never swallow. */
+function sourceSecrets(table: Record<string, SecretMaterial | "throw">): {
+	secrets: Secrets;
+	seen: Array<{ ref: string; ctx: ResolveContext }>;
 } {
-	const seen: SecretRequest[] = [];
-	return {
-		seen,
-		fn: (request) => {
-			seen.push(request);
-			const entry = table[request.scheme];
-			if (entry === "throw") throw new Error("vault unreachable");
-			return entry ?? null;
+	const seen: Array<{ ref: string; ctx: ResolveContext }> = [];
+	const secrets = buildSecrets([
+		{
+			name: "test",
+			capability: { manage: false },
+			get: async (ref, ctx) => {
+				seen.push({ ref, ctx });
+				const entry = table[ref];
+				if (entry === "throw") throw new Error("vault unreachable");
+				return entry ?? null;
+			},
 		},
-	};
+	]);
+	return { secrets, seen };
 }
 
-describe("applyCredentials — placement per scheme", () => {
+describe("applyCredentials — placement per scheme (source-keyed material)", () => {
 	it("apiKey in header", async () => {
-		const { fn } = resolver({
-			apiKeyHeader: { kind: "token", value: "sk-123" },
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "sk-123" },
 		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ apiKeyHeader: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.headers["X-API-Key"]).toBe("sk-123");
 	});
 
 	it("apiKey in query (appended, encoded)", async () => {
-		const { fn } = resolver({
-			apiKeyQuery: { kind: "token", value: "a b+c" },
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "a b+c" },
 		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ apiKeyQuery: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.url).toBe("https://api.example/v1/pets?api_key=a%20b%2Bc");
 	});
 
 	it("http bearer → Authorization: Bearer", async () => {
-		const { fn } = resolver({ bearerAuth: { kind: "token", value: "tok" } });
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "tok" },
+		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ bearerAuth: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.headers.authorization).toBe("Bearer tok");
 	});
 
 	it("http basic → Authorization: Basic base64(user:pass)", async () => {
-		const { fn } = resolver({
-			basicAuth: { kind: "basic", username: "alice", password: "s3cret" },
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "basic", username: "alice", password: "s3cret" },
 		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ basicAuth: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.headers.authorization).toBe(
@@ -113,11 +118,13 @@ describe("applyCredentials — placement per scheme", () => {
 	});
 
 	it("oauth2 material is placed as a bearer token", async () => {
-		const { fn } = resolver({ oauth: { kind: "token", value: "oauth-tok" } });
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "oauth-tok" },
+		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ oauth: ["pets:read"] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.headers.authorization).toBe("Bearer oauth-tok");
@@ -125,61 +132,62 @@ describe("applyCredentials — placement per scheme", () => {
 });
 
 describe("applyCredentials — AND / OR alternatives", () => {
-	it("AND: every scheme in one requirement is applied", async () => {
-		const { fn } = resolver({
-			apiKeyHeader: { kind: "token", value: "key" },
-			bearerAuth: { kind: "token", value: "tok" },
+	it("AND: the ONE source credential is placed in every scheme's slot", async () => {
+		// One credential per registration: both AND-ed schemes resolve the SAME source material and
+		// apply it in their own placement (X-API-Key and Authorization both carry it).
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "cred" },
 		});
 		const out = await applyCredentials(
 			plan(),
 			binding([{ apiKeyHeader: [], bearerAuth: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
-		expect(out.headers["X-API-Key"]).toBe("key");
-		expect(out.headers.authorization).toBe("Bearer tok");
+		expect(out.headers["X-API-Key"]).toBe("cred");
+		expect(out.headers.authorization).toBe("Bearer cred");
 	});
 
-	it("OR: the first fully satisfiable alternative wins", async () => {
-		// Only apiKey is configured; the first (bearer) alternative is unsatisfiable → apiKey wins.
-		const { fn } = resolver({
-			apiKeyHeader: { kind: "token", value: "key" },
+	it("OR: the first alternative whose schemes are all SUPPORTED wins", async () => {
+		// Source-keyed resolution ⇒ a source resolves for every scheme or none, so the OR differentiator
+		// is scheme SUPPORT: the first alternative references an undefined scheme → skipped; the second wins.
+		const { secrets } = sourceSecrets({
+			petstore: { kind: "token", value: "cred" },
 		});
 		const out = await applyCredentials(
 			plan(),
-			binding([{ bearerAuth: [] }, { apiKeyHeader: [] }]),
-			fn,
+			binding([{ undefinedScheme: [] }, { apiKeyHeader: [] }]),
+			secrets,
 			CTX,
 		);
 		expect(out.headers.authorization).toBeUndefined();
-		expect(out.headers["X-API-Key"]).toBe("key");
+		expect(out.headers["X-API-Key"]).toBe("cred");
 	});
 
-	it("threads organizationId, source, scopes, and actor into the request — never model args", async () => {
-		const { fn, seen } = resolver({
-			oauth: { kind: "token", value: "t" },
+	it("threads the source name and the turn's org + actor into the reader — never model args", async () => {
+		const { secrets, seen } = sourceSecrets({
+			petstore: { kind: "token", value: "t" },
 		});
 		await applyCredentials(
 			plan(),
 			binding([{ oauth: ["pets:read", "pets:write"] }]),
-			fn,
+			secrets,
 			{ organizationId: "org-a", source: "petstore", actor: "alice" },
 		);
+		// Resolution is source-keyed: the reader sees the registration source + the turn's org/actor.
+		// The scheme + scopes are NOT part of the name — they drive APPLICATION (from the securityScheme).
 		expect(seen[0]).toEqual({
-			organizationId: "org-a",
-			source: "petstore",
-			scheme: "oauth",
-			scopes: ["pets:read", "pets:write"],
-			actor: "alice",
+			ref: "petstore",
+			ctx: { organizationId: "org-a", actor: "alice" },
 		});
 	});
 });
 
 describe("applyCredentials — failure modes stay distinguishable", () => {
 	it("a required-but-unconfigured scheme fails loud, naming source + scheme", async () => {
-		const { fn } = resolver({});
+		const { secrets } = sourceSecrets({});
 		await expect(
-			applyCredentials(plan(), binding([{ apiKeyHeader: [] }]), fn, CTX),
+			applyCredentials(plan(), binding([{ apiKeyHeader: [] }]), secrets, CTX),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			details: {
@@ -189,12 +197,12 @@ describe("applyCredentials — failure modes stay distinguishable", () => {
 		});
 	});
 
-	it("a resolver THROW propagates as infra failure, NOT missing-credential", async () => {
-		const { fn } = resolver({ bearerAuth: "throw" });
+	it("a reader THROW propagates as infra failure, NOT missing-credential", async () => {
+		const { secrets } = sourceSecrets({ petstore: "throw" });
 		const error = await applyCredentials(
 			plan(),
 			binding([{ bearerAuth: [] }]),
-			fn,
+			secrets,
 			CTX,
 		).catch((e) => e);
 		expect(error).toBeInstanceOf(Error);
@@ -203,20 +211,20 @@ describe("applyCredentials — failure modes stay distinguishable", () => {
 	});
 
 	it("public: undefined and [] security send nothing", async () => {
-		const { fn, seen } = resolver({});
-		const undef = await applyCredentials(plan(), binding(undefined), fn, CTX);
-		const empty = await applyCredentials(plan(), binding([]), fn, CTX);
+		const { secrets, seen } = sourceSecrets({});
+		const undef = await applyCredentials(plan(), binding(undefined), secrets, CTX);
+		const empty = await applyCredentials(plan(), binding([]), secrets, CTX);
 		expect(undef.headers).toEqual({});
 		expect(empty.headers).toEqual({});
-		expect(seen).toHaveLength(0); // the resolver was never consulted
+		expect(seen).toHaveLength(0); // the reader was never consulted
 	});
 
 	it("a `{}` alternative is explicitly public and short-circuits", async () => {
-		const { fn, seen } = resolver({});
+		const { secrets, seen } = sourceSecrets({});
 		const out = await applyCredentials(
 			plan(),
 			binding([{}, { apiKeyHeader: [] }]),
-			fn,
+			secrets,
 			CTX,
 		);
 		expect(out.headers).toEqual({});

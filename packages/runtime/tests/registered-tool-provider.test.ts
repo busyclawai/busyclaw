@@ -1,8 +1,9 @@
 import type {
 	JsonObject,
 	RegisteredToolRecord,
-	SecretResolver,
+	Secrets,
 } from "@euroclaw/contracts";
+import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
 import { modelFacingTools } from "../src/tools";
 import type { EgressLookup } from "../src/tools/invoke/egress";
@@ -15,7 +16,17 @@ const publicLookup: EgressLookup = async () => [
 	{ address: "93.184.216.34", family: 4 },
 ];
 
-const noSecrets: SecretResolver = () => null;
+/** A reader resolving nothing, and one resolving any source name to a token — the invoker keys the
+ *  credential by the registration SOURCE, so a per-name reader is a per-registration credential. */
+const noSecrets = buildSecrets([]);
+const anySecret = (value: string): Secrets =>
+	buildSecrets([
+		{
+			name: "test",
+			capability: { manage: false },
+			get: async () => ({ kind: "token", value }),
+		},
+	]);
 
 function row(overrides: Partial<RegisteredToolRecord>): RegisteredToolRecord {
 	return {
@@ -77,7 +88,7 @@ describe("createRegisteredToolProvider", () => {
 				}),
 		);
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: fn,
 			lookup: publicLookup,
 		});
@@ -97,10 +108,8 @@ describe("createRegisteredToolProvider", () => {
 					headers: { "content-type": "application/json" },
 				}),
 		);
-		const resolver: SecretResolver = (req) =>
-			req.scheme === "bearerAuth" ? { kind: "token", value: "tok" } : null;
 		const provider = createRegisteredToolProvider({
-			resolveSecret: resolver,
+			secrets: anySecret("tok"),
 			fetch: fn,
 			lookup: publicLookup,
 		});
@@ -141,7 +150,7 @@ describe("createRegisteredToolProvider", () => {
 	it("a non-2xx status is RETURNED, never thrown", async () => {
 		const { fn } = fakeFetch(() => new Response("not found", { status: 404 }));
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: fn,
 			lookup: publicLookup,
 		});
@@ -154,7 +163,7 @@ describe("createRegisteredToolProvider", () => {
 	it("a blocked egress target throws (private IP literal, no DNS)", async () => {
 		const { fn } = fakeFetch(() => new Response("{}"));
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: fn,
 		});
 		const tools = provider(
@@ -187,7 +196,7 @@ describe("createRegisteredToolProvider", () => {
 				);
 			})) as unknown as typeof fetch;
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: abortingFetch,
 			lookup: publicLookup,
 			timeoutMs: 10,
@@ -201,7 +210,7 @@ describe("createRegisteredToolProvider", () => {
 	it("an oversized response is capped", async () => {
 		const { fn } = fakeFetch(() => new Response("x".repeat(5000)));
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: fn,
 			lookup: publicLookup,
 			maxResponseBytes: 1000,
@@ -214,7 +223,7 @@ describe("createRegisteredToolProvider", () => {
 
 	it("the model-facing view carries neither the binding nor credentials", async () => {
 		const provider = createRegisteredToolProvider({
-			resolveSecret: noSecrets,
+			secrets: noSecrets,
 			fetch: fakeFetch(() => new Response("{}")).fn,
 			lookup: publicLookup,
 		});

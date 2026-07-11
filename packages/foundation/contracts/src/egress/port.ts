@@ -4,7 +4,7 @@
 // enforced*). Modeled on the PolicyEngine port (authz/engine.ts): a behaviour port plus a declared
 // `capability` the system reads to warn when an org's policy needs enforcement a tier structurally
 // cannot apply — no silent over-claim. Ports are behaviour, not data — plain TS, no schema/arktype
-// (like PolicyEngine and SecretResolver, these are host-assembled, not values crossing a boundary).
+// (like PolicyEngine and the Secrets reader, these are host-assembled, not values crossing a boundary).
 //
 // DOM-free on purpose: @euroclaw/contracts builds without the DOM lib and plugins import it, so the
 // connection-level request / response / socket shapes are STRUCTURAL mirrors (the SandboxFetch

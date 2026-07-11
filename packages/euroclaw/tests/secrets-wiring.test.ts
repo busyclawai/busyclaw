@@ -1,14 +1,13 @@
 // The secrets assembly-wiring proof: `createClaw` builds the one-door `@euroclaw/secrets` reader
 // (over the assembly's zero-config `[env()]` base plus any plugin-contributed providers) and flows it
-// two ways — it backs registered-tool credential resolution (absent `resolveSecret` ⇒ env-backed,
-// keyed by the registration `source`),
-// and it is injected into the plugin `configure` context. This is the POSTURE FLIP: an absent
-// resolver no longer fails every authed tool loud — it reads env; a still-unresolved value fails loud.
+// two ways — it backs registered-tool credential resolution (env-backed by default, keyed by the
+// registration `source`), and it is injected into the plugin `configure` context. The POSTURE: with no
+// provider configured the invoker reads env; a still-unresolved value fails loud.
 //
 // The registered-tool cases drive a full createClaw run so the env default reaches a LIVE tool call:
 // a public-IP-literal server clears the egress floor without DNS, and the global `fetch` is stubbed
-// so the credential the invoker placed is observable on the request. `resolveSecret` (the escape
-// hatch) must win over the reader, and an unset credential must never send an unauthenticated request.
+// so the credential the invoker placed is observable on the request. An unset credential must never
+// send an unauthenticated request.
 
 import type { EuroclawPlugin, JsonObject, Secrets } from "@euroclaw/contracts";
 import { cedar } from "@euroclaw/policy-cedar";
@@ -146,7 +145,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("(a) absent resolveSecret: a registered tool's credential resolves through the env default", async () => {
+	it("(a) with no provider configured: a registered tool's credential resolves through the env default", async () => {
 		const { stores, policyPlugin } = await registeredPetstore();
 		// The credential NAME is the registration source ("petstore"), read from the env global.
 		vi.stubEnv("petstore", "env-secret-key");
@@ -165,7 +164,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 			organization: (ctx) =>
 				typeof ctx.org === "string" ? ctx.org : undefined,
 			plugins: [policyPlugin],
-			// no `resolveSecret`, no secrets() base plugin ⇒ the [env()] default backs the credential.
+			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
 
 		const result = await claw.$context.runtime.run("get pet 7", runCtx);
@@ -199,37 +198,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("(c) config.resolveSecret is the escape hatch: it wins over the env reader", async () => {
-		const { stores, policyPlugin } = await registeredPetstore();
-		// The env has one value; the explicit resolver returns a DIFFERENT one — the resolver must win.
-		vi.stubEnv("petstore", "env-secret-key");
-		const { fn, calls } = fakeFetch(
-			() =>
-				new Response(JSON.stringify({ id: 7 }), {
-					headers: { "content-type": "application/json" },
-				}),
-		);
-		vi.stubGlobal("fetch", fn);
-
-		const claw = createClaw({
-			model: getPetModel("7"),
-			stores: { registry: stores },
-			organization: (ctx) =>
-				typeof ctx.org === "string" ? ctx.org : undefined,
-			plugins: [policyPlugin],
-			resolveSecret: (req) =>
-				req.scheme === "apiKey"
-					? { kind: "token", value: "override-key" }
-					: null,
-		});
-
-		const result = await claw.$context.runtime.run("get pet 7", runCtx);
-		expect(result.status).toBe("completed");
-		expect(calls).toHaveLength(1);
-		expect(apiKeyHeaderOf(calls[0])).toBe("override-key");
-	});
-
-	it("(d) the one-door reader is injected into the plugin configure context", async () => {
+	it("(c) the one-door reader is injected into the plugin configure context", async () => {
 		let received: Secrets | undefined;
 		const probe: EuroclawPlugin = {
 			id: "secrets-probe",

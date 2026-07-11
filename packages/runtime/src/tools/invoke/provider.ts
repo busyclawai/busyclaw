@@ -19,7 +19,7 @@
 import type {
 	JsonValue,
 	RegisteredToolRecord,
-	SecretResolver,
+	Secrets,
 	ToolGovernance,
 } from "@euroclaw/contracts";
 import {
@@ -52,7 +52,9 @@ export type InvokerResponse = {
 };
 
 export type RegisteredToolProviderOptions = {
-	resolveSecret: SecretResolver;
+	/** The one-door reader the invoker resolves each registration's credential through
+	 *  (`secrets.get(source, { organizationId, actor })`). */
+	secrets: Secrets;
 	/** Injected for tests; defaults to the platform global `fetch`. */
 	fetch?: typeof fetch;
 	/** Response body byte cap (untrusted data flowing back to the model). Default 1 MB. */
@@ -109,7 +111,7 @@ export function createRegisteredToolProvider(
 				const credentialed = await applyCredentials(
 					plan,
 					binding,
-					options.resolveSecret,
+					options.secrets,
 					{
 						organizationId: context.organizationId,
 						source: row.source,

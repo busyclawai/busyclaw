@@ -6,8 +6,9 @@
 // execute; the model cannot redirect the origin; a missing credential fails loud; a private target
 // is blocked by the floor.
 
-import type { JsonObject, SecretResolver } from "@euroclaw/contracts";
+import type { JsonObject, Secrets } from "@euroclaw/contracts";
 import { cedar } from "@euroclaw/policy-cedar";
+import { buildSecrets } from "@euroclaw/secrets";
 import {
 	createRegisteredToolProvider,
 	createRuntime,
@@ -108,10 +109,22 @@ const publicLookup: EgressLookup = async () => [
 	{ address: "93.184.216.34", family: 4 },
 ];
 
+// The invoker keys each registration's credential by its SOURCE name, so a per-name reader is a
+// per-registration credential. `anySecret` resolves any name; `noSecrets` resolves nothing.
+const anySecret = (value: string): Secrets =>
+	buildSecrets([
+		{
+			name: "test",
+			capability: { manage: false },
+			get: async () => ({ kind: "token", value }),
+		},
+	]);
+const noSecrets = buildSecrets([]);
+
 async function setup(options: {
 	petId: string;
 	policies: string;
-	resolveSecret: SecretResolver;
+	secrets: Secrets;
 	fetch: typeof fetch;
 	server?: string;
 	lookup?: EgressLookup;
@@ -128,7 +141,7 @@ async function setup(options: {
 	const { model } = assembleOrgActions({ registeredTools: rows });
 
 	const provider = createRegisteredToolProvider({
-		resolveSecret: options.resolveSecret,
+		secrets: options.secrets,
 		fetch: options.fetch,
 		lookup: options.lookup ?? publicLookup,
 	});
@@ -165,8 +178,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 		const { runtime } = await setup({
 			petId: "7",
 			policies: PERMIT,
-			resolveSecret: (req) =>
-				req.scheme === "apiKey" ? { kind: "token", value: "secret-key" } : null,
+			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
 		const result = await runtime.run("get pet 7", runCtx);
@@ -187,7 +199,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			petId: "7",
 			// getPet is not permitted (deny-by-default); a different action is.
 			policies: `permit(principal, action == Action::"other", resource);`,
-			resolveSecret: () => ({ kind: "token", value: "secret-key" }),
+			secrets: anySecret("secret-key"),
 			fetch: fetchThatMustNotRun,
 		});
 		const result = await runtime.run("get pet 7", runCtx);
@@ -199,7 +211,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 		const { provider, rows } = await setup({
 			petId: "7",
 			policies: PERMIT,
-			resolveSecret: () => null, // nothing configured
+			secrets: noSecrets, // nothing configured
 			fetch: fakeFetch(() => new Response("{}")).fn,
 		});
 		// Drive the synthesized tool directly — the invoker must refuse rather than send unauthenticated.
@@ -220,7 +232,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 		const { runtime } = await setup({
 			petId: "../../evil.com/x",
 			policies: PERMIT,
-			resolveSecret: () => ({ kind: "token", value: "secret-key" }),
+			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
 		await runtime.run("get a weird pet", runCtx);
@@ -235,7 +247,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 		const { provider, rows } = await setup({
 			petId: "7",
 			policies: PERMIT,
-			resolveSecret: () => ({ kind: "token", value: "secret-key" }),
+			secrets: anySecret("secret-key"),
 			fetch: fakeFetch(() => new Response("{}")).fn,
 			server: "https://10.0.0.1/v1", // a private IP literal — the floor blocks it without DNS
 		});

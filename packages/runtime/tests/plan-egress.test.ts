@@ -2,16 +2,17 @@ import type {
 	EgressCapability,
 	GovernedOutbound,
 	PolicyEngine,
-	SecretResolver,
+	Secrets,
 	StampedFacts,
 } from "@euroclaw/contracts";
+import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
 import { planEgress } from "../src/index";
 
 // Fakes for the stable signature. The slice-2 compiler does NOT call these (the interceptor outbound
-// will, in slice 3) — a permit-all engine, an empty resolver, and minimal stamped facts suffice.
+// will, in slice 3) — a permit-all engine, an empty reader, and minimal stamped facts suffice.
 const policy: PolicyEngine = { authorize: () => ({ decision: "permit" }) };
-const secrets: SecretResolver = () => null;
+const secrets: Secrets = buildSecrets([]);
 const facts: StampedFacts = { organizationId: "org_1", runMode: "autonomous" };
 
 // A fake governed outbound — proves an interceptor plan carries through whatever `buildOutbound`

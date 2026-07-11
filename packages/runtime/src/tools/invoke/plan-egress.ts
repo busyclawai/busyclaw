@@ -18,7 +18,7 @@ import type {
 	EgressPlan,
 	GovernedOutbound,
 	PolicyEngine,
-	SecretResolver,
+	Secrets,
 	StampedFacts,
 	UnenforcedNote,
 } from "@euroclaw/contracts";
@@ -34,8 +34,8 @@ export type PlanEgressInput = {
 	policy: PolicyEngine;
 	/** The runtime-stamped identity facts (actor/org/runMode) the outbound carries into policy. */
 	facts: StampedFacts;
-	/** Credential-material source for claim-check injection at egress (slice 3). */
-	secrets: SecretResolver;
+	/** The one-door reader for claim-check credential injection at egress (slice 3). */
+	secrets: Secrets;
 	/** The explicit allowlist host-set for the `allowlist` tier (decision 2 — the Cedar
 	 *  host-projection compiler that derives this is slice 4). Ignored by the other tiers. */
 	hosts?: readonly string[];

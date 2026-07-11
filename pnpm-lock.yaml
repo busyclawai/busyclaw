@@ -352,6 +352,9 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
+      '@euroclaw/secrets':
+        specifier: workspace:*
+        version: link:../foundation/secrets
       '@euroclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core

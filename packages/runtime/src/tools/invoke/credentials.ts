@@ -1,17 +1,20 @@
 // Credential application over a request plan. Given the plan, the binding's security requirements
-// (the AND-ed alternatives), the denormalized scheme definitions, and a SecretResolver, place the
-// right credential material onto the plan — or fail LOUD when a required credential is unconfigured.
+// (the AND-ed alternatives), the denormalized scheme definitions, and the one-door `Secrets` reader,
+// place the right credential material onto the plan — or fail LOUD when a required credential is
+// unconfigured.
 //
-// Credentials come ONLY from the resolver, keyed by {organizationId, source, scheme, actor?} drawn
-// from trusted turn context — never from model args, never from the spec. A required-but-
-// unconfigured scheme fails the call (an actionable configure-your-credential error) rather than
-// silently sending an unauthenticated request. A resolver THROW is infrastructure failure and
-// propagates unchanged — it is never swallowed into "unsatisfiable".
+// RESOLUTION and APPLICATION are separate concerns. Resolution: the material comes ONLY from the
+// reader, keyed by the registration SOURCE name with the turn's {organizationId, actor?} context
+// (never from model args, never from the spec) — one credential per registration (the per-scheme
+// override is a later slice). Application: HOW to place that material (header/query/basic/bearer) is
+// read from the spec's own securityScheme, per scheme. A required-but-unconfigured source fails the
+// call (an actionable configure-your-credential error) rather than silently sending unauthenticated;
+// a reader THROW is infrastructure failure and propagates unchanged — never swallowed into "unsatisfiable".
 
 import type {
+	ResolveContext,
 	SecretMaterial,
-	SecretRequest,
-	SecretResolver,
+	Secrets,
 } from "@euroclaw/contracts";
 import { configurationError } from "@euroclaw/contracts";
 import type {
@@ -33,12 +36,20 @@ export type CredentialContext = {
 export async function applyCredentials(
 	plan: HttpRequestPlan,
 	binding: OpenApiBinding,
-	resolveSecret: SecretResolver,
+	secrets: Secrets,
 	context: CredentialContext,
 ): Promise<HttpRequestPlan> {
 	const requirements = binding.security;
 	// Undefined or `[]` security ⇒ the operation declared no auth ⇒ public.
 	if (!requirements || requirements.length === 0) return plan;
+
+	// Resolution context — the turn's org + actor (never model args). The scheme/scopes are NOT part of
+	// the name (name = the registration source); they are read from the spec's securityScheme when the
+	// material is APPLIED below.
+	const resolveCtx: ResolveContext = {
+		organizationId: context.organizationId,
+		...(context.actor !== undefined ? { actor: context.actor } : {}),
+	};
 
 	const unmet: string[] = [];
 	for (const requirement of requirements) {
@@ -60,16 +71,9 @@ export async function applyCredentials(
 				satisfiable = false;
 				break;
 			}
-			const scopes = requirement[scheme] ?? [];
-			const request: SecretRequest = {
-				organizationId: context.organizationId,
-				source: context.source,
-				scheme,
-				...(scopes.length > 0 ? { scopes } : {}),
-				...(context.actor !== undefined ? { actor: context.actor } : {}),
-			};
-			// A resolver THROW is infra failure — let it propagate (never coerced to "unsatisfiable").
-			const material = await resolveSecret(request);
+			// Resolve by the registration SOURCE name — one credential per registration; the scheme drives
+			// APPLICATION (below), not resolution. A reader THROW is infra failure — let it propagate.
+			const material = await secrets.get(context.source, resolveCtx);
 			if (material === null) {
 				unmet.push(`${scheme} (not configured)`);
 				satisfiable = false;

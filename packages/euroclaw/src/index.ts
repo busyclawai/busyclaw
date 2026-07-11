@@ -12,7 +12,6 @@ import {
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
-	type SecretResolver,
 	type Secrets,
 } from "@euroclaw/contracts";
 import {
@@ -94,12 +93,6 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	>;
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
 	models?: ClawModelsConfig;
-	/** Escape-hatch credential resolver for registered-tool invocation — wins over the `secrets`
-	 *  reader when provided. euroclaw stores no secrets; absent ⇒ credentials resolve through the
-	 *  `secrets` reader (env-backed by default), and a still-unresolved credential fails loud at call
-	 *  time (the invoker's null-vs-configured contract). `resolveTools` is built by the assembly from
-	 *  the org's rows + this resolver — hosts never set it directly. */
-	resolveSecret?: SecretResolver;
 	stores?: ClawStores;
 };
 
@@ -343,33 +336,23 @@ function createPluginApi(input: {
 	return out;
 }
 
-// Bridge the one-door reader to the invoker's per-requirement resolver. The credential NAME is the
-// registration `source` (unique per registration); the requirement's `scheme` is NOT part of the
-// name — it is apply-only (the invoker reads how to place the material from the spec's securityScheme).
-// KNOWN LIMITATION: name = source assumes ONE credential per registration. A spec that declares
-// multiple distinct-credential securitySchemes would collide on `source` — the fix is a
-// per-registration credential-name override (a later slice). Do NOT build the override here.
-const secretsBackedResolver =
-	(secrets: Secrets): SecretResolver =>
-	(req) =>
-		secrets.get(req.source, {
-			organizationId: req.organizationId,
-			actor: req.actor,
-		});
-
 /**
  * Build the per-run tool resolver for an organization's registered rows: synthesize its rows into
  * invoker-backed tools, with org/actor read from the RESOLVED turn context and closure-captured at
  * synthesis (never the AI-SDK execute options, which carry no turn context). The provider is built
- * once here; the returned resolver runs per turn.
+ * once here (over the one-door reader); the returned resolver runs per turn.
+ *
+ * The invoker resolves each registration's credential by its `source` name through the reader — the
+ * requirement's `scheme` is apply-only (how to place the material, read from the spec's securityScheme).
+ * KNOWN LIMITATION: name = source assumes ONE credential per registration; a spec declaring multiple
+ * distinct-credential securitySchemes would collide on `source` — the per-registration credential-name
+ * override is a later slice. Do NOT build the override here.
  */
 function registeredToolResolver(
 	stores: RegistryStores,
-	resolveSecret: SecretResolver,
+	secrets: Secrets,
 ): NonNullable<RuntimeConfig["resolveTools"]> {
-	const provider = createRegisteredToolProvider({
-		resolveSecret,
-	});
+	const provider = createRegisteredToolProvider({ secrets });
 	return async (ctx) => {
 		const organizationId = ctx[ORGANIZATION_CONTEXT_KEY];
 		if (typeof organizationId !== "string") return {};
@@ -454,13 +437,10 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const registryStores =
 		config.stores?.registry ??
 		(adapter ? createRegistryStores(adapter) : undefined);
-	// Registered tools become executable per run (see registeredToolResolver above). Absent
-	// `resolveSecret` ⇒ the env-backed one-door reader; `resolveSecret` stays the escape hatch.
+	// Registered tools become executable per run (see registeredToolResolver above): the invoker
+	// resolves each row's credential through the one-door reader by its `source` name.
 	const resolveTools = registryStores
-		? registeredToolResolver(
-				registryStores,
-				config.resolveSecret ?? secretsBackedResolver(secrets),
-			)
+		? registeredToolResolver(registryStores, secrets)
 		: undefined;
 	const eventSinks = [
 		...(clawsStore ? [createClawRuntimeEventSink(clawsStore)] : []),
