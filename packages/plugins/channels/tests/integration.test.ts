@@ -293,7 +293,8 @@ describe("channels ↔ euroclaw integration", () => {
 				detector: noopDetector,
 				mappings: createPiiMappingStore(db),
 			}),
-			// secrets([env({})]) REPLACES the env default (marker) — nothing resolves, deterministically.
+			// A contributed `env` provider with empty vars suppresses the assembly's env floor, so
+			// nothing resolves — deterministic regardless of the real process.env.
 			plugins: [secrets([env({ vars: {} })]), channels([telegram()])],
 		});
 		const route = (claw.$context.plugins ?? [])

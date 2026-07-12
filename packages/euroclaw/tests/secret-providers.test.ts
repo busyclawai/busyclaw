@@ -1,9 +1,9 @@
 // Plugins can contribute secret PROVIDERS (resolvers, never values) via the declared
 // `plugin.secrets.providers` field. The assembly reads them STATICALLY off the raw plugin list and
-// merges them into the same one-door reader every subsystem resolves through, over the assembly's
-// zero-config `[env()]` base. This proves: a plugin provider resolves via the one door; a duplicate
-// name across the chain fails loud; and the env base survives a GENERIC plugin contribution (the
-// secrets() base-owner, which replaces env, is covered in the secrets-plugin tests).
+// merges them into the same one-door reader every subsystem resolves through, ABOVE the assembly's
+// `env()` fallback floor. This proves: a plugin provider resolves via the one door; a duplicate
+// name across the chain fails loud; and env survives a plugin contribution (additive — installing a
+// provider never removes env) unless the plugin contributes its own `env`-named provider.
 // See docs/plans/secrets-provider-registry.md § Providers from plugins.
 
 import type {
@@ -121,7 +121,7 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 		});
 	});
 
-	it("(5) secrets([provider]) REPLACES the env base — its provider reaches the chain, env does not", async () => {
+	it("(5) secrets([provider]) ADDS its provider ABOVE the env floor — env survives (additive)", async () => {
 		vi.stubEnv("ENV_ONLY", "from-process-env");
 		const capture = captureSecrets();
 		createClaw({
@@ -129,13 +129,16 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 			plugins: [secrets([stubProvider()]), capture.plugin],
 		});
 		const reader = capture.read();
-		// the secrets() base provider reaches the one-door chain
+		// the secrets() provider reaches the one-door chain
 		expect(await reader.get("STUB_SECRET")).toEqual({
 			kind: "token",
 			value: "stub-token",
 		});
-		// …and env is REPLACED — a process.env-only name no longer resolves
-		expect(await reader.get("ENV_ONLY")).toBeNull();
+		// …and env SURVIVES — installing a provider plugin never silently removes the env floor
+		expect(await reader.get("ENV_ONLY")).toEqual({
+			kind: "token",
+			value: "from-process-env",
+		});
 	});
 
 	it("(6) secrets([env(), provider]) keeps env explicitly alongside the base provider", async () => {

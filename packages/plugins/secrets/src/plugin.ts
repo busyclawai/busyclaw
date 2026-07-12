@@ -9,7 +9,6 @@ import {
 	type Secrets,
 	stateError,
 } from "@euroclaw/contracts";
-import { env } from "@euroclaw/secrets";
 import {
 	createSecretCipher,
 	parseSecretStoreKey,
@@ -177,18 +176,17 @@ function buildStore(options: SecretStoreOptions): {
 }
 
 /**
- * `secrets(providers?, { store? })` — the deployment secret-provider base plus the optional in-app
- * store (the channels() shape: `secrets([vault()], { store })`). It OWNS the base
- * (`$providesSecretBase`), so its `providers` REPLACE the assembly's zero-config env default —
- * `secrets()` keeps env, `secrets([vault()])` drops it, `secrets([env(), vault()])` keeps it
- * explicitly. `{ store }` folds in the `stored_secret` table + the `"store"` data-tier provider, which
- * (being data-tier) resolves BEFORE the base regardless of listing order.
+ * `secrets(providers?, { store? })` — contributes secret providers (and the optional in-app store),
+ * the channels() shape: `secrets([vault()], { store })`. Providers ADD to the chain; the assembly's
+ * `env()` fallback floor stays unless you contribute your own `env`-named provider (`secrets([env({
+ * vars })])`). `{ store }` folds in the `stored_secret` table + the `"store"` data-tier provider,
+ * which (being data-tier) resolves BEFORE config-tier providers regardless of listing order.
  */
 export function secrets(
 	providers?: readonly SecretProvider[],
 	options: SecretsPluginOptions = {},
 ): EuroclawPlugin {
-	const base = providers ?? [env()];
+	const base = providers ?? [];
 	// `store: true` ⇒ default store options; an object ⇒ those options; absent/false ⇒ no store.
 	const storeOptions: SecretStoreOptions | undefined =
 		options.store === true
@@ -200,7 +198,6 @@ export function secrets(
 	if (!storeOptions) {
 		return {
 			id: options.id ?? "euroclaw.secrets",
-			$providesSecretBase: true,
 			secrets: { providers: [...base] },
 		};
 	}
@@ -208,7 +205,6 @@ export function secrets(
 	const { provider, configure } = buildStore(storeOptions);
 	return {
 		id: options.id ?? "euroclaw.secrets",
-		$providesSecretBase: true,
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: storedSecretModels,

@@ -392,20 +392,22 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		);
 	}
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
-	// The zero-config base is env (assembly-built, always available with no config). The `secrets()`
-	// plugin OWNS the deployment base (`$providesSecretBase`), so when it is present its providers
-	// REPLACE that env default — it re-includes env unless you passed replacements (`secrets([vault()])`
-	// drops it). A generic provider-contributing plugin leaves the marker unset, so its providers ADD to
-	// the base. All contributions are read STATICALLY off the raw plugin list — the reader is built
-	// before `configure` runs, so consumers close over the complete chain. buildSecrets then orders
-	// data-tier providers (runtime-managed rows) before config-tier ones and fails loud on a duplicate
-	// name across the whole chain.
-	const ownsBase = pluginList.some(
-		(plugin) => plugin.$providesSecretBase === true,
+	// Plugin-contributed providers come FIRST; `env()` is appended as the lowest-priority FALLBACK
+	// floor — always present, because installing a provider plugin must never silently REMOVE env
+	// (plugins are additive), yet env only ever serves a name nothing else resolves. A plugin that
+	// contributes its own `env`-named provider (e.g. `secrets([env({ vars })])`, to reconfigure or
+	// deterministically shadow it) suppresses the auto-floor. Contributions are read STATICALLY off the
+	// raw plugin list — the reader is built before `configure` runs, so consumers close over the
+	// complete chain. buildSecrets then floats data-tier providers (runtime-managed rows) ahead of
+	// config-tier ones and fails loud on a duplicate name across the whole chain.
+	const pluginProviders = pluginList.flatMap(
+		(plugin) => plugin.secrets?.providers ?? [],
 	);
 	const providers = [
-		...(ownsBase ? [] : [env()]),
-		...pluginList.flatMap((plugin) => plugin.secrets?.providers ?? []),
+		...pluginProviders,
+		...(pluginProviders.some((provider) => provider.name === "env")
+			? []
+			: [env()]),
 	];
 	const secrets: Secrets = buildSecrets(providers);
 	// Fail fast at init if any plugin/host schema collides with a core column — the same collection the
