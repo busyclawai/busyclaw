@@ -7,3 +7,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# generated prisma test database (pretest db push creates it)
+packages/storage/prisma/prisma/test.db
