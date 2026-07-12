@@ -1,4 +1,16 @@
 export {
+	createSecretsManagementApi,
+	type DeleteSecretInput,
+	deleteSecretInput,
+	type ListSecretInput,
+	listSecretInput,
+	type SecretsManagementApi,
+	type SecretsPluginApi,
+	type SetSecretInput,
+	type StoredSecretView,
+	setSecretInput,
+} from "./api";
+export {
 	createSecretCipher,
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
@@ -8,6 +20,7 @@ export {
 	SECRET_STORE_PROVIDER_NAME,
 	type SecretStoreOptions,
 	type SecretsPluginOptions,
+	type SecretsStorePlugin,
 	secrets,
 } from "./plugin";
 export {

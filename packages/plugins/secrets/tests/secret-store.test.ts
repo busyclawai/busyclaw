@@ -35,9 +35,12 @@ const cipherFor = (key: string) =>
 function connectedStore(options: SecretStoreOptions = {}) {
 	const plugin = secrets([], { store: { key: TEST_KEY, ...options } });
 	const db = entityAdapter(memoryAdapter(), storedSecretModels);
-	plugin.configure?.({ adapter: db });
+	// configure fills the store/reader slots AND returns the runtime half — the management api, which
+	// closes over the same store the provider reads (so a set here resolves through provider.get).
+	const runtime = plugin.configure?.({ adapter: db });
 	const [provider] = plugin.secrets.providers;
 	return {
+		api: runtime?.api?.(undefined).secrets,
 		db,
 		plugin,
 		provider,
@@ -403,5 +406,113 @@ describe("encryption at rest", () => {
 			kind: "token",
 			value: "sealed",
 		});
+	});
+});
+
+// The personal management api (claw.api.secrets.*) — end-user self-service, PERSONAL-ONLY. Every
+// method keys to `(personal, input.actor)`, values are WRITE-ONLY (set/list return metadata views,
+// there is no get-plaintext), and the material only ever exits via the provider (secrets.get). The
+// api rides configure's runtime half; connectedStore exposes it (`api`).
+describe("the personal management api — claw.api.secrets.*", () => {
+	// Metadata a view carries — never `value`, never the `provider`/`ref` pointer fields.
+	const VIEW_KEYS = ["createdAt", "createdBy", "kind", "name", "updatedAt"];
+
+	it("set writes a personal row, list shows the name (no value), and the provider resolves the material", async () => {
+		const { api, provider } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		const view = await api.set({
+			name: "MY_NOTION_TOKEN",
+			value: "secret-v1",
+			actor: "alice",
+		});
+		expect(view).toMatchObject({
+			name: "MY_NOTION_TOKEN",
+			kind: "value",
+			createdBy: "alice",
+		});
+		expect(view).not.toHaveProperty("value");
+		// The name shows in alice's inventory, still with no value…
+		const listed = await api.list({ actor: "alice" });
+		expect(listed.map((v) => v.name)).toEqual(["MY_NOTION_TOKEN"]);
+		expect(listed[0]).not.toHaveProperty("value");
+		// …and the write-side meets the read-side: the provider opens the sealed row for alice's ctx.
+		expect(await provider.get("MY_NOTION_TOKEN", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "secret-v1",
+		});
+	});
+
+	it("actor isolation — a caller only ever touches their OWN personal rows (the security invariant)", async () => {
+		const { api, provider } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		await api.set({ name: "X", value: "alices", actor: "alice" });
+		// bob's list does not include alice's X…
+		expect(await api.list({ actor: "bob" })).toEqual([]);
+		// …bob's delete of X is a no-op (alice's row survives — a caller cannot reach across actors)…
+		await api.delete({ name: "X", actor: "bob" });
+		expect((await api.list({ actor: "alice" })).map((v) => v.name)).toEqual([
+			"X",
+		]);
+		// …bob cannot read alice's X through the provider, and alice still can.
+		expect(await provider.get("X", { actor: "bob" })).toBeNull();
+		expect(await provider.get("X", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "alices",
+		});
+	});
+
+	it("values are write-only — neither set's return nor list's entries carry value/provider/ref", async () => {
+		const { api } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		const view = await api.set({ name: "WO", value: "hidden", actor: "alice" });
+		for (const key of ["value", "provider", "ref"]) {
+			expect(view).not.toHaveProperty(key);
+		}
+		expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
+		const [listed] = await api.list({ actor: "alice" });
+		for (const key of ["value", "provider", "ref"]) {
+			expect(listed).not.toHaveProperty(key);
+		}
+		expect(Object.keys(listed).sort()).toEqual(VIEW_KEYS);
+	});
+
+	it("upsert — re-setting a name rotates the value in place (one row, latest wins)", async () => {
+		const { api, provider } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		await api.set({ name: "ROT", value: "v1", actor: "alice" });
+		await api.set({ name: "ROT", value: "v2", actor: "alice" });
+		// one row, not two…
+		expect(await api.list({ actor: "alice" })).toHaveLength(1);
+		// …and the resolved value is the latest.
+		expect(await provider.get("ROT", { actor: "alice" })).toEqual({
+			kind: "token",
+			value: "v2",
+		});
+	});
+
+	it("delete — set then delete leaves an empty list and the provider resolves null", async () => {
+		const { api, provider } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		await api.set({ name: "GONE", value: "v", actor: "alice" });
+		await api.delete({ name: "GONE", actor: "alice" });
+		expect(await api.list({ actor: "alice" })).toEqual([]);
+		expect(await provider.get("GONE", { actor: "alice" })).toBeNull();
+	});
+
+	it("a missing or blank actor fails loud — validationError on both set and list", async () => {
+		const { api } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		const validationFailed = { code: "EUROCLAW_VALIDATION_FAILED" };
+		// A personal secret must have an owner — no actor is not a silent global write.
+		await expect(
+			api.set({ name: "X", value: "v" } as never),
+		).rejects.toMatchObject(validationFailed);
+		await expect(
+			api.set({ name: "X", value: "v", actor: "" }),
+		).rejects.toMatchObject(validationFailed);
+		await expect(api.list({} as never)).rejects.toMatchObject(validationFailed);
+		await expect(api.list({ actor: "   " })).rejects.toMatchObject(
+			validationFailed,
+		);
 	});
 });

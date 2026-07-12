@@ -9,6 +9,7 @@ import {
 	type Secrets,
 	stateError,
 } from "@euroclaw/contracts";
+import { createSecretsManagementApi, type SecretsPluginApi } from "./api";
 import {
 	createSecretCipher,
 	parseSecretStoreKey,
@@ -93,7 +94,7 @@ function buildStore(options: SecretStoreOptions): {
 	provider: SecretProvider;
 	configure: (
 		context: EuroclawPluginConfigureContext,
-	) => EuroclawPluginRuntime | undefined;
+	) => EuroclawPluginRuntime<SecretsPluginApi> | undefined;
 } {
 	let store: StoredSecretsStore | undefined;
 	let reader: Secrets | undefined;
@@ -162,10 +163,12 @@ function buildStore(options: SecretStoreOptions): {
 		},
 	};
 
-	// Fills the slots the static provider reads (the two-role capture); adds no routes/cron/api.
+	// Fills the slots the static provider reads (the two-role capture), and returns the RUNTIME half:
+	// the personal management api, closing over the SAME `requireStore` guard the provider uses (so a
+	// no-database claw fails loud on first call, never silently). No routes, no cron.
 	const configure = (
 		context: EuroclawPluginConfigureContext,
-	): EuroclawPluginRuntime | undefined => {
+	): EuroclawPluginRuntime<SecretsPluginApi> | undefined => {
 		if (context.adapter) {
 			store = createStoredSecretsStore(context.adapter, {
 				cipher,
@@ -173,23 +176,56 @@ function buildStore(options: SecretStoreOptions): {
 			});
 		}
 		reader = context.secrets;
-		return undefined;
+		return {
+			api: () => ({ secrets: createSecretsManagementApi(requireStore) }),
+		};
 	};
 
 	return { provider, configure };
 }
 
 /**
+ * The store path's plugin type: it contributes the personal management api (`$Api` ⇒
+ * `claw.api.secrets`) and requires a database. The no-store path stays the wide {@link EuroclawPlugin}
+ * (providers only, no api). Mirrors channels' registrations-vs-app-bot return split.
+ */
+export type SecretsStorePlugin = EuroclawPlugin<
+	"no-cron",
+	readonly string[],
+	SecretsPluginApi
+> & {
+	readonly $Api: SecretsPluginApi;
+	readonly $RequiresDatabase: true;
+};
+
+/** Store enabled at the TYPE level — a literal `true` or an options object. A wide `boolean` is
+ *  uncertain, so it falls back to the no-api shape (the runtime still honours it); mirrors channels'
+ *  literal-only RegistrationsEnabled. */
+type StoreEnabled<Options> = Options extends { store: infer Store }
+	? [Store] extends [false | undefined]
+		? false
+		: boolean extends Store
+			? false
+			: true
+	: false;
+
+type SecretsReturn<Options> =
+	StoreEnabled<Options> extends true ? SecretsStorePlugin : EuroclawPlugin;
+
+/**
  * `secrets(providers?, { store? })` — contributes secret providers (and the optional in-app store),
  * the channels() shape: `secrets([vault()], { store })`. Providers ADD to the chain; the assembly's
  * `env()` fallback floor stays unless you contribute your own `env`-named provider (`secrets([env({
- * vars })])`). `{ store }` folds in the `stored_secret` table + the `"store"` data-tier provider,
- * which (being data-tier) resolves BEFORE config-tier providers regardless of listing order.
+ * vars })])`). `{ store }` folds in the `stored_secret` table, the `"store"` data-tier provider —
+ * which (being data-tier) resolves BEFORE config-tier providers regardless of listing order — and the
+ * personal management api on `claw.api.secrets`.
  */
-export function secrets(
+export function secrets<
+	const Options extends SecretsPluginOptions = SecretsPluginOptions,
+>(
 	providers?: readonly SecretProvider[],
-	options: SecretsPluginOptions = {},
-): EuroclawPlugin {
+	options: Options = {} as Options,
+): SecretsReturn<Options> {
 	const base = providers ?? [];
 	// `store: true` ⇒ default store options; an object ⇒ those options; absent/false ⇒ no store.
 	const storeOptions: SecretStoreOptions | undefined =
@@ -200,14 +236,18 @@ export function secrets(
 				: options.store;
 
 	if (!storeOptions) {
-		return {
+		const plugin: EuroclawPlugin = {
 			id: options.id ?? "euroclaw.secrets",
 			secrets: { providers: [...base] },
 		};
+		return plugin as SecretsReturn<Options>;
 	}
 
+	// The narrowing cast is the one seam between the runtime branch and the typed return (the channels
+	// pattern): this path sets $RequiresDatabase (RequireDatabaseForPlugins) and, via configure's api,
+	// contributes $Api — exactly what StoreEnabled folds a truthy `store` to.
 	const { provider, configure } = buildStore(storeOptions);
-	return {
+	const plugin: EuroclawPlugin = {
 		id: options.id ?? "euroclaw.secrets",
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
@@ -216,4 +256,5 @@ export function secrets(
 		secrets: { providers: [...base, provider] },
 		configure,
 	};
+	return plugin as SecretsReturn<Options>;
 }

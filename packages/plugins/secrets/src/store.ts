@@ -41,6 +41,13 @@ export type StoredSecretsStore = {
 		scopeId: string,
 		name: string,
 	) => Promise<StoredSecretRecord | null>;
+	/** Delete the row at the exact `(scope, scopeId, name)` key — a no-op when no such row exists
+	 *  (so the management api's `delete` is idempotent by construction). */
+	delete: (scope: string, scopeId: string, name: string) => Promise<void>;
+	/** Every row inside one `(scope, scopeId)` boundary (for personal: one actor's secrets). Returns
+	 *  FULL records — the `value` is the SEALED form, NEVER opened here; the read side strips it to a
+	 *  metadata view. The store stays a dumb data port: no decrypt, no projection. */
+	list: (scope: string, scopeId: string) => Promise<StoredSecretRecord[]>;
 };
 
 export type StoredSecretsStoreOptions = {
@@ -107,13 +114,19 @@ function assertSetInput(input: unknown): SetStoredSecretInput {
 
 type SecretWhere = EntityWhere<typeof storedSecretFields>;
 
+/** The two-clause boundary predicate — every row inside one `(scope, scopeId)`. `list` reads it
+ *  whole; `keyWhere` narrows it to a single name. */
+const boundaryWhere = (scope: string, scopeId: string): SecretWhere[] => [
+	{ field: "scope", value: scope },
+	{ field: "scopeId", value: scopeId, connector: "AND" },
+];
+
 const keyWhere = (
 	scope: string,
 	scopeId: string,
 	name: string,
 ): SecretWhere[] => [
-	{ field: "scope", value: scope },
-	{ field: "scopeId", value: scopeId, connector: "AND" },
+	...boundaryWhere(scope, scopeId),
 	{ field: "name", value: name, connector: "AND" },
 ];
 
@@ -200,6 +213,23 @@ export function createStoredSecretsStore(
 			// Every READ is parsed through the record schema inside the entity layer (untrusted
 			// boundary: a hostile row fails loud, never a cast).
 			return findByKey(scope, scopeId, name);
+		},
+
+		async delete(scope, scopeId, name) {
+			// The adapter no-ops when nothing matches, so deleting an absent name is silently fine
+			// (idempotence the management api relies on). Infrastructure failure still throws (guarded).
+			await guarded(() =>
+				db.delete({ model: MODEL, where: keyWhere(scope, scopeId, name) }),
+			);
+		},
+
+		async list(scope, scopeId) {
+			// Whole-boundary read — the rows carry the SEALED value, and this port never opens the
+			// cipher for a list (the value never leaves via management; only the provider's read path
+			// decrypts). The read side strips each row to a metadata view.
+			return guarded(() =>
+				db.findMany({ model: MODEL, where: boundaryWhere(scope, scopeId) }),
+			);
 		},
 	};
 }
