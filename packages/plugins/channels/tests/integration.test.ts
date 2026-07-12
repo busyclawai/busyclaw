@@ -94,10 +94,12 @@ describe("channels ↔ euroclaw integration", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor: createStoredRedactor({
-				detector: noopDetector,
-				mappings: createPiiMappingStore(db),
-			}),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
 			plugins: [
 				channels([appBot()]),
 				channels([telegram()], { registrations: { enabled: true } }),
@@ -138,10 +140,12 @@ describe("channels ↔ euroclaw integration", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor: createStoredRedactor({
-				detector: noopDetector,
-				mappings: createPiiMappingStore(db),
-			}),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
 			// the named app bot resolves its token via its own tokenRef → "app-token"
 			plugins: [
 				secrets([env({ vars: { SALES_BOT: "app-token" } })]),
@@ -242,10 +246,12 @@ describe("channels ↔ euroclaw integration", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("pong"),
-			redactor: createStoredRedactor({
-				detector: noopDetector,
-				mappings: createPiiMappingStore(db),
-			}),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
 			plugins: [
 				secrets([env({ vars: { TELEGRAM_BOT_TOKEN: "env-token" } })]),
 				channels([telegram({ fetch: fakeFetch })]),
@@ -289,10 +295,12 @@ describe("channels ↔ euroclaw integration", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("pong"),
-			redactor: createStoredRedactor({
-				detector: noopDetector,
-				mappings: createPiiMappingStore(db),
-			}),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
 			// A contributed `env` provider with empty vars suppresses the assembly's env floor, so
 			// nothing resolves — deterministic regardless of the real process.env.
 			plugins: [secrets([env({ vars: {} })]), channels([telegram()])],

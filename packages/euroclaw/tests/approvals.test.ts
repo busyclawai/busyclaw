@@ -10,7 +10,7 @@ describe("createClaw approvals", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({

@@ -8,7 +8,7 @@ describe("createClaw conversation binding", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor,
+			redaction: { redactor },
 		});
 
 		const first = await claw.api.bindConversation({

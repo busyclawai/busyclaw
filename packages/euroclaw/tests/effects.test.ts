@@ -9,7 +9,7 @@ describe("createClaw effects", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({ onExecute: (to) => ({ sent: true, recipient: to }) }),
@@ -29,7 +29,7 @@ describe("createClaw effects", () => {
 		const effect = await claw.api.getEffect({
 			id: `approval:${approvalId}:tool:c1`,
 		});
-		expect(JSON.stringify(effect?.output)).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
+		expect(JSON.stringify(effect?.output)).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
 		expect(JSON.stringify(effect?.output)).not.toContain("alice@personal.com");
 	});
 
@@ -38,7 +38,7 @@ describe("createClaw effects", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({ onExecute: (to) => ({ sent: true, recipient: to }) }),
@@ -71,7 +71,7 @@ describe("createClaw effects", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({
@@ -144,7 +144,7 @@ describe("createClaw effects", () => {
 			database: db,
 			effectStore,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({

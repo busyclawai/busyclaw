@@ -132,7 +132,7 @@ describe("euroclaw governance — the neutral pipeline", () => {
 		// the audit log saw only a TOKEN — PII never crossed into persistence
 		const entries = audit.entries();
 		expect(entries).toHaveLength(1);
-		expect(entries.at(0)?.payload.to).toMatch(/^\{\{pii:[a-z0-9]+\}\}$/);
+		expect(entries.at(0)?.payload.to).toMatch(/^\{\{pii:[a-z]+:[a-z0-9]+\}\}$/);
 		expect(JSON.stringify(entries)).not.toContain("alice@personal.com");
 	});
 
@@ -147,6 +147,7 @@ describe("euroclaw governance — the neutral pipeline", () => {
 			resolve: (placeholder) =>
 				saved.find((mapping) => mapping.placeholder === placeholder)
 					?.original ?? null,
+			findByHash: () => null,
 			deleteForSubject: () => {},
 		};
 		const ec = createGovernance({
@@ -181,8 +182,8 @@ describe("euroclaw governance — the neutral pipeline", () => {
 			scopeId: "b",
 		});
 
-		expect(first).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
-		expect(second).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
+		expect(first).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(second).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
 		expect(first).not.toBe(second);
 		expect(
 			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "a" }),

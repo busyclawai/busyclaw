@@ -50,6 +50,12 @@ export type PiiSpans = typeof piiSpans.infer;
 export const piiMappingFields = {
 	placeholder: field.string({ required: true, index: true }),
 	original: field.string({ required: true, pii: "contains" }),
+	// Dedup index: keyed hash of (kind, original) — what makes placeholders deterministic per
+	// (value, kind, container). KEYED (never a bare hash) so low-entropy PII can't be
+	// dictionary-attacked offline; optional because a keyless redactor cannot compute it and
+	// falls back to minting fresh placeholders. Losing the key only resets dedup — rehydration
+	// never depends on it.
+	originalHash: field.string({ index: true }),
 	kind: field.enum(piiKindValues, { required: true, index: true }),
 	// Containment: the (scope, scopeId) container this was redacted in — `claw:<clawId>` today,
 	// `memory:<kbId>` / `task:<taskId>` later. A placeholder rehydrates ONLY within the same
@@ -96,6 +102,12 @@ export type PiiMappingStore = {
 		placeholder: string,
 		ctx?: RehydrationContext,
 	) => string | null | Promise<string | null>;
+	/** originalHash → its mapping, but only within the SAME container — the dedup read behind
+	 *  deterministic placeholders (same value, same kind, same container → same placeholder). */
+	findByHash: (
+		originalHash: string,
+		ctx?: RehydrationContext,
+	) => PiiMapping | null | Promise<PiiMapping | null>;
 	/** Right-to-be-forgotten: delete every mapping this subject appears on (multi-subject safe). */
 	deleteForSubject: (subjectId: string) => void | Promise<void>;
 };

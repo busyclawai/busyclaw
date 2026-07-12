@@ -12,6 +12,7 @@ import type {
 	EntitySchemaInput,
 	InferPluginSchema,
 } from "@euroclaw/contracts";
+import type { clawRedactionFields } from "./redaction";
 
 /** Extra fields the host declares for model `M` via `createClaw({ models: { <M>: { additionalFields } } })`. */
 export type HostModelFields<Config, M extends string> = Config extends {
@@ -33,15 +34,28 @@ type DefaultModelFields = {
 export type ExtensibleModel = keyof DefaultModelFields & string;
 
 /**
+ * The assembly-owned `redaction` posture column — present on `claw` exactly when the config
+ * declares per-claw posture. The runtime injection (tables.ts collectModelFields) mirrors this,
+ * so the typed create-input and the persisted column come from one declaration.
+ */
+type RedactionModelFields<Config, M extends ExtensibleModel> = M extends "claw"
+	? Config extends { redaction: { posture: "per-claw" } }
+		? typeof clawRedactionFields
+		: Record<never, never>
+	: Record<never, never>;
+
+/**
  * The merged field map for model `M` under a given config: the default fields, every plugin's
- * `schema[M].fields`, and the host's `models[M].additionalFields` (default < plugin < host).
+ * `schema[M].fields`, the host's `models[M].additionalFields` (default < plugin < host), and the
+ * assembly's per-claw redaction column when declared.
  */
 export type InferModelFields<
 	Config,
 	M extends ExtensibleModel,
 > = DefaultModelFields[M] &
 	InferPluginSchema<Config, M> &
-	HostModelFields<Config, M>;
+	HostModelFields<Config, M> &
+	RedactionModelFields<Config, M>;
 
 /** The `claw` record as seen through a given config — base fields + plugin/host extensions. */
 export type ClawRecordOf<Config> = EntityRecord<

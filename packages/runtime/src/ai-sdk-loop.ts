@@ -15,7 +15,9 @@ export type AiSdkLoopInput = {
 	model: RuntimeModel;
 	tools: ToolSet;
 	system?: string;
+	/** Arrives ALREADY redacted (the caller redacts at ingress) — the loop never re-redacts it. */
 	prompt?: string;
+	/** Arrive ALREADY redacted (checkpoints persist the placeholder-clean transcript). */
 	messages?: ModelMessage[];
 	startStep?: number;
 	ctx?: Record<string, unknown>;
@@ -27,13 +29,17 @@ export type AiSdkLoopInput = {
 	abortSignal?: RuntimeAbortSignal;
 	/** Invocation soft deadline (ISO). Past it, the loop parks a yield checkpoint and stops. */
 	deadlineAt?: string;
-	/** Persists the redacted resume state at a yield point; returns the checkpoint id. */
+	/** Persists the resume state at a yield point; returns the checkpoint id. The transcript is
+	 *  placeholder-clean by construction (redact-at-ingress), so it persists as-is. */
 	persistYieldCheckpoint?: (input: {
 		nextStep: number;
 		messages: ModelMessage[];
 	}) => Promise<string>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
-	redactEventValue?: <T>(value: T) => Promise<T>;
+	/** The redaction seam: applied ONCE to content entering the transcript (tool outputs) and to
+	 *  event payloads. Everything downstream — model prompt, events, checkpoints, approvals —
+	 *  reads the same placeholder text. */
+	redactValue?: <T>(value: T) => Promise<T>;
 };
 
 export function toolResultMessage(
@@ -73,8 +79,8 @@ function serializeToolOutput(output: unknown): string {
 	});
 }
 
-async function redactForEvent<T>(input: AiSdkLoopInput, value: T): Promise<T> {
-	return input.redactEventValue ? await input.redactEventValue(value) : value;
+async function redact<T>(input: AiSdkLoopInput, value: T): Promise<T> {
+	return input.redactValue ? await input.redactValue(value) : value;
 }
 
 export async function runAiSdkLoop(
@@ -121,11 +127,14 @@ export async function runAiSdkLoop(
 			);
 		}
 
-		input.state.currentMessages = await redactForEvent(input, messages);
+		// The transcript is placeholder-clean by construction (ingress redaction) — snapshot, don't
+		// re-redact: re-minting per step is what used to break coreference and prompt caching.
+		input.state.currentMessages = [...messages];
 		const toolMessages: ModelMessage[] = [];
 		for (const toolCall of res.toolCalls) {
 			abortIfNeeded(input.abortSignal);
-			const redactedToolInput = await redactForEvent(input, toolCall.input);
+			// Model-authored args may contain NOVEL raw PII the model composed — still redacted here.
+			const redactedToolInput = await redact(input, toolCall.input);
 			input.state.currentToolCallId = toolCall.toolCallId;
 			input.state.currentToolName = toolCall.toolName;
 			input.state.currentToolInput = redactedToolInput;
@@ -155,9 +164,7 @@ export async function runAiSdkLoop(
 					err instanceof Error
 						? { name: err.name, message: err.message }
 						: { message: String(err) };
-				const redactedError = input.redactEventValue
-					? await input.redactEventValue(error)
-					: error;
+				const redactedError = await redact(input, error);
 				await input.emitEvent?.({
 					error: redactedError,
 					step,
@@ -209,23 +216,22 @@ export async function runAiSdkLoop(
 					approvalIds,
 				};
 			}
+			// Tool output is the transcript ingress for world data — redact ONCE; the same
+			// placeholder text feeds the event, the transcript, and (via them) checkpoints.
 			const output =
 				result.status === "ok"
-					? result.output
+					? await redact(input, result.output)
 					: {
 							__governance: result.status,
 							reason: result.reason,
 							reasonCode: result.reasonCode,
 						};
 			if (result.status === "ok") {
-				const redactedOutput = input.redactEventValue
-					? await input.redactEventValue(result.output)
-					: result.output;
 				await input.emitEvent?.({
 					...(input.state.currentEffectId !== undefined
 						? { effectId: input.state.currentEffectId }
 						: {}),
-					...(redactedOutput !== undefined ? { output: redactedOutput } : {}),
+					...(output !== undefined ? { output } : {}),
 					step,
 					toolCallId: toolCall.toolCallId,
 					toolName: toolCall.toolName,
@@ -248,8 +254,10 @@ export async function runAiSdkLoop(
 		messages.push(...toolMessages);
 
 		// The resumable point: every tool result of this step is in the transcript, no call is
-		// pending. Past the soft deadline, park the redacted resume state and yield instead of
-		// paying the next model call. Skipped on the final step — the loop is about to exit anyway.
+		// pending. Past the soft deadline, park the resume state and yield instead of paying the
+		// next model call. The transcript is already placeholder-clean (ingress redaction), so it
+		// persists as-is — pre- and post-yield transcripts are byte-identical by construction.
+		// Skipped on the final step — the loop is about to exit anyway.
 		if (
 			input.deadlineAt !== undefined &&
 			step + 1 < input.maxSteps &&
@@ -260,10 +268,9 @@ export async function runAiSdkLoop(
 					"deadline yields require a run checkpoint persister",
 				);
 			}
-			const redactedMessages = await redactForEvent(input, messages);
 			const checkpointId = await input.persistYieldCheckpoint({
 				nextStep: step + 1,
-				messages: redactedMessages,
+				messages,
 			});
 			return {
 				status: "yielded",

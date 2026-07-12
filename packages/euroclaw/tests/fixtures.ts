@@ -56,7 +56,7 @@ export function approvalToolModel(): V2Model {
 			if (step++ === 0) {
 				const promptText = JSON.stringify(options.prompt);
 				const token =
-					promptText.match(/\{\{pii:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
+					promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
 				return {
 					content: [
 						{

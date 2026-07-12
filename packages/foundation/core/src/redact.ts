@@ -5,6 +5,7 @@
 
 import {
 	type Detector,
+	type PiiKind,
 	type PiiMapping,
 	type PiiMappingStore,
 	piiMapping,
@@ -16,10 +17,14 @@ import {
 	rehydrationContext,
 } from "@euroclaw/contracts";
 import { validationError } from "@euroclaw/errors";
-import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
+import { hmac } from "@noble/hashes/hmac.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 
-const PLACEHOLDER = /\{\{pii:[a-z0-9]+\}\}/g;
+// Kind-typed tokens (`{{pii:email:a1b2…}}`) so the model can reason over what a placeholder IS;
+// the kindless first-generation form stays matched so pre-existing tokens still rehydrate.
+const PLACEHOLDER = /\{\{pii:(?:[a-z]+:)?[a-z0-9]+\}\}/g;
 
 /**
  * The neutral default: detects nothing, so redaction is a no-op until you opt in.
@@ -28,8 +33,8 @@ const PLACEHOLDER = /\{\{pii:[a-z0-9]+\}\}/g;
  */
 export const noopDetector: Detector = () => [];
 
-function newPlaceholder(): string {
-	return `{{pii:${bytesToHex(randomBytes(16))}}}`;
+function newPlaceholder(kind: PiiKind): string {
+	return `{{pii:${kind}:${bytesToHex(randomBytes(16))}}}`;
 }
 
 export function createMemoryPiiMappingStore(): PiiMappingStore {
@@ -65,6 +70,17 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 				? mapping.original
 				: null;
 		},
+		findByHash(originalHash, ctx) {
+			for (const mapping of byPlaceholder.values()) {
+				if (
+					mapping.originalHash === originalHash &&
+					sameContainer(mapping, ctx)
+				) {
+					return mapping;
+				}
+			}
+			return null;
+		},
 		deleteForSubject(subjectId) {
 			const placeholders = subjectToPlaceholders.get(subjectId);
 			if (placeholders === undefined) return;
@@ -82,6 +98,15 @@ export type StoredRedactorOptions = {
 	detector?: Detector;
 	mappings: PiiMappingStore;
 	now?: () => string;
+	/**
+	 * Dedup key: with it, the same (value, kind, container) always yields the SAME placeholder —
+	 * coreference across mentions/steps/artifacts, stable prompt caching, one mapping row per value.
+	 * The key only feeds the lookup hash; rehydration never depends on it, so loss or rotation
+	 * merely resets dedup. Omit → every occurrence mints fresh (a durable store warns once).
+	 */
+	indexKey?: string;
+	/** Where the keyless-durable warning goes (core has no console). Omit → silent. */
+	warn?: (message: string) => void;
 };
 
 function cleanSpans(
@@ -129,6 +154,23 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	const detect = options.detector ?? noopDetector;
 	const now = options.now ?? (() => new Date().toISOString());
 	const mappings = options.mappings;
+	const indexKey = options.indexKey;
+	if (indexKey === undefined && mappings.durable === true) {
+		options.warn?.(
+			"no indexKey configured — placeholders will not deduplicate, so the durable mapping store grows per occurrence and transcripts lose coreference. Provide indexKey to make placeholders deterministic.",
+		);
+	}
+	const hashOf =
+		indexKey === undefined
+			? undefined
+			: (kind: PiiKind, value: string): string =>
+					bytesToHex(
+						hmac(
+							sha256,
+							utf8ToBytes(indexKey),
+							utf8ToBytes(`${kind}\0${value}`),
+						),
+					);
 
 	const redactText = async (
 		text: string,
@@ -146,18 +188,36 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		let out = "";
 		let last = 0;
 		for (const span of spans) {
-			const placeholder = newPlaceholder();
-			await mappings.save(
-				{
-					placeholder,
-					original: span.value,
-					kind: span.kind,
-					scope: ctx?.scope,
-					scopeId: ctx?.scopeId,
-					createdAt: now(),
-				},
-				ctx?.subjectIds,
-			);
+			// Lookup-or-mint: an already-known (value, kind, container) reuses its placeholder, so
+			// every mention wears the same token. The awaited save above the next lookup makes the
+			// dedup hold even for two occurrences inside ONE text.
+			const originalHash = hashOf?.(span.kind, span.value);
+			const existing =
+				originalHash === undefined
+					? null
+					: await mappings.findByHash(originalHash, ctx);
+			let placeholder: string;
+			if (existing) {
+				placeholder = existing.placeholder;
+				// Same value, possibly a new data-subject — append junction rows only.
+				if (ctx?.subjectIds !== undefined && ctx.subjectIds.length > 0) {
+					await mappings.save(existing, ctx.subjectIds);
+				}
+			} else {
+				placeholder = newPlaceholder(span.kind);
+				await mappings.save(
+					{
+						placeholder,
+						original: span.value,
+						originalHash,
+						kind: span.kind,
+						scope: ctx?.scope,
+						scopeId: ctx?.scopeId,
+						createdAt: now(),
+					},
+					ctx?.subjectIds,
+				);
+			}
 			out += text.slice(last, span.start) + placeholder;
 			last = span.end;
 		}
@@ -222,4 +282,57 @@ export function createMemoryRedactor(
 		detector: detect,
 		mappings: createMemoryPiiMappingStore(),
 	});
+}
+
+/** A container's resolved redaction posture — the claw row's birth fact. */
+export type ContainerPosture = "strict" | "raw";
+
+export type RoutingRedactorOptions = {
+	/** The armed redactor strict containers use. */
+	strict: Redactor;
+	/** Posture per redaction context. Called on every redact; cache inside if reads are costly. */
+	postureOf: (
+		ctx?: RedactionContext,
+	) => ContainerPosture | Promise<ContainerPosture>;
+};
+
+/**
+ * Posture router over the one Redactor port: "strict" delegates, "raw" passes through — one claw,
+ * per-container posture. Rehydration ALWAYS delegates: raw containers hold no placeholders, and a
+ * foreign placeholder is inert by containment, so delegation is harmless and fail-closed.
+ */
+export function createRoutingRedactor(
+	options: RoutingRedactorOptions,
+): Redactor {
+	return {
+		durable: options.strict.durable,
+		async redactValue<T>(value: T, ctx?: RedactionContext): Promise<T> {
+			return (await options.postureOf(ctx)) === "strict"
+				? options.strict.redactValue(value, ctx)
+				: value;
+		},
+		async rehydrateValue<T>(value: T, ctx?: RehydrationContext): Promise<T> {
+			return options.strict.rehydrateValue(value, ctx);
+		},
+	};
+}
+
+/**
+ * The declared-raw redactor: identity both ways, and vacuously durable — it never mints a
+ * placeholder, so "every minted placeholder survives a restart" holds. Exists so a deployment
+ * that CHOSE unredacted durability (`redaction: { posture: "raw" }`) satisfies the database
+ * boot guard by declaration instead of by accident.
+ */
+export function createInertRedactor(): Redactor {
+	return {
+		durable: true,
+		redactValue: async (value) => value,
+		rehydrateValue: async (value) => value,
+	};
+}
+
+/** Union of detectors: run all, concatenate spans. Overlaps are resolved by the redactor's span
+ *  cleaning — earliest start wins, ties go to the longer span. */
+export function composeDetectors(...detectors: readonly Detector[]): Detector {
+	return (text) => detectors.flatMap((detect) => detect(text));
 }

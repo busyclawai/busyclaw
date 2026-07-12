@@ -149,7 +149,7 @@ describe("createClaw engine", () => {
 			database: db,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({ onExecute: (to) => ({ sent: true, to }) }),

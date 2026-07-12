@@ -66,7 +66,7 @@ describe("createClaw deadline slicing", () => {
 			}),
 			environment: { now },
 			model: multiStepModel(2),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				ping: tool({
 					description: "Ping.",
@@ -160,7 +160,7 @@ describe("createClaw deadline slicing", () => {
 			}),
 			environment: { now },
 			model: multiStepModel(2),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				ping: tool({
 					description: "Ping.",

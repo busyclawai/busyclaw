@@ -24,7 +24,7 @@ import {
 	type RuntimeEventSink,
 } from "@euroclaw/runtime";
 import { buildSecrets, env } from "@euroclaw/secrets";
-import { schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter } from "@euroclaw/storage-core";
 import {
 	createClawsStore,
 	createEffectStore,
@@ -43,8 +43,14 @@ import {
 import { type ClawDatabase, resolveDatabase } from "./database";
 import { createClawRuntimeEventSink } from "./events";
 import type { ClawModelsConfig, RequireNoCoreColumnCollision } from "./models";
+import {
+	REDACTION_SYSTEM_FRAGMENT,
+	type RedactionConfig,
+	resolveRedaction,
+	withImmutableRedaction,
+} from "./redaction";
 import { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
-import { collectModelFields, getEuroclawTables } from "./tables";
+import { collectModelFields, getEuroclawModels } from "./tables";
 
 export type {
 	BindConversationClawInput,
@@ -82,7 +88,7 @@ export type ClawStores = {
 
 export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	Config,
-	"database" | "effectStore" | "events" | "resolveTools"
+	"database" | "effectStore" | "events" | "resolveTools" | "redactor"
 > & {
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
@@ -93,6 +99,9 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	>;
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
 	models?: ClawModelsConfig;
+	/** Redaction POLICY — posture, detector, dedup key. The assembly builds the mechanism from the
+	 *  same `database` as every other store; `createRuntime.redactor` stays the mechanism port. */
+	redaction?: RedactionConfig;
 	stores?: ClawStores;
 };
 
@@ -391,6 +400,25 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			},
 		);
 	}
+	// Durable state (approvals, events, checkpoints) persists what the runtime hands it, and the
+	// runtime refuses that without a durable redactor — surface the decision HERE, in the config
+	// vocabulary the host actually writes. A legacy runtime-level `redactor` (JS callers; the field
+	// is gone from ClawConfig) still flows through and meets the runtime guard on its own.
+	const legacyRedactor = (config as { redactor?: RuntimeConfig["redactor"] })
+		.redactor;
+	if (
+		adapter &&
+		config.redaction === undefined &&
+		legacyRedactor === undefined
+	) {
+		throw configurationError(
+			"database-backed claws persist approvals, events, and checkpoints — configure redaction",
+			{
+				reason:
+					'add redaction: { detector, indexKey } to redact durable state, or redaction: { posture: "raw" } to accept unerasable persistence',
+			},
+		);
+	}
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
 	// Plugin-contributed providers come FIRST; `env()` is appended as the lowest-priority FALLBACK
 	// floor — always present, because installing a provider plugin must never silently REMOVE env
@@ -412,14 +440,21 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const secrets: Secrets = buildSecrets(providers);
 	// Fail fast at init if any plugin/host schema collides with a core column — the same collection the
 	// `generate` CLI runs, so a bad registration surfaces here, not at migration time. The merged
-	// tables also drive the schema-aware adapter handed to plugins below.
-	const tables = getEuroclawTables({
+	// MODEL map (fields per model) also drives the entity-validating adapter handed to plugins below —
+	// migration and persistence share one source.
+	const models = getEuroclawModels({
 		models: config.models,
 		plugins: pluginList,
+		redaction: config.redaction,
 	});
-	const modelFields = collectModelFields(pluginList, config.models);
+	const modelFields = collectModelFields(
+		pluginList,
+		config.models,
+		config.redaction,
+	);
 	const clawAdditionalFields = modelFields.claw;
-	const clawsStore =
+	const perClawRedaction = config.redaction?.posture === "per-claw";
+	const resolvedClawsStore =
 		config.stores?.claws ??
 		(adapter
 			? createClawsStore(
@@ -429,6 +464,24 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 						: {},
 				)
 			: undefined);
+	// Posture is a birth fact of the row — wrap ONCE so every writer (api, plugins, sinks) sees
+	// the same immutability wall.
+	const clawsStore =
+		perClawRedaction && resolvedClawsStore
+			? withImmutableRedaction(resolvedClawsStore)
+			: resolvedClawsStore;
+	const redaction = resolveRedaction({
+		config: config.redaction,
+		adapter,
+		clawsStore,
+		warn: (message) => console.warn(`euroclaw redaction: ${message}`),
+	});
+	// The placeholder contract rides the system prompt whenever placeholders can actually appear.
+	const system = redaction.armed
+		? [config.system, REDACTION_SYSTEM_FRAGMENT]
+				.filter((part): part is string => typeof part === "string")
+				.join("\n\n")
+		: config.system;
 	const configuredEffectStore = (config as { effectStore?: EffectStore })
 		.effectStore;
 	const effectsStore =
@@ -450,15 +503,16 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	];
 	const configuredPlugins = configurePlugins({
 		context: {
-			// The resolved adapter, wrapped ONCE with the merged tables (better-auth builds its adapter
+			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
 			// with the full getAuthTables schema the same way) and passed through the configure context's
-			// index signature. Plugins that own tables build their stores on it directly — they speak
-			// logical model/field names and never wrap adapters themselves. The storage-durable stores
-			// above deliberately take the RAW adapter instead and wrap internally: they ARE the storage
-			// layer (schemaAdapter is theirs to use), and their constructors are public host API — the
-			// wrap-once rule exists to keep PLUGINS free of the storage implementation, not to move
-			// every wrap to the assembly.
-			adapter: adapter ? schemaAdapter(adapter, tables) : undefined,
+			// index signature. The entity layer validates every row against its model's record schema,
+			// so a plugin read is a checked read; plugins open a typed lens over it (entityView) with
+			// their own field maps and never wrap adapters themselves. The storage-durable stores above
+			// deliberately take the RAW adapter instead and wrap internally: they ARE the storage layer
+			// (entityDb is theirs to use), and their constructors are public host API — the wrap-once
+			// rule exists to keep PLUGINS free of the storage implementation, not to move every wrap to
+			// the assembly.
+			adapter: adapter ? entityAdapter(adapter, models) : undefined,
 			clawsStore,
 			effects: effectsStore,
 			events: pluginEventSink(eventSinks),
@@ -473,6 +527,8 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		...(effectsStore ? { effectStore: effectsStore } : {}),
 		...(eventSinks.length > 0 ? { events: eventSinks } : {}),
 		...(resolveTools ? { resolveTools } : {}),
+		...(redaction.redactor ? { redactor: redaction.redactor } : {}),
+		...(system !== undefined ? { system } : {}),
 	} as ResolvedConfig<Config>);
 	const engine = config.engine?.create(runtime);
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
@@ -540,4 +596,15 @@ export type {
 	ValidateSecretsAtBootInput,
 } from "./secrets";
 export { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
-export { getEuroclawTables } from "./tables";
+export type {
+	PerClawRedactionConfig,
+	RawRedactionConfig,
+	RedactionConfig,
+	StrictRedactionConfig,
+} from "./redaction";
+export {
+	clawRedactionFields,
+	REDACTION_POSTURES,
+	REDACTION_SYSTEM_FRAGMENT,
+} from "./redaction";
+export { getEuroclawModels, getEuroclawTables } from "./tables";
