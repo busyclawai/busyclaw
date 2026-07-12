@@ -30,6 +30,7 @@ export type {
 	SkillReadStore,
 	SkillsStore,
 } from "./contracts";
+export type { SkillProposalState } from "./schema";
 export {
 	createSkillAclInput,
 	createSkillAclInputOptions,
@@ -75,6 +76,7 @@ export {
 	skillProposalKind,
 	skillProposalKindValues,
 	skillProposalRecord,
+	skillProposalState,
 	skillProposalStatus,
 	skillProposalStatusValues,
 	skillReadEntity,
@@ -82,6 +84,7 @@ export {
 	skillReadRecord,
 	skillReadSource,
 	skillReadSourceValues,
+	skillShareProposalState,
 	skillsModels,
 	skillsSchema,
 } from "./schema";

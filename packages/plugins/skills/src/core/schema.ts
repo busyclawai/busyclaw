@@ -257,6 +257,23 @@ export const skillReadFields = {
 	createdAt: field.string({ required: true }),
 } as const;
 
+// The proposal STATE — a versioned, kind-owned payload. One member today: the share proposal
+// (`skills.share.v1`, produced by the governed api's createShareProposal). Future kinds
+// (create/patch/archive/restore) JOIN this union with their own versioned schema when they grow a
+// producer — the schema-first column makes "write the shape first" a compile-time requirement, and
+// unknown keys are rejected so a stored state can't smuggle undeclared authority.
+export const skillShareProposalState = type({
+	version: "'skills.share.v1'",
+	installationId: "string",
+	permission: "'activate'",
+	principalType: "'actor' | 'team' | 'organization' | 'public'",
+	"principalId?": "string",
+	requestedBy: "string",
+	"reason?": "string",
+}).onUndeclaredKey("reject");
+export const skillProposalState = skillShareProposalState;
+export type SkillProposalState = typeof skillProposalState.infer;
+
 // A proposal's `(scope, scopeId)` is the review inbox — the boundary whose admins decide it. For
 // share proposals it is DERIVED from the target installation at creation (server-set, never a
 // caller claim); future create-proposals will carry the boundary the creation targets.
@@ -271,7 +288,9 @@ export const skillProposalFields = {
 		required: true,
 		index: true,
 	}),
-	state: field.jsonObject({ required: true, pii: "redacted" }),
+	// Schema-first: the column IS the versioned proposal-state union — typed on read, validated at
+	// the create boundary and on every row crossing the adapter.
+	state: field.json(skillProposalState, { required: true, pii: "redacted" }),
 	createdAt: field.string({ required: true }),
 	updatedAt: field.string({ required: true }),
 } as const;

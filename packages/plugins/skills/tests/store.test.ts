@@ -122,8 +122,17 @@ describe("createSkillsStore", () => {
 			scopeId: "team-1",
 			targetInstallationId: "install-1",
 			proposerActorId: "actor-1",
-			kind: "patch",
-			state: { manifestPatch: { allowedTools: ["summarize"] } },
+			kind: "share",
+			// The state column is schema-first (the versioned share shape) — a kind without an owned
+			// state schema (e.g. patch) cannot be stored until its schema joins the union.
+			state: {
+				version: "skills.share.v1",
+				installationId: "install-1",
+				permission: "activate",
+				principalType: "team",
+				principalId: "team-1",
+				requestedBy: "actor-1",
+			},
 		});
 		expect(proposal).toMatchObject({ status: "pending" });
 		expect(
