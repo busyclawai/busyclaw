@@ -1,47 +1,63 @@
 // Schema collection — the `getAuthTables` analog. euroclaw owns the core durable tables; plugins and
 // the host register extra fields declaratively (a plugin's `schema`, the host's `models`). This module
-// merges them into the one `SchemaDeclaration` the `generate` CLI turns into migrations: a model key
-// that names a core table adds columns to it (extend), a new key becomes a plugin-owned table (own).
-// Core columns can't be rewritten — schema is additive. The same per-model field merge also feeds the
-// runtime stores (the claw store reads its `["claw"]` slice), so migration and persistence share one
-// source. Nothing here — and nothing in storage-durable — imports a plugin; registration is declarative.
+// merges them at the FIELD level into one model map (default < plugin < host): a model key that names
+// a core table adds columns to it (extend), a new key becomes a plugin-owned table (own). Core columns
+// can't be rewritten — schema is additive. The merged FIELDS are the single source both projections
+// derive from: `getEuroclawTables` projects them to the SchemaDeclaration the `generate` CLI turns
+// into migrations, and `getEuroclawModels` feeds the entity-validating adapter the assembly wraps
+// once — so a plugin's extra columns are migrated AND validated from one declaration. Nothing here —
+// and nothing in storage-durable — imports a plugin; registration is declarative.
 import {
-	approvalSchema,
-	authzChangeSchema,
-	clawsSchema,
+	approvalFields,
+	authzChangeFields,
+	checkpointFields,
+	clawFields,
 	configurationError,
+	conversationBindingFields,
 	type EntityField,
 	type EuroclawPlugin,
-	effectSchema,
+	effectStorageFields,
 	entity,
-	factsOverlaySchema,
-	piiMappingSchema,
-	piiSubjectSchema,
-	policySliceSchema,
-	registeredToolSchema,
-	runCheckpointSchema,
-	specRegistrationSchema,
+	factsOverlayFields,
+	messageFields,
+	piiMappingFields,
+	piiSubjectFields,
+	policySliceFields,
+	registeredToolFields,
+	runCheckpointFields,
+	specRegistrationFields,
+	threadFields,
+	toolCallFields,
+	toolResultFields,
 } from "@euroclaw/contracts";
-import type { SchemaDeclaration } from "@euroclaw/storage-core";
-import { teamSchema } from "@euroclaw/storage-durable";
+import type { EntityModelMap, SchemaDeclaration } from "@euroclaw/storage-core";
+import { teamInviteEntity, teamMemberEntity } from "@euroclaw/storage-durable";
 import type { ClawModelsConfig } from "./models";
+import { clawRedactionFields, type RedactionConfig } from "./redaction";
 
-/** The tables euroclaw's own durable stores own — the base every plugin/host field merges onto. */
-const CORE_TABLES: SchemaDeclaration = {
-	...clawsSchema,
-	...approvalSchema,
-	...effectSchema,
-	...piiMappingSchema,
-	...piiSubjectSchema,
-	...runCheckpointSchema,
-	...teamSchema,
+/** The models euroclaw's own durable stores own — the base every plugin/host field merges onto. */
+const CORE_MODELS: Record<string, Record<string, EntityField>> = {
+	claw: clawFields,
+	thread: threadFields,
+	message: messageFields,
+	tool_call: toolCallFields,
+	tool_result: toolResultFields,
+	checkpoint: checkpointFields,
+	conversation_binding: conversationBindingFields,
+	approval: approvalFields,
+	effect: effectStorageFields,
+	pii_mapping: piiMappingFields,
+	pii_subject: piiSubjectFields,
+	run_checkpoint: runCheckpointFields,
+	team_member: teamMemberEntity.fields,
+	team_invite: teamInviteEntity.fields,
 	// The tool registry is PRODUCT (rows), not a plugin — siblings of approvals/run_checkpoint.
-	...specRegistrationSchema,
-	...registeredToolSchema,
-	...factsOverlaySchema,
+	spec_registration: specRegistrationFields,
+	registered_tool: registeredToolFields,
+	facts_overlay: factsOverlayFields,
 	// Slice 6b: customer policy slices + the append-only authz change log (its count keys the router).
-	...policySliceSchema,
-	...authzChangeSchema,
+	policy_slice: policySliceFields,
+	authz_change: authzChangeFields,
 };
 
 /**
@@ -52,6 +68,7 @@ const CORE_TABLES: SchemaDeclaration = {
 export function collectModelFields(
 	plugins: readonly EuroclawPlugin[],
 	models: ClawModelsConfig | undefined,
+	redaction?: RedactionConfig,
 ): Record<string, Record<string, EntityField>> {
 	const byModel: Record<string, Record<string, EntityField>> = {};
 	for (const plugin of plugins) {
@@ -62,42 +79,76 @@ export function collectModelFields(
 	for (const [model, decl] of Object.entries(models ?? {})) {
 		byModel[model] = { ...byModel[model], ...decl.additionalFields };
 	}
+	// Per-claw posture rides an assembly-owned claw column — folded here so migrations (this same
+	// collection feeds the generate CLI) and the entity-validating adapter see one declaration.
+	if (redaction?.posture === "per-claw") {
+		const claw = byModel["claw"] ?? {};
+		if ("redaction" in claw) {
+			throw configurationError(
+				'the "redaction" claw column is assembly-owned (redaction posture "per-claw") and cannot be redeclared',
+				{ column: "redaction", model: "claw" },
+			);
+		}
+		byModel["claw"] = { ...claw, ...clawRedactionFields };
+	}
 	return byModel;
 }
 
 /**
- * The full table set for the `generate` CLI: euroclaw's core tables plus every field a plugin or the
- * host registers. A model key matching a core table extends it (adds columns); a new key becomes its
- * own table. Redefining a core column throws — schema is additive, never a rewrite.
+ * The full MODEL map (merged fields per model) — core models plus every field a plugin or the host
+ * registers. A model key matching a core model extends it (adds columns); a new key becomes its own
+ * model. Redefining a core column throws — schema is additive, never a rewrite. This is what the
+ * assembly wraps the adapter with (entityAdapter derives both the storage projection and the
+ * per-model record validators from it).
+ */
+export function getEuroclawModels(config: {
+	plugins?: readonly EuroclawPlugin[];
+	models?: ClawModelsConfig;
+	redaction?: RedactionConfig;
+}): EntityModelMap {
+	const extra = collectModelFields(
+		config.plugins ?? [],
+		config.models,
+		config.redaction,
+	);
+	const merged: Record<string, Record<string, EntityField>> = {
+		...CORE_MODELS,
+	};
+	for (const [model, fields] of Object.entries(extra)) {
+		if (Object.keys(fields).length === 0) continue;
+		const core = CORE_MODELS[model];
+		if (!core) {
+			merged[model] = fields;
+			continue;
+		}
+		for (const column of Object.keys(fields)) {
+			if (column in core) {
+				throw configurationError(
+					`schema for model "${model}" redefines core column "${column}"`,
+					{ column, model },
+				);
+			}
+		}
+		merged[model] = { ...core, ...fields };
+	}
+	return Object.fromEntries(
+		Object.entries(merged).map(([model, fields]) => [model, { fields }]),
+	);
+}
+
+/**
+ * The full table set for the `generate` CLI — the storage projection of the merged model map (the
+ * same fields the entity-validating adapter derives its validators from, so migration and
+ * persistence share one source).
  */
 export function getEuroclawTables(config: {
 	plugins?: readonly EuroclawPlugin[];
 	models?: ClawModelsConfig;
+	redaction?: RedactionConfig;
 }): SchemaDeclaration {
-	const extra = collectModelFields(config.plugins ?? [], config.models);
-	const tables: SchemaDeclaration = {
-		...CORE_TABLES,
-	};
-	for (const [model, fields] of Object.entries(extra)) {
-		if (Object.keys(fields).length === 0) continue;
-		// Turn the registered EntityFields into storage FieldAttributes via the entity DSL. The storage
-		// map has exactly one entry (this model); iterate it so we never index-access a possibly-undefined.
-		for (const [name, table] of Object.entries(entity(model, fields).storage)) {
-			const core = CORE_TABLES[name];
-			if (!core) {
-				tables[name] = table;
-				continue;
-			}
-			for (const column of Object.keys(table.fields)) {
-				if (column in core.fields) {
-					throw configurationError(
-						`schema for model "${name}" redefines core column "${column}"`,
-						{ column, model: name },
-					);
-				}
-			}
-			tables[name] = { ...core, fields: { ...core.fields, ...table.fields } };
-		}
+	const tables: SchemaDeclaration = {};
+	for (const [model, decl] of Object.entries(getEuroclawModels(config))) {
+		Object.assign(tables, entity(model, decl.fields).storage);
 	}
 	return tables;
 }

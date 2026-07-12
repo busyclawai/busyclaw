@@ -181,7 +181,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 		expect(nestedToolSaw).toBe("alice@personal.com");
 		const auditJson = JSON.stringify(runtime.audit?.entries() ?? []);
 		expect(auditJson).not.toContain("alice@personal.com");
-		expect(auditJson).toMatch(/\{\{pii:[a-z0-9]+\}\}/);
+		expect(auditJson).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
 	});
 
 	it("makes two nested calls without an effect collision — only the parent claims an effect", async () => {

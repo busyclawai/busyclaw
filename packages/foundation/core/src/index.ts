@@ -12,9 +12,14 @@ export {
 export type { Context, Governance, GovernanceConfig } from "./governance";
 export { createGovernance } from "./governance";
 export {
+	composeDetectors,
+	type ContainerPosture,
+	createInertRedactor,
 	createMemoryPiiMappingStore,
 	createMemoryRedactor,
+	createRoutingRedactor,
 	createStoredRedactor,
 	noopDetector,
+	type RoutingRedactorOptions,
 	type StoredRedactorOptions,
 } from "./redact";

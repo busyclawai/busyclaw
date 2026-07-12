@@ -21,7 +21,7 @@ describe("createClaw plugin APIs", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor,
+			redaction: { redactor },
 			plugins: [
 				governedSkillsPlugin({
 					activationContext: {
@@ -107,7 +107,7 @@ describe("createClaw plugin APIs", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			organization: () => "organization-1",
 			plugins: [
 				governedSkillsPlugin({

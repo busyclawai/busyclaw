@@ -27,7 +27,7 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor,
+			redaction: { redactor },
 		});
 		const { agent, thread } = await createAgentThread(claw);
 
@@ -63,7 +63,7 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(emailTool({ onExecute: () => ({ sent: true }) }), {
 					gate: () => ({ decision: "needs-approval" }),
@@ -124,7 +124,7 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(
 					emailTool({
@@ -192,7 +192,7 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: govern(emailTool({ onExecute: () => ({ sent: true }) }), {
 					gate: () => ({ decision: "needs-approval" }),
@@ -261,7 +261,7 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
-			redactor,
+			redaction: { redactor },
 			tools: {
 				send_email: emailTool({
 					onExecute: (to) => {

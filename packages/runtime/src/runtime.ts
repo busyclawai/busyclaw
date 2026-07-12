@@ -516,7 +516,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				}
 			: undefined;
 
-	const redactEventValue = async <T>(
+	// The one redaction seam runtime hands the loop: ingress (prompt, tool outputs) + events.
+	const redactValue = async <T>(
 		value: T,
 		ctx: Record<string, unknown>,
 	): Promise<T> =>
@@ -852,15 +853,18 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
 		const core = createRunCore(state, approvalStore, runTools);
+		// Ingress: the prompt is redacted ONCE — the run.started event and the transcript share
+		// the same placeholder text (the loop never re-redacts what it receives).
+		const redactedPrompt = String(await redactValue(prompt, resolvedCtx));
 		await emitEvent(emitCtx, {
-			prompt: String(await redactEventValue(prompt, resolvedCtx)),
+			prompt: redactedPrompt,
 			type: "run.started",
 		});
 		const result = await runAiSdkLoop({
 			model: config.model,
 			tools: runModelTools,
 			system: config.system,
-			prompt,
+			prompt: redactedPrompt,
 			ctx,
 			resolvedCtx,
 			core,
@@ -871,7 +875,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
-			redactEventValue: (value) => redactEventValue(value, resolvedCtx),
+			redactValue: (value) => redactValue(value, resolvedCtx),
 		});
 		const valid = RuntimeResult(result);
 		if (valid instanceof ark.errors) {
@@ -972,26 +976,22 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			});
 		}
 
+		// Ingress: the approved tool's output is redacted ONCE — the tool.completed event and the
+		// resumed transcript share the same placeholder text.
 		const output =
 			toolResult.status === "ok"
-				? toolResult.output
+				? await redactValue(toolResult.output, resolvedCtx)
 				: {
 						__governance: toolResult.status,
 						reason: toolResult.reason,
 						reasonCode: toolResult.reasonCode,
 					};
 		if (toolResult.status === "ok") {
-			const redactedOutput = config.redactor
-				? await config.redactor.redactValue(
-						toolResult.output,
-						redactionContextFrom(resolvedCtx),
-					)
-				: toolResult.output;
 			await emitEvent(emitCtx, {
 				...(state.currentEffectId !== undefined
 					? { effectId: state.currentEffectId }
 					: {}),
-				...(redactedOutput !== undefined ? { output: redactedOutput } : {}),
+				...(output !== undefined ? { output } : {}),
 				step: checkpoint.step,
 				toolCallId: checkpoint.toolCallId,
 				toolName: checkpoint.toolName,
@@ -1034,13 +1034,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(resumeState),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
-			redactEventValue: async (value) =>
-				config.redactor
-					? config.redactor.redactValue(
-							value,
-							redactionContextFrom(resolvedCtx),
-						)
-					: value,
+			redactValue: (value) => redactValue(value, resolvedCtx),
 		});
 		const valid = RuntimeResult(result);
 		if (valid instanceof ark.errors) {
@@ -1094,7 +1088,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
-			redactEventValue: (value) => redactEventValue(value, resolvedCtx),
+			redactValue: (value) => redactValue(value, resolvedCtx),
 		});
 		const valid = RuntimeResult(result);
 		if (valid instanceof ark.errors) {

@@ -9,7 +9,7 @@ describe("createClaw model extension", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor,
+			redaction: { redactor },
 			models: {
 				claw: {
 					additionalFields: {
@@ -43,7 +43,7 @@ describe("createClaw model extension", () => {
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
-			redactor,
+			redaction: { redactor },
 			plugins: [taggingPlugin],
 		});
 
@@ -68,7 +68,7 @@ describe("createClaw model extension", () => {
 				database: db,
 				model: textModel("done"),
 				plugins: [evil],
-				redactor,
+				redaction: { redactor },
 			}),
 		).toThrow(/redefines core column "status"/);
 	});
