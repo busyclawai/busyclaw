@@ -9,9 +9,11 @@
 //   • organizationId/actor come from the per-run CONTEXT passed to the provider (the turn's trusted
 //     org + actor), NOT from the AI-SDK execute options — those carry no turn context.
 //
-// Governance is stamped RAW from the row and re-validated by the runtime's `toolGovernance` reader
-// when it is read for execution at dispatch (the §2 invariant: governance blobs are never trusted
-// raw). The stored binding is an adapter-read boundary, so it is arktype-parsed inside `execute`
+// Governance rides through typed: the registry column is schema-first (`field.json(toolGovernance)`),
+// so the store validates it on read and `row.governance` is a `ToolGovernance` here — no cast. The
+// dispatch floor still re-validates every stamp at the runtime chokepoint (the §2 invariant:
+// governance blobs are never trusted raw). The stored binding is an adapter-read boundary, so it is
+// arktype-parsed inside `execute`
 // before it can drive a request. The response is UNTRUSTED data: parsed as data only (never
 // executed), size-capped, and time-bounded; a non-2xx status is RETURNED (not thrown) so policy and
 // the model can react. Throws are reserved for infra / guard / missing-required-credential.
@@ -20,7 +22,6 @@ import type {
 	JsonValue,
 	RegisteredToolRecord,
 	Secrets,
-	ToolGovernance,
 } from "@euroclaw/contracts";
 import {
 	configurationError,
@@ -31,7 +32,7 @@ import {
 } from "@euroclaw/contracts";
 import { jsonSchema, type ToolSet } from "ai";
 import { type } from "arktype";
-import { type OpenApiBinding, openApiBinding } from "../sources/openapi";
+import { openApiBinding } from "../sources/openapi";
 import { applyCredentials } from "./credentials";
 import { assertEgressAllowed, type EgressLookup } from "./egress";
 import { planHttpRequest } from "./request-plan";
@@ -98,14 +99,14 @@ export function createRegisteredToolProvider(
 						validArgs.summary,
 					);
 				}
-				const parsedBinding = openApiBinding(row.binding);
-				if (parsedBinding instanceof type.errors) {
+				// The parse result IS OpenApiBinding — the type derives from this schema, no cast.
+				const binding = openApiBinding(row.binding);
+				if (binding instanceof type.errors) {
 					throw validationError(
 						`registered tool "${row.address}" has an invalid stored binding`,
-						parsedBinding.summary,
+						binding.summary,
 					);
 				}
-				const binding = parsedBinding as OpenApiBinding;
 
 				const plan = planHttpRequest(binding, validArgs);
 				const credentialed = await applyCredentials(
@@ -143,8 +144,10 @@ export function createRegisteredToolProvider(
 					),
 					execute,
 				},
-				// Stamp RAW — the runtime's toolGovernance reader validates it at dispatch (never raw).
-				row.governance as unknown as ToolGovernance,
+				// `row.governance` is typed `ToolGovernance`: the registry column is schema-first and the
+				// store validates it on read, so no cast is needed here. The dispatch floor still
+				// re-checks every stamp at the runtime chokepoint — including tools that never hit this store.
+				row.governance,
 			) as ToolSet[string];
 		}
 		return tools;

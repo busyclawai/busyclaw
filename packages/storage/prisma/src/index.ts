@@ -8,8 +8,12 @@
  * Prisma's public delegate API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import {
+	configurationError,
+	isWhereGroup,
+	sortByList,
+} from "@euroclaw/contracts";
 
 /** The subset of a Prisma model delegate this adapter uses (your generated client satisfies it). */
 export type PrismaDelegate = {
@@ -40,22 +44,47 @@ const PRISMA_OP = {
 	gt: "gt",
 	gte: "gte",
 	in: "in",
+	not_in: "notIn",
+	contains: "contains",
+	starts_with: "startsWith",
+	ends_with: "endsWith",
 } as const;
 
-/** One Where clause → a Prisma where fragment. */
-function clause(w: Where): Record<string, unknown> {
+/** One Where clause → a Prisma where fragment. `mode: "insensitive"` rides through as Prisma's
+ *  native string-filter mode (support depends on the connector — postgres/mongo yes, sqlite no). */
+function clause(w: WhereClause): Record<string, unknown> {
 	const op = w.operator ?? "eq";
-	if (op === "eq") return { [w.field]: w.value };
-	if (op === "ne") return { [w.field]: { not: w.value } };
-	if (op === "contains") return { [w.field]: { contains: w.value } };
-	return { [w.field]: { [PRISMA_OP[op]]: w.value } };
+	const mode =
+		w.mode === "insensitive" && typeof w.value === "string"
+			? { mode: "insensitive" }
+			: {};
+	if (op === "eq") {
+		return "mode" in mode
+			? { [w.field]: { equals: w.value, ...mode } }
+			: { [w.field]: w.value };
+	}
+	if (op === "ne") return { [w.field]: { not: w.value, ...mode } };
+	return { [w.field]: { [PRISMA_OP[op]]: w.value, ...mode } };
 }
 
-/** Where[] → a Prisma where, left-folded by each clause's connector. */
+/** A where tree → a Prisma where: left-fold by each node's connector; a group nests under its own
+ *  AND/OR. An empty group fails loud (never a silent match-all/match-none). */
 export function toWhere(where: Where[]): Record<string, unknown> {
 	let combined: Record<string, unknown> | undefined;
 	for (const w of where) {
-		const c = clause(w);
+		let c: Record<string, unknown>;
+		if (isWhereGroup(w)) {
+			const isAnd = "and" in w && w.and !== undefined;
+			const members = isAnd ? (w.and ?? []) : (w.or ?? []);
+			if (members.length === 0) {
+				throw configurationError("storage-prisma: where group is empty", {});
+			}
+			c = {
+				[isAnd ? "AND" : "OR"]: members.map((member) => toWhere([member])),
+			};
+		} else {
+			c = clause(w);
+		}
 		combined =
 			combined === undefined
 				? c
@@ -98,7 +127,9 @@ export function prismaAdapter(prisma: PrismaLike): Adapter {
 		async findMany({ model, where, limit, offset, sortBy }) {
 			return (await delegate(prisma, model).findMany({
 				where: toWhere(where ?? []),
-				orderBy: sortBy ? { [sortBy.field]: sortBy.direction } : undefined,
+				orderBy: sortByList(sortBy).map((sort) => ({
+					[sort.field]: sort.direction,
+				})),
 				take: limit,
 				skip: offset,
 			})) as never;

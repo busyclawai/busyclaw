@@ -1,20 +1,25 @@
 // createEffectStore — the EffectStore port (durable idempotency + lease-based execution), backed by
-// any @euroclaw/storage-core Adapter. JSON columns (output, error, compensation) are (de)serialized
-// by `schemaAdapter` from the effect storage schema, which also drops the storage-only
-// `leaseTokenHash` on read (returned:false) — the store never hand-rolls row mapping.
+// any @euroclaw/storage-core Adapter. Persistence goes through `entityDb`: JSON columns (output,
+// error, compensation) are (de)serialized by the schema layer, the storage-only `leaseTokenHash`
+// drops on read (returned:false — absent from the read record type AND the read validator), and
+// every row crossing the adapter boundary is parsed against the effect record schema.
 
 import type { Adapter } from "@euroclaw/contracts";
 import {
 	type EffectClaim,
 	type EffectRecord,
 	type EffectStore,
-	effectRecord as effectRecordSchema,
-	effectSchema,
+	effectStorageFields,
+	type JsonValue,
 	jsonValue as jsonValueSchema,
 	stateError,
 	validationError,
 } from "@euroclaw/contracts";
-import { schemaAdapter } from "@euroclaw/storage-core";
+import {
+	type EntityPatch,
+	type EntityWhere,
+	entityDb,
+} from "@euroclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
@@ -28,9 +33,9 @@ const hashToken = (value: string): string =>
 const addMs = (iso: string, ms: number): string =>
 	new Date(new Date(iso).getTime() + ms).toISOString();
 
-// JSON payloads (tool output / error) are validated as JsonValue at the boundary; `schemaAdapter`
-// owns the serialization to the storage column.
-function assertJsonValue(value: unknown, label: string): unknown {
+// JSON payloads (tool output / error) are validated as JsonValue at the boundary; the entity
+// layer owns the serialization to the storage column.
+function assertJsonValue(value: unknown, label: string): JsonValue {
 	const valid = jsonValueSchema(value);
 	if (valid instanceof type.errors) {
 		throw validationError(`${label} invalid`, valid.summary);
@@ -38,26 +43,15 @@ function assertJsonValue(value: unknown, label: string): unknown {
 	return valid;
 }
 
-// Reads are untrusted boundary data; every read is PARSED through the record schema, never cast.
-function validateRecord(value: unknown): EffectRecord {
-	const valid = effectRecordSchema(value);
-	if (valid instanceof type.errors) {
-		throw validationError("effect record invalid", valid.summary);
-	}
-	return valid;
-}
+type EffectWhere = EntityWhere<typeof effectStorageFields>;
+type EffectPatch = EntityPatch<typeof effectStorageFields>;
 
 export function createEffectStore(adapter: Adapter): EffectStore {
-	const db = schemaAdapter(adapter, effectSchema);
+	const db = entityDb(adapter, { effect: { fields: effectStorageFields } });
 	const locks = new Map<string, Promise<void>>();
 
-	const read = async (id: string): Promise<EffectRecord | null> => {
-		const row = await db.findOne<EffectRecord>({
-			model: MODEL,
-			where: [{ field: "id", value: id }],
-		});
-		return row ? validateRecord(row) : null;
-	};
+	const read = async (id: string): Promise<EffectRecord | null> =>
+		db.findOne({ model: MODEL, where: [{ field: "id", value: id }] });
 
 	const withLock = async <R>(id: string, fn: () => Promise<R>): Promise<R> => {
 		const previous = locks.get(id) ?? Promise.resolve();
@@ -96,7 +90,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 		id: string;
 		leaseToken: string;
 		now: string;
-	}) => [
+	}): EffectWhere[] => [
 		{ field: "id", value: input.id },
 		{ field: "status", value: "started", connector: "AND" as const },
 		{
@@ -166,7 +160,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 					}
 					if (!record.leaseExpiresAt) return { status: "in_progress", record };
 					if (input.reclaimExpired === false) return uncertainClaim(record);
-					const row = await db.update<EffectRecord>({
+					const row = await db.update({
 						model: MODEL,
 						where: [
 							{ field: "id", value: input.id },
@@ -180,7 +174,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 						],
 						update: { leaseTokenHash, leaseExpiresAt, updatedAt: input.now },
 					});
-					if (row) return claimRecord(validateRecord(row));
+					if (row) return claimRecord(row);
 					const latest = await read(input.id);
 					if (!latest) return { status: "unavailable", record };
 					assertSameEffect(input, latest);
@@ -203,7 +197,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 				try {
 					await db.create({
 						model: MODEL,
-						data: { ...validateRecord(record), leaseTokenHash },
+						data: { ...record, leaseTokenHash },
 					});
 					return claimRecord(record);
 				} catch (err) {
@@ -219,16 +213,15 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 				input.now,
 				input.leaseTtlMs ?? DEFAULT_EFFECT_LEASE_TTL_MS,
 			);
-			const row = await db.update<EffectRecord>({
+			return db.update({
 				model: MODEL,
 				where: activeLeaseWhere(input),
 				update: { leaseExpiresAt, updatedAt: input.now },
 			});
-			return row ? validateRecord(row) : null;
 		},
 
 		async complete(input) {
-			const update: Record<string, unknown> = {
+			const update: EffectPatch = {
 				status: "completed",
 				leaseTokenHash: null,
 				leaseExpiresAt: null,
@@ -237,7 +230,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 			if (input.output !== undefined) {
 				update.output = assertJsonValue(input.output, "effect.output");
 			}
-			const row = await db.update<EffectRecord>({
+			const row = await db.update({
 				model: MODEL,
 				where: activeLeaseWhere(input),
 				update,
@@ -249,11 +242,11 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 					{ effectId: input.id },
 				);
 			}
-			return validateRecord(row);
+			return row;
 		},
 
 		async fail(input) {
-			const row = await db.update<EffectRecord>({
+			const row = await db.update({
 				model: MODEL,
 				where: activeLeaseWhere(input),
 				update: {
@@ -271,7 +264,7 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 					{ effectId: input.id },
 				);
 			}
-			return validateRecord(row);
+			return row;
 		},
 	};
 }

@@ -24,6 +24,7 @@ import { type } from "arktype";
 import {
 	HTTP_METHODS,
 	type OpenApiAuthScheme,
+	type OpenApiBinding,
 	type OpenApiDiagnostic,
 	type OpenApiExtraction,
 	type OpenApiMethod,
@@ -392,7 +393,7 @@ function deriveGovernance(
 // resolver; a remote/circular ref on a scheme drops that scheme (never the operation).
 function extractAuthSchemes(
 	document: JsonObject,
-	security: readonly Record<string, readonly string[]>[] | undefined,
+	security: OpenApiBinding["security"],
 	notes: string[],
 ): Record<string, OpenApiAuthScheme> | undefined {
 	if (!security || security.length === 0) return undefined;
@@ -479,10 +480,10 @@ function extractSecurity(
 	document: JsonObject,
 	operation: JsonObject,
 	notes: string[],
-): readonly Record<string, readonly string[]>[] | undefined {
+): OpenApiBinding["security"] {
 	const declared = operation.security ?? document.security;
 	if (!Array.isArray(declared)) return undefined;
-	const out: Record<string, readonly string[]>[] = [];
+	const out: NonNullable<OpenApiBinding["security"]> = [];
 	for (const entry of declared) {
 		const parsed = openApiSecurityRequirement(entry);
 		if (parsed instanceof type.errors) {

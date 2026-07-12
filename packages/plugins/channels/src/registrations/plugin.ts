@@ -239,7 +239,10 @@ export function buildRegistrationsPlugin(
 				const channel = byProvider.get(params.provider ?? "");
 				// identify is guaranteed present (asserted at build), but narrow for the type.
 				if (!channel?.identify) {
-					return { status: 404, body: { ok: false, error: "unknown provider" } };
+					return {
+						status: 404,
+						body: { ok: false, error: "unknown provider" },
+					};
 				}
 				// Read the body once, then hand the same bytes to identify (may parse it) and dispatch.
 				const rawBody = await request.text();

@@ -1,4 +1,9 @@
-import { type Adapter, validationError, type Where } from "@euroclaw/contracts";
+import { type Adapter, validationError } from "@euroclaw/contracts";
+import {
+	type EntityPatch,
+	type EntityWhere,
+	entityView,
+} from "@euroclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import {
@@ -14,22 +19,15 @@ import {
 	createSkillPackageInput,
 	createSkillProposalInput,
 	createSkillReadInput,
-	type SkillAclRecord,
-	type SkillActivationRecord,
-	type SkillInstallationRecord,
 	type SkillInstallationStatusPatch,
-	type SkillPackageRecord,
-	type SkillProposalRecord,
 	type SkillProposalStatusPatch,
-	type SkillReadRecord,
 	type SkillsStore,
-	skillAclRecord,
-	skillActivationRecord,
-	skillInstallationRecord,
-	skillManifest,
-	skillPackageRecord,
-	skillProposalRecord,
-	skillReadRecord,
+	skillAclFields,
+	skillActivationFields,
+	skillInstallationFields,
+	skillPackageFields,
+	skillProposalFields,
+	skillReadFields,
 } from "../core";
 
 export type SkillsStoreOptions = {
@@ -48,18 +46,8 @@ function assertCreateSkillPackageInput(
 	if (valid instanceof type.errors) {
 		throw validationError("create skill package input invalid", valid.summary);
 	}
-	const manifest = skillManifest(valid.manifest);
-	if (manifest instanceof type.errors) {
-		throw validationError("skill package manifest invalid", manifest.summary);
-	}
-	return valid;
-}
-
-function assertSkillPackageRecord(input: unknown): SkillPackageRecord {
-	const valid = skillPackageRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("skill package record invalid", valid.summary);
-	}
+	// The manifest column is schema-first (`field.json(skillManifest)`), so the input schema above
+	// already validated `manifest` through `skillManifest` — no separate re-parse needed here.
 	return valid;
 }
 
@@ -78,30 +66,10 @@ function assertCreateSkillInstallationInput(
 	return valid;
 }
 
-function assertSkillInstallationRecord(
-	input: unknown,
-): SkillInstallationRecord {
-	const valid = skillInstallationRecord(input) as
-		| SkillInstallationRecord
-		| type.errors;
-	if (valid instanceof type.errors) {
-		throw validationError("skill installation record invalid", valid.summary);
-	}
-	return valid;
-}
-
 function assertCreateSkillAclInput(input: unknown): CreateSkillAclInput {
 	const valid = createSkillAclInput(input);
 	if (valid instanceof type.errors) {
 		throw validationError("create skill acl input invalid", valid.summary);
-	}
-	return valid;
-}
-
-function assertSkillAclRecord(input: unknown): SkillAclRecord {
-	const valid = skillAclRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("skill acl record invalid", valid.summary);
 	}
 	return valid;
 }
@@ -121,30 +89,12 @@ function assertCreateSkillActivationInput(
 	return valid;
 }
 
-function assertSkillActivationRecord(input: unknown): SkillActivationRecord {
-	const valid = skillActivationRecord(input) as
-		| SkillActivationRecord
-		| type.errors;
-	if (valid instanceof type.errors) {
-		throw validationError("skill activation record invalid", valid.summary);
-	}
-	return valid;
-}
-
 function assertCreateSkillReadInput(input: unknown): CreateSkillReadInput {
 	const valid = createSkillReadInput(input) as
 		| CreateSkillReadInput
 		| type.errors;
 	if (valid instanceof type.errors) {
 		throw validationError("create skill read input invalid", valid.summary);
-	}
-	return valid;
-}
-
-function assertSkillReadRecord(input: unknown): SkillReadRecord {
-	const valid = skillReadRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("skill read record invalid", valid.summary);
 	}
 	return valid;
 }
@@ -161,57 +111,49 @@ function assertCreateSkillProposalInput(
 	return valid;
 }
 
-function assertSkillProposalRecord(input: unknown): SkillProposalRecord {
-	const valid = skillProposalRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("skill proposal record invalid", valid.summary);
-	}
-	return valid;
-}
-
 export function createSkillsStore(
-	// The schema-aware adapter the assembly hands through the configure context; tests wrap manually.
-	db: Adapter,
+	// The entity-validating adapter the assembly hands through the configure context; entityView
+	// opens the typed lens for this plugin's own models (fails loud if one was never declared).
+	// Tests wrap manually: entityAdapter(memoryAdapter(), …).
+	adapter: Adapter,
 	options: SkillsStoreOptions = {},
 ): SkillsStore {
+	const db = entityView(adapter, {
+		skill_package: { fields: skillPackageFields },
+		skill_installation: { fields: skillInstallationFields },
+		skill_acl: { fields: skillAclFields },
+		skill_activation: { fields: skillActivationFields },
+		skill_read: { fields: skillReadFields },
+		skill_proposal: { fields: skillProposalFields },
+	});
 	const now = options.now ?? (() => new Date().toISOString());
 
 	return {
 		packages: {
 			async create(input) {
 				const valid = assertCreateSkillPackageInput(input);
-				const record = assertSkillPackageRecord({
-					id: valid.id ?? newId(),
-					packageId: valid.packageId,
-					version: valid.version,
-					digest: valid.digest,
-					manifest: valid.manifest,
-					instructions: valid.instructions,
-					source: valid.source,
-					publisher: valid.publisher,
-					signature: valid.signature,
-					createdAt: now(),
+				return db.create({
+					model: "skill_package",
+					data: { ...valid, id: valid.id ?? newId(), createdAt: now() },
 				});
-				await db.create({ model: "skill_package", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillPackageRecord>({
+				return db.findOne({
 					model: "skill_package",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			getByDigest(digest) {
-				return db.findOne<SkillPackageRecord>({
+				return db.findOne({
 					model: "skill_package",
 					where: [{ field: "digest", value: digest }],
 				});
 			},
 
 			getByPackageVersion(input) {
-				return db.findOne<SkillPackageRecord>({
+				return db.findOne({
 					model: "skill_package",
 					where: [
 						{ field: "packageId", value: input.packageId },
@@ -221,7 +163,7 @@ export function createSkillsStore(
 			},
 
 			list(input = {}) {
-				const where: Where[] = [];
+				const where: EntityWhere<typeof skillPackageFields>[] = [];
 				if (input.source !== undefined) {
 					where.push({ field: "source", value: input.source });
 				}
@@ -232,7 +174,7 @@ export function createSkillsStore(
 						connector: where.length > 0 ? "AND" : undefined,
 					});
 				}
-				return db.findMany<SkillPackageRecord>({
+				return db.findMany({
 					model: "skill_package",
 					where,
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -244,35 +186,31 @@ export function createSkillsStore(
 			async create(input) {
 				const valid = assertCreateSkillInstallationInput(input);
 				const ts = now();
-				const record = assertSkillInstallationRecord({
-					id: valid.id ?? newId(),
-					packageId: valid.packageId,
-					version: valid.version,
-					digest: valid.digest,
-					createdBy: valid.createdBy,
-					// An installation is personal to its installer until re-shared — the one scope
-					// literal in this store (mirrors claws.create).
-					scope: valid.scope ?? "personal",
-					scopeId: valid.scopeId ?? valid.createdBy,
-					status: valid.status ?? "installed",
-					trustedBy: valid.trustedBy,
-					enabledBy: valid.enabledBy,
-					createdAt: ts,
-					updatedAt: ts,
+				return db.create({
+					model: "skill_installation",
+					data: {
+						...valid,
+						id: valid.id ?? newId(),
+						// An installation is personal to its installer until re-shared — the one scope
+						// literal in this store (mirrors claws.create).
+						scope: valid.scope ?? "personal",
+						scopeId: valid.scopeId ?? valid.createdBy,
+						status: valid.status ?? "installed",
+						createdAt: ts,
+						updatedAt: ts,
+					},
 				});
-				await db.create({ model: "skill_installation", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillInstallationRecord>({
+				return db.findOne({
 					model: "skill_installation",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			listForScope(input) {
-				const where: Where[] = [
+				const where: EntityWhere<typeof skillInstallationFields>[] = [
 					{ field: "scope", value: input.scope },
 					{ field: "scopeId", value: input.scopeId, connector: "AND" },
 				];
@@ -283,7 +221,7 @@ export function createSkillsStore(
 						connector: "AND",
 					});
 				}
-				return db.findMany<SkillInstallationRecord>({
+				return db.findMany({
 					model: "skill_installation",
 					where,
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -291,43 +229,38 @@ export function createSkillsStore(
 			},
 
 			async updateStatus(id, patch: SkillInstallationStatusPatch) {
-				const update: Record<string, unknown> = { updatedAt: now() };
+				const update: EntityPatch<typeof skillInstallationFields> = {
+					updatedAt: now(),
+				};
 				if (patch.status !== undefined) update.status = patch.status;
 				if (patch.trustedBy !== undefined) update.trustedBy = patch.trustedBy;
 				if (patch.enabledBy !== undefined) update.enabledBy = patch.enabledBy;
-				const row = await db.update<SkillInstallationRecord>({
+				return db.update({
 					model: "skill_installation",
 					where: [{ field: "id", value: id }],
 					update,
 				});
-				return row ? assertSkillInstallationRecord(row) : null;
 			},
 		},
 
 		acl: {
 			async grant(input) {
 				const valid = assertCreateSkillAclInput(input);
-				const record = assertSkillAclRecord({
-					id: valid.id ?? newId(),
-					installationId: valid.installationId,
-					principalType: valid.principalType,
-					principalId: valid.principalId,
-					permission: valid.permission,
-					createdAt: now(),
+				return db.create({
+					model: "skill_acl",
+					data: { ...valid, id: valid.id ?? newId(), createdAt: now() },
 				});
-				await db.create({ model: "skill_acl", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillAclRecord>({
+				return db.findOne({
 					model: "skill_acl",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			listForInstallation(installationId) {
-				return db.findMany<SkillAclRecord>({
+				return db.findMany({
 					model: "skill_acl",
 					where: [{ field: "installationId", value: installationId }],
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -335,7 +268,7 @@ export function createSkillsStore(
 			},
 
 			listForPrincipal(input) {
-				const where: Where[] = [
+				const where: EntityWhere<typeof skillAclFields>[] = [
 					{ field: "principalType", value: input.principalType },
 				];
 				if (input.principalId !== undefined) {
@@ -352,7 +285,7 @@ export function createSkillsStore(
 						connector: "AND",
 					});
 				}
-				return db.findMany<SkillAclRecord>({
+				return db.findMany({
 					model: "skill_acl",
 					where,
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -363,31 +296,21 @@ export function createSkillsStore(
 		activations: {
 			async create(input) {
 				const valid = assertCreateSkillActivationInput(input);
-				const record = assertSkillActivationRecord({
-					id: valid.id ?? newId(),
-					clawId: valid.clawId,
-					threadId: valid.threadId,
-					runId: valid.runId,
-					installationId: valid.installationId,
-					skillId: valid.skillId,
-					digest: valid.digest,
-					activatedBy: valid.activatedBy,
-					source: valid.source,
-					createdAt: now(),
+				return db.create({
+					model: "skill_activation",
+					data: { ...valid, id: valid.id ?? newId(), createdAt: now() },
 				});
-				await db.create({ model: "skill_activation", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillActivationRecord>({
+				return db.findOne({
 					model: "skill_activation",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			listForRun(runId) {
-				return db.findMany<SkillActivationRecord>({
+				return db.findMany({
 					model: "skill_activation",
 					where: [{ field: "runId", value: runId }],
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -395,7 +318,7 @@ export function createSkillsStore(
 			},
 
 			listForThread(threadId) {
-				return db.findMany<SkillActivationRecord>({
+				return db.findMany({
 					model: "skill_activation",
 					where: [{ field: "threadId", value: threadId }],
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -406,33 +329,21 @@ export function createSkillsStore(
 		reads: {
 			async create(input) {
 				const valid = assertCreateSkillReadInput(input);
-				const record = assertSkillReadRecord({
-					id: valid.id ?? newId(),
-					clawId: valid.clawId,
-					threadId: valid.threadId,
-					runId: valid.runId,
-					installationId: valid.installationId,
-					skillId: valid.skillId,
-					packageId: valid.packageId,
-					version: valid.version,
-					digest: valid.digest,
-					readBy: valid.readBy,
-					source: valid.source,
-					createdAt: now(),
+				return db.create({
+					model: "skill_read",
+					data: { ...valid, id: valid.id ?? newId(), createdAt: now() },
 				});
-				await db.create({ model: "skill_read", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillReadRecord>({
+				return db.findOne({
 					model: "skill_read",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			listForRun(runId) {
-				return db.findMany<SkillReadRecord>({
+				return db.findMany({
 					model: "skill_read",
 					where: [{ field: "runId", value: runId }],
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -440,7 +351,7 @@ export function createSkillsStore(
 			},
 
 			listForThread(threadId) {
-				return db.findMany<SkillReadRecord>({
+				return db.findMany({
 					model: "skill_read",
 					where: [{ field: "threadId", value: threadId }],
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -452,31 +363,27 @@ export function createSkillsStore(
 			async create(input) {
 				const valid = assertCreateSkillProposalInput(input);
 				const ts = now();
-				const record = assertSkillProposalRecord({
-					id: valid.id ?? newId(),
-					scope: valid.scope,
-					scopeId: valid.scopeId,
-					targetInstallationId: valid.targetInstallationId,
-					proposerActorId: valid.proposerActorId,
-					kind: valid.kind,
-					status: valid.status ?? "pending",
-					state: valid.state,
-					createdAt: ts,
-					updatedAt: ts,
+				return db.create({
+					model: "skill_proposal",
+					data: {
+						...valid,
+						id: valid.id ?? newId(),
+						status: valid.status ?? "pending",
+						createdAt: ts,
+						updatedAt: ts,
+					},
 				});
-				await db.create({ model: "skill_proposal", data: record });
-				return record;
 			},
 
 			get(id) {
-				return db.findOne<SkillProposalRecord>({
+				return db.findOne({
 					model: "skill_proposal",
 					where: [{ field: "id", value: id }],
 				});
 			},
 
 			listForScope(input) {
-				const where: Where[] = [
+				const where: EntityWhere<typeof skillProposalFields>[] = [
 					{ field: "scope", value: input.scope },
 					{ field: "scopeId", value: input.scopeId, connector: "AND" },
 				];
@@ -487,7 +394,7 @@ export function createSkillsStore(
 						connector: "AND",
 					});
 				}
-				return db.findMany<SkillProposalRecord>({
+				return db.findMany({
 					model: "skill_proposal",
 					where,
 					sortBy: { field: "createdAt", direction: "asc" },
@@ -495,15 +402,16 @@ export function createSkillsStore(
 			},
 
 			async updateStatus(id, patch: SkillProposalStatusPatch) {
-				const update: Record<string, unknown> = { updatedAt: now() };
+				const update: EntityPatch<typeof skillProposalFields> = {
+					updatedAt: now(),
+				};
 				if (patch.status !== undefined) update.status = patch.status;
 				if (patch.state !== undefined) update.state = patch.state;
-				const row = await db.update<SkillProposalRecord>({
+				return db.update({
 					model: "skill_proposal",
 					where: [{ field: "id", value: id }],
 					update,
 				});
-				return row ? assertSkillProposalRecord(row) : null;
 			},
 		},
 	};

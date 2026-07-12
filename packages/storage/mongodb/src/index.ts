@@ -7,8 +7,13 @@
  * the mongodb driver's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where } from "@euroclaw/contracts";
-import type { Db, Document, Filter } from "mongodb";
+import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import {
+	configurationError,
+	isWhereGroup,
+	sortByList,
+} from "@euroclaw/contracts";
+import type { Db, Document, Filter, Sort } from "mongodb";
 
 const MONGO_OP = {
 	ne: "$ne",
@@ -17,6 +22,7 @@ const MONGO_OP = {
 	gt: "$gt",
 	gte: "$gte",
 	in: "$in",
+	not_in: "$nin",
 } as const;
 
 function escapeRegExp(s: string): string {
@@ -33,21 +39,57 @@ function assertUpdateKeys(update: Record<string, unknown>): void {
 	for (const key of Object.keys(update)) assertFieldName(key);
 }
 
-/** One Where clause → a Mongo filter fragment. */
-function clause(w: Where): Filter<Document> {
+/** One Where clause → a Mongo filter fragment. `mode: "insensitive"` maps to a case-insensitive
+ *  anchored regex (equality) or the `i` option on the pattern operators. */
+function clause(w: WhereClause): Filter<Document> {
 	assertFieldName(w.field);
 	const op = w.operator ?? "eq";
+	const insensitive = w.mode === "insensitive" && typeof w.value === "string";
+	const options = insensitive ? { $options: "i" } : {};
+	if (op === "contains" || op === "starts_with" || op === "ends_with") {
+		const escaped = escapeRegExp(String(w.value));
+		const pattern =
+			op === "contains"
+				? escaped
+				: op === "starts_with"
+					? `^${escaped}`
+					: `${escaped}$`;
+		return { [w.field]: { $regex: pattern, ...options } };
+	}
+	if (insensitive && op === "eq") {
+		return {
+			[w.field]: { $regex: `^${escapeRegExp(String(w.value))}$`, ...options },
+		};
+	}
+	if (insensitive && op === "ne") {
+		return {
+			[w.field]: {
+				$not: { $regex: `^${escapeRegExp(String(w.value))}$`, ...options },
+			},
+		};
+	}
 	if (op === "eq") return { [w.field]: w.value };
-	if (op === "contains")
-		return { [w.field]: { $regex: escapeRegExp(String(w.value)) } };
 	return { [w.field]: { [MONGO_OP[op]]: w.value } };
 }
 
-/** Where[] → a Mongo filter, left-folded by each clause's connector. */
+/** A where tree → a Mongo filter: left-fold by each node's connector; a group nests under its own
+ *  $and/$or. An empty group fails loud (never a silent match-all/match-none). */
 export function toFilter(where: Where[]): Filter<Document> {
 	let combined: Filter<Document> | undefined;
 	for (const w of where) {
-		const c = clause(w);
+		let c: Filter<Document>;
+		if (isWhereGroup(w)) {
+			const isAnd = "and" in w && w.and !== undefined;
+			const members = isAnd ? (w.and ?? []) : (w.or ?? []);
+			if (members.length === 0) {
+				throw configurationError("storage-mongodb: where group is empty", {});
+			}
+			c = {
+				[isAnd ? "$and" : "$or"]: members.map((member) => toFilter([member])),
+			};
+		} else {
+			c = clause(w);
+		}
 		combined =
 			combined === undefined
 				? c
@@ -80,11 +122,15 @@ export function mongoAdapter(db: Db): Adapter {
 
 		async findMany({ model, where, limit, offset, sortBy }) {
 			let cursor = col(model).find(toFilter(where ?? []));
-			if (sortBy) {
-				assertFieldName(sortBy.field);
-				cursor = cursor.sort({
-					[sortBy.field]: sortBy.direction === "desc" ? -1 : 1,
-				});
+			const sorts = sortByList(sortBy);
+			if (sorts.length > 0) {
+				const spec: Sort = {};
+				for (const sort of sorts) {
+					assertFieldName(sort.field);
+					(spec as Record<string, 1 | -1>)[sort.field] =
+						sort.direction === "desc" ? -1 : 1;
+				}
+				cursor = cursor.sort(spec);
 			}
 			if (offset) cursor = cursor.skip(offset);
 			if (limit !== undefined) cursor = cursor.limit(limit);

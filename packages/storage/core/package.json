@@ -23,6 +23,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@euroclaw/contracts": "workspace:*",
+		"arktype": "2.2.0"
 	}
 }

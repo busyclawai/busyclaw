@@ -97,13 +97,15 @@ export function mergeFactsOverlay(
 
 /**
  * Map stored registered-tool rows to action inputs. Structural row type (authz never imports
- * storage): each `governance` blob is re-validated through the contracts `toolGovernance` schema —
- * a hostile stored stamp fails LOUD here, at model-assembly time, not silently downstream.
+ * storage): `governance` arrives typed as `ToolGovernance` (the registry column is schema-first, so
+ * the store validated it on read), but authz re-validates it through the contracts `toolGovernance`
+ * schema anyway — it can't rely on any particular caller's boundary, so a hostile stamp fails LOUD
+ * here, at model-assembly time, not silently downstream.
  */
 export function actionInputsFromRegisteredTools(
 	rows: readonly {
 		address: string;
-		governance: JsonObject;
+		governance: ToolGovernance;
 		inputSchema: JsonObject;
 	}[],
 ): AuthzActionInput[] {

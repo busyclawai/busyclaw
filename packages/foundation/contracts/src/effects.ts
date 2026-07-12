@@ -32,10 +32,9 @@ export const effectFields = {
 	inputHash: field.string({ required: true, index: true, immutable: true }),
 	output: field.jsonValue({ pii: "redacted" }),
 	error: field.jsonValue({ pii: "redacted" }),
-	compensation: field.jsonObject<EffectCompensation>({
-		ark: effectCompensation,
-		optionalArk: effectCompensation.or("undefined"),
-	}),
+	// Schema-first: the column IS `effectCompensation`, so the record type and the boundary
+	// validator come from one source and cannot drift (the old `jsonObject<T>({ ark })` pair could).
+	compensation: field.json(effectCompensation),
 	compensationEffectId: field.string(),
 	leaseExpiresAt: field.string({ index: true }),
 	createdAt: field.string({ required: true, immutable: true }),

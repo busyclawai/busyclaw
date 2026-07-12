@@ -48,11 +48,13 @@ export function registerToolGates(core: Governance, tools: ToolSet): void {
 export function modelFacingTools(tools: ToolSet): ToolSet {
 	return Object.fromEntries(
 		Object.entries(tools).map(([name, tool]) => {
+			// The ToolSet type erases the `euroclaw` stamp, so widen just enough to strip it — the
+			// rest of the tool keeps its type (the outer cast only bridges fromEntries' widening).
 			const {
 				euroclaw: _euroclaw,
 				execute: _execute,
 				...rest
-			} = tool as Record<string, unknown>;
+			} = tool as ToolSet[string] & { euroclaw?: unknown };
 			return [name, rest];
 		}),
 	) as ToolSet;

@@ -151,7 +151,11 @@ function buildStore(options: SecretStoreOptions): {
 			// team rung: ResolveContext carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,
 			// but nothing threads it into secret resolution) — insert `(team, ctx.team)` here when it does.
 			if (ctx.organizationId !== undefined) {
-				const orgWide = await rows.get("organization", ctx.organizationId, name);
+				const orgWide = await rows.get(
+					"organization",
+					ctx.organizationId,
+					name,
+				);
 				if (orgWide) return materialOf(orgWide, cipher);
 			}
 			return null;

@@ -1,8 +1,8 @@
 import type { Secrets } from "@euroclaw/contracts";
 import { buildSecrets, env } from "@euroclaw/secrets";
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { type Channel, channels, channelsSchema } from "../src/index";
+import { type Channel, channels, channelsModels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
 
 // A fake claw that records binds and completes without reply text (so no Bot API egress happens).
@@ -29,7 +29,7 @@ function fakeClaw(binds: unknown[]) {
 /** Configure the plugin against a wrapped adapter and the one-door reader — what createClaw does. */
 function configured(plugin: ReturnType<typeof channels>, secrets?: Secrets) {
 	const built = plugin.configure?.({
-		adapter: schemaAdapter(memoryAdapter(), channelsSchema),
+		adapter: entityAdapter(memoryAdapter(), channelsModels),
 		secrets,
 	});
 	if (!built) throw new Error("expected configure to build the plugin");

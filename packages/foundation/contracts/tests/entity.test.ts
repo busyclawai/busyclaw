@@ -1,11 +1,12 @@
 import { type } from "arktype";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
 	approvalSchema,
 	effectRecord,
 	effectSchema,
 	entity,
 	field,
+	type JsonObject,
 	piiMappingSchema,
 } from "../src/index";
 
@@ -61,6 +62,52 @@ describe("euroclaw core — entity-derived schemas", () => {
 		// the immutable flag flows into the storage declaration the update path enforces
 		expect(thing.storage.thing.fields.id.immutable).toBe(true);
 		expect(thing.storage.thing.fields.name.immutable).toBeUndefined();
+	});
+});
+
+describe("field.json — one schema drives BOTH the record type and the validator", () => {
+	const point = type({ x: "number", y: "number" });
+	const thing = entity("thing", {
+		id: field.string({ required: true }),
+		// schema-first: typed AND validated from one source
+		point: field.json(point, { required: true }),
+		// value-rooted schema (array) — the schema dictates the root
+		tags: field.json(type("string[]")),
+		// opaque JSON stays opaque — the contrast the DSL now forces
+		bag: field.jsonObject(),
+	} as const);
+	type Rec = (typeof thing.record)["infer"];
+
+	it("infers the record type from the schema (typed json), leaving jsonObject opaque", () => {
+		expectTypeOf<Rec["point"]>().toEqualTypeOf<{ x: number; y: number }>();
+		expectTypeOf<Rec["tags"]>().toEqualTypeOf<string[] | undefined>();
+		// the untyped column is still just JsonObject — proof both forms coexist
+		expectTypeOf<Rec["bag"]>().toEqualTypeOf<JsonObject | undefined>();
+	});
+
+	it("validates the column on read/parse — a bad shape fails loud, not silently cast", () => {
+		expect(thing.record({ id: "a", point: { x: 1, y: 2 } })).not.toBeInstanceOf(
+			type.errors,
+		);
+		// missing `y` — the record schema rejects it (the read boundary is now honest)
+		expect(thing.record({ id: "a", point: { x: 1 } })).toBeInstanceOf(
+			type.errors,
+		);
+		expect(
+			thing.record({ id: "a", point: { x: 1, y: 2 }, tags: ["a", "b"] }),
+		).not.toBeInstanceOf(type.errors);
+		// a non-string[] stored value fails, even though it is valid JSON
+		expect(
+			thing.record({ id: "a", point: { x: 1, y: 2 }, tags: [1] }),
+		).toBeInstanceOf(type.errors);
+	});
+
+	it("validates the input schema too — create rejects a bad shape", () => {
+		const create = thing.schema({ omit: ["id"] });
+		expect(create({ point: { x: 1, y: 2 } })).not.toBeInstanceOf(type.errors);
+		expect(create({ point: "nope" as unknown as never })).toBeInstanceOf(
+			type.errors,
+		);
 	});
 });
 

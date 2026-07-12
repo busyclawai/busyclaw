@@ -40,9 +40,11 @@ export type SandboxFetch = (
 /**
  * A virtual filesystem tree — the wrapper's memfs NestedDirectoryJSON shape: a file is a string or
  * Uint8Array leaf, a directory is a nested object. Host-assembled (the engine builds it from a store,
- * the provider extracts it from memfs), NOT an untrusted boundary — plain TS, no arktype.
+ * the provider extracts it from memfs), NOT an untrusted boundary — plain TS, no arktype. The type
+ * is recursive so tree walkers narrow leaves naturally instead of casting.
  */
-export type VolumeTree = Record<string, unknown>;
+export type VolumeNode = string | Uint8Array | VolumeTree;
+export type VolumeTree = { [path: string]: VolumeNode };
 
 /**
  * An opaque, provider-agnostic reference a SandboxVolumeStore interprets: an S3 adapter reads it as

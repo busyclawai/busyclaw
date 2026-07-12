@@ -112,7 +112,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			},
 		});
 		await expect(authzChanges.listByOrganization("org-bad")).rejects.toThrow(
-			"authz change record invalid",
+			"authz_change record invalid",
 		);
 	});
 });

@@ -19,6 +19,49 @@ describe("@euroclaw/storage-prisma — Where → Prisma where", () => {
 		).toEqual({ name: { contains: "ab" } });
 	});
 
+	it("groups nest, new operators and mode translate, empty groups fail loud", () => {
+		expect(
+			toWhere([
+				{
+					or: [
+						{
+							and: [
+								{ field: "scope", value: "personal" },
+								{ field: "scopeId", value: "me" },
+							],
+						},
+						{
+							and: [
+								{ field: "scope", value: "organization" },
+								{ field: "scopeId", value: "org" },
+							],
+						},
+					],
+				},
+			]),
+		).toEqual({
+			OR: [
+				{ AND: [{ scope: "personal" }, { scopeId: "me" }] },
+				{ AND: [{ scope: "organization" }, { scopeId: "org" }] },
+			],
+		});
+		expect(toWhere([{ field: "s", operator: "not_in", value: ["a"] }])).toEqual(
+			{ s: { notIn: ["a"] } },
+		);
+		expect(
+			toWhere([{ field: "n", operator: "starts_with", value: "ab" }]),
+		).toEqual({ n: { startsWith: "ab" } });
+		expect(
+			toWhere([
+				{ field: "n", operator: "ends_with", value: "ab", mode: "insensitive" },
+			]),
+		).toEqual({ n: { endsWith: "ab", mode: "insensitive" } });
+		expect(toWhere([{ field: "n", value: "ab", mode: "insensitive" }])).toEqual(
+			{ n: { equals: "ab", mode: "insensitive" } },
+		);
+		expect(() => toWhere([{ or: [] }])).toThrow(/where group is empty/);
+	});
+
 	it("left-folds AND / OR by connector", () => {
 		expect(
 			toWhere([
@@ -63,10 +106,10 @@ describe("@euroclaw/storage-prisma — adapter against real Prisma (SQLite)", ()
 			model: "approval",
 			data: { id: "ap1", status: "pending" },
 		});
-		const got = await a().findOne<{ status: string }>({
+		const got = (await a().findOne({
 			model: "approval",
 			where: [{ field: "id", value: "ap1" }],
-		});
+		})) as { status: string } | null;
 		expect(got?.status).toBe("pending");
 		expect(
 			await a().findOne({
@@ -79,27 +122,27 @@ describe("@euroclaw/storage-prisma — adapter against real Prisma (SQLite)", ()
 	it("findMany with operators, sort, limit, offset", async () => {
 		for (const seq of [2, 0, 3, 1])
 			await a().create({ model: "audit", data: { seq, name: `t${seq}` } });
-		const sorted = await a().findMany<{ seq: number }>({
+		const sorted = (await a().findMany({
 			model: "audit",
 			sortBy: { field: "seq", direction: "asc" },
-		});
+		})) as { seq: number }[];
 		expect(sorted.map((r) => r.seq)).toEqual([0, 1, 2, 3]);
-		const page = await a().findMany<{ seq: number }>({
+		const page = (await a().findMany({
 			model: "audit",
 			sortBy: { field: "seq", direction: "asc" },
 			offset: 1,
 			limit: 2,
-		});
+		})) as { seq: number }[];
 		expect(page.map((r) => r.seq)).toEqual([1, 2]);
-		const gt = await a().findMany<{ seq: number }>({
+		const gt = (await a().findMany({
 			model: "audit",
 			where: [{ field: "seq", operator: "gt", value: 1 }],
-		});
+		})) as { seq: number }[];
 		expect(gt.map((r) => r.seq).sort()).toEqual([2, 3]);
-		const inSet = await a().findMany<{ seq: number }>({
+		const inSet = (await a().findMany({
 			model: "audit",
 			where: [{ field: "seq", operator: "in", value: [0, 3] }],
-		});
+		})) as { seq: number }[];
 		expect(inSet.map((r) => r.seq).sort()).toEqual([0, 3]);
 	});
 
@@ -112,29 +155,29 @@ describe("@euroclaw/storage-prisma — adapter against real Prisma (SQLite)", ()
 			model: "approval",
 			data: { id: "y", status: "pending" },
 		});
-		const updated = await a().update<{ status: string }>({
+		const updated = (await a().update({
 			model: "approval",
 			where: [{ field: "id", value: "x" }],
 			update: { status: "approved" },
-		});
+		})) as { status: string } | null;
 		expect(updated?.status).toBe("approved");
 
-		const transitioned = await a().update<{ status: string }>({
+		const transitioned = (await a().update({
 			model: "approval",
 			where: [
 				{ field: "id", value: "x" },
 				{ field: "status", value: "approved", connector: "AND" },
 			],
 			update: { status: "consumed" },
-		});
+		})) as { status: string } | null;
 		expect(transitioned?.status).toBe("consumed");
 
 		expect(
 			(
-				await a().findOne<{ status: string }>({
+				(await a().findOne({
 					model: "approval",
 					where: [{ field: "id", value: "x" }],
-				})
+				})) as { status: string } | null
 			)?.status,
 		).toBe("consumed");
 		expect(

@@ -5,9 +5,9 @@ import type {
 } from "../entity";
 import type {
 	appendMessageInputOptions,
+	bindConversationClawInputOptions,
 	bindConversationInput,
 	bindConversationResult,
-	bindConversationClawInputOptions,
 	bindConversationThreadInputOptions,
 	checkpointFields,
 	checkpointKindValues,

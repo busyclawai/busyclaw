@@ -5,6 +5,7 @@
 
 import type {
 	SandboxVolumeStore,
+	VolumeNode,
 	VolumeRef,
 	VolumeTree,
 } from "../../core/contracts";
@@ -12,11 +13,9 @@ import type {
 // Deep-clone on the way in AND out so a returned tree can never mutate the stored one, nor a caller's
 // later edits to a saved tree corrupt the store. Handles the VolumeTree leaf shapes: strings are
 // immutable (shared safely), Uint8Array is copied, nested dirs recurse. No structuredClone dependency.
-function cloneValue(value: unknown): unknown {
+function cloneValue(value: VolumeNode): VolumeNode {
 	if (value instanceof Uint8Array) return value.slice();
-	if (value !== null && typeof value === "object") {
-		return cloneTree(value as VolumeTree);
-	}
+	if (typeof value === "object") return cloneTree(value);
 	return value;
 }
 

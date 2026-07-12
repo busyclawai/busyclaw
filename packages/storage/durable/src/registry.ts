@@ -1,9 +1,10 @@
 // createRegistryStores — the tool-registry ports (SpecRegistrationStore / RegisteredToolStore /
 // FactsOverlayStore) plus the slice-6b customer-policy stores (PolicySliceStore + the append-only
-// AuthzChangeStore), backed by any @euroclaw/storage-core Adapter. JSON columns (specBlob, report,
-// inputSchema, governance, binding, groups, summary) are (de)serialized by `schemaAdapter` from the
-// entity schema — the stores never hand-roll row mapping. Every READ is parsed through the record
-// schema (untrusted boundary: a hostile row must fail loud, not cast).
+// AuthzChangeStore), backed by any @euroclaw/storage-core Adapter. Persistence goes through
+// `entityDb`: the model name drives the row types, JSON columns (specBlob, report, inputSchema,
+// governance, binding, groups, summary) are (de)serialized by the schema layer, and every row
+// crossing the adapter boundary is parsed against its record schema (untrusted boundary: a hostile
+// row must fail loud, not cast) — the stores validate INPUTS and let the entity layer own the rows.
 //
 // The authz change log is the router's version source: every authz mutation here — facts_overlay and
 // policy_slice upsert AND delete — APPENDS an authz_change (createSpecRegistry appends the
@@ -15,44 +16,34 @@
 // set (a partial update can only add, and a nulled JSON column would fail the record schema on
 // read-back) — a fresh row is the honest "the override was replaced".
 
-import type { Adapter, Where } from "@euroclaw/contracts";
+import type { Adapter } from "@euroclaw/contracts";
 import {
 	type AuthzChangeAppend,
-	type AuthzChangeRecord,
 	type AuthzChangeStore,
 	authzChangeAppend as authzChangeAppendSchema,
-	authzChangeRecord as authzChangeRecordSchema,
-	authzChangeSchema,
-	type FactsOverlayRecord,
+	authzChangeFields,
 	type FactsOverlayStore,
 	type FactsOverlayUpsert,
-	factsOverlayRecord as factsOverlayRecordSchema,
-	factsOverlaySchema,
+	factsOverlayFields,
 	factsOverlayUpsert as factsOverlayUpsertSchema,
-	type PolicySliceRecord,
 	type PolicySliceStore,
 	type PolicySliceUpsert,
-	policySliceRecord as policySliceRecordSchema,
-	policySliceSchema,
+	policySliceFields,
 	policySliceUpsert as policySliceUpsertSchema,
 	type RegisteredToolCreate,
 	type RegisteredToolPatch,
-	type RegisteredToolRecord,
 	type RegisteredToolStore,
 	registeredToolCreate as registeredToolCreateSchema,
+	registeredToolFields,
 	registeredToolPatch as registeredToolPatchSchema,
-	registeredToolRecord as registeredToolRecordSchema,
-	registeredToolSchema,
-	type SpecRegistrationRecord,
 	type SpecRegistrationStore,
 	type SpecRegistrationUpsert,
-	specRegistrationRecord as specRegistrationRecordSchema,
-	specRegistrationSchema,
+	specRegistrationFields,
 	specRegistrationUpsert as specRegistrationUpsertSchema,
 	stateError,
 	validationError,
 } from "@euroclaw/contracts";
-import { schemaAdapter } from "@euroclaw/storage-core";
+import { entityDb } from "@euroclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 
@@ -79,11 +70,16 @@ const POLICY_MODEL = "policy_slice";
 const CHANGE_MODEL = "authz_change";
 const newId = (): string => bytesToHex(randomBytes(16));
 
-const whereEq = (field: string, value: string): Where => ({ field, value });
-const andEq = (field: string, value: string): Where => ({
+// Literal-preserving Where helpers: the entity layer types each clause's field against the model's
+// own columns, so the const generic keeps "organizationId" a literal instead of widening to string.
+const whereEq = <const F extends string>(field: F, value: string) => ({
 	field,
 	value,
-	connector: "AND",
+});
+const andEq = <const F extends string>(field: F, value: string) => ({
+	field,
+	value,
+	connector: "AND" as const,
 });
 
 /** Back the three registry ports with a storage Adapter. */
@@ -92,30 +88,19 @@ export function createRegistryStores(
 	options: RegistryStoresOptions = {},
 ): RegistryStores {
 	const now = options.now ?? (() => new Date().toISOString());
-	const specDb = schemaAdapter(adapter, specRegistrationSchema);
-	const toolDb = schemaAdapter(adapter, registeredToolSchema);
-	const overlayDb = schemaAdapter(adapter, factsOverlaySchema);
-	const policyDb = schemaAdapter(adapter, policySliceSchema);
-	const changeDb = schemaAdapter(adapter, authzChangeSchema);
+	// Literal keys (not computed [SPEC_MODEL]) so the model map keeps precise per-model types.
+	const db = entityDb(adapter, {
+		spec_registration: { fields: specRegistrationFields },
+		registered_tool: { fields: registeredToolFields },
+		facts_overlay: { fields: factsOverlayFields },
+		policy_slice: { fields: policySliceFields },
+		authz_change: { fields: authzChangeFields },
+	});
 
-	function validateSpec(record: unknown): SpecRegistrationRecord {
-		const valid = specRegistrationRecordSchema(record);
-		if (valid instanceof type.errors) {
-			throw validationError("spec registration record invalid", valid.summary);
-		}
-		return valid;
-	}
 	function validateSpecInput(input: unknown): SpecRegistrationUpsert {
 		const valid = specRegistrationUpsertSchema(input);
 		if (valid instanceof type.errors) {
 			throw validationError("spec registration input invalid", valid.summary);
-		}
-		return valid;
-	}
-	function validateTool(record: unknown): RegisteredToolRecord {
-		const valid = registeredToolRecordSchema(record);
-		if (valid instanceof type.errors) {
-			throw validationError("registered tool record invalid", valid.summary);
 		}
 		return valid;
 	}
@@ -133,13 +118,6 @@ export function createRegistryStores(
 		}
 		return valid;
 	}
-	function validateOverlay(record: unknown): FactsOverlayRecord {
-		const valid = factsOverlayRecordSchema(record);
-		if (valid instanceof type.errors) {
-			throw validationError("facts overlay record invalid", valid.summary);
-		}
-		return valid;
-	}
 	function validateOverlayInput(input: unknown): FactsOverlayUpsert {
 		const valid = factsOverlayUpsertSchema(input);
 		if (valid instanceof type.errors) {
@@ -147,24 +125,10 @@ export function createRegistryStores(
 		}
 		return valid;
 	}
-	function validatePolicy(record: unknown): PolicySliceRecord {
-		const valid = policySliceRecordSchema(record);
-		if (valid instanceof type.errors) {
-			throw validationError("policy slice record invalid", valid.summary);
-		}
-		return valid;
-	}
 	function validatePolicyInput(input: unknown): PolicySliceUpsert {
 		const valid = policySliceUpsertSchema(input);
 		if (valid instanceof type.errors) {
 			throw validationError("policy slice input invalid", valid.summary);
-		}
-		return valid;
-	}
-	function validateChange(record: unknown): AuthzChangeRecord {
-		const valid = authzChangeRecordSchema(record);
-		if (valid instanceof type.errors) {
-			throw validationError("authz change record invalid", valid.summary);
 		}
 		return valid;
 	}
@@ -179,7 +143,7 @@ export function createRegistryStores(
 	const specRegistrations: SpecRegistrationStore = {
 		async upsert(input) {
 			const valid = validateSpecInput(input);
-			const existing = await specDb.findOne<SpecRegistrationRecord>({
+			const existing = await db.findOne({
 				model: SPEC_MODEL,
 				where: [
 					whereEq("organizationId", valid.organizationId),
@@ -188,10 +152,9 @@ export function createRegistryStores(
 			});
 			const stamp = now();
 			if (existing) {
-				const prev = validateSpec(existing);
-				const updated = await specDb.update<SpecRegistrationRecord>({
+				const updated = await db.update({
 					model: SPEC_MODEL,
-					where: [whereEq("id", prev.id)],
+					where: [whereEq("id", existing.id)],
 					update: {
 						specBlob: valid.specBlob,
 						contentVersion: valid.contentVersion,
@@ -202,59 +165,51 @@ export function createRegistryStores(
 				});
 				if (!updated) {
 					throw stateError("spec registration vanished mid-upsert", {
-						id: prev.id,
+						id: existing.id,
 					});
 				}
-				return validateSpec(updated);
+				return updated;
 			}
-			const record = validateSpec({
-				...valid,
-				id: newId(),
-				createdAt: stamp,
-				updatedAt: stamp,
+			return db.create({
+				model: SPEC_MODEL,
+				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 			});
-			await specDb.create({ model: SPEC_MODEL, data: record });
-			return record;
 		},
 
 		async get(organizationId, source) {
-			const row = await specDb.findOne<SpecRegistrationRecord>({
+			return db.findOne({
 				model: SPEC_MODEL,
 				where: [
 					whereEq("organizationId", organizationId),
 					andEq("source", source),
 				],
 			});
-			return row ? validateSpec(row) : null;
 		},
 
 		async listByOrganization(organizationId) {
-			const rows = await specDb.findMany<SpecRegistrationRecord>({
+			return db.findMany({
 				model: SPEC_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 			});
-			return rows.map(validateSpec);
 		},
 	};
 
 	const registeredTools: RegisteredToolStore = {
 		async listBySource(organizationId, source) {
-			const rows = await toolDb.findMany<RegisteredToolRecord>({
+			return db.findMany({
 				model: TOOL_MODEL,
 				where: [
 					whereEq("organizationId", organizationId),
 					andEq("source", source),
 				],
 			});
-			return rows.map(validateTool);
 		},
 
 		async listByOrganization(organizationId) {
-			const rows = await toolDb.findMany<RegisteredToolRecord>({
+			return db.findMany({
 				model: TOOL_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 			});
-			return rows.map(validateTool);
 		},
 
 		async create(input) {
@@ -262,45 +217,39 @@ export function createRegistryStores(
 			// spread writes exactly the present fields — absent stays absent at the adapter.
 			const valid = validateToolInput(input);
 			const stamp = now();
-			const record = validateTool({
-				...valid,
-				id: newId(),
-				createdAt: stamp,
-				updatedAt: stamp,
+			return db.create({
+				model: TOOL_MODEL,
+				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 			});
-			await toolDb.create({ model: TOOL_MODEL, data: record });
-			return record;
 		},
 
 		async update(id, patch) {
 			const valid = validateToolPatch(patch);
-			const row = await toolDb.update<RegisteredToolRecord>({
+			return db.update({
 				model: TOOL_MODEL,
 				where: [whereEq("id", id)],
 				// The store owns updatedAt — spread first so a caller-supplied one is overridden.
 				update: { ...valid, updatedAt: now() },
 			});
-			return row ? validateTool(row) : null;
 		},
 
 		async deleteById(id) {
-			await toolDb.delete({ model: TOOL_MODEL, where: [whereEq("id", id)] });
+			await db.delete({ model: TOOL_MODEL, where: [whereEq("id", id)] });
 		},
 	};
 
 	const factsOverlay: FactsOverlayStore = {
 		async listByOrganization(organizationId) {
-			const rows = await overlayDb.findMany<FactsOverlayRecord>({
+			return db.findMany({
 				model: OVERLAY_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 			});
-			return rows.map(validateOverlay);
 		},
 
 		async upsert(input) {
 			const valid = validateOverlayInput(input);
 			// Replace: drop any prior override for this (org, actionId), then write the new one whole.
-			await overlayDb.delete({
+			await db.delete({
 				model: OVERLAY_MODEL,
 				where: [
 					whereEq("organizationId", valid.organizationId),
@@ -308,13 +257,10 @@ export function createRegistryStores(
 				],
 			});
 			const stamp = now();
-			const record = validateOverlay({
-				...valid,
-				id: newId(),
-				createdAt: stamp,
-				updatedAt: stamp,
+			const record = await db.create({
+				model: OVERLAY_MODEL,
+				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 			});
-			await overlayDb.create({ model: OVERLAY_MODEL, data: record });
 			await authzChanges.append({
 				organizationId: valid.organizationId,
 				kind: "overlay_changed",
@@ -327,22 +273,21 @@ export function createRegistryStores(
 		async deleteById(id) {
 			// Read first: the append needs the org (the router keys on its count), and a no-op delete
 			// (the row is already gone) must NOT bump the count.
-			const existing = await overlayDb.findOne<FactsOverlayRecord>({
+			const existing = await db.findOne({
 				model: OVERLAY_MODEL,
 				where: [whereEq("id", id)],
 			});
-			await overlayDb.delete({
+			await db.delete({
 				model: OVERLAY_MODEL,
 				where: [whereEq("id", id)],
 			});
 			if (existing) {
-				const prev = validateOverlay(existing);
 				await authzChanges.append({
-					organizationId: prev.organizationId,
+					organizationId: existing.organizationId,
 					kind: "overlay_changed",
 					// `by` is the row's last actor — deleteById(id) carries no acting principal itself.
-					summary: { actionId: prev.actionId, deleted: true },
-					by: prev.updatedBy,
+					summary: { actionId: existing.actionId, deleted: true },
+					by: existing.updatedBy,
 				});
 			}
 		},
@@ -355,25 +300,25 @@ export function createRegistryStores(
 	const authzChanges: AuthzChangeStore = {
 		async append(input) {
 			const valid = validateChangeInput(input);
-			const record = validateChange({ ...valid, id: newId(), at: now() });
-			await changeDb.create({ model: CHANGE_MODEL, data: record });
-			return record;
+			return db.create({
+				model: CHANGE_MODEL,
+				data: { ...valid, id: newId(), at: now() },
+			});
 		},
 
 		async count(organizationId) {
-			return changeDb.count({
+			return db.count({
 				model: CHANGE_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 			});
 		},
 
 		async listByOrganization(organizationId) {
-			const rows = await changeDb.findMany<AuthzChangeRecord>({
+			return db.findMany({
 				model: CHANGE_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 				sortBy: { field: "at", direction: "asc" },
 			});
-			return rows.map(validateChange);
 		},
 	};
 
@@ -383,16 +328,15 @@ export function createRegistryStores(
 	// change log, so the router's `count`-keyed version bumps and the edit takes effect next decision.
 	const policySlices: PolicySliceStore = {
 		async listByOrganization(organizationId) {
-			const rows = await policyDb.findMany<PolicySliceRecord>({
+			return db.findMany({
 				model: POLICY_MODEL,
 				where: [whereEq("organizationId", organizationId)],
 			});
-			return rows.map(validatePolicy);
 		},
 
 		async upsert(input) {
 			const valid = validatePolicyInput(input);
-			const existing = await policyDb.findOne<PolicySliceRecord>({
+			const existing = await db.findOne({
 				model: POLICY_MODEL,
 				where: [
 					whereEq("organizationId", valid.organizationId),
@@ -400,12 +344,11 @@ export function createRegistryStores(
 				],
 			});
 			const stamp = now();
-			let record: PolicySliceRecord;
+			let record: Awaited<ReturnType<PolicySliceStore["upsert"]>>;
 			if (existing) {
-				const prev = validatePolicy(existing);
-				const updated = await policyDb.update<PolicySliceRecord>({
+				const updated = await db.update({
 					model: POLICY_MODEL,
-					where: [whereEq("id", prev.id)],
+					where: [whereEq("id", existing.id)],
 					// The store owns updatedAt — spread first so a caller-supplied one is overridden.
 					update: {
 						cedar: valid.cedar,
@@ -415,17 +358,16 @@ export function createRegistryStores(
 					},
 				});
 				if (!updated) {
-					throw stateError("policy slice vanished mid-upsert", { id: prev.id });
+					throw stateError("policy slice vanished mid-upsert", {
+						id: existing.id,
+					});
 				}
-				record = validatePolicy(updated);
+				record = updated;
 			} else {
-				record = validatePolicy({
-					...valid,
-					id: newId(),
-					createdAt: stamp,
-					updatedAt: stamp,
+				record = await db.create({
+					model: POLICY_MODEL,
+					data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 				});
-				await policyDb.create({ model: POLICY_MODEL, data: record });
 			}
 			// Append after the write succeeds — a failed write must never bump the router's version.
 			await authzChanges.append({
@@ -442,22 +384,21 @@ export function createRegistryStores(
 			// remove another org's slice by id. A delete APPENDS a change event (keeping the count
 			// monotonic) — read first for the org, skip the append when the row was absent (a no-op
 			// must not bump the count).
-			const existing = await policyDb.findOne<PolicySliceRecord>({
+			const existing = await db.findOne({
 				model: POLICY_MODEL,
 				where: [whereEq("organizationId", organizationId), andEq("id", id)],
 			});
 			if (!existing) return;
-			const prev = validatePolicy(existing);
-			await policyDb.delete({
+			await db.delete({
 				model: POLICY_MODEL,
 				where: [whereEq("organizationId", organizationId), andEq("id", id)],
 			});
 			await authzChanges.append({
-				organizationId: prev.organizationId,
+				organizationId: existing.organizationId,
 				kind: "policy_changed",
 				// `by` is the row's last actor — delete carries no acting principal itself.
-				summary: { slice: prev.name, deleted: true },
-				by: prev.updatedBy,
+				summary: { slice: existing.name, deleted: true },
+				by: existing.updatedBy,
 			});
 		},
 	};

@@ -93,8 +93,14 @@ function extractTree(vol: Volume): VolumeTree {
 		for (let i = 0; i < segments.length - 1; i++) {
 			const seg = segments[i] ?? "";
 			const next = node[seg];
-			if (next !== null && typeof next === "object") {
-				node = next as VolumeTree;
+			// A leaf (string/binary) at a directory path is replaced by a fresh dir — same rule for
+			// both leaf kinds (previously a binary leaf would have been descended into as a tree).
+			if (
+				next !== undefined &&
+				typeof next === "object" &&
+				!(next instanceof Uint8Array)
+			) {
+				node = next;
 			} else {
 				const created: VolumeTree = {};
 				node[seg] = created;

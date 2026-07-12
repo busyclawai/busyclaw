@@ -1,10 +1,10 @@
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { skillsSchema } from "../src/core/index";
+import { skillsModels } from "../src/core/index";
 import { createGovernedSkillsApi, createSkillsStore } from "../src/index";
 
 // Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => schemaAdapter(memoryAdapter(), skillsSchema);
+const db = () => entityAdapter(memoryAdapter(), skillsModels);
 
 describe("@euroclaw/skills (governed)", () => {
 	it("creates a nested skills API over a SkillsStore", async () => {

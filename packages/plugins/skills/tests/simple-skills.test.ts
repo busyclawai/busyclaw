@@ -7,9 +7,9 @@ import {
 	THREAD_ID_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 import { createGovernance, createMemoryAudit } from "@euroclaw/core";
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { skillsSchema } from "../src/core/index";
+import { skillsModels } from "../src/core/index";
 import {
 	assertSkillManifest,
 	createSimpleSkillsApi,
@@ -21,7 +21,7 @@ import {
 } from "../src/index";
 
 // Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => schemaAdapter(memoryAdapter(), skillsSchema);
+const db = () => entityAdapter(memoryAdapter(), skillsModels);
 
 describe("@euroclaw/skills (simple)", () => {
 	it("rejects unsafe manifest ids", () => {

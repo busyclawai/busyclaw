@@ -233,23 +233,24 @@ describe("@euroclaw/engine-sql", () => {
 			},
 		});
 
-		// decoded through schemaAdapter, then rejected by the run record validator (input must be an object)
+		// decoded through the entity layer, then rejected by its read validator (input must be an object)
 		await expect(store.getRun("bad-run")).rejects.toThrow(/run record invalid/);
 	});
 
 	it("rejects non-JSON SQL engine inputs before serialization", async () => {
 		const store = createSqlEngineStore(memoryAdapter());
 
+		// the json payload is parsed at the write seam, before the record ever assembles
 		await expect(
 			store.createRun({ input: { amount: Number.NaN } }),
-		).rejects.toThrow(/run record invalid/);
+		).rejects.toThrow(/run input invalid/);
 		await expect(
 			store.enqueueTask({
 				runId: "run-1",
 				kind: "turn",
 				payload: { nested: { fn: () => "nope" } } as never,
 			}),
-		).rejects.toThrow(/runtime task invalid: payload/);
+		).rejects.toThrow(/task payload invalid/);
 	});
 
 	it("worker claims a runtime.run task, executes runtime, and completes the run", async () => {

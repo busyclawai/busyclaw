@@ -3,34 +3,22 @@
 // atomic consumeOne primitive) and creates a member. `roleOf` is what a claw's
 // `roleMembership({ roleOf })` calls to resolve the actor's role on a team → which authz then reads.
 
-import type { Adapter, Where } from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/contracts";
-import { schemaAdapter } from "@euroclaw/storage-core";
+import type { Adapter } from "@euroclaw/contracts";
+import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
-import { type } from "arktype";
-import { teamInviteRecord, teamMemberRecord, teamSchema } from "./schema";
+import {
+	teamInviteEntity,
+	type teamInviteRecord,
+	teamMemberEntity,
+	type teamMemberRecord,
+} from "./schema";
 
 // The row shapes ARE the team entities' own arktype records — one source of truth shared with the
 // schema/migration declarations. Reads are untrusted boundary data (rows from any adapter back this
-// store) and feed authz role resolution, so every read is PARSED through these, never cast.
+// store) and feed authz role resolution, so every row the entity layer returns has been PARSED
+// through these, never cast.
 export type TeamMember = typeof teamMemberRecord.infer;
 export type TeamInvite = typeof teamInviteRecord.infer;
-
-function fromMemberRow(row: Record<string, unknown>): TeamMember {
-	const valid = teamMemberRecord(row);
-	if (valid instanceof type.errors) {
-		throw validationError("team member row invalid", valid.summary);
-	}
-	return valid;
-}
-
-function fromInviteRow(row: Record<string, unknown>): TeamInvite {
-	const valid = teamInviteRecord(row);
-	if (valid instanceof type.errors) {
-		throw validationError("team invite row invalid", valid.summary);
-	}
-	return valid;
-}
 
 export type TeamStore = {
 	/** Open a pending invite to a team, with a role. */
@@ -53,15 +41,20 @@ export type TeamStoreOptions = { now?: () => string };
 
 const newId = (): string => bytesToHex(randomBytes(16));
 
+type MemberWhere = EntityWhere<(typeof teamMemberEntity)["fields"]>;
+
 export function createTeamStore(
 	adapter: Adapter,
 	options: TeamStoreOptions = {},
 ): TeamStore {
 	const now = options.now ?? (() => new Date().toISOString());
-	// Persist through the schema-aware adapter like every sibling store — logical names, decode
-	// normalization (SQL NULL → absent), immutable enforcement.
-	const db = schemaAdapter(adapter, teamSchema);
-	const memberWhere = (team: string, userId: string): Where[] => [
+	// Persist through the entity-validating adapter like every sibling store — logical names, decode
+	// normalization (SQL NULL → absent), immutable enforcement, rows parsed on every read.
+	const db = entityDb(adapter, {
+		team_member: teamMemberEntity,
+		team_invite: teamInviteEntity,
+	});
+	const memberWhere = (team: string, userId: string): MemberWhere[] => [
 		{ field: "team", value: team },
 		{ field: "userId", value: userId, connector: "AND" },
 	];
@@ -81,12 +74,11 @@ export function createTeamStore(
 
 		async accept(inviteId, userId) {
 			// Single-use: atomically consume the invite, then create the membership.
-			const inviteRow = await db.consumeOne<Record<string, unknown>>({
+			const invite = await db.consumeOne({
 				model: "team_invite",
 				where: [{ field: "id", value: inviteId }],
 			});
-			if (!inviteRow) return null;
-			const invite = fromInviteRow(inviteRow);
+			if (!invite) return null;
 			const member: TeamMember = {
 				id: newId(),
 				team: invite.team,
@@ -99,19 +91,18 @@ export function createTeamStore(
 		},
 
 		async members(team) {
-			const rows = await db.findMany<Record<string, unknown>>({
+			return db.findMany({
 				model: "team_member",
 				where: [{ field: "team", value: team }],
 			});
-			return rows.map(fromMemberRow);
 		},
 
 		async roleOf(team, userId) {
-			const row = await db.findOne<Record<string, unknown>>({
+			const row = await db.findOne({
 				model: "team_member",
 				where: memberWhere(team, userId),
 			});
-			return row ? fromMemberRow(row).role : null;
+			return row ? row.role : null;
 		},
 
 		async remove(team, userId) {

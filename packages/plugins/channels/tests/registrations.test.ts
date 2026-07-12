@@ -1,4 +1,4 @@
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	type Channel,
@@ -6,12 +6,12 @@ import {
 	channels,
 	endpointId,
 } from "../src/index";
-import { channelRegistrationsSchema } from "../src/registrations/schema";
+import { channelRegistrationsModels } from "../src/registrations/schema";
 import { createChannelRegistrationsStore } from "../src/registrations/store";
 
 // Stores and the configure context take the schema-aware adapter the assembly provides in
 // production; tests wrap manually.
-const db = () => schemaAdapter(memoryAdapter(), channelRegistrationsSchema);
+const db = () => entityAdapter(memoryAdapter(), channelRegistrationsModels);
 
 const now = () => "2026-01-01T00:00:00.000Z";
 

@@ -74,7 +74,7 @@ function suite(
 				},
 			});
 			await expect(store.get("bad")).rejects.toThrow(
-				"run checkpoint record invalid",
+				"run_checkpoint record invalid",
 			);
 		});
 	});

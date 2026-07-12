@@ -20,6 +20,7 @@ export type {
 } from "./authz/change-log";
 export {
 	authzChangeAppend,
+	authzChangeFields,
 	authzChangeRecord,
 	authzChangeSchema,
 } from "./authz/change-log";
@@ -44,6 +45,7 @@ export type {
 	PolicySliceUpsert,
 } from "./authz/policy-slice";
 export {
+	policySliceFields,
 	policySliceRecord,
 	policySliceSchema,
 	policySliceUpsert,
@@ -356,8 +358,11 @@ export type {
 	SortBy,
 	TableSchema,
 	Where,
+	WhereClause,
+	WhereGroup,
 	WhereOperator,
 } from "./storage";
+export { isWhereGroup, sortByList } from "./storage";
 // ── tool registry: durable rows for uploaded tool surfaces (impls in storage/runtime) ──
 export type {
 	FactsOverlayRecord,
@@ -369,14 +374,18 @@ export type {
 	SpecRegistrationUpsert,
 } from "./tools/registry";
 export {
+	factsOverlayFields,
 	factsOverlayRecord,
 	factsOverlaySchema,
 	factsOverlayUpsert,
 	registeredToolCreate,
+	registeredToolFields,
 	registeredToolPatch,
 	registeredToolRecord,
 	registeredToolSchema,
+	specRegistrationFields,
 	specRegistrationRecord,
+	specRegistrationReport,
 	specRegistrationSchema,
 	specRegistrationUpsert,
 } from "./tools/registry";
@@ -395,9 +404,10 @@ export type {
 	SecretProvider,
 	Secrets,
 } from "./tools/secrets";
-// ── tool sources: what every extractor produces (types only; impls in @euroclaw/runtime) ──
+// ── tool sources: what every extractor produces (impls in @euroclaw/runtime) ──
 export type {
 	SourceDiagnostic,
 	SourceExtraction,
 	SourceTool,
 } from "./tools/source";
+export { sourceDiagnostic } from "./tools/source";

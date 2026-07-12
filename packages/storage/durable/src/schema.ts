@@ -13,7 +13,7 @@ import {
 	runCheckpointSchema,
 } from "@euroclaw/contracts";
 
-const teamMemberEntity = entity("team_member", {
+export const teamMemberEntity = entity("team_member", {
 	id: field.string({ required: true, unique: true }),
 	team: field.string({ required: true, index: true }),
 	userId: field.string({ required: true, index: true }),
@@ -21,7 +21,7 @@ const teamMemberEntity = entity("team_member", {
 	joinedAt: field.string({ required: true }),
 } as const);
 
-const teamInviteEntity = entity("team_invite", {
+export const teamInviteEntity = entity("team_invite", {
 	id: field.string({ required: true, unique: true }),
 	team: field.string({ required: true, index: true }),
 	email: field.string({ required: true, pii: "possible" }),

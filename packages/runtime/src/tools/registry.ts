@@ -184,10 +184,9 @@ export function createSpecRegistry(
 					binding: tool.binding,
 				});
 				perRowVersions.push(version);
-				const governance = asJsonObject(
-					tool.governance,
-					"registered tool governance",
-				);
+				// governance flows through TYPED — the registry column is schema-first
+				// (`field.json(toolGovernance)`), so the store's input schema validates it; only the
+				// format-opaque binding still needs the explicit JSON-safety gate before storage.
 				const binding = asJsonObject(tool.binding, "registered tool binding");
 				const prior = priorByAddress.get(address);
 				// Flat literals — the store's entity schemas drop undefined-valued keys, so an
@@ -200,7 +199,7 @@ export function createSpecRegistry(
 						address,
 						description: tool.description,
 						inputSchema: tool.inputSchema,
-						governance,
+						governance: tool.governance,
 						binding,
 						contentVersion: version,
 					});
@@ -211,7 +210,7 @@ export function createSpecRegistry(
 						address,
 						description: tool.description,
 						inputSchema: tool.inputSchema,
-						governance,
+						governance: tool.governance,
 						binding,
 						contentVersion: version,
 					});
@@ -243,7 +242,9 @@ export function createSpecRegistry(
 				source: input.source,
 				specBlob: input.document,
 				contentVersion,
-				report: asJsonObject(report, "spec registration report"),
+				// Typed through — the report column is schema-first (`field.json(specRegistrationReport)`),
+				// so the store's input schema validates the shape; no JSON-laundering needed.
+				report,
 				registeredBy: input.registeredBy,
 			});
 			// A registration is an authz-state change — append so the org router's count-keyed bundle

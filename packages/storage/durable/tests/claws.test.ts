@@ -42,10 +42,10 @@ describe("createClawsStore", () => {
 		expect(await claws.claws.get(claw.id)).toEqual(claw);
 		expect(await claws.threads.get(thread.id)).toEqual(thread);
 
-		const rawClaw = await adapter.findOne<Record<string, unknown>>({
+		const rawClaw = (await adapter.findOne({
 			model: "claw",
 			where: [{ field: "id", value: claw.id }],
-		});
+		})) as Record<string, unknown> | null;
 		expect(rawClaw?.context).toBe(JSON.stringify({ locale: "en" }));
 	});
 
@@ -72,10 +72,10 @@ describe("createClawsStore", () => {
 		// …round-trips through get…
 		expect(await claws.claws.get("claw-x")).toMatchObject({ priority: 5 });
 		// …and is a real persisted column, not dropped on the floor.
-		const raw = await adapter.findOne<Record<string, unknown>>({
+		const raw = (await adapter.findOne({
 			model: "claw",
 			where: [{ field: "id", value: "claw-x" }],
-		});
+		})) as Record<string, unknown> | null;
 		expect(raw?.priority).toBe(5);
 	});
 

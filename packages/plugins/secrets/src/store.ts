@@ -6,16 +6,15 @@ import {
 	errorMessage,
 	stateError,
 	validationError,
-	type Where,
 } from "@euroclaw/contracts";
+import { type EntityWhere, entityView } from "@euroclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import type { SecretCipher } from "./crypto";
 import {
 	setStoredSecretInput,
 	type setStoredSecretInputOptions,
-	type storedSecretFields,
-	storedSecretRecord,
+	storedSecretFields,
 } from "./schema";
 
 // Types projected from the one entity (the schema module is this store's contract): the record and
@@ -106,33 +105,28 @@ function assertSetInput(input: unknown): SetStoredSecretInput {
 	return valid;
 }
 
-function assertStoredSecretRecord(input: unknown): StoredSecretRecord {
-	const valid = storedSecretRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("stored secret record invalid", valid.summary);
-	}
-	return valid;
-}
+type SecretWhere = EntityWhere<typeof storedSecretFields>;
 
-const whereEq = (field: string, value: string): Where => ({ field, value });
-const andEq = (field: string, value: string): Where => ({
-	field,
-	value,
-	connector: "AND",
-});
-
-const keyWhere = (scope: string, scopeId: string, name: string): Where[] => [
-	whereEq("scope", scope),
-	andEq("scopeId", scopeId),
-	andEq("name", name),
+const keyWhere = (
+	scope: string,
+	scopeId: string,
+	name: string,
+): SecretWhere[] => [
+	{ field: "scope", value: scope },
+	{ field: "scopeId", value: scopeId, connector: "AND" },
+	{ field: "name", value: name, connector: "AND" },
 ];
 
-/** Back the StoredSecretsStore port with a storage Adapter (schema-aware — the assembly hands one
- *  through the configure context; tests wrap manually). */
+/** Back the StoredSecretsStore port with the entity-validating adapter the assembly hands through
+ *  the configure context (entityView opens the typed lens for this plugin's own model — every row
+ *  crossing the adapter boundary is parsed against the record schema; tests wrap manually). */
 export function createStoredSecretsStore(
-	db: Adapter,
+	adapter: Adapter,
 	options: StoredSecretsStoreOptions,
 ): StoredSecretsStore {
+	const db = entityView(adapter, {
+		stored_secret: { fields: storedSecretFields },
+	});
 	const { cipher } = options;
 	const now = options.now ?? (() => new Date().toISOString());
 
@@ -142,7 +136,7 @@ export function createStoredSecretsStore(
 		name: string,
 	): Promise<StoredSecretRecord | null> =>
 		guarded(() =>
-			db.findOne<StoredSecretRecord>({
+			db.findOne({
 				model: MODEL,
 				where: keyWhere(scope, scopeId, name),
 			}),
@@ -169,40 +163,43 @@ export function createStoredSecretsStore(
 			const existing = await findByKey(scope, scopeId, valid.name);
 			const stamp = now();
 			if (existing) {
-				const prev = assertStoredSecretRecord(existing);
 				const updated = await guarded(() =>
-					db.update<StoredSecretRecord>({
+					db.update({
 						model: MODEL,
-						where: [whereEq("id", prev.id)],
+						where: [{ field: "id", value: existing.id }],
 						// The store owns updatedAt; the value is the only column a re-set rotates.
 						update: { value: sealed, updatedAt: stamp },
 					}),
 				);
 				if (!updated) {
-					throw stateError("stored secret vanished mid-set", { id: prev.id });
+					throw stateError("stored secret vanished mid-set", {
+						id: existing.id,
+					});
 				}
-				return assertStoredSecretRecord(updated);
+				return updated;
 			}
-			const record = assertStoredSecretRecord({
-				id: newId(),
-				createdBy: valid.createdBy,
-				scope,
-				scopeId,
-				name: valid.name,
-				kind: "value",
-				value: sealed,
-				createdAt: stamp,
-				updatedAt: stamp,
-			});
-			await guarded(() => db.create({ model: MODEL, data: record }));
-			return record;
+			return guarded(() =>
+				db.create({
+					model: MODEL,
+					data: {
+						id: newId(),
+						createdBy: valid.createdBy,
+						scope,
+						scopeId,
+						name: valid.name,
+						kind: "value",
+						value: sealed,
+						createdAt: stamp,
+						updatedAt: stamp,
+					},
+				}),
+			);
 		},
 
 		async get(scope, scopeId, name) {
-			const row = await findByKey(scope, scopeId, name);
-			// Every READ is parsed through the record schema (untrusted boundary: a hostile row fails
-			// loud, not casts).
-			return row ? assertStoredSecretRecord(row) : null;
+			// Every READ is parsed through the record schema inside the entity layer (untrusted
+			// boundary: a hostile row fails loud, never a cast).
+			return findByKey(scope, scopeId, name);
 		},
 	};
 }

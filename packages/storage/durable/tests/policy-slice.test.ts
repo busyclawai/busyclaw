@@ -99,7 +99,7 @@ describe("createRegistryStores — policy_slice", () => {
 			},
 		});
 		await expect(policySlices.listByOrganization("org-bad")).rejects.toThrow(
-			"policy slice record invalid",
+			"policy_slice record invalid",
 		);
 	});
 
@@ -120,7 +120,7 @@ describe("createRegistryStores — policy_slice", () => {
 			},
 		});
 		await expect(policySlices.listByOrganization("org-bad")).rejects.toThrow(
-			"policy slice record invalid",
+			"policy_slice record invalid",
 		);
 	});
 });

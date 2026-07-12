@@ -13,9 +13,16 @@
  * Kysely's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where, WhereOperator } from "@euroclaw/contracts";
+import type {
+	Adapter,
+	Where,
+	WhereClause,
+	WhereOperator,
+} from "@euroclaw/contracts";
 import {
 	configurationError,
+	isWhereGroup,
+	sortByList,
 	unsupportedOperationError,
 } from "@euroclaw/contracts";
 import {
@@ -29,7 +36,13 @@ import {
 	sql,
 } from "kysely";
 
-const SQL_OP: Record<Exclude<WhereOperator, "in" | "contains">, string> = {
+const SQL_OP: Record<
+	Exclude<
+		WhereOperator,
+		"in" | "not_in" | "contains" | "starts_with" | "ends_with"
+	>,
+	string
+> = {
 	eq: "=",
 	ne: "!=",
 	lt: "<",
@@ -38,29 +51,73 @@ const SQL_OP: Record<Exclude<WhereOperator, "in" | "contains">, string> = {
 	gte: ">=",
 };
 
-/** A raw SQL boolean expression from Where[], left-folded by each clause's connector. */
+/** Escape LIKE wildcards in a user value; every LIKE below declares ESCAPE '\\' (sqlite has no
+ *  default escape character, so it must be explicit to be portable). */
+const escapeLike = (value: string): string =>
+	value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
+/** One clause → a raw SQL boolean expression. `mode: "insensitive"` folds both sides through
+ *  lower() (portable across sqlite/postgres; non-ASCII semantics follow the database collation). */
+function clauseExpr(w: WhereClause): Expression<boolean> {
+	const col = sql.ref(w.field);
+	const op = w.operator ?? "eq";
+	const insensitive = w.mode === "insensitive" && typeof w.value === "string";
+	if (w.value === null) {
+		if (op === "eq") return sql<boolean>`${col} is null`;
+		if (op === "ne") return sql<boolean>`${col} is not null`;
+		throw configurationError(
+			`@euroclaw/storage-kysely: where operator "${op}" cannot compare null`,
+			{ field: w.field, operator: op },
+		);
+	}
+	if (op === "in" || op === "not_in") {
+		const values = w.value as unknown[];
+		// Fixed empty-list semantics: `in []` matches nothing, `not_in []` matches everything —
+		// SQL's `IN ()` is a syntax error, so emit the constant.
+		if (values.length === 0)
+			return op === "in" ? sql<boolean>`1 = 0` : sql<boolean>`1 = 1`;
+		const list = values.map((v) => sql`${v}`);
+		return op === "in"
+			? sql<boolean>`${col} in (${sql.join(list)})`
+			: sql<boolean>`${col} not in (${sql.join(list)})`;
+	}
+	if (op === "contains" || op === "starts_with" || op === "ends_with") {
+		const escaped = escapeLike(String(w.value));
+		const pattern =
+			op === "contains"
+				? `%${escaped}%`
+				: op === "starts_with"
+					? `${escaped}%`
+					: `%${escaped}`;
+		return insensitive
+			? sql<boolean>`lower(${col}) like lower(${pattern}) escape '\\'`
+			: sql<boolean>`${col} like ${pattern} escape '\\'`;
+	}
+	if (insensitive && (op === "eq" || op === "ne")) {
+		return sql<boolean>`lower(${col}) ${sql.raw(SQL_OP[op])} lower(${w.value})`;
+	}
+	return sql<boolean>`${col} ${sql.raw(SQL_OP[op])} ${w.value}`;
+}
+
+/** A raw SQL boolean expression from a where tree: left-fold by each node's connector; a group
+ *  parenthesizes its members under its own combinator. An empty group fails loud. */
 function whereExpr(where: Where[]): Expression<boolean> | undefined {
 	let combined: Expression<boolean> | undefined;
 	for (const w of where) {
-		const col = sql.ref(w.field);
-		const op = w.operator ?? "eq";
 		let clause: Expression<boolean>;
-		if (w.value === null) {
-			if (op === "eq") clause = sql<boolean>`${col} is null`;
-			else if (op === "ne") clause = sql<boolean>`${col} is not null`;
-			else {
+		if (isWhereGroup(w)) {
+			const members = "and" in w && w.and !== undefined ? w.and : (w.or ?? []);
+			const joiner = "and" in w && w.and !== undefined ? " and " : " or ";
+			const inner = members.map((member) => whereExpr([member]));
+			if (inner.length === 0 || inner.some((e) => e === undefined)) {
 				throw configurationError(
-					`@euroclaw/storage-kysely: where operator "${op}" cannot compare null`,
-					{ field: w.field, operator: op },
+					"@euroclaw/storage-kysely: where group is empty",
+					{},
 				);
 			}
-		} else if (op === "in") {
-			const list = (w.value as unknown[]).map((v) => sql`${v}`);
-			clause = sql<boolean>`${col} in (${sql.join(list)})`;
-		} else if (op === "contains") {
-			clause = sql<boolean>`${col} like ${`%${w.value}%`}`;
+			clause = sql<boolean>`(${sql.join(inner as Expression<boolean>[], sql.raw(joiner))})`;
 		} else {
-			clause = sql<boolean>`${col} ${sql.raw(SQL_OP[op])} ${w.value}`;
+			clause = clauseExpr(w);
 		}
 		combined =
 			combined === undefined
@@ -176,7 +233,8 @@ export function kyselyAdapter(database: KyselyDatabase): Adapter {
 			let q = db.selectFrom(model).selectAll();
 			const e = whereExpr(where ?? []);
 			if (e !== undefined) q = q.where(e);
-			if (sortBy) q = q.orderBy(sortBy.field, sortBy.direction);
+			for (const sort of sortByList(sortBy))
+				q = q.orderBy(sort.field, sort.direction);
 			if (limit !== undefined) q = q.limit(limit);
 			if (offset) q = q.offset(offset);
 			return (await q.execute()) as never;

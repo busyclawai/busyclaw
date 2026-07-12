@@ -1,5 +1,11 @@
 import type { SchemaDeclaration } from "@euroclaw/contracts";
-import { type EntityField, entity, field } from "@euroclaw/contracts";
+import {
+	bindConversationClawInput,
+	bindConversationThreadInput,
+	type EntityField,
+	entity,
+	field,
+} from "@euroclaw/contracts";
 
 // A channel registration is a USER-registered bot — the ssoProvider analog: registered at runtime,
 // credentials stored in the row and read back at use, with the organization it belongs to as optional row
@@ -33,9 +39,11 @@ export const channelRegistrationFields = {
 	// Whose bot this is — the organizationId analog. Merged into the claw bind defaults at dispatch.
 	organizationId: field.string({ index: true }),
 	// Bind defaults for conversations on this registration (sans organization — organizationId above wins).
-	// Validated against the bindConversation claw/thread inputs when the context is assembled.
-	claw: field.jsonObject({ pii: "possible" }),
-	thread: field.jsonObject({ pii: "possible" }),
+	// Schema-first: the bindConversation claw/thread inputs are all-optional, so they hold at rest —
+	// a bad default fails at REGISTER time (and on read), not first at dispatch. The context assembly
+	// still re-validates the MERGED value (the org scope lands on top of these defaults).
+	claw: field.json(bindConversationClawInput, { pii: "possible" }),
+	thread: field.json(bindConversationThreadInput, { pii: "possible" }),
 	// Webhook state — the last error (cleared on receipt) and the last time traffic arrived.
 	lastError: field.jsonValue({ pii: "redacted" }),
 	lastReceivedAt: field.string({ index: true }),

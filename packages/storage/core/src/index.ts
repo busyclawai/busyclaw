@@ -12,7 +12,12 @@
  * Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where } from "@euroclaw/contracts";
+import type { Adapter, SortBy, Where, WhereClause } from "@euroclaw/contracts";
+import {
+	configurationError,
+	isWhereGroup,
+	sortByList,
+} from "@euroclaw/contracts";
 
 // The storage PROTOCOL (Adapter, Where, the declarative schema format) lives in
 // @euroclaw/contracts/storage — plugins type against it without depending on this package. This
@@ -25,19 +30,48 @@ export type {
 	SortBy,
 	TableSchema,
 	Where,
+	WhereClause,
+	WhereGroup,
 	WhereOperator,
 } from "@euroclaw/contracts";
+export { isWhereGroup, sortByList } from "@euroclaw/contracts";
+export {
+	type EntityDb,
+	type EntityModelMap,
+	type EntityPatch,
+	type EntityReadRecord,
+	type EntitySortBy,
+	type EntityValidatedAdapter,
+	type EntityWhere,
+	type EntityWhereClause,
+	entityAdapter,
+	entityDb,
+	entityView,
+} from "./entity-adapter";
 export { type SchemaAdapterOptions, schemaAdapter } from "./schema-adapter";
 
 // ── The memory adapter ───────────────────────────────────────────────────────────────────────
 
-function matchOne(row: Record<string, unknown>, w: Where): boolean {
+/** Fold a string comparison through the clause's case mode. */
+function stringsOf(
+	v: unknown,
+	clause: WhereClause,
+): { row: string; value: string } | undefined {
+	if (typeof v !== "string" || typeof clause.value !== "string")
+		return undefined;
+	return clause.mode === "insensitive"
+		? { row: v.toLowerCase(), value: clause.value.toLowerCase() }
+		: { row: v, value: clause.value };
+}
+
+function matchOne(row: Record<string, unknown>, w: WhereClause): boolean {
 	const v = row[w.field];
+	const s = stringsOf(v, w);
 	switch (w.operator ?? "eq") {
 		case "eq":
-			return v === w.value;
+			return s ? s.row === s.value : v === w.value;
 		case "ne":
-			return v !== w.value;
+			return s ? s.row !== s.value : v !== w.value;
 		case "lt":
 			return (v as number) < (w.value as number);
 		case "lte":
@@ -48,14 +82,24 @@ function matchOne(row: Record<string, unknown>, w: Where): boolean {
 			return (v as number) >= (w.value as number);
 		case "in":
 			return Array.isArray(w.value) && (w.value as unknown[]).includes(v);
+		case "not_in":
+			return Array.isArray(w.value) && !(w.value as unknown[]).includes(v);
 		case "contains":
-			return typeof v === "string" && v.includes(String(w.value));
+			return s !== undefined && s.row.includes(s.value);
+		case "starts_with":
+			return s !== undefined && s.row.startsWith(s.value);
+		case "ends_with":
+			return s !== undefined && s.row.endsWith(s.value);
 		default:
 			return false;
 	}
 }
 
-/** Apply a Where[] to a row (left-fold by each clause's connector). Empty → matches all. */
+/**
+ * Apply a where tree to a row: left-fold by each node's connector; a group recurses with its own
+ * combinator (its members left-fold as all-AND or all-OR). Empty `where` matches all rows; an
+ * empty GROUP is a caller bug and fails loud (never a silent match-all/match-none).
+ */
 export function matchWhere(
 	row: Record<string, unknown>,
 	where: Where[],
@@ -63,7 +107,19 @@ export function matchWhere(
 	let result = true;
 	let seen = false;
 	for (const w of where) {
-		const m = matchOne(row, w);
+		let m: boolean;
+		if (isWhereGroup(w)) {
+			const members = "and" in w && w.and !== undefined ? w.and : w.or;
+			if (!members || members.length === 0) {
+				throw configurationError("storage where group is empty", {});
+			}
+			m =
+				"and" in w && w.and !== undefined
+					? members.every((member) => matchWhere(row, [member]))
+					: members.some((member) => matchWhere(row, [member]));
+		} else {
+			m = matchOne(row, w);
+		}
 		result = !seen ? m : w.connector === "OR" ? result || m : result && m;
 		seen = true;
 	}
@@ -83,7 +139,9 @@ export function memoryAdapter(): Adapter {
 			}
 			return t;
 		};
-		const out = <T>(row: Record<string, unknown>): T => ({ ...row }) as T;
+		const out = (row: Record<string, unknown>): Record<string, unknown> => ({
+			...row,
+		});
 
 		return {
 			id: "memory",
@@ -98,13 +156,17 @@ export function memoryAdapter(): Adapter {
 			},
 			async findMany({ model, where, limit, offset, sortBy }) {
 				let rows = table(model).filter((r) => matchWhere(r, where ?? []));
-				if (sortBy) {
-					const { field, direction } = sortBy;
+				const sorts: SortBy[] = sortByList(sortBy);
+				if (sorts.length > 0) {
+					// Multi-column: compare by each sort in order, first non-tie wins.
 					rows = [...rows].sort((a, b) => {
-						const av = a[field] as number;
-						const bv = b[field] as number;
-						const cmp = av < bv ? -1 : av > bv ? 1 : 0;
-						return direction === "desc" ? -cmp : cmp;
+						for (const { field, direction } of sorts) {
+							const av = a[field] as number;
+							const bv = b[field] as number;
+							const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+							if (cmp !== 0) return direction === "desc" ? -cmp : cmp;
+						}
+						return 0;
 					});
 				}
 				if (offset) rows = rows.slice(offset);

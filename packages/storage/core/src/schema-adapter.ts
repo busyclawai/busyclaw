@@ -1,6 +1,9 @@
+import type { WhereClause } from "@euroclaw/contracts";
 import {
 	configurationError,
 	errorMessage,
+	isWhereGroup,
+	sortByList,
 	validationError,
 } from "@euroclaw/contracts";
 import type {
@@ -207,17 +210,26 @@ function transformWhere(input: {
 }): Where[] | undefined {
 	if (!input.where || !input.model) return input.where;
 	const model = input.model;
-	return input.where.map((clause) => {
+	const transformNode = (node: Where): Where => {
+		// Groups recurse — the field mapping/encoding applies at the leaves.
+		if (isWhereGroup(node)) {
+			return "and" in node && node.and !== undefined
+				? { ...node, and: node.and.map(transformNode) }
+				: { ...node, or: (node.or ?? []).map(transformNode) };
+		}
 		const mapping = ensureKnownField({
 			action: input.action,
-			field: clause.field,
+			field: node.field,
 			model,
 			strict: input.strict,
 		});
-		if (!mapping) return clause;
-		let value = clause.value;
+		if (!mapping) return node;
+		let value = node.value;
 		if (mapping.meta.type === "json" && input.jsonMode === "string") {
-			if (Array.isArray(value) && clause.operator === "in") {
+			if (
+				Array.isArray(value) &&
+				(node.operator === "in" || node.operator === "not_in")
+			) {
 				value = value.map((item) =>
 					encodeFieldValue({
 						field: mapping,
@@ -232,26 +244,32 @@ function transformWhere(input: {
 					jsonMode: input.jsonMode,
 					model: model.logical,
 					value,
-				}) as Where["value"];
+				}) as WhereClause["value"];
 			}
 		}
-		return { ...clause, field: mapping.physical, value };
-	});
+		return { ...node, field: mapping.physical, value };
+	};
+	return input.where.map(transformNode);
 }
 
 function transformSortBy(input: {
 	model: ModelMapping | undefined;
-	sortBy: SortBy | undefined;
+	sortBy: SortBy | readonly SortBy[] | undefined;
 	strict: boolean;
-}): SortBy | undefined {
-	if (!input.sortBy || !input.model) return input.sortBy;
-	const mapping = ensureKnownField({
-		action: "sortBy",
-		field: input.sortBy.field,
-		model: input.model,
-		strict: input.strict,
+}): SortBy[] | undefined {
+	if (!input.sortBy) return undefined;
+	const model = input.model;
+	const list = sortByList(input.sortBy);
+	if (!model) return list;
+	return list.map((sort) => {
+		const mapping = ensureKnownField({
+			action: "sortBy",
+			field: sort.field,
+			model,
+			strict: input.strict,
+		});
+		return mapping ? { ...sort, field: mapping.physical } : sort;
 	});
-	return mapping ? { ...input.sortBy, field: mapping.physical } : input.sortBy;
 }
 
 function transformCreateData(input: {
@@ -371,6 +389,17 @@ function decodeRow(input: {
 	return out;
 }
 
+/** The port's reads return `unknown` (honest — the DB holds whatever it holds); a row must be an
+ *  object before it can be decoded. A non-object here is an adapter bug — fail loud. */
+function asRow(value: unknown): Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		throw configurationError("storage adapter returned a non-object row", {
+			received: typeof value,
+		});
+	}
+	return value as Record<string, unknown>;
+}
+
 /**
  * Wrap a physical Adapter with schema-aware model/field mapping, JSON encoding, defaults, and
  * on-update values. Stores keep using logical euroclaw names; the wrapped adapter talks to the
@@ -393,23 +422,25 @@ export function schemaAdapter(
 
 		async create({ model, data, select }) {
 			const mapped = modelFor(model);
-			const row = await adapter.create<Record<string, unknown>>({
-				data: transformCreateData({ data, jsonMode, model: mapped, strict }),
-				model: mapped?.physical ?? model,
-				select: transformSelect({ model: mapped, select, strict }),
-			});
+			const row = asRow(
+				await adapter.create({
+					data: transformCreateData({ data, jsonMode, model: mapped, strict }),
+					model: mapped?.physical ?? model,
+					select: transformSelect({ model: mapped, select, strict }),
+				}),
+			);
 			return decodeRow({
 				jsonMode,
 				model: mapped,
 				row,
 				select,
 				strict,
-			}) as never;
+			});
 		},
 
 		async findOne({ model, where, select }) {
 			const mapped = modelFor(model);
-			const row = await adapter.findOne<Record<string, unknown>>({
+			const row = await adapter.findOne({
 				model: mapped?.physical ?? model,
 				select: transformSelect({ model: mapped, select, strict }),
 				where:
@@ -421,20 +452,20 @@ export function schemaAdapter(
 						where,
 					}) ?? [],
 			});
-			return row
-				? (decodeRow({
+			return row == null
+				? null
+				: decodeRow({
 						jsonMode,
 						model: mapped,
-						row,
+						row: asRow(row),
 						select,
 						strict,
-					}) as never)
-				: null;
+					});
 		},
 
 		async findMany({ model, where, limit, offset, sortBy, select }) {
 			const mapped = modelFor(model);
-			const rows = await adapter.findMany<Record<string, unknown>>({
+			const rows = await adapter.findMany({
 				limit,
 				model: mapped?.physical ?? model,
 				offset,
@@ -449,8 +480,8 @@ export function schemaAdapter(
 				}),
 			});
 			return rows.map((row) =>
-				decodeRow({ jsonMode, model: mapped, row, select, strict }),
-			) as never;
+				decodeRow({ jsonMode, model: mapped, row: asRow(row), select, strict }),
+			);
 		},
 
 		async count({ model, where }) {
@@ -469,7 +500,7 @@ export function schemaAdapter(
 
 		async update({ model, where, update }) {
 			const mapped = modelFor(model);
-			const row = await adapter.update<Record<string, unknown>>({
+			const row = await adapter.update({
 				model: mapped?.physical ?? model,
 				update: transformUpdateData({
 					jsonMode,
@@ -486,9 +517,9 @@ export function schemaAdapter(
 						where,
 					}) ?? [],
 			});
-			return row
-				? (decodeRow({ jsonMode, model: mapped, row, strict }) as never)
-				: null;
+			return row == null
+				? null
+				: decodeRow({ jsonMode, model: mapped, row: asRow(row), strict });
 		},
 
 		async updateMany({ model, where, update }) {
@@ -544,7 +575,7 @@ export function schemaAdapter(
 
 		async consumeOne({ model, where }) {
 			const mapped = modelFor(model);
-			const row = await adapter.consumeOne<Record<string, unknown>>({
+			const row = await adapter.consumeOne({
 				model: mapped?.physical ?? model,
 				where:
 					transformWhere({
@@ -555,9 +586,9 @@ export function schemaAdapter(
 						where,
 					}) ?? [],
 			});
-			return row
-				? (decodeRow({ jsonMode, model: mapped, row, strict }) as never)
-				: null;
+			return row == null
+				? null
+				: decodeRow({ jsonMode, model: mapped, row: asRow(row), strict });
 		},
 
 		transaction: runTransaction

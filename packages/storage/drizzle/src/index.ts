@@ -13,8 +13,12 @@
  * shapes is a smell.
  */
 
-import type { Adapter, Where } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import {
+	configurationError,
+	isWhereGroup,
+	sortByList,
+} from "@euroclaw/contracts";
 import {
 	and,
 	asc,
@@ -26,14 +30,27 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
-	like,
 	lt,
 	lte,
 	ne,
+	notInArray,
 	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
+
+/** Escape LIKE wildcards in a user value; every LIKE below declares ESCAPE '\\' (sqlite has no
+ *  default escape character, so it must be explicit to be portable). */
+const escapeLike = (value: string): string =>
+	value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
+/** LIKE with an explicit escape (and optional lower() case-fold) via raw SQL — drizzle's like()
+ *  helper cannot declare ESCAPE. */
+function likeExpr(col: unknown, pattern: string, insensitive: boolean): SQL {
+	return insensitive
+		? sql`lower(${col}) like lower(${pattern}) escape '\\'`
+		: sql`${col} like ${pattern} escape '\\'`;
+}
 
 /** Map a model name to its Drizzle table: `{ audit, approval }`. */
 export type DrizzleSchema = Record<string, unknown>;
@@ -70,8 +87,9 @@ type DrizzleDb = {
 const columns = (t: unknown): Record<string, unknown> =>
 	getTableColumns(t as never) as Record<string, unknown>;
 
-function condition(col: unknown, w: Where): SQL {
+function condition(col: unknown, w: WhereClause): SQL {
 	const op = w.operator ?? "eq";
+	const insensitive = w.mode === "insensitive" && typeof w.value === "string";
 	if (w.value === null) {
 		if (op === "eq") return isNull(col as never);
 		if (op === "ne") return isNotNull(col as never);
@@ -82,7 +100,9 @@ function condition(col: unknown, w: Where): SQL {
 	}
 	switch (op) {
 		case "ne":
-			return ne(col as never, w.value);
+			return insensitive
+				? sql`lower(${col}) != lower(${w.value})`
+				: ne(col as never, w.value);
 		case "lt":
 			return lt(col as never, w.value);
 		case "lte":
@@ -91,12 +111,28 @@ function condition(col: unknown, w: Where): SQL {
 			return gt(col as never, w.value);
 		case "gte":
 			return gte(col as never, w.value);
-		case "in":
-			return inArray(col as never, w.value as unknown[]);
+		case "in": {
+			const values = w.value as unknown[];
+			// Fixed empty-list semantics: `in []` matches nothing.
+			if (values.length === 0) return sql`1 = 0`;
+			return inArray(col as never, values);
+		}
+		case "not_in": {
+			const values = w.value as unknown[];
+			// Fixed empty-list semantics: `not_in []` matches everything.
+			if (values.length === 0) return sql`1 = 1`;
+			return notInArray(col as never, values);
+		}
 		case "contains":
-			return like(col as never, `%${w.value}%`);
+			return likeExpr(col, `%${escapeLike(String(w.value))}%`, insensitive);
+		case "starts_with":
+			return likeExpr(col, `${escapeLike(String(w.value))}%`, insensitive);
+		case "ends_with":
+			return likeExpr(col, `%${escapeLike(String(w.value))}`, insensitive);
 		default:
-			return eq(col as never, w.value);
+			return insensitive
+				? sql`lower(${col}) = lower(${w.value})`
+				: eq(col as never, w.value);
 	}
 }
 
@@ -105,14 +141,32 @@ function whereClause(table: unknown, where: Where[]): SQL | undefined {
 	const cols = columns(table);
 	let combined: SQL | undefined;
 	for (const w of where) {
-		const col = cols[w.field];
-		if (!col) {
-			throw configurationError(
-				`storage-drizzle: unknown field "${w.field}" in where clause`,
-				{ field: w.field },
-			);
+		let c: SQL;
+		if (isWhereGroup(w)) {
+			// A group parenthesizes its members under its own combinator; empty groups fail loud.
+			const isAnd = "and" in w && w.and !== undefined;
+			const members = isAnd ? (w.and ?? []) : (w.or ?? []);
+			const inner = members
+				.map((member) => whereClause(table, [member]))
+				.filter((e): e is SQL => e !== undefined);
+			if (inner.length === 0 || inner.length !== members.length) {
+				throw configurationError("storage-drizzle: where group is empty", {});
+			}
+			const joined = isAnd ? and(...inner) : or(...inner);
+			if (!joined) {
+				throw configurationError("storage-drizzle: where group is empty", {});
+			}
+			c = joined;
+		} else {
+			const col = cols[w.field];
+			if (!col) {
+				throw configurationError(
+					`storage-drizzle: unknown field "${w.field}" in where clause`,
+					{ field: w.field },
+				);
+			}
+			c = condition(col, w);
 		}
-		const c = condition(col, w);
 		combined =
 			combined === undefined
 				? c
@@ -121,6 +175,14 @@ function whereClause(table: unknown, where: Where[]): SQL | undefined {
 					: and(combined, c);
 	}
 	return combined;
+}
+
+/** Narrow a row's primary key out of an `unknown` read — the port's reads are honestly untyped. */
+function rowId(row: unknown): string | number | undefined {
+	if (row === null || typeof row !== "object" || !("id" in row))
+		return undefined;
+	const id = (row as { id: unknown }).id;
+	return typeof id === "string" || typeof id === "number" ? id : undefined;
 }
 
 function affectedRows(result: unknown): number {
@@ -240,15 +302,15 @@ export function drizzleAdapter(
 				.from(t)
 				.where(whereClause(t, where ?? []))
 				.$dynamic();
-			if (sortBy) {
-				const col = columns(t)[sortBy.field];
-				if (col)
-					q = q.orderBy(
-						sortBy.direction === "desc"
-							? desc(col as Parameters<typeof desc>[0])
-							: asc(col as Parameters<typeof asc>[0]),
-					);
-			}
+			const sorts = sortByList(sortBy)
+				.map((sort) => ({ sort, col: columns(t)[sort.field] }))
+				.filter((entry) => entry.col !== undefined)
+				.map(({ sort, col }) =>
+					sort.direction === "desc"
+						? desc(col as Parameters<typeof desc>[0])
+						: asc(col as Parameters<typeof asc>[0]),
+				);
+			if (sorts.length > 0) q = q.orderBy(...sorts);
 			if (limit !== undefined) q = q.limit(limit);
 			if (offset) q = q.offset(offset);
 			return (await many(q, provider)) as never;
@@ -268,11 +330,8 @@ export function drizzleAdapter(
 
 		async update({ model, where, update }) {
 			const t = table(model);
-			const before = await adapter.findOne<{ id?: string | number }>({
-				model,
-				where,
-			});
-			const id = before?.id;
+			const before = await adapter.findOne({ model, where });
+			const id = rowId(before);
 			if (id === undefined || id === null) return null;
 			const idCol = idColumn(t);
 			const clause = and(
@@ -285,7 +344,7 @@ export function drizzleAdapter(
 				return adapter.findOne({ model, where: [{ field: "id", value: id }] });
 			}
 			const row = await one(builder.returning(), provider);
-			return (row ?? null) as never;
+			return row ?? null;
 		},
 
 		async updateMany({ model, where, update }) {
@@ -301,11 +360,8 @@ export function drizzleAdapter(
 
 		async delete({ model, where }) {
 			const t = table(model);
-			const before = await adapter.findOne<{ id?: string | number }>({
-				model,
-				where,
-			});
-			const id = before?.id;
+			const before = await adapter.findOne({ model, where });
+			const id = rowId(before);
 			if (id === undefined || id === null) return;
 			const idCol = idColumn(t);
 			await run(

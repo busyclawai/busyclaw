@@ -340,7 +340,9 @@ function buildAppBotPlugin(
 		const webhookHandler =
 			(keyFrom: (params: Record<string, string>) => string) =>
 			async ({ claw, params, request }: EuroclawRouteContext) => {
-				const channel = byKey.get(`${params.provider ?? ""}:${keyFrom(params)}`);
+				const channel = byKey.get(
+					`${params.provider ?? ""}:${keyFrom(params)}`,
+				);
 				if (!channel) {
 					return { status: 404, body: { ok: false, error: "unknown channel" } };
 				}

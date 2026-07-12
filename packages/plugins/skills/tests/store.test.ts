@@ -1,10 +1,10 @@
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { skillsSchema } from "../src/core/index";
+import { skillsModels } from "../src/core/index";
 import { createSkillsStore } from "../src/store/store";
 
 // Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => schemaAdapter(memoryAdapter(), skillsSchema);
+const db = () => entityAdapter(memoryAdapter(), skillsModels);
 
 const manifest = {
 	id: "summarize-thread",
@@ -144,10 +144,11 @@ describe("createSkillsStore", () => {
 				packageId: "bad",
 				version: "1.0.0",
 				digest: "sha256:bad",
-				// Invalid id (uppercase/space) — rejected by the manifest schema.
+				// Invalid id (uppercase/space) — rejected by the schema-first manifest column, which
+				// validates the manifest as part of the create-input boundary (no separate re-parse).
 				manifest: { id: "Bad Id", description: "Bad" },
 				source: "upload",
 			}),
-		).rejects.toThrow(/skill package manifest invalid/);
+		).rejects.toThrow(/create skill package input invalid/);
 	});
 });

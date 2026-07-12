@@ -154,7 +154,10 @@ export const skillPackageFields = {
 	packageId: field.string({ required: true, index: true }),
 	version: field.string({ required: true, index: true }),
 	digest: field.string({ required: true, index: true }),
-	manifest: field.jsonObject({ required: true, pii: "redacted" }),
+	// Schema-first: the column IS `skillManifest`, so the record type is `SkillManifest` and every
+	// read validates it (the store no longer needs a separate manifest re-parse). The one behavioural
+	// rule the schema can't express — no reserved `euroclaw__` tool names — stays in `assertSkillManifest`.
+	manifest: field.json(skillManifest, { required: true, pii: "redacted" }),
 	instructions: field.string({ pii: "possible" }),
 	source: field.enum(skillPackageSourceValues, { required: true, index: true }),
 	publisher: field.string({ index: true }),

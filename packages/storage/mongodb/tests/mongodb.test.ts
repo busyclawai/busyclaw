@@ -20,6 +20,52 @@ describe("@euroclaw/storage-mongodb — Where → Mongo filter", () => {
 		).toEqual({ name: { $regex: "a\\.b" } });
 	});
 
+	it("groups nest, new operators and mode translate, empty groups fail loud", () => {
+		expect(
+			toFilter([
+				{
+					or: [
+						{
+							and: [
+								{ field: "scope", value: "personal" },
+								{ field: "scopeId", value: "me" },
+							],
+						},
+						{
+							and: [
+								{ field: "scope", value: "organization" },
+								{ field: "scopeId", value: "org" },
+							],
+						},
+					],
+				},
+			]),
+		).toEqual({
+			$or: [
+				{ $and: [{ scope: "personal" }, { scopeId: "me" }] },
+				{ $and: [{ scope: "organization" }, { scopeId: "org" }] },
+			],
+		});
+		expect(
+			toFilter([{ field: "s", operator: "not_in", value: ["a"] }]),
+		).toEqual({ s: { $nin: ["a"] } });
+		expect(
+			toFilter([{ field: "n", operator: "starts_with", value: "a.b" }]),
+		).toEqual({ n: { $regex: "^a\\.b" } });
+		expect(
+			toFilter([{ field: "n", operator: "ends_with", value: "ab" }]),
+		).toEqual({ n: { $regex: "ab$" } });
+		expect(
+			toFilter([
+				{ field: "n", operator: "contains", value: "ab", mode: "insensitive" },
+			]),
+		).toEqual({ n: { $regex: "ab", $options: "i" } });
+		expect(
+			toFilter([{ field: "n", value: "ab", mode: "insensitive" }]),
+		).toEqual({ n: { $regex: "^ab$", $options: "i" } });
+		expect(() => toFilter([{ or: [] }])).toThrow(/where group is empty/);
+	});
+
 	it("left-folds AND / OR by connector", () => {
 		expect(
 			toFilter([
@@ -77,10 +123,10 @@ describe("@euroclaw/storage-mongodb — adapter against real MongoDB", () => {
 			model: "approval",
 			data: { id: "ap1", status: "pending" },
 		});
-		const got = await a.findOne<{ id: string; status: string }>({
+		const got = (await a.findOne({
 			model: "approval",
 			where: [{ field: "id", value: "ap1" }],
-		});
+		})) as { id: string; status: string } | null;
 		expect(got).toEqual({ id: "ap1", status: "pending" });
 		expect(
 			await a.findOne({
@@ -94,27 +140,27 @@ describe("@euroclaw/storage-mongodb — adapter against real MongoDB", () => {
 		const a = mongoAdapter(db);
 		for (const seq of [2, 0, 3, 1])
 			await a.create({ model: "audit", data: { seq, name: `t${seq}` } });
-		const sorted = await a.findMany<{ seq: number }>({
+		const sorted = (await a.findMany({
 			model: "audit",
 			sortBy: { field: "seq", direction: "asc" },
-		});
+		})) as { seq: number }[];
 		expect(sorted.map((r) => r.seq)).toEqual([0, 1, 2, 3]);
-		const page = await a.findMany<{ seq: number }>({
+		const page = (await a.findMany({
 			model: "audit",
 			sortBy: { field: "seq", direction: "asc" },
 			offset: 1,
 			limit: 2,
-		});
+		})) as { seq: number }[];
 		expect(page.map((r) => r.seq)).toEqual([1, 2]);
-		const gt = await a.findMany<{ seq: number }>({
+		const gt = (await a.findMany({
 			model: "audit",
 			where: [{ field: "seq", operator: "gt", value: 1 }],
-		});
+		})) as { seq: number }[];
 		expect(gt.map((r) => r.seq).sort()).toEqual([2, 3]);
-		const inSet = await a.findMany<{ seq: number }>({
+		const inSet = (await a.findMany({
 			model: "audit",
 			where: [{ field: "seq", operator: "in", value: [0, 3] }],
-		});
+		})) as { seq: number }[];
 		expect(inSet.map((r) => r.seq).sort()).toEqual([0, 3]);
 	});
 
@@ -129,10 +175,10 @@ describe("@euroclaw/storage-mongodb — adapter against real MongoDB", () => {
 		});
 		expect(
 			(
-				await a.findOne<{ status: string }>({
+				(await a.findOne({
 					model: "approval",
 					where: [{ field: "id", value: "x" }],
-				})
+				})) as { status: string } | null
 			)?.status,
 		).toBe("approved");
 		expect(

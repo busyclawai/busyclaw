@@ -5,16 +5,19 @@ import {
 	type EntitySchemaInput,
 	errorMessage,
 	validationError,
-	type Where,
 } from "@euroclaw/contracts";
+import {
+	type EntityWhere,
+	type EntityWhereClause,
+	entityView,
+} from "@euroclaw/storage-core";
 import { type } from "arktype";
 import type { EndpointEvent } from "../core/contracts";
 import { endpointId } from "../core/id";
 import {
-	type channelRegistrationFields,
+	channelRegistrationFields,
 	channelRegistrationLookupInput,
 	type channelRegistrationLookupInputOptions,
-	channelRegistrationRecord,
 	type channelRegistrationStatusValues,
 	registerChannelRegistrationInput,
 	type registerChannelRegistrationInputOptions,
@@ -145,17 +148,14 @@ function assertLookup(input: unknown): ChannelRegistrationLookup {
 	return valid;
 }
 
-function assertRegistrationRecord(input: unknown): ChannelRegistrationRecord {
-	const valid = channelRegistrationRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("channel registration record invalid", valid.summary);
-	}
-	return valid;
-}
+type RegistrationWhere = EntityWhere<typeof channelRegistrationFields>;
 
-function listWhere(filter: ChannelRegistrationListFilter): Where[] {
-	const where: Where[] = [];
-	const add = (fieldName: string, value: string): void => {
+function listWhere(filter: ChannelRegistrationListFilter): RegistrationWhere[] {
+	const where: RegistrationWhere[] = [];
+	const add = (
+		fieldName: EntityWhereClause<typeof channelRegistrationFields>["field"],
+		value: string,
+	): void => {
 		where.push(
 			where.length === 0
 				? { field: fieldName, value }
@@ -169,12 +169,17 @@ function listWhere(filter: ChannelRegistrationListFilter): Where[] {
 	return where;
 }
 
-/** The registration registry — user-registered bots persisted through a schema-aware adapter. */
+/** The registration registry — user-registered bots persisted through the entity-validating adapter. */
 export function createChannelRegistrationsStore(
-	// The schema-aware adapter the assembly hands through the configure context; tests wrap manually.
-	db: Adapter,
+	// The entity-validating adapter the assembly hands through the configure context; entityView
+	// opens the typed lens for this plugin's own model (fails loud if the model was never declared).
+	// Tests wrap manually: entityAdapter(memoryAdapter(), …).
+	adapter: Adapter,
 	options: ChannelRegistrationsStoreOptions = {},
 ): ChannelRegistrationsStore {
+	const db = entityView(adapter, {
+		channel_registration: { fields: channelRegistrationFields },
+	});
 	const now = options.now ?? (() => new Date().toISOString());
 
 	const patchByKey = async (
@@ -188,14 +193,13 @@ export function createChannelRegistrationsStore(
 				valid.summary,
 			);
 		}
-		const row = await guarded(() =>
-			db.update<ChannelRegistrationRecord>({
+		return guarded(() =>
+			db.update({
 				model: "channel_registration",
 				where: [{ field: "id", value: endpointId(lookup) }],
 				update: { ...valid, updatedAt: now() },
 			}),
 		);
-		return row ? assertRegistrationRecord(row) : null;
 	};
 
 	return {
@@ -220,18 +224,19 @@ export function createChannelRegistrationsStore(
 				if (updated) return updated;
 			}
 			const ts = now();
-			const record = assertRegistrationRecord({
-				...valid,
-				id: endpointId(lookup),
-				status: "active",
-				createdAt: ts,
-				updatedAt: ts,
-			});
 			try {
-				await guarded(() =>
-					db.create({ model: "channel_registration", data: record }),
+				return await guarded(() =>
+					db.create({
+						model: "channel_registration",
+						data: {
+							...valid,
+							id: endpointId(lookup),
+							status: "active",
+							createdAt: ts,
+							updatedAt: ts,
+						},
+					}),
 				);
-				return record;
 			} catch (err) {
 				// create raced another register onto the same natural key (id is its hash) — fall through
 				// to patching the winner's row.
@@ -243,7 +248,7 @@ export function createChannelRegistrationsStore(
 
 		get(id) {
 			return guarded(() =>
-				db.findOne<ChannelRegistrationRecord>({
+				db.findOne({
 					model: "channel_registration",
 					where: [{ field: "id", value: id }],
 				}),
@@ -256,8 +261,8 @@ export function createChannelRegistrationsStore(
 		},
 
 		async getBySecret(provider, webhookSecret) {
-			const row = await guarded(() =>
-				db.findOne<ChannelRegistrationRecord>({
+			return guarded(() =>
+				db.findOne({
 					model: "channel_registration",
 					where: [
 						{ field: "provider", value: provider },
@@ -265,12 +270,11 @@ export function createChannelRegistrationsStore(
 					],
 				}),
 			);
-			return row ? assertRegistrationRecord(row) : null;
 		},
 
 		list(filter = {}) {
 			return guarded(() =>
-				db.findMany<ChannelRegistrationRecord>({
+				db.findMany({
 					model: "channel_registration",
 					where: listWhere(filter),
 				}),

@@ -186,7 +186,7 @@ describe("createRegistryStores over memory adapter", () => {
 		});
 		await expect(
 			specRegistrations.listByOrganization("org-bad"),
-		).rejects.toThrow("spec registration record invalid");
+		).rejects.toThrow("spec_registration record invalid");
 	});
 
 	it("rejects a malformed stored registered_tool row (required governance missing)", async () => {
@@ -208,7 +208,7 @@ describe("createRegistryStores over memory adapter", () => {
 			},
 		});
 		await expect(registeredTools.listByOrganization("org-bad")).rejects.toThrow(
-			"registered tool record invalid",
+			"registered_tool record invalid",
 		);
 	});
 });

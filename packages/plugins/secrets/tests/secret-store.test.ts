@@ -7,21 +7,25 @@
 
 import type { Adapter } from "@euroclaw/contracts";
 import { buildSecrets, env } from "@euroclaw/secrets";
-import { memoryAdapter, schemaAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	createSecretCipher,
 	createStoredSecretsStore,
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
-	secrets,
 	type SecretStoreOptions,
-	storedSecretSchema,
+	secrets,
+	storedSecretFields,
 } from "../src/index";
 
 // 32 bytes, hex — the shape parseSecretStoreKey demands.
 const TEST_KEY = "0123456789abcdef".repeat(4);
 const OTHER_KEY = "fedcba9876543210".repeat(4);
+
+const storedSecretModels = {
+	stored_secret: { fields: storedSecretFields },
+};
 
 const cipherFor = (key: string) =>
 	createSecretCipher(async () => parseSecretStoreKey(key));
@@ -30,7 +34,7 @@ const cipherFor = (key: string) =>
  *  plus a same-key store over the same adapter as the seeding surface. */
 function connectedStore(options: SecretStoreOptions = {}) {
 	const plugin = secrets([], { store: { key: TEST_KEY, ...options } });
-	const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+	const db = entityAdapter(memoryAdapter(), storedSecretModels);
 	plugin.configure?.({ adapter: db });
 	const [provider] = plugin.secrets.providers;
 	return {
@@ -76,8 +80,12 @@ describe("secrets([], { store: true }) — the plugin shape", () => {
 	});
 
 	it("rejects a malformed config key loud at construction", () => {
-		expect(() => secrets([], { store: { key: "too-short" } })).toThrow(/not valid hex/);
-		expect(() => secrets([], { store: { key: "abcd" } })).toThrow(/wrong length/);
+		expect(() => secrets([], { store: { key: "too-short" } })).toThrow(
+			/not valid hex/,
+		);
+		expect(() => secrets([], { store: { key: "abcd" } })).toThrow(
+			/wrong length/,
+		);
 	});
 });
 
@@ -179,7 +187,12 @@ describe("the store provider — nearest-scope resolution", () => {
 		).toBeNull();
 
 		const broken = secrets([], { store: { key: TEST_KEY } });
-		broken.configure?.({ adapter: failingAdapter("connection refused") });
+		broken.configure?.({
+			adapter: entityAdapter(
+				failingAdapter("connection refused"),
+				storedSecretModels,
+			),
+		});
 		const [brokenProvider] = broken.secrets.providers;
 		await expect(brokenProvider.get("ANY", { actor: "alice" })).rejects.toThrow(
 			/connection refused/,
@@ -189,7 +202,10 @@ describe("the store provider — nearest-scope resolution", () => {
 	it("wraps a missing-table error into a clear configurationError (not-migrated)", async () => {
 		const plugin = secrets([], { store: { key: TEST_KEY } });
 		plugin.configure?.({
-			adapter: failingAdapter("SqliteError: no such table: stored_secret"),
+			adapter: entityAdapter(
+				failingAdapter("SqliteError: no such table: stored_secret"),
+				storedSecretModels,
+			),
 		});
 		const [provider] = plugin.secrets.providers;
 		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
@@ -288,14 +304,14 @@ describe("encryption at rest", () => {
 			value: "plain-secret",
 			createdBy: "alice",
 		});
-		const raw = await db.findOne<{ value?: string }>({
+		const raw = (await db.findOne({
 			model: "stored_secret",
 			where: [
 				{ field: "scope", value: "personal" },
 				{ field: "scopeId", value: "alice", connector: "AND" },
 				{ field: "name", value: "AT_REST", connector: "AND" },
 			],
-		});
+		})) as { value?: string } | null;
 		const sealed = raw?.value;
 		if (sealed === undefined) throw new Error("expected a sealed value");
 		expect(sealed).not.toBe("plain-secret");
@@ -309,7 +325,7 @@ describe("encryption at rest", () => {
 
 	it("an unresolvable master key with rows present fails loud — never ciphertext, never null", async () => {
 		// Rows exist (sealed under TEST_KEY by the seeding store)…
-		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
 		const seeder = createStoredSecretsStore(db, {
 			cipher: cipherFor(TEST_KEY),
 		});
@@ -330,7 +346,7 @@ describe("encryption at rest", () => {
 	});
 
 	it("a wrong (rotated) master key fails loud on decrypt — never garbage material", async () => {
-		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
 		const seeder = createStoredSecretsStore(db, {
 			cipher: cipherFor(TEST_KEY),
 		});
@@ -355,7 +371,7 @@ describe("encryption at rest", () => {
 		// store provider itself (data tier ⇒ consulted FIRST for every name — including the key's,
 		// which without the short-circuit would recurse: get → decrypt → resolve key → get …).
 		const plugin = secrets([], { store: true });
-		const db = schemaAdapter(memoryAdapter(), storedSecretSchema);
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
 		const [provider] = plugin.secrets.providers;
 		const reader = buildSecrets([
 			env({ vars: { [SECRET_STORE_KEY_NAME]: TEST_KEY } }),

@@ -5,6 +5,7 @@
 // connection, an SDL string) — only the output shape is shared. Promoted from runtime to contracts
 // (slice 5): the tool registry stores these as rows, so a non-runtime tier now consumes the type.
 
+import { type } from "arktype";
 import type { JsonObject } from "../common";
 import type { ToolGovernance } from "../govern";
 
@@ -20,11 +21,14 @@ export type SourceTool<Binding> = {
 };
 
 /** One reported drop. `subject` names the dropped thing in the source's own vocabulary
- *  ("get /pets", "mutation createPet"); formats intersect extra structured fields on top. */
-export type SourceDiagnostic = {
-	subject: string;
-	reason: string;
-};
+ *  ("get /pets", "mutation createPet"); formats intersect extra structured fields on top —
+ *  undeclared keys pass through the schema (arktype's default), so a format's extra fields
+ *  (e.g. the OpenAPI extractor's `method`/`path`) survive storage round-trips. */
+export const sourceDiagnostic = type({
+	subject: "string",
+	reason: "string",
+});
+export type SourceDiagnostic = typeof sourceDiagnostic.infer;
 
 /** Every source's result: the tools, plus what did NOT extract and why — never silent. */
 export type SourceExtraction<

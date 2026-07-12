@@ -14,6 +14,8 @@ export {
 	effectSchema,
 	piiMappingSchema,
 	runCheckpointSchema,
+	teamInviteEntity,
+	teamMemberEntity,
 	teamSchema,
 } from "./schema";
 export type {

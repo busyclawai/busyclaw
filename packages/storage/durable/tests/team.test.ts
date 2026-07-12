@@ -76,10 +76,10 @@ function suite(
 				},
 			});
 			await expect(store.roleOf("acme", "bob")).rejects.toThrow(
-				/team member row invalid/,
+				/team_member record invalid/,
 			);
 			await expect(store.members("acme")).rejects.toThrow(
-				/team member row invalid/,
+				/team_member record invalid/,
 			);
 		});
 	});

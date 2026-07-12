@@ -12,7 +12,7 @@
  * produced here is operational state, not compliance audit; compliance evidence stays in @euroclaw/core.
  */
 
-import type { Adapter, TableSchema, Where } from "@euroclaw/contracts";
+import type { Adapter, JsonObject } from "@euroclaw/contracts";
 import {
 	configurationError,
 	type EntityUpdateInput,
@@ -21,11 +21,17 @@ import {
 	stateError,
 	validationError,
 } from "@euroclaw/contracts";
-import { schemaAdapter } from "@euroclaw/storage-core";
+import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type as ark } from "arktype";
-import { type runFields, sqlEngineSchema } from "./schema";
+import {
+	idempotencyFields,
+	leaseFields,
+	runEventFields,
+	runFields,
+	runtimeTaskFields,
+} from "./schema";
 
 export const RunStatus = ark(
 	"'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'",
@@ -220,18 +226,14 @@ export function addMs(iso: string, ms: number): string {
 	return new Date(Date.parse(iso) + ms).toISOString();
 }
 
-/**
- * Narrow an engine schema table — the tables are index-typed under `satisfies SchemaDeclaration` — and
- * pin its physical model name. The tables always exist (sqlEngineSchema is built from these entities);
- * the guard is how we narrow without a non-null assertion.
- */
-function engineTable(
-	table: TableSchema | undefined,
-	modelName: string,
-): TableSchema {
-	if (!table)
-		throw configurationError("engine schema table missing", { modelName });
-	return { ...table, modelName };
+/** Narrow a caller-supplied `Record<string, unknown>` json payload to JsonObject at the write seam —
+ *  a parse, never a cast (the entity layer re-validates the whole record on create). */
+function asJsonRecord(value: unknown, label: string): JsonObject {
+	const valid = jsonObjectSchema(value);
+	if (valid instanceof ark.errors) {
+		throw validationError(`${label} invalid`, valid.summary);
+	}
+	return valid;
 }
 
 function stringifyJson(value: unknown, label: string): string {
@@ -251,47 +253,7 @@ function stringifyJson(value: unknown, label: string): string {
 	}
 }
 
-function validateRunRecord(record: unknown): RunRecord {
-	const valid = RunRecord(record);
-	if (valid instanceof ark.errors) {
-		throw validationError("run record invalid", valid.summary);
-	}
-	return valid;
-}
-
-function validateTask(task: unknown): RuntimeTask {
-	const valid = RuntimeTask(task);
-	if (valid instanceof ark.errors) {
-		throw validationError("runtime task invalid", valid.summary);
-	}
-	return valid;
-}
-
-function validateEvent(event: unknown): RunEvent {
-	const valid = RunEvent(event);
-	if (valid instanceof ark.errors) {
-		throw validationError("run event invalid", valid.summary);
-	}
-	return valid;
-}
-
-function validateLeaseRecord(record: unknown): LeaseRecord {
-	const valid = LeaseRecord(record);
-	if (valid instanceof ark.errors) {
-		throw validationError("lease record invalid", valid.summary);
-	}
-	return valid;
-}
-
-function validateIdempotencyRecord(record: unknown): IdempotencyRecord {
-	const valid = IdempotencyRecord(record);
-	if (valid instanceof ark.errors) {
-		throw validationError("idempotency record invalid", valid.summary);
-	}
-	return valid;
-}
-
-function pendingWhere(now: string): Where[] {
+function pendingWhere(now: string): EntityWhere<typeof runtimeTaskFields>[] {
 	return [
 		{ field: "status", value: "pending" },
 		{ field: "dueAt", value: now, operator: "lte", connector: "AND" },
@@ -327,18 +289,16 @@ export function createSqlEngineStore(
 	const eventModel = options.eventModel ?? "run_event";
 	const leaseModel = options.leaseModel ?? "lease";
 	const idempotencyModel = options.idempotencyModel ?? "idempotency_key";
-	// Every engine table persists through schemaAdapter (logical↔physical names, JSON encode/decode,
-	// undefined-dropping, immutable enforcement), so the ops speak native records and never hand-roll row
-	// mapping. Each table's *Model option pins its physical name via modelName.
-	const db = schemaAdapter(adapter, {
-		run: engineTable(sqlEngineSchema.run, runModel),
-		runtime_task: engineTable(sqlEngineSchema.runtime_task, taskModel),
-		run_event: engineTable(sqlEngineSchema.run_event, eventModel),
-		lease: engineTable(sqlEngineSchema.lease, leaseModel),
-		idempotency_key: engineTable(
-			sqlEngineSchema.idempotency_key,
-			idempotencyModel,
-		),
+	// Every engine table persists through the entity layer (logical↔physical names, JSON
+	// encode/decode, undefined-dropping, immutable enforcement) — and every row crossing the adapter
+	// boundary is parsed against its record schema, so the ops speak validated native records. Each
+	// table's *Model option pins its physical name via modelName.
+	const db = entityDb(adapter, {
+		run: { fields: runFields, modelName: runModel },
+		runtime_task: { fields: runtimeTaskFields, modelName: taskModel },
+		run_event: { fields: runEventFields, modelName: eventModel },
+		lease: { fields: leaseFields, modelName: leaseModel },
+		idempotency_key: { fields: idempotencyFields, modelName: idempotencyModel },
 	});
 
 	async function validateLease(
@@ -346,12 +306,11 @@ export function createSqlEngineStore(
 		token: string,
 	): Promise<LeaseRecord | null> {
 		if (task.leaseId === undefined) return null;
-		const row = await db.findOne<unknown>({
+		const lease = await db.findOne({
 			model: "lease",
 			where: [{ field: "id", value: task.leaseId }],
 		});
-		if (!row) return null;
-		const lease = validateLeaseRecord(row);
+		if (!lease) return null;
 		if (lease.taskId !== task.id) return null;
 		if (lease.expiresAt <= now()) return null;
 		if (lease.tokenHash !== hashText(token)) return null;
@@ -367,77 +326,75 @@ export function createSqlEngineStore(
 
 		async createRun(input = {}) {
 			const ts = now();
-			const record = validateRunRecord({
-				id: input.id ?? newId(),
-				status: "queued",
-				input: input.input ?? {},
-				actor: input.actor,
-				team: input.team,
-				createdAt: ts,
-				updatedAt: ts,
+			return db.create({
+				model: "run",
+				data: {
+					id: input.id ?? newId(),
+					status: "queued",
+					input: asJsonRecord(input.input ?? {}, "run input"),
+					actor: input.actor,
+					team: input.team,
+					createdAt: ts,
+					updatedAt: ts,
+				},
 			});
-			await db.create({ model: "run", data: record });
-			return record;
 		},
 
 		async getRun(id) {
-			const row = await db.findOne<unknown>({
+			return db.findOne({
 				model: "run",
 				where: [{ field: "id", value: id }],
 			});
-			return row ? validateRunRecord(row) : null;
 		},
 
 		async updateRun(id, patch) {
-			// schemaAdapter drops undefined + encodes JSON; the store owns updatedAt (input:false).
-			const row = await db.update<unknown>({
+			// The entity layer drops undefined + encodes JSON; the store owns updatedAt (input:false).
+			return db.update({
 				model: "run",
 				where: [{ field: "id", value: id }],
 				update: { ...patch, updatedAt: now() },
 			});
-			return row ? validateRunRecord(row) : null;
 		},
 
 		async enqueueTask(input) {
 			const ts = now();
-			const record = validateTask({
-				id: input.id ?? newId(),
-				runId: input.runId,
-				kind: input.kind,
-				status: "pending",
-				payload: input.payload ?? {},
-				dueAt: input.dueAt ?? ts,
-				attempt: 0,
-				maxAttempts: input.maxAttempts ?? 1,
-				retryDelayMs: input.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
-				createdAt: ts,
-				updatedAt: ts,
+			return db.create({
+				model: "runtime_task",
+				data: {
+					id: input.id ?? newId(),
+					runId: input.runId,
+					kind: input.kind,
+					status: "pending",
+					payload: asJsonRecord(input.payload ?? {}, "task payload"),
+					dueAt: input.dueAt ?? ts,
+					attempt: 0,
+					maxAttempts: input.maxAttempts ?? 1,
+					retryDelayMs: input.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
+					createdAt: ts,
+					updatedAt: ts,
+				},
 			});
-			await db.create({ model: "runtime_task", data: record });
-			return record;
 		},
 
 		async getTask(id) {
-			const row = await db.findOne<unknown>({
+			return db.findOne({
 				model: "runtime_task",
 				where: [{ field: "id", value: id }],
 			});
-			return row ? validateTask(row) : null;
 		},
 
 		async claimDueTask(input) {
 			await store.reapExpiredLeases();
 			const ts = now();
-			const candidates = await db.findMany<unknown>({
+			const candidates = await db.findMany({
 				model: "runtime_task",
 				where: pendingWhere(ts),
 				sortBy: { field: "dueAt", direction: "asc" },
 				limit: input.limit ?? 10,
 			});
-			for (const candidateRow of candidates) {
-				const candidate = validateTask(candidateRow);
+			for (const candidate of candidates) {
 				if (candidate.attempt >= candidate.maxAttempts) {
-					await db.update<unknown>({
+					await db.update({
 						model: "runtime_task",
 						where: [
 							{ field: "id", value: candidate.id },
@@ -465,7 +422,7 @@ export function createSqlEngineStore(
 					createdAt: ts,
 				};
 				await db.create({ model: "lease", data: lease });
-				const updated = await db.update<unknown>({
+				const updated = await db.update({
 					model: "runtime_task",
 					where: [
 						{ field: "id", value: candidate.id },
@@ -487,26 +444,24 @@ export function createSqlEngineStore(
 					});
 					continue;
 				}
-				const task = validateTask(updated);
-				await store.updateRun(task.runId, { status: "running" });
-				return { task, leaseId, leaseToken, expiresAt };
+				await store.updateRun(updated.runId, { status: "running" });
+				return { task: updated, leaseId, leaseToken, expiresAt };
 			}
 			return null;
 		},
 
 		async heartbeatLease(input) {
-			const leaseRow = await db.findOne<unknown>({
+			const lease = await db.findOne({
 				model: "lease",
 				where: [{ field: "id", value: input.leaseId }],
 			});
-			if (!leaseRow) return null;
-			const lease = validateLeaseRecord(leaseRow);
+			if (!lease) return null;
 			if (lease.expiresAt <= now()) return null;
 			if (lease.tokenHash !== hashText(input.leaseToken)) return null;
 			const ts = now();
 			const expiresAt = addMs(ts, input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
 			const tokenHash = hashText(input.leaseToken);
-			const updated = await db.update<unknown>({
+			const updated = await db.update({
 				model: "lease",
 				where: [
 					{ field: "id", value: input.leaseId },
@@ -516,7 +471,7 @@ export function createSqlEngineStore(
 				update: { expiresAt, lastHeartbeatAt: ts },
 			});
 			if (!updated) return null;
-			await db.update<unknown>({
+			await db.update({
 				model: "runtime_task",
 				where: [
 					{ field: "id", value: lease.taskId },
@@ -526,7 +481,7 @@ export function createSqlEngineStore(
 				],
 				update: { leasedUntil: expiresAt, updatedAt: ts },
 			});
-			return validateLeaseRecord(updated);
+			return updated;
 		},
 
 		async completeTask(input) {
@@ -535,7 +490,7 @@ export function createSqlEngineStore(
 			const lease = await validateLease(task, input.leaseToken);
 			if (!lease) return null;
 			const ts = now();
-			const row = await db.update<unknown>({
+			const row = await db.update({
 				model: "runtime_task",
 				where: [
 					{ field: "id", value: input.taskId },
@@ -544,7 +499,9 @@ export function createSqlEngineStore(
 				],
 				update: {
 					status: "completed",
-					output: input.output,
+					...(input.output !== undefined
+						? { output: asJsonRecord(input.output, "task output") }
+						: {}),
 					completedAt: ts,
 					updatedAt: ts,
 				},
@@ -554,7 +511,7 @@ export function createSqlEngineStore(
 				model: "lease",
 				where: [{ field: "id", value: lease.id }],
 			});
-			return validateTask(row);
+			return row;
 		},
 
 		async failTask(input) {
@@ -565,7 +522,7 @@ export function createSqlEngineStore(
 			const ts = now();
 			const status: TaskStatus =
 				task.attempt >= task.maxAttempts ? "dead" : "pending";
-			const row = await db.update<unknown>({
+			const row = await db.update({
 				model: "runtime_task",
 				where: [
 					{ field: "id", value: input.taskId },
@@ -587,19 +544,18 @@ export function createSqlEngineStore(
 				model: "lease",
 				where: [{ field: "id", value: lease.id }],
 			});
-			return row ? validateTask(row) : null;
+			return row;
 		},
 
 		async reapExpiredLeases() {
 			const ts = now();
-			const leaseRows = await db.findMany<unknown>({
+			const leaseRows = await db.findMany({
 				model: "lease",
 				where: [{ field: "expiresAt", value: ts, operator: "lte" }],
 			});
 			let count = 0;
-			for (const leaseRow of leaseRows) {
-				const candidate = validateLeaseRecord(leaseRow);
-				const consumedLeaseRow = await db.consumeOne<unknown>({
+			for (const candidate of leaseRows) {
+				const lease = await db.consumeOne({
 					model: "lease",
 					where: [
 						{ field: "id", value: candidate.id },
@@ -611,17 +567,15 @@ export function createSqlEngineStore(
 						},
 					],
 				});
-				if (!consumedLeaseRow) continue;
-				const lease = validateLeaseRecord(consumedLeaseRow);
-				const taskRow = await db.findOne<unknown>({
+				if (!lease) continue;
+				const task = await db.findOne({
 					model: "runtime_task",
 					where: [{ field: "id", value: lease.taskId }],
 				});
-				if (!taskRow) continue;
-				const task = validateTask(taskRow);
+				if (!task) continue;
 				const status: TaskStatus =
 					task.attempt >= task.maxAttempts ? "dead" : "pending";
-				const updated = await db.update<unknown>({
+				const updated = await db.update({
 					model: "runtime_task",
 					where: [
 						{ field: "id", value: lease.taskId },
@@ -648,24 +602,24 @@ export function createSqlEngineStore(
 		},
 
 		async appendEvent(input) {
-			const record = validateEvent({
-				id: newId(),
-				runId: input.runId,
-				type: input.type,
-				payload: input.payload ?? {},
-				createdAt: now(),
+			return db.create({
+				model: "run_event",
+				data: {
+					id: newId(),
+					runId: input.runId,
+					type: input.type,
+					payload: asJsonRecord(input.payload ?? {}, "event payload"),
+					createdAt: now(),
+				},
 			});
-			await db.create({ model: "run_event", data: record });
-			return record;
 		},
 
 		async events(runId) {
-			const rows = await db.findMany<unknown>({
+			return db.findMany({
 				model: "run_event",
 				where: [{ field: "runId", value: runId }],
 				sortBy: { field: "createdAt", direction: "asc" },
 			});
-			return rows.map((row) => validateEvent(row));
 		},
 
 		requestHash(body) {
@@ -676,12 +630,11 @@ export function createSqlEngineStore(
 			// The id IS the hash of the scope tuple (key/method/path/organizationId/actor), so a primary-key
 			// lookup is exactly the scoped match — and it sidesteps `WHERE col = NULL` (never true in SQL,
 			// and undefined !== null in the memory adapter) for absent organization/actor.
-			const row = await db.findOne<unknown>({
+			const record = await db.findOne({
 				model: "idempotency_key",
 				where: [{ field: "id", value: idempotencyId(input) }],
 			});
-			if (!row) return null;
-			const record = validateIdempotencyRecord(row);
+			if (!record) return null;
 			if (record.requestHash !== input.requestHash) {
 				throw stateError(
 					"idempotency key reused with a different request body",
@@ -698,26 +651,27 @@ export function createSqlEngineStore(
 		async saveIdempotency(input) {
 			const existing = await store.getIdempotency(input);
 			if (existing) return existing;
-			const record = validateIdempotencyRecord({
-				id: idempotencyId(input),
-				key: input.key,
-				method: input.method,
-				path: input.path,
-				organizationId: input.organizationId,
-				actor: input.actor,
-				requestHash: input.requestHash,
-				responseStatus: input.responseStatus,
-				responseBody: input.responseBody,
-				createdAt: now(),
-			});
 			try {
-				await db.create({ model: "idempotency_key", data: record });
+				return await db.create({
+					model: "idempotency_key",
+					data: {
+						id: idempotencyId(input),
+						key: input.key,
+						method: input.method,
+						path: input.path,
+						organizationId: input.organizationId,
+						actor: input.actor,
+						requestHash: input.requestHash,
+						responseStatus: input.responseStatus,
+						responseBody: asJsonRecord(input.responseBody, "response body"),
+						createdAt: now(),
+					},
+				});
 			} catch (err) {
 				const raced = await store.getIdempotency(input);
 				if (raced) return raced;
 				throw err;
 			}
-			return record;
 		},
 	};
 

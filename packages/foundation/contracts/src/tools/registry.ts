@@ -15,6 +15,18 @@
 import { type } from "arktype";
 import type { EntityInput, EntityRecord, EntityUpdateInput } from "../entity";
 import { entity, field } from "../entity";
+import { toolGovernance } from "../govern";
+import { sourceDiagnostic } from "./source";
+
+// What one registration did — the diff's outcome (addresses touched) plus the extractor's
+// diagnostics, verbatim. The stored `report` column IS this schema (schema-first `field.json`).
+export const specRegistrationReport = type({
+	added: "string[]",
+	updated: "string[]",
+	removed: "string[]",
+	skipped: sourceDiagnostic.array(),
+	warnings: sourceDiagnostic.array(),
+});
 
 // ── spec_registration — one row per (organizationId, source); re-registration REPLACES it ──────
 
@@ -31,8 +43,9 @@ export const specRegistrationFields = {
 	specBlob: field.jsonObject({ required: true, pii: "possible" }),
 	// Hash of the extracted tool rows — the cache key the org router routes on.
 	contentVersion: field.string({ required: true }),
-	// { added, updated, removed, skipped, warnings } from the last registration.
-	report: field.jsonObject({ required: true }),
+	// What the last registration did — schema-first, so the record type carries the report shape
+	// and every read validates it.
+	report: field.json(specRegistrationReport, { required: true }),
 	// The acting principal at registration time.
 	registeredBy: field.string({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),
@@ -76,8 +89,10 @@ export const registeredToolFields = {
 	address: field.string({ required: true, index: true }),
 	description: field.string(),
 	inputSchema: field.jsonObject({ required: true }),
-	// The ToolGovernance stamp — stored opaque; re-validated via `toolGovernance` at assembly.
-	governance: field.jsonObject({ required: true }),
+	// The ToolGovernance stamp. Schema-first (`field.json`): the column IS `toolGovernance`, so the
+	// record type is `ToolGovernance` and every read validates it — the old opaque blob + downstream
+	// re-derivation (a cast in the invoker, a re-parse at model assembly) collapse to one boundary.
+	governance: field.json(toolGovernance, { required: true }),
 	// Format-opaque invocation metadata (the OpenApiBinding today).
 	binding: field.jsonObject({ required: true }),
 	// Hash of this row's content (schema/governance/binding/description).
@@ -126,12 +141,9 @@ export const factsOverlayFields = {
 	actionId: field.string({ required: true, index: true }),
 	// Validated as the ActionAccess enum in the record schema (stored as a string column).
 	access: field.enum(["read", "write"]),
-	// A string array — a JSON column (euroclaw's jsonObject requires an object root, so jsonValue),
-	// but the record schema validates it strictly as string[] so a hostile stored value fails loud.
-	groups: field.jsonValue<string[]>({
-		ark: type("string[]"),
-		optionalArk: type("string[] | undefined"),
-	}),
+	// A string array — schema-first (`field.json`), so it persists as a JSON column while the record
+	// type is `string[]` and every read validates it strictly; a hostile stored value fails loud.
+	groups: field.json(type("string[]")),
 	resource: field.string(),
 	audit: field.boolean(),
 	updatedBy: field.string({ required: true }),

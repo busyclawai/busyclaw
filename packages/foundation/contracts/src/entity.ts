@@ -20,12 +20,18 @@ type FieldKind =
 	| "boolean"
 	| "jsonObject"
 	| "jsonValue"
+	| "json"
 	| "enum";
 
+// The base/constraint form leaves `Value` as `unknown`: `Record<string, EntityField>` (the bound
+// every entity helper carries) must admit fields whose value type isn't pure JSON — a schema-first
+// `field.json(schema)` column can infer, say, `ToolGovernance` (an optional `gate: Function` that is
+// never present at rest but lives in the type). Concrete field types always pass `Value` explicitly
+// through `makeField`, so this default is only ever the constraint bound, never a real field's type.
 export type EntityField<
 	Kind extends FieldKind = FieldKind,
 	Values extends readonly string[] = readonly string[],
-	Value = FieldValueFor<Kind, Values>,
+	Value = unknown,
 > = EntityFieldMeta & {
 	kind: Kind;
 	values?: Values;
@@ -33,23 +39,6 @@ export type EntityField<
 	optionalArk: unknown;
 	readonly __value: Value;
 };
-
-type FieldValueFor<
-	Kind extends FieldKind,
-	Values extends readonly string[],
-> = Kind extends "string"
-	? string
-	: Kind extends "number"
-		? number
-		: Kind extends "boolean"
-			? boolean
-			: Kind extends "jsonObject"
-				? JsonObject
-				: Kind extends "jsonValue"
-					? JsonValue
-					: Kind extends "enum"
-						? Values[number]
-						: never;
 
 type FieldValue<F> = F extends { readonly __value: infer Value }
 	? Value
@@ -275,6 +264,42 @@ export const field = {
 			"jsonValue",
 			readonly string[],
 			Value,
+			JsonEntityStorageMeta<Meta>
+		>(input);
+	},
+	// Schema-first json: ONE arktype `Type` drives BOTH the record type (`Value = S["infer"]`) and
+	// the boundary validator (`ark = schema`), so the two can never drift the way a hand-set
+	// `jsonObject<T>({ ark })` pair can. The store read IS the boundary — with a real `ark`, the
+	// entity's record schema validates this column on every read, not just "is it json". Use this
+	// where euroclaw OWNS the shape; keep `jsonObject`/`jsonValue` for genuinely opaque payloads.
+	// The persisted shape is unchanged (`type: "json"`) — this is a type+validation change, not a
+	// migration. The schema dictates the root, so one constructor covers object- and value-rooted
+	// shapes alike.
+	json: <
+		S extends Type,
+		const Meta extends Omit<
+			JsonEntityFieldMeta,
+			"ark" | "optionalArk"
+		> = EmptyFieldMeta,
+	>(
+		schema: S,
+		meta?: Meta,
+	) => {
+		const input = {
+			...(meta ?? ({} as Meta)),
+			type: "json",
+			kind: "json",
+			ark: schema,
+			optionalArk: schema.or("undefined"),
+		} as JsonEntityStorageMeta<Meta> & {
+			kind: "json";
+			ark: unknown;
+			optionalArk: unknown;
+		};
+		return makeField<
+			"json",
+			readonly string[],
+			S["infer"],
 			JsonEntityStorageMeta<Meta>
 		>(input);
 	},

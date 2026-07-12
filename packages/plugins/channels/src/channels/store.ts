@@ -4,14 +4,11 @@ import {
 	type EntityUpdateInput,
 	validationError,
 } from "@euroclaw/contracts";
+import { entityView } from "@euroclaw/storage-core";
 import { type } from "arktype";
 import type { ChannelEndpointMode, EndpointEvent } from "../core/contracts";
 import { endpointId } from "../core/id";
-import {
-	type channelEndpointFields,
-	channelEndpointRecord,
-	channelEndpointStatePatch,
-} from "./schema";
+import { channelEndpointFields, channelEndpointStatePatch } from "./schema";
 
 export type ChannelEndpointStateRecord = EntityRecord<
 	typeof channelEndpointFields
@@ -37,14 +34,6 @@ export type ChannelEndpointStateStoreOptions = {
 	now?: () => string;
 };
 
-function assertStateRecord(input: unknown): ChannelEndpointStateRecord {
-	const valid = channelEndpointRecord(input);
-	if (valid instanceof type.errors) {
-		throw validationError("channel endpoint state invalid", valid.summary);
-	}
-	return valid;
-}
-
 function assertStatePatch(input: unknown): ChannelEndpointStatePatch {
 	const valid = channelEndpointStatePatch(input);
 	if (valid instanceof type.errors) {
@@ -58,11 +47,16 @@ function assertStatePatch(input: unknown): ChannelEndpointStatePatch {
 
 /** The state store for code-declared bots: one row per endpoint, keyed by hash(provider, key). */
 export function createChannelEndpointStateStore(
-	// The schema-aware adapter the assembly hands through the configure context (logical model/field
-	// names, JSON encode/decode, immutable enforcement). Tests wrap manually: schemaAdapter(memoryAdapter(), channelsSchema).
-	db: Adapter,
+	// The entity-validating adapter the assembly hands through the configure context (logical
+	// model/field names, JSON encode/decode, immutable enforcement, rows parsed on every read).
+	// entityView opens the typed lens for this plugin's own model — and fails loud at configure
+	// time if the model was never declared. Tests wrap manually: entityAdapter(memoryAdapter(), …).
+	adapter: Adapter,
 	options: ChannelEndpointStateStoreOptions = {},
 ): ChannelEndpointStateStore {
+	const db = entityView(adapter, {
+		channel_endpoint: { fields: channelEndpointFields },
+	});
 	const now = options.now ?? (() => new Date().toISOString());
 
 	const eventPatch = (event: EndpointEvent): ChannelEndpointStatePatch => {
@@ -78,7 +72,7 @@ export function createChannelEndpointStateStore(
 
 	return {
 		get(key) {
-			return db.findOne<ChannelEndpointStateRecord>({
+			return db.findOne({
 				model: "channel_endpoint",
 				where: [{ field: "id", value: endpointId(key) }],
 			});
@@ -87,42 +81,43 @@ export function createChannelEndpointStateStore(
 		async record(key, event) {
 			const patch = assertStatePatch(eventPatch(event));
 			const id = endpointId(key);
-			const existing = await db.findOne<ChannelEndpointStateRecord>({
+			const existing = await db.findOne({
 				model: "channel_endpoint",
 				where: [{ field: "id", value: id }],
 			});
 			if (!existing) {
 				const ts = now();
-				const record = assertStateRecord({
-					id,
-					provider: key.provider,
-					endpointKey: key.endpointKey,
-					mode: key.mode,
-					...patch,
-					createdAt: ts,
-					updatedAt: ts,
-				});
 				try {
-					await db.create({ model: "channel_endpoint", data: record });
-					return record;
+					return await db.create({
+						model: "channel_endpoint",
+						data: {
+							id,
+							provider: key.provider,
+							endpointKey: key.endpointKey,
+							mode: key.mode,
+							...patch,
+							createdAt: ts,
+							updatedAt: ts,
+						},
+					});
 				} catch (err) {
 					// create raced another writer onto the same natural key (id is its hash) — fall through
 					// to patching the winner's row.
-					const raced = await db.update<ChannelEndpointStateRecord>({
+					const raced = await db.update({
 						model: "channel_endpoint",
 						where: [{ field: "id", value: id }],
 						update: { ...patch, updatedAt: now() },
 					});
-					if (raced) return assertStateRecord(raced);
+					if (raced) return raced;
 					throw err;
 				}
 			}
-			const updated = await db.update<ChannelEndpointStateRecord>({
+			const updated = await db.update({
 				model: "channel_endpoint",
 				where: [{ field: "id", value: id }],
 				update: { ...patch, updatedAt: now() },
 			});
-			return updated ? assertStateRecord(updated) : existing;
+			return updated ?? existing;
 		},
 	};
 }
