@@ -6,6 +6,7 @@
 // Webhook routes (plugin.routes) are provider-shaped ingress, not product api — not documented.
 
 import type { EndpointInputSchema, EndpointRoute } from "@euroclaw/contracts";
+import { docOf } from "@euroclaw/contracts";
 import type { JsonSchema } from "arktype";
 import type { Claw } from "euroclaw";
 import { clawApiRouteList } from "euroclaw";
@@ -100,6 +101,28 @@ function schemaJson(schema: EndpointInputSchema | unknown): ClawOpenApiSchema {
 	return schema.toJsonSchema({ dialect: null, fallback: (ctx) => ctx.base });
 }
 
+/** The top-level schema slot with the euroclaw doc channel CONSUMED: `description` becomes
+ *  `docOf(schema)` — the rich `euroclaw.doc` prose, falling back to the `.describe()` text, else
+ *  whatever the plain emission carried — and the raw `euroclaw` meta key, which arktype serializes
+ *  as an opaque `$ark.*` registry reference (noise to any document reader), is dropped.
+ *  SCOPE: top level only, deliberately. Field-LEVEL doc surfacing inside nested toJsonSchema
+ *  output is deferred — arktype usefully emits only UniversalMeta keys (description/title/…) for
+ *  nested fields, degrading unknown keys to `$ark.*` references; a per-field overlay walker is its
+ *  own slice when a real field needs it. */
+function documentedSchemaJson(
+	schema: EndpointInputSchema | unknown,
+): ClawOpenApiSchema {
+	const emitted = schemaJson(schema);
+	if (typeof emitted === "boolean") return emitted;
+	// Fresh from toJsonSchema — never shared, safe to rebuild. The record view exists because
+	// arktype's JsonSchema union is not index-assignable.
+	const { euroclaw: _consumed, ...rest } = emitted as Record<string, unknown>;
+	const doc = docOf(schema);
+	return (
+		doc === undefined ? rest : { ...rest, description: doc }
+	) as ClawOpenApiSchema;
+}
+
 /** The 200 body: the success envelope with `data` = the declared output schema, or `true` when the
  *  operation declares none (base api methods carry no output schemas today). */
 function successEnvelopeSchema(output: unknown): ClawOpenApiSchema {
@@ -109,7 +132,7 @@ function successEnvelopeSchema(output: unknown): ClawOpenApiSchema {
 			ok: { const: true },
 			// `data` may be absent on the wire (a void handler result serializes away), so it is
 			// documented but not required.
-			data: output === undefined ? true : schemaJson(output),
+			data: output === undefined ? true : documentedSchemaJson(output),
 		},
 		required: ["ok"],
 	};
@@ -126,7 +149,7 @@ function buildOperation(input: {
 	// Tags group by the first path segment: plugin namespaces cluster under their mount
 	// (`secrets`, `skills`); flat base methods are single-segment, so each tags as itself.
 	const firstSegment = input.path.split("/")[1] ?? "";
-	const inputSchema = schemaJson(input.input);
+	const inputSchema = documentedSchemaJson(input.input);
 	return {
 		operationId: input.operationId,
 		tags: [firstSegment],
@@ -167,7 +190,9 @@ function buildOperation(input: {
  * Generate the OpenAPI 3.1 document for a claw's routed api surface. Paths are RELATIVE to the
  * adapter's basePath (exactly the paths toRequestHandler mounts under it). Input schemas — and
  * declared endpoint `output` schemas — emit via arktype's `toJsonSchema()`, so field-level
- * `.describe()` metadata flows into the document.
+ * `.describe()` metadata flows into the document; the top-level request/response schema
+ * `description` reads the euroclaw doc channel through `docOf` (rich `euroclaw.doc` prose over
+ * the terse `.describe()` text).
  */
 export function clawOpenApi(
 	claw: Claw,

@@ -47,9 +47,33 @@ function skillsNamespace() {
 	});
 }
 
+/** The euroclaw doc channel in the wild: rich prose DIVERGING from the error-facing describe()
+ *  text on the input, a doc-only output, and a describe()-only read for the fallback arm. */
+function docsNamespace() {
+	return endpoints({
+		create: {
+			input: type({ name: "string" })
+				.describe("a docs create request")
+				.configure({ euroclaw: { doc: "Create a documented thing." } }),
+			output: type({ id: "string" }).configure({
+				euroclaw: { doc: "The created thing." },
+			}),
+			handler: async (input: { name: string }) => ({ id: input.name }),
+		},
+		get: {
+			input: type({ id: "string" }).describe("a docs get request"),
+			handler: async (input: { id: string }) => ({ id: input.id }),
+		},
+	});
+}
+
 function openApiClaw(): Claw {
 	return {
-		api: { ...secretsApiOverMemory(), skills: skillsNamespace() },
+		api: {
+			...secretsApiOverMemory(),
+			docs: docsNamespace(),
+			skills: skillsNamespace(),
+		},
 	} as unknown as Claw;
 }
 
@@ -57,11 +81,15 @@ function openApiClaw(): Claw {
 function objectSchema(schema: unknown): {
 	properties: Record<string, unknown>;
 	required?: string[];
+	description?: string;
+	euroclaw?: unknown;
 } {
 	expect(schema).toMatchObject({ type: "object" });
 	return schema as {
 		properties: Record<string, unknown>;
 		required?: string[];
+		description?: string;
+		euroclaw?: unknown;
 	};
 }
 
@@ -137,6 +165,38 @@ describe("clawOpenApi — the generated document", () => {
 			type: "string",
 			description: "a non-empty secret name",
 		});
+	});
+
+	it("surfaces the euroclaw doc channel as the top-level schema description (docOf precedence)", () => {
+		const create = document.paths["/docs/create"]?.post;
+		const request = objectSchema(
+			create?.requestBody?.content["application/json"].schema,
+		);
+		// The rich doc wins over the .describe() text at the top level of the emitted schema…
+		expect(request.description).toBe("Create a documented thing.");
+		// …and the raw namespaced key (arktype emits it as an opaque $ark.* registry reference) is
+		// consumed into `description`, never leaked into the document.
+		expect(request.euroclaw).toBeUndefined();
+		// The declared output surfaces the same way as the envelope's `data` description.
+		const envelope = objectSchema(
+			create?.responses["200"].content["application/json"].schema,
+		);
+		const data = objectSchema(envelope.properties.data);
+		expect(data.description).toBe("The created thing.");
+		expect(data.euroclaw).toBeUndefined();
+		// No euroclaw.doc ⇒ docOf falls back to the .describe() text (GET parameter arm included).
+		const get = document.paths["/docs/get"]?.get;
+		const parameter = objectSchema(
+			get?.parameters?.[0]?.content["application/json"].schema,
+		);
+		expect(parameter.description).toBe("a docs get request");
+		// No user-authored prose at all ⇒ no top-level description (today's emission, unchanged).
+		const set = objectSchema(
+			document.paths["/secrets/set"]?.post?.requestBody?.content[
+				"application/json"
+			].schema,
+		);
+		expect(set.description).toBeUndefined();
 	});
 
 	it("documents 200 as the success envelope: declared output as data, else data: true", () => {

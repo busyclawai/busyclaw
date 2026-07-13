@@ -283,6 +283,10 @@ export {
 	THREAD_ID_CONTEXT_KEY,
 	toolCall,
 } from "./governance/boundary";
+// ── governance: the doc meta channel — the typed ArkEnv augmentation rides this module, so it
+// loads with the barrel (server-side consumers) and never with the docless wire subpaths ──
+export type { DocSource } from "./governance/doc";
+export { docOf } from "./governance/doc";
 // ── governance: declared plugin api endpoints (routable namespaces + the one kebab/verb source) ──
 export type {
 	EndpointDefinition,
