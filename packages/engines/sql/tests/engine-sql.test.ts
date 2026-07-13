@@ -17,14 +17,22 @@ import {
 
 function textModel(text: string): RuntimeModel {
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async () => ({
 			content: [{ type: "text", text }],
-			finishReason: "stop",
-			usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+			finishReason: { unified: "stop", raw: undefined },
+			usage: {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			},
 			warnings: [],
 		}),
 		doStream: async () => {
@@ -35,7 +43,7 @@ function textModel(text: string): RuntimeModel {
 
 function failingModel(message: string): RuntimeModel {
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},

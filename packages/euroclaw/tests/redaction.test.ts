@@ -17,7 +17,7 @@ type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
 function promptCaptureModel(received: { prompt: string }): V2Model {
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
@@ -25,8 +25,16 @@ function promptCaptureModel(received: { prompt: string }): V2Model {
 			received.prompt = JSON.stringify(options.prompt);
 			return {
 				content: [{ type: "text", text: "done" }],
-				finishReason: "stop",
-				usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+				finishReason: { unified: "stop", raw: undefined },
+				usage: {
+					inputTokens: {
+						total: 1,
+						noCache: undefined,
+						cacheRead: undefined,
+						cacheWrite: undefined,
+					},
+					outputTokens: { total: 1, text: undefined, reasoning: undefined },
+				},
 				warnings: [],
 			};
 		},
@@ -329,7 +337,10 @@ describe("governed read path (view + forgetSubject)", () => {
 		expect(JSON.stringify(after)).toContain("{{pii:email:seededtoken00}}");
 		expect(
 			audit.entries().find((record) => record.name === "pii.erasure"),
-		).toMatchObject({ boundary: "privacy", payload: { subjectId: "subject-1" } });
+		).toMatchObject({
+			boundary: "privacy",
+			payload: { subjectId: "subject-1" },
+		});
 	});
 
 	it("fails loud where erasure would be false comfort", async () => {
@@ -340,15 +351,15 @@ describe("governed read path (view + forgetSubject)", () => {
 			model: textModel("ok"),
 			redaction: { posture: "raw" },
 		});
-		await expect(
-			raw.api.forgetSubject({ subjectId: "s1" }),
-		).rejects.toThrow(/erasure is impossible/);
+		await expect(raw.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
+			/erasure is impossible/,
+		);
 		warn.mockRestore();
 
 		const none = createClaw({ model: textModel("ok") });
-		await expect(
-			none.api.forgetSubject({ subjectId: "s1" }),
-		).rejects.toThrow(/no redaction configured/);
+		await expect(none.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
+			/no redaction configured/,
+		);
 	});
 });
 

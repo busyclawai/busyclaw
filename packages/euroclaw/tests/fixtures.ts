@@ -28,14 +28,22 @@ export function textModel(
 	options: { modelId?: string } = {},
 ): V2Model {
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: options.modelId ?? "mock",
 		supportedUrls: {},
 		doGenerate: async () => ({
 			content: [{ type: "text", text }],
-			finishReason: "stop",
-			usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+			finishReason: { unified: "stop", raw: undefined },
+			usage: {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			},
 			warnings: [],
 		}),
 		doStream: async () => {
@@ -47,12 +55,20 @@ export function textModel(
 export function approvalToolModel(): V2Model {
 	let step = 0;
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async (options) => {
-			const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
 			if (step++ === 0) {
 				const promptText = JSON.stringify(options.prompt);
 				const token =
@@ -66,14 +82,14 @@ export function approvalToolModel(): V2Model {
 							input: JSON.stringify({ to: token }),
 						},
 					],
-					finishReason: "tool-calls",
+					finishReason: { unified: "tool-calls", raw: undefined },
 					usage,
 					warnings: [],
 				};
 			}
 			return {
 				content: [{ type: "text", text: "done" }],
-				finishReason: "stop",
+				finishReason: { unified: "stop", raw: undefined },
 				usage,
 				warnings: [],
 			};

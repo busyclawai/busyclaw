@@ -29,7 +29,9 @@ describe("createClaw effects", () => {
 		const effect = await claw.api.getEffect({
 			id: `approval:${approvalId}:tool:c1`,
 		});
-		expect(JSON.stringify(effect?.output)).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(JSON.stringify(effect?.output)).toMatch(
+			/\{\{pii:[a-z]+:[a-z0-9]+\}\}/,
+		);
 		expect(JSON.stringify(effect?.output)).not.toContain("alice@personal.com");
 	});
 

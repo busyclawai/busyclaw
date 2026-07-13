@@ -34,7 +34,15 @@ type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
 const TOKENS = /\{\{pii:email:[a-z0-9]+\}\}/g;
 
-const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+const usage = {
+	inputTokens: {
+		total: 1,
+		noCache: undefined,
+		cacheRead: undefined,
+		cacheWrite: undefined,
+	},
+	outputTokens: { total: 1, text: undefined, reasoning: undefined },
+};
 
 function lookupTool(result: string) {
 	return tool({
@@ -51,7 +59,7 @@ function lookupTool(result: string) {
 function echoTokenModel(received: { prompts: string[] }): V2Model {
 	let step = 0;
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
@@ -68,7 +76,7 @@ function echoTokenModel(received: { prompts: string[] }): V2Model {
 							input: JSON.stringify({}),
 						},
 					],
-					finishReason: "tool-calls",
+					finishReason: { unified: "tool-calls", raw: undefined },
 					usage,
 					warnings: [],
 				};
@@ -76,7 +84,7 @@ function echoTokenModel(received: { prompts: string[] }): V2Model {
 			const token = promptText.match(TOKEN)?.[0] ?? "NOTOKEN";
 			return {
 				content: [{ type: "text", text: `sent to ${token}` }],
-				finishReason: "stop",
+				finishReason: { unified: "stop", raw: undefined },
 				usage,
 				warnings: [],
 			};
@@ -125,7 +133,7 @@ describe("redact-at-ingress coherence", () => {
 		const received = { prompts: [] as string[] };
 		let step = 0;
 		const leakyModel: V2Model = {
-			specificationVersion: "v2",
+			specificationVersion: "v4",
 			provider: "mock",
 			modelId: "mock",
 			supportedUrls: {},
@@ -143,14 +151,14 @@ describe("redact-at-ingress coherence", () => {
 								input: JSON.stringify({}),
 							},
 						],
-						finishReason: "tool-calls",
+						finishReason: { unified: "tool-calls", raw: undefined },
 						usage,
 						warnings: [],
 					};
 				}
 				return {
 					content: [{ type: "text", text: "done" }],
-					finishReason: "stop",
+					finishReason: { unified: "stop", raw: undefined },
 					usage,
 					warnings: [],
 				};

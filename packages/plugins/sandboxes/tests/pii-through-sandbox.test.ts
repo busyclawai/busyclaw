@@ -46,13 +46,21 @@ type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 function runCodeModel(makeCode: (token: string) => string): V2Model {
 	let step = 0;
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async (options) => {
 			const promptText = JSON.stringify(options.prompt);
-			const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
 			if (step++ === 0) {
 				const token =
 					promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
@@ -65,14 +73,14 @@ function runCodeModel(makeCode: (token: string) => string): V2Model {
 							input: JSON.stringify({ code: makeCode(token) }),
 						},
 					],
-					finishReason: "tool-calls",
+					finishReason: { unified: "tool-calls", raw: undefined },
 					usage,
 					warnings: [],
 				};
 			}
 			return {
 				content: [{ type: "text", text: "done" }],
-				finishReason: "stop",
+				finishReason: { unified: "stop", raw: undefined },
 				usage,
 				warnings: [],
 			};

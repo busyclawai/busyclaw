@@ -1,4 +1,8 @@
-import type { ResolveContext, SecretMaterial, Secrets } from "@euroclaw/contracts";
+import type {
+	ResolveContext,
+	SecretMaterial,
+	Secrets,
+} from "@euroclaw/contracts";
 import { EuroclawError } from "@euroclaw/contracts";
 import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
@@ -212,7 +216,12 @@ describe("applyCredentials — failure modes stay distinguishable", () => {
 
 	it("public: undefined and [] security send nothing", async () => {
 		const { secrets, seen } = sourceSecrets({});
-		const undef = await applyCredentials(plan(), binding(undefined), secrets, CTX);
+		const undef = await applyCredentials(
+			plan(),
+			binding(undefined),
+			secrets,
+			CTX,
+		);
 		const empty = await applyCredentials(plan(), binding([]), secrets, CTX);
 		expect(undef.headers).toEqual({});
 		expect(empty.headers).toEqual({});

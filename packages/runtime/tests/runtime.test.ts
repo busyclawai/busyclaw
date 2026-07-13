@@ -46,14 +46,22 @@ type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 function scriptedModel(received: { prompt: string }): V2Model {
 	let step = 0;
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async (options) => {
 			const promptText = JSON.stringify(options.prompt);
 			received.prompt = promptText;
-			const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
 			if (step++ === 0) {
 				const token =
 					promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
@@ -66,14 +74,14 @@ function scriptedModel(received: { prompt: string }): V2Model {
 							input: JSON.stringify({ to: token }),
 						},
 					],
-					finishReason: "tool-calls",
+					finishReason: { unified: "tool-calls", raw: undefined },
 					usage,
 					warnings: [],
 				};
 			}
 			return {
 				content: [{ type: "text", text: "done" }],
-				finishReason: "stop",
+				finishReason: { unified: "stop", raw: undefined },
 				usage,
 				warnings: [],
 			};
@@ -86,14 +94,22 @@ function scriptedModel(received: { prompt: string }): V2Model {
 
 function textOnlyModel(text: string): V2Model {
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async () => ({
 			content: [{ type: "text", text }],
-			finishReason: "stop",
-			usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+			finishReason: { unified: "stop", raw: undefined },
+			usage: {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			},
 			warnings: [],
 		}),
 		doStream: async () => {
@@ -371,8 +387,16 @@ describe("@euroclaw/runtime", () => {
 					providerRan = true;
 					return {
 						content: [{ type: "text", text: "done" }],
-						finishReason: "stop",
-						usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+						finishReason: { unified: "stop", raw: undefined },
+						usage: {
+							inputTokens: {
+								total: 1,
+								noCache: undefined,
+								cacheRead: undefined,
+								cacheWrite: undefined,
+							},
+							outputTokens: { total: 1, text: undefined, reasoning: undefined },
+						},
 						warnings: [],
 					};
 				},
@@ -403,7 +427,7 @@ describe("@euroclaw/runtime", () => {
 	it("does not rehydrate final model text outside a trusted boundary", async () => {
 		const runtime = createRuntime({
 			model: {
-				specificationVersion: "v2",
+				specificationVersion: "v4",
 				provider: "mock",
 				modelId: "mock",
 				supportedUrls: {},
@@ -413,8 +437,16 @@ describe("@euroclaw/runtime", () => {
 						promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
 					return {
 						content: [{ type: "text", text: `final ${token}` }],
-						finishReason: "stop",
-						usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+						finishReason: { unified: "stop", raw: undefined },
+						usage: {
+							inputTokens: {
+								total: 1,
+								noCache: undefined,
+								cacheRead: undefined,
+								cacheWrite: undefined,
+							},
+							outputTokens: { total: 1, text: undefined, reasoning: undefined },
+						},
 						warnings: [],
 					};
 				},
@@ -434,7 +466,7 @@ describe("@euroclaw/runtime", () => {
 	it("fails closed when a model step returns multiple tool calls", async () => {
 		const runtime = createRuntime({
 			model: {
-				specificationVersion: "v2",
+				specificationVersion: "v4",
 				provider: "mock",
 				modelId: "mock",
 				supportedUrls: {},
@@ -453,8 +485,16 @@ describe("@euroclaw/runtime", () => {
 							input: JSON.stringify({}),
 						},
 					],
-					finishReason: "tool-calls",
-					usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+					finishReason: { unified: "tool-calls", raw: undefined },
+					usage: {
+						inputTokens: {
+							total: 1,
+							noCache: undefined,
+							cacheRead: undefined,
+							cacheWrite: undefined,
+						},
+						outputTokens: { total: 1, text: undefined, reasoning: undefined },
+					},
 					warnings: [],
 				}),
 				doStream: async () => {
@@ -724,7 +764,9 @@ describe("@euroclaw/runtime", () => {
 
 		const effect = await runtime.effects?.get(`approval:${approvalId}:tool:c1`);
 		expect(effect?.output).toMatchObject({ sent: true });
-		expect(JSON.stringify(effect?.output)).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(JSON.stringify(effect?.output)).toMatch(
+			/\{\{pii:[a-z]+:[a-z0-9]+\}\}/,
+		);
 		expect(JSON.stringify(effect?.output)).not.toContain("alice@personal.com");
 	});
 

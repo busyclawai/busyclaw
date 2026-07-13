@@ -243,8 +243,16 @@ describe("createClaw engine", () => {
 					resolveAbort();
 					return {
 						content: [{ type: "text", text: "should not persist" }],
-						finishReason: "stop",
-						usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+						finishReason: { unified: "stop", raw: undefined },
+						usage: {
+							inputTokens: {
+								total: 1,
+								noCache: undefined,
+								cacheRead: undefined,
+								cacheWrite: undefined,
+							},
+							outputTokens: { total: 1, text: undefined, reasoning: undefined },
+						},
 						warnings: [],
 					};
 				},

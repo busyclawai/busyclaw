@@ -310,8 +310,7 @@ export function toolEntriesFromToolSet(tools: ToolSetLike): ToolEntry[] {
 		address: name,
 		name,
 		source: "host",
-		description:
-			typeof t.description === "string" ? t.description : undefined,
+		description: typeof t.description === "string" ? t.description : undefined,
 		inputSchema: t.inputSchema,
 		outputSchema: t.outputSchema,
 		risk: t.euroclaw?.effect?.risk,

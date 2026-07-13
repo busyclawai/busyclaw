@@ -46,7 +46,8 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 	const sameContainer = (
 		mapping: PiiMapping,
 		ctx?: RehydrationContext,
-	): boolean => mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
+	): boolean =>
+		mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
 	return {
 		durable: false,
 		save(mapping, subjectIds) {

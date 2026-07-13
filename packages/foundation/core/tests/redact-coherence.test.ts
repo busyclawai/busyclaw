@@ -173,7 +173,10 @@ describe("createRoutingRedactor", () => {
 		);
 		// The same token traveling into a raw container resolves to nothing.
 		expect(
-			await routing.rehydrateValue(redacted, { scope: "claw", scopeId: "raw1" }),
+			await routing.rehydrateValue(redacted, {
+				scope: "claw",
+				scopeId: "raw1",
+			}),
 		).toBe(redacted);
 	});
 

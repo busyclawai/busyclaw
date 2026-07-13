@@ -9,12 +9,20 @@ import { durableRedactor, type V2Model } from "./fixtures";
 function multiStepModel(toolSteps: number): V2Model {
 	let call = 0;
 	return {
-		specificationVersion: "v2",
+		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async () => {
-			const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
 			if (call++ < toolSteps) {
 				return {
 					content: [
@@ -25,14 +33,14 @@ function multiStepModel(toolSteps: number): V2Model {
 							input: JSON.stringify({ n: call }),
 						},
 					],
-					finishReason: "tool-calls",
+					finishReason: { unified: "tool-calls", raw: undefined },
 					usage,
 					warnings: [],
 				};
 			}
 			return {
 				content: [{ type: "text", text: "done" }],
-				finishReason: "stop",
+				finishReason: { unified: "stop", raw: undefined },
 				usage,
 				warnings: [],
 			};

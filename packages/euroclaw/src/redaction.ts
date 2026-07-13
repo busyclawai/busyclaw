@@ -146,14 +146,20 @@ export function resolveRedaction(input: {
 					// that no mapping deletion can reach.
 					throw configurationError(
 						'per-subject erasure is impossible under redaction posture "raw"',
-						{ reason: "durable state persists unredacted values with no mappings" },
+						{
+							reason:
+								"durable state persists unredacted values with no mappings",
+						},
 					);
 				},
 			},
 		};
 	}
 
-	if (cfg.redactor && (cfg.detector !== undefined || cfg.indexKey !== undefined)) {
+	if (
+		cfg.redactor &&
+		(cfg.detector !== undefined || cfg.indexKey !== undefined)
+	) {
 		throw configurationError(
 			"redaction.redactor is mutually exclusive with detector/indexKey",
 			{ reason: "a custom redactor owns its own detection and dedup" },
@@ -193,7 +199,12 @@ export function resolveRedaction(input: {
 	});
 
 	if (cfg.posture !== "per-claw") {
-		return { redactor: strict, armed, perClaw: false, handle: handleOver(strict) };
+		return {
+			redactor: strict,
+			armed,
+			perClaw: false,
+			handle: handleOver(strict),
+		};
 	}
 
 	const clawsStore = input.clawsStore;
