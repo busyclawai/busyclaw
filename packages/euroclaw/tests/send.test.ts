@@ -154,7 +154,7 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
-		await claw.api.grantApproval({ approvalId, by: "alice" });
+		await claw.api.grantApproval({ approvalId, by: "user:alice" });
 		const resumed = await claw.api.continueRun({ approvalId });
 
 		expect(resumed).toMatchObject({ status: "completed", text: "done" });
@@ -218,12 +218,12 @@ describe("createClaw send", () => {
 
 		await claw.api.denyApproval({
 			approvalId,
-			by: "alice",
+			by: "user:alice",
 			reason: "Not allowed",
 		});
 		await expect(claw.api.continueRun({ approvalId })).resolves.toMatchObject({
 			approvalId,
-			decidedBy: "alice",
+			decidedBy: "user:alice",
 			reason: "Not allowed",
 			status: "denied",
 		});
@@ -245,7 +245,7 @@ describe("createClaw send", () => {
 			}),
 		).toMatchObject([
 			{
-				error: { decidedBy: "alice", reason: "Not allowed" },
+				error: { decidedBy: "user:alice", reason: "Not allowed" },
 				status: "failed",
 			},
 		]);

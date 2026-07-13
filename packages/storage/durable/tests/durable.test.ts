@@ -1,3 +1,4 @@
+import { userPrincipal } from "@euroclaw/contracts";
 import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
 import { kyselyAdapter } from "@euroclaw/storage-kysely";
 import Database from "better-sqlite3";
@@ -38,7 +39,7 @@ function suite(
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
 			expect(await store.consume(rec.id)).toBeNull(); // not granted yet
-			expect((await store.grant(rec.id, "alice"))?.status).toBe("approved");
+			expect((await store.grant(rec.id, userPrincipal("alice")))?.status).toBe("approved");
 			const consumed = await store.consume(rec.id);
 			expect(consumed?.toolName).toBe("send_email");
 			expect(consumed?.args).toEqual({ to: "{{pii:abc}}" }); // the call to re-run
@@ -49,11 +50,11 @@ function suite(
 		it("deny blocks consume, and a decided row can't be re-decided", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
-			expect(await store.deny(rec.id, "alice", "not allowed")).toMatchObject({
+			expect(await store.deny(rec.id, userPrincipal("alice"), "not allowed")).toMatchObject({
 				status: "denied",
 				reason: "not allowed",
 			});
-			expect(await store.grant(rec.id, "bob")).toBeNull(); // no longer pending
+			expect(await store.grant(rec.id, userPrincipal("bob"))).toBeNull(); // no longer pending
 			expect(await store.consume(rec.id)).toBeNull();
 		});
 
@@ -65,14 +66,14 @@ function suite(
 				...base,
 				expiresAt: "2026-01-01T00:00:00Z",
 			});
-			await store.grant(rec.id, "alice");
+			await store.grant(rec.id, userPrincipal("alice"));
 			expect(await store.consume(rec.id)).toBeNull();
 		});
 
 		it("consume is race-safe — concurrent resumes, exactly one winner", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
-			await store.grant(rec.id, "alice");
+			await store.grant(rec.id, userPrincipal("alice"));
 			const results = await Promise.all(
 				Array.from({ length: 5 }, () => store.consume(rec.id)),
 			);

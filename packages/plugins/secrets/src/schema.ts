@@ -12,7 +12,7 @@ export const storedSecretKindValues = ["value", "pointer"] as const;
 export const storedSecretFields = {
 	id: field.string({ required: true, unique: true, immutable: true }),
 	// Who saved it — accountability/erasure attribution, never the access boundary itself.
-	createdBy: field.string({ required: true, index: true, immutable: true }),
+	createdBy: field.principal({ required: true, index: true, immutable: true }),
 	// The access boundary. `scope` is an OPAQUE string this table never interprets; store-defaults
 	// `personal:createdBy` (the claws/skills pattern).
 	scope: field.string({ required: true, index: true }),

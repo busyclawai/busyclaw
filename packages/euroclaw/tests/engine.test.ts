@@ -172,7 +172,7 @@ describe("createClaw engine", () => {
 
 		await claw.api.grantApproval({
 			approvalId: parked.approvalIds[0],
-			by: "alice",
+			by: "user:alice",
 		});
 		const resume = await claw.api.continueEngineRun({
 			approvalId: parked.approvalIds[0],

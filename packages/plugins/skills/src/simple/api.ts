@@ -3,6 +3,7 @@ import {
 	configurationError,
 	endpoints,
 	ORGANIZATION_CONTEXT_KEY,
+	type Principal,
 	PRINCIPAL_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
@@ -114,7 +115,9 @@ function assertReadSkillContext(input: unknown): ReadSkillContext {
 	if (valid instanceof ark.errors) {
 		throw validationError("read skill context invalid", valid.summary);
 	}
-	return valid;
+	// The schema validated `readBy`'s principal form; `asPrincipal` re-establishes the brand the
+	// context type carries, so the read stamp and turn context both have a Principal.
+	return { ...valid, readBy: asPrincipal(valid.readBy) };
 }
 
 function assertReadSkillResult(input: unknown): ReadSkillResult {
@@ -144,13 +147,13 @@ function assertActivateSkillInput(input: unknown): ActivateSkillInput {
 }
 
 function assertActivateSkillContext(input: unknown): ActivateSkillContext {
-	const valid = activateSkillContext(input) as
-		| ActivateSkillContext
-		| ark.errors;
+	const valid = activateSkillContext(input);
 	if (valid instanceof ark.errors) {
 		throw validationError("activate skill context invalid", valid.summary);
 	}
-	return valid;
+	// The schema validated `activatedBy`'s principal form; `asPrincipal` re-establishes the brand the
+	// context type carries, so every downstream use (turn context, activation stamp) has a Principal.
+	return { ...valid, activatedBy: asPrincipal(valid.activatedBy) };
 }
 
 async function resolveActivateSkillContext(input: {
@@ -267,7 +270,7 @@ export async function createReadRecord(input: {
 	installationId?: string;
 	packageId?: string;
 	read: ReadSkillInput;
-	readBy: string;
+	readBy: Principal;
 	skillId: string;
 	store: SkillsStore;
 	version?: string;

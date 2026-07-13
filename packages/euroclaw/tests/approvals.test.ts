@@ -31,7 +31,7 @@ describe("createClaw approvals", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await claw.api.grantApproval({ approvalId, by: "alice" });
+		await claw.api.grantApproval({ approvalId, by: "user:alice" });
 		await expect(claw.api.continueRun({ approvalId })).resolves.toMatchObject({
 			status: "completed",
 			text: "done",

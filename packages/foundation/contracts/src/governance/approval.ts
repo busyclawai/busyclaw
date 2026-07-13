@@ -34,7 +34,7 @@ export const approvalFields = {
 	principal: field.principal({ index: true, immutable: true }),
 	reason: field.string(),
 	metadata: field.jsonObject(),
-	decidedBy: field.string(),
+	decidedBy: field.principal(),
 	createdAt: field.string({ required: true, immutable: true }),
 	expiresAt: field.string({ index: true, immutable: true }),
 } as const;
@@ -69,12 +69,14 @@ export type ApprovalStore = {
 	create: (input: NewApproval) => Promise<ApprovalRecord>;
 	/** Read an approval without consuming it. */
 	get: (id: string) => Promise<ApprovalRecord | null>;
-	/** Mark a pending approval approved. Returns the updated record, or null if it wasn't pending. */
-	grant: (id: string, by: string) => Promise<ApprovalRecord | null>;
+	/** Mark a pending approval approved. Returns the updated record, or null if it wasn't pending.
+	 *  `by` is the deciding {@link Principal} — the host constructs it (`userPrincipal(id)`) at the
+	 *  decide boundary, so the `decidedBy` stamp is authorizable by construction. */
+	grant: (id: string, by: Principal) => Promise<ApprovalRecord | null>;
 	/** Mark a pending approval denied. Returns the updated record, or null if it wasn't pending. */
 	deny: (
 		id: string,
-		by: string,
+		by: Principal,
 		reason?: string,
 	) => Promise<ApprovalRecord | null>;
 	/**

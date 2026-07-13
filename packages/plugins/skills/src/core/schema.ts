@@ -226,7 +226,7 @@ export const skillActivationFields = {
 	}),
 	skillId: field.string({ required: true, index: true }),
 	digest: field.string({ required: true, index: true }),
-	activatedBy: field.string({ required: true, index: true }),
+	activatedBy: field.principal({ required: true, index: true }),
 	source: field.enum(skillActivationSourceValues, {
 		required: true,
 		index: true,
@@ -249,7 +249,7 @@ export const skillReadFields = {
 	packageId: field.string({ index: true }),
 	version: field.string({ index: true }),
 	digest: field.string({ index: true }),
-	readBy: field.string({ required: true, index: true }),
+	readBy: field.principal({ required: true, index: true }),
 	source: field.enum(skillReadSourceValues, {
 		required: true,
 		index: true,

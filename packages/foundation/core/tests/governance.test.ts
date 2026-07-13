@@ -8,6 +8,7 @@ import {
 	SCOPE_CONTEXT_KEY,
 	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
+	userPrincipal,
 } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -742,7 +743,9 @@ describe("euroclaw governance — durable approval continuation", () => {
 		expect(pending.toolName).toBe("send_rejection");
 
 		// 2. a human grants it
-		expect((await store.grant(pending.id, "alice"))?.status).toBe("approved");
+		expect((await store.grant(pending.id, userPrincipal("alice")))?.status).toBe(
+			"approved",
+		);
 
 		// 3. resume → the exact call runs, the oversight gate bypassed
 		const r2 = await ec.continueRun(pending.id);

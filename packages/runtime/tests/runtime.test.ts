@@ -4,7 +4,7 @@ import type {
 	EuroclawPlugin,
 	PiiSpan,
 } from "@euroclaw/contracts";
-import { RUN_MODE_CONTEXT_KEY } from "@euroclaw/contracts";
+import { RUN_MODE_CONTEXT_KEY, userPrincipal } from "@euroclaw/contracts";
 import {
 	createMemoryAudit,
 	createMemoryRedactor,
@@ -572,7 +572,7 @@ describe("@euroclaw/runtime", () => {
 			toolName: "send_email",
 		});
 
-		await runtime.approvals?.grant(approval.id, "alice");
+		await runtime.approvals?.grant(approval.id, userPrincipal("alice"));
 		const result = await runtime.continueRun(approval.id);
 
 		expect(result?.status).toBe("completed");
@@ -638,7 +638,7 @@ describe("@euroclaw/runtime", () => {
 			throw new Error("expected runtime to wait for approval");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await runtime.approvals?.grant(approvalId, "alice");
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
 
 		const firstResume = runtime.continueRun(approvalId);
 		await toolStarted;
@@ -718,7 +718,7 @@ describe("@euroclaw/runtime", () => {
 			throw new Error("expected runtime to wait for approval");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await runtime.approvals?.grant(approvalId, "alice");
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
 
 		await expect(runtime.continueRun(approvalId)).rejects.toThrow(
 			/unknown and cannot be retried without idempotency/,
@@ -759,7 +759,7 @@ describe("@euroclaw/runtime", () => {
 			throw new Error("expected runtime to wait for approval");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await runtime.approvals?.grant(approvalId, "alice");
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
 		await runtime.continueRun(approvalId);
 
 		const effect = await runtime.effects?.get(`approval:${approvalId}:tool:c1`);
@@ -830,7 +830,7 @@ describe("@euroclaw/runtime", () => {
 			throw new Error("expected runtime to wait for approval");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await runtime.approvals?.grant(approvalId, "alice");
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
 		await runtime.continueRun(approvalId);
 
 		const effect = await runtime.effects?.get(`approval:${approvalId}:tool:c1`);
@@ -877,7 +877,7 @@ describe("@euroclaw/runtime", () => {
 			throw new Error("expected runtime to wait for approval");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await runtime.approvals?.grant(approvalId, "alice");
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
 		expect((await runtime.continueRun(approvalId))?.status).toBe("completed");
 		expect(toolRuns).toBe(1);
 

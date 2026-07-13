@@ -1,5 +1,6 @@
 export { skillManifest, skillManifests } from "../core";
 
+import { principal as principalSchema } from "@euroclaw/contracts";
 import { type } from "arktype";
 import { nonEmptyString, skillManifest } from "../core";
 
@@ -46,16 +47,18 @@ export const activateSkillInput = type({
 	"threadId?": optionalNes,
 });
 
-// Trusted principal facts for the ladder. Org/team are ADDITIVE — absent until the host's identity
-// wiring supplies them; an org-less deployment activates personal skills.
+// Trusted principal facts for the ladder. `activatedBy`/`readBy` are the deciding principal — the
+// host resolves a real `Principal` (`userPrincipal(id)`); the schema validates its principal form at
+// this boundary and the api brands it (`asPrincipal`) for the stamp column. Org/team are ADDITIVE —
+// absent until the host's identity wiring supplies them; an org-less deployment activates personal skills.
 export const activateSkillContext = type({
-	activatedBy: nes,
+	activatedBy: principalSchema,
 	"teamId?": optionalNes,
 	"organizationId?": optionalNes,
 });
 
 export const readSkillContext = type({
-	readBy: nes,
+	readBy: principalSchema,
 	"teamId?": optionalNes,
 	"organizationId?": optionalNes,
 });

@@ -1,4 +1,4 @@
-import type { TurnContext } from "@euroclaw/contracts";
+import type { Principal, TurnContext } from "@euroclaw/contracts";
 import type { SkillManifest, SkillsStore } from "../core";
 import type {
 	activateSkillContext,
@@ -28,9 +28,18 @@ export type ActiveSkillResolver = (
 ) => ActiveSkillSelection | Promise<ActiveSkillSelection>;
 
 export type ActivateSkillInput = typeof activateSkillInput.infer;
-export type ActivateSkillContext = typeof activateSkillContext.infer;
+// `activatedBy`/`readBy` carry the branded `Principal` the host constructs — the arktype narrow
+// validates the form but infers a bare `string`, so rebrand the deciding field here (the assert
+// re-establishes the brand via `asPrincipal`). teamId/organizationId stay boundary refs.
+export type ActivateSkillContext = Omit<
+	typeof activateSkillContext.infer,
+	"activatedBy"
+> & { activatedBy: Principal };
 export type ReadSkillInput = typeof readSkillInput.infer;
-export type ReadSkillContext = typeof readSkillContext.infer;
+export type ReadSkillContext = Omit<
+	typeof readSkillContext.infer,
+	"readBy"
+> & { readBy: Principal };
 
 export type ActivateSkillContextResolver = (
 	input: ActivateSkillInput,

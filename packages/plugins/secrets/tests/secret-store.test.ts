@@ -102,11 +102,11 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 		const record = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v1",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		expect(record).toMatchObject({
 			scope: "personal",
-			scopeId: "alice",
+			scopeId: "user:alice",
 			kind: "value",
 		});
 	});
@@ -116,16 +116,16 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 		const first = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v1",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		const second = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v2",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		expect(second.id).toBe(first.id);
 		expect(
-			await provider.get("MY_NOTION_TOKEN", { principal: "alice" }),
+			await provider.get("MY_NOTION_TOKEN", { principal: "user:alice" }),
 		).toEqual({
 			kind: "token",
 			value: "v2",
@@ -135,7 +135,7 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 	it("rejects a set without a value — the store writes value-kind rows", async () => {
 		const { store } = connectedStore();
 		await expect(
-			store.set({ name: "NO_MATERIAL", createdBy: "alice" }),
+			store.set({ name: "NO_MATERIAL", createdBy: "user:alice" }),
 		).rejects.toThrow(/value is required/);
 	});
 });
@@ -146,25 +146,25 @@ describe("the store provider — nearest-scope resolution", () => {
 		await store.set({
 			name: "MY_TOKEN",
 			value: "org-wide",
-			createdBy: "admin",
+			createdBy: "user:admin",
 			scope: "organization",
 			scopeId: "org-a",
 		});
 		await store.set({
 			name: "MY_TOKEN",
 			value: "alices-own",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		expect(
 			await provider.get("MY_TOKEN", {
-				principal: "alice",
+				principal: "user:alice",
 				organizationId: "org-a",
 			}),
 		).toEqual({ kind: "token", value: "alices-own" });
 		// bob saved nothing personally — the org-wide row serves him.
 		expect(
 			await provider.get("MY_TOKEN", {
-				principal: "bob",
+				principal: "user:bob",
 				organizationId: "org-a",
 			}),
 		).toEqual({ kind: "token", value: "org-wide" });
@@ -172,8 +172,8 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("isolates scopes — another principal's personal row is unreachable", async () => {
 		const { provider, store } = connectedStore();
-		await store.set({ name: "PRIVATE", value: "alices", createdBy: "alice" });
-		expect(await provider.get("PRIVATE", { principal: "mallory" })).toBeNull();
+		await store.set({ name: "PRIVATE", value: "alices", createdBy: "user:alice" });
+		expect(await provider.get("PRIVATE", { principal: "user:mallory" })).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
 			await provider.get("PRIVATE", { organizationId: "org-a" }),
@@ -182,8 +182,8 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("an ORG-LESS context resolves personal rows — org is fully additive", async () => {
 		const { provider, store } = connectedStore();
-		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "alice" });
-		expect(await provider.get("MY_TOKEN", { principal: "alice" })).toEqual({
+		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "user:alice" });
+		expect(await provider.get("MY_TOKEN", { principal: "user:alice" })).toEqual({
 			kind: "token",
 			value: "v",
 		});
@@ -193,7 +193,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		const { provider } = connectedStore();
 		expect(
 			await provider.get("NOWHERE", {
-				principal: "alice",
+				principal: "user:alice",
 				organizationId: "org-a",
 			}),
 		).toBeNull();
@@ -207,7 +207,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		});
 		const [brokenProvider] = broken.secrets.providers;
 		await expect(
-			brokenProvider.get("ANY", { principal: "alice" }),
+			brokenProvider.get("ANY", { principal: "user:alice" }),
 		).rejects.toThrow(/connection refused/);
 	});
 
@@ -221,7 +221,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		});
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ANY", { principal: "alice" }),
+			provider.get("ANY", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(
@@ -234,7 +234,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		const plugin = secrets([], { store: { key: TEST_KEY } });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ANY", { principal: "alice" }),
+			provider.get("ANY", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/secret store has no database/),
@@ -250,9 +250,9 @@ describe("the store provider — nearest-scope resolution", () => {
 			model: "stored_secret",
 			data: {
 				id: "ptr-1",
-				createdBy: "alice",
+				createdBy: "user:alice",
 				scope: "personal",
-				scopeId: "alice",
+				scopeId: "user:alice",
 				name: "PTR",
 				kind: "pointer",
 				provider: "vault",
@@ -262,7 +262,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			},
 		});
 		await expect(
-			provider.get("PTR", { principal: "alice" }),
+			provider.get("PTR", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/pointers are not supported yet/),
@@ -276,19 +276,19 @@ describe("data-tier precedence through buildSecrets", () => {
 		await store.set({
 			name: "SHARED_NAME",
 			value: "from-store",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		// env FIRST in the listing — tier ordering must still consult the store first.
 		const secrets = buildSecrets([
 			env({ vars: { SHARED_NAME: "from-env" } }),
 			provider,
 		]);
-		expect(await secrets.get("SHARED_NAME", { principal: "alice" })).toEqual({
+		expect(await secrets.get("SHARED_NAME", { principal: "user:alice" })).toEqual({
 			kind: "token",
 			value: "from-store",
 		});
 		// a store miss falls through to the config tier — env still serves everyone else.
-		expect(await secrets.get("SHARED_NAME", { principal: "bob" })).toEqual({
+		expect(await secrets.get("SHARED_NAME", { principal: "user:bob" })).toEqual({
 			kind: "token",
 			value: "from-env",
 		});
@@ -301,9 +301,9 @@ describe("encryption at rest", () => {
 		await store.set({
 			name: "ROUNDTRIP",
 			value: "plain-secret",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
-		expect(await provider.get("ROUNDTRIP", { principal: "alice" })).toEqual({
+		expect(await provider.get("ROUNDTRIP", { principal: "user:alice" })).toEqual({
 			kind: "token",
 			value: "plain-secret",
 		});
@@ -314,13 +314,13 @@ describe("encryption at rest", () => {
 		await store.set({
 			name: "AT_REST",
 			value: "plain-secret",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		const raw = (await db.findOne({
 			model: "stored_secret",
 			where: [
 				{ field: "scope", value: "personal" },
-				{ field: "scopeId", value: "alice", connector: "AND" },
+				{ field: "scopeId", value: "user:alice", connector: "AND" },
 				{ field: "name", value: "AT_REST", connector: "AND" },
 			],
 		})) as { value?: string } | null;
@@ -341,13 +341,13 @@ describe("encryption at rest", () => {
 		const seeder = createStoredSecretsStore(db, {
 			cipher: cipherFor(TEST_KEY),
 		});
-		await seeder.set({ name: "LOCKED", value: "material", createdBy: "alice" });
+		await seeder.set({ name: "LOCKED", value: "material", createdBy: "user:alice" });
 		// …but the plugin has no config key and its reader resolves nothing.
 		const plugin = secrets([], { store: true });
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("LOCKED", { principal: "alice" }),
+			provider.get("LOCKED", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			// secrets.require names the key and fails loud when nothing resolves it.
@@ -365,13 +365,13 @@ describe("encryption at rest", () => {
 		await seeder.set({
 			name: "ROTATED",
 			value: "material",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		const plugin = secrets([], { store: { key: OTHER_KEY } });
 		plugin.configure?.({ adapter: db });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ROTATED", { principal: "alice" }),
+			provider.get("ROTATED", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/cannot decrypt stored secret/),
@@ -397,21 +397,21 @@ describe("encryption at rest", () => {
 		await seeder.set({
 			name: SECRET_STORE_KEY_NAME,
 			value: "not-the-key",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 		await seeder.set({
 			name: "USER_TOKEN",
 			value: "sealed",
-			createdBy: "alice",
+			createdBy: "user:alice",
 		});
 
 		// The key name resolves from ENV (the short-circuit made the data tier a miss)…
 		expect(
-			await reader.get(SECRET_STORE_KEY_NAME, { principal: "alice" }),
+			await reader.get(SECRET_STORE_KEY_NAME, { principal: "user:alice" }),
 		).toEqual({ kind: "token", value: TEST_KEY });
 		// …and a normal name resolves THROUGH that same reader-resolved key: the full loop — store
 		// row → decrypt → lazy key via env — with no recursion and no hang.
-		expect(await reader.get("USER_TOKEN", { principal: "alice" })).toEqual({
+		expect(await reader.get("USER_TOKEN", { principal: "user:alice" })).toEqual({
 			kind: "token",
 			value: "sealed",
 		});

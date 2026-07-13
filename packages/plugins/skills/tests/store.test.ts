@@ -1,3 +1,4 @@
+import { userPrincipal } from "@euroclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { skillsModels } from "../src/core/index";
@@ -87,7 +88,7 @@ describe("createSkillsStore", () => {
 			installationId: "install-1",
 			skillId: manifest.id,
 			digest: pkg.digest,
-			activatedBy: "actor-1",
+			activatedBy: userPrincipal("actor-1"),
 			source: "user",
 		});
 		expect(activation).toMatchObject({ skillId: "summarize-thread" });
@@ -105,7 +106,7 @@ describe("createSkillsStore", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			readBy: "actor-1",
+			readBy: userPrincipal("actor-1"),
 			source: "user",
 		});
 		expect(read).toMatchObject({ skillId: "summarize-thread" });

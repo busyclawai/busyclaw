@@ -23,7 +23,7 @@ describe("createClaw effects", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await claw.api.grantApproval({ approvalId, by: "alice" });
+		await claw.api.grantApproval({ approvalId, by: "user:alice" });
 		await claw.api.continueRun({ approvalId });
 
 		const effect = await claw.api.getEffect({
@@ -57,7 +57,7 @@ describe("createClaw effects", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await claw.api.grantApproval({ approvalId, by: "alice" });
+		await claw.api.grantApproval({ approvalId, by: "user:alice" });
 		await claw.api.continueRun({ approvalId });
 
 		await expect(
@@ -95,7 +95,7 @@ describe("createClaw effects", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await claw.api.grantApproval({ approvalId, by: "alice" });
+		await claw.api.grantApproval({ approvalId, by: "user:alice" });
 		expect((await claw.api.continueRun({ approvalId }))?.status).toBe(
 			"completed",
 		);
@@ -169,7 +169,7 @@ describe("createClaw effects", () => {
 		}
 		await claw.api.grantApproval({
 			approvalId: waiting.approvalIds[0],
-			by: "alice",
+			by: "user:alice",
 		});
 
 		await expect(

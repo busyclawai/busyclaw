@@ -1,4 +1,5 @@
 import {
+	asPrincipal,
 	endpoints,
 	principal as principalSchema,
 	validationError,
@@ -124,17 +125,20 @@ export function createSecretsManagementApi(
 			handler: async (input: SetSecretInput): Promise<StoredSecretView> => {
 				const valid = assertSetSecretInput(input);
 				// Structural scoping: personal:principal, always. The HOST passes the already-tagged
-				// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the api takes it
-				// directly. Both `createdBy` and the personal boundary key are that principal — the caller never
-				// names a target — and because sessionIdentity stamps the same principal onto ctx.principal, the
-				// written `scopeId` matches the provider's read. `kind` is the store's to write (value-kind
-				// rows), so it is not passed here.
+				// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the input schema
+				// re-validates its principal form, and `asPrincipal` re-establishes the brand the `createdBy`
+				// stamp column carries. Both `createdBy` and the personal boundary key are that principal — the
+				// caller never names a target — and because sessionIdentity stamps the same principal onto
+				// ctx.principal, the written `scopeId` matches the provider's read (a boundary ref, so the
+				// principal widens to its plain string). `kind` is the store's to write (value-kind rows), so it
+				// is not passed here.
+				const owner = asPrincipal(valid.principal);
 				const record = await requireStore().set({
 					name: valid.name,
 					value: valid.value,
-					createdBy: valid.principal,
+					createdBy: owner,
 					scope: "personal",
-					scopeId: valid.principal,
+					scopeId: owner,
 				});
 				return toView(record);
 			},

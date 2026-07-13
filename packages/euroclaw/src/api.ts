@@ -815,9 +815,10 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		grantApproval: ({ approvalId, by }) =>
-			context.runtime.approvals?.grant(approvalId, by) ?? Promise.resolve(null),
+			context.runtime.approvals?.grant(approvalId, asPrincipal(by)) ??
+			Promise.resolve(null),
 		denyApproval: ({ approvalId, by, reason }) =>
-			context.runtime.approvals?.deny(approvalId, by, reason) ??
+			context.runtime.approvals?.deny(approvalId, asPrincipal(by), reason) ??
 			Promise.resolve(null),
 		getApproval: ({ id }) =>
 			context.runtime.approvals?.get(id) ?? Promise.resolve(null),

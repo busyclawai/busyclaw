@@ -25,7 +25,7 @@ describe("createClaw plugin APIs", () => {
 			plugins: [
 				governedSkillsPlugin({
 					activationContext: {
-						activatedBy: "actor-1",
+						activatedBy: "user:actor-1",
 						teamId: "team-1",
 						organizationId: "organization-1",
 					},
@@ -112,7 +112,7 @@ describe("createClaw plugin APIs", () => {
 			plugins: [
 				governedSkillsPlugin({
 					activationContext: {
-						activatedBy: "actor-1",
+						activatedBy: "user:actor-1",
 						organizationId: "organization-1",
 					},
 					skills: [],
