@@ -32,12 +32,12 @@ describe("@euroclaw/skills (governed)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 		});
 		expect(
 			await api.installations.updateStatus({
 				id: installation.id,
-				patch: { status: "enabled", enabledBy: "admin-1" },
+				patch: { status: "enabled", enabledBy: "user:admin-1" },
 			}),
 		).toMatchObject({ status: "enabled" });
 	});
@@ -75,7 +75,7 @@ describe("@euroclaw/skills (governed)", () => {
 			source: "upload",
 		});
 		await api.install({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			packageId: pkg.packageId,
 			scope: "team",
 			scopeId: "team-1",
@@ -121,11 +121,11 @@ describe("@euroclaw/skills (governed)", () => {
 	it("reads personal DB-backed skills and persists read records", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()), {
 			readContext: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 			},
 		});
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:read-personal",
 			manifest: {
 				id: "read-personal",
@@ -148,7 +148,7 @@ describe("@euroclaw/skills (governed)", () => {
 			installation: { id: personal.installation.id, status: "enabled" },
 			kind: "installed",
 			read: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 				runId: "run-1",
 				skillId: "read-personal",
 				threadId: "thread-1",
@@ -172,7 +172,7 @@ describe("@euroclaw/skills (governed)", () => {
 	it("records static skill reads when a store and read context are available", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()), {
 			readContext: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 			},
 			staticSkills: [
 				{
@@ -193,7 +193,7 @@ describe("@euroclaw/skills (governed)", () => {
 			kind: "static",
 			manifest: { description: "Static read" },
 			read: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 				runId: "run-static",
 				skillId: "static-read",
 				threadId: "thread-static",
@@ -209,7 +209,7 @@ describe("@euroclaw/skills (governed)", () => {
 		const apiWithoutContext = createGovernedSkillsApi(store);
 		const api = createGovernedSkillsApi(store, {
 			readContext: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 				organizationId: "organization-1",
 			},
 		});
@@ -225,7 +225,7 @@ describe("@euroclaw/skills (governed)", () => {
 			source: "upload",
 		});
 		const installation = await api.install({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			packageId: pkg.packageId,
 			scope: "organization",
 			scopeId: "organization-1",
@@ -233,10 +233,10 @@ describe("@euroclaw/skills (governed)", () => {
 		});
 		await api.trustInstallation({
 			installationId: installation.id,
-			trustedBy: "admin-1",
+			trustedBy: "user:admin-1",
 		});
 		await api.enableInstallation({
-			enabledBy: "admin-1",
+			enabledBy: "user:admin-1",
 			installationId: installation.id,
 		});
 
@@ -249,7 +249,7 @@ describe("@euroclaw/skills (governed)", () => {
 		await api.acl.grant({
 			installationId: installation.id,
 			permission: "read",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 		await expect(
@@ -263,7 +263,7 @@ describe("@euroclaw/skills (governed)", () => {
 	it("rejects reads for unavailable installed skills", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()), {
 			readContext: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 				organizationId: "organization-1",
 			},
 		});
@@ -279,7 +279,7 @@ describe("@euroclaw/skills (governed)", () => {
 			source: "upload",
 		});
 		const installation = await api.install({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			packageId: pkg.packageId,
 			scope: "organization",
 			scopeId: "organization-1",
@@ -288,7 +288,7 @@ describe("@euroclaw/skills (governed)", () => {
 		await api.acl.grant({
 			installationId: installation.id,
 			permission: "read",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 
@@ -301,7 +301,7 @@ describe("@euroclaw/skills (governed)", () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()));
 
 		const result = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:personal",
 			manifest: {
 				id: "personal",
@@ -313,26 +313,26 @@ describe("@euroclaw/skills (governed)", () => {
 		});
 
 		expect(result.package).toMatchObject({
-			publisher: "actor-1",
+			publisher: "user:actor-1",
 			source: "local",
 		});
 		expect(result.installation).toMatchObject({
-			createdBy: "actor-1",
-			enabledBy: "actor-1",
+			createdBy: "user:actor-1",
+			enabledBy: "user:actor-1",
 			scope: "personal",
-			scopeId: "actor-1",
+			scopeId: "user:actor-1",
 			status: "enabled",
 		});
 		expect(result.grant).toMatchObject({
 			installationId: result.installation.id,
 			permission: "activate",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 		expect(result.readGrant).toMatchObject({
 			installationId: result.installation.id,
 			permission: "read",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 		await expect(
@@ -345,7 +345,7 @@ describe("@euroclaw/skills (governed)", () => {
 	it("proposes sharing until approved, then grants", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()));
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:governed-share",
 			manifest: {
 				id: "governed-share",
@@ -364,14 +364,14 @@ describe("@euroclaw/skills (governed)", () => {
 				principalId: "team-1",
 				principalType: "team",
 				reason: "share with hiring team",
-				requestedBy: "actor-1",
+				requestedBy: "user:actor-1",
 			}),
 		).resolves.toMatchObject({
 			proposal: {
 				kind: "share",
-				proposerActorId: "actor-1",
+				proposerActorId: "user:actor-1",
 				scope: "personal",
-				scopeId: "actor-1",
+				scopeId: "user:actor-1",
 				state: expect.objectContaining({
 					installationId: personal.installation.id,
 					permission: "activate",
@@ -391,11 +391,11 @@ describe("@euroclaw/skills (governed)", () => {
 		// An explicit approver short-circuits straight to the grant.
 		await expect(
 			api.share({
-				approvedBy: "admin-1",
+				approvedBy: "user:admin-1",
 				installationId: personal.installation.id,
 				principalId: "team-1",
 				principalType: "team",
-				requestedBy: "actor-1",
+				requestedBy: "user:actor-1",
 			}),
 		).resolves.toMatchObject({
 			grant: {
@@ -411,7 +411,7 @@ describe("@euroclaw/skills (governed)", () => {
 	it("requestShare always records a share proposal", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()));
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:request-share",
 			manifest: {
 				id: "request-share",
@@ -426,12 +426,12 @@ describe("@euroclaw/skills (governed)", () => {
 			api.requestShare({
 				installationId: personal.installation.id,
 				principalType: "public",
-				requestedBy: "actor-1",
+				requestedBy: "user:actor-1",
 			}),
 		).resolves.toMatchObject({
 			kind: "share",
 			scope: "personal",
-			scopeId: "actor-1",
+			scopeId: "user:actor-1",
 			state: expect.objectContaining({
 				permission: "activate",
 				principalType: "public",
@@ -443,7 +443,7 @@ describe("@euroclaw/skills (governed)", () => {
 	it("validates share principals before writing grants or proposals", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()));
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:bad-share",
 			manifest: {
 				id: "bad-share",
@@ -457,16 +457,16 @@ describe("@euroclaw/skills (governed)", () => {
 		await expect(
 			api.share({
 				installationId: personal.installation.id,
-				principalId: "actor-2",
+				principalId: "user:actor-2",
 				principalType: "public",
-				requestedBy: "actor-1",
+				requestedBy: "user:actor-1",
 			}),
 		).rejects.toThrow(/principalId must be undefined/);
 		await expect(
 			api.requestShare({
 				installationId: personal.installation.id,
 				principalType: "team",
-				requestedBy: "actor-1",
+				requestedBy: "user:actor-1",
 			}),
 		).rejects.toThrow(/principalId must be a string/);
 	});
@@ -487,14 +487,14 @@ describe("@euroclaw/skills (governed)", () => {
 
 		await expect(
 			api.install({
-				createdBy: "admin-1",
+				createdBy: "user:admin-1",
 				packageId: pkg.packageId,
 				scope: "team",
 				scopeId: "team-1",
 				version: pkg.version,
 			}),
 		).resolves.toMatchObject({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			digest: pkg.digest,
 			packageId: pkg.packageId,
 			scope: "team",
@@ -520,14 +520,14 @@ describe("@euroclaw/skills (governed)", () => {
 
 		await expect(
 			api.install({
-				createdBy: "actor-1",
+				createdBy: "user:actor-1",
 				packageId: pkg.packageId,
 				version: pkg.version,
 			}),
 		).resolves.toMatchObject({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			scope: "personal",
-			scopeId: "actor-1",
+			scopeId: "user:actor-1",
 			status: "installed",
 		});
 	});
@@ -537,7 +537,7 @@ describe("@euroclaw/skills (governed)", () => {
 
 		await expect(
 			api.install({
-				createdBy: "admin-1",
+				createdBy: "user:admin-1",
 				packageId: "team.missing",
 				version: "1.0.0",
 			}),
@@ -558,31 +558,31 @@ describe("@euroclaw/skills (governed)", () => {
 			source: "upload",
 		});
 		const installation = await api.install({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			packageId: pkg.packageId,
 			version: pkg.version,
 		});
 
 		await expect(
 			api.enableInstallation({
-				enabledBy: "admin-1",
+				enabledBy: "user:admin-1",
 				installationId: installation.id,
 			}),
 		).rejects.toThrow(/must be trusted/);
 		const trusted = await api.trustInstallation({
 			installationId: installation.id,
-			trustedBy: "admin-1",
+			trustedBy: "user:admin-1",
 		});
 		expect(trusted).toMatchObject({
 			status: "trusted",
-			trustedBy: "admin-1",
+			trustedBy: "user:admin-1",
 		});
 		await expect(
 			api.enableInstallation({
-				enabledBy: "admin-1",
+				enabledBy: "user:admin-1",
 				installationId: installation.id,
 			}),
-		).resolves.toMatchObject({ enabledBy: "admin-1", status: "enabled" });
+		).resolves.toMatchObject({ enabledBy: "user:admin-1", status: "enabled" });
 	});
 
 	it("checks activation grants before writing ACL records", async () => {
@@ -599,7 +599,7 @@ describe("@euroclaw/skills (governed)", () => {
 			source: "upload",
 		});
 		const installation = await api.install({
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			packageId: pkg.packageId,
 			version: pkg.version,
 		});
@@ -607,7 +607,7 @@ describe("@euroclaw/skills (governed)", () => {
 		await expect(
 			api.grantActivation({
 				installationId: installation.id,
-				principalId: "actor-1",
+				principalId: "user:actor-1",
 				principalType: "public",
 			}),
 		).rejects.toThrow(/principalId must be undefined/);
@@ -620,20 +620,20 @@ describe("@euroclaw/skills (governed)", () => {
 		await expect(
 			api.grantActivation({
 				installationId: "install-missing",
-				principalId: "actor-1",
+				principalId: "user:actor-1",
 				principalType: "actor",
 			}),
 		).rejects.toThrow(/installation not found/);
 		await expect(
 			api.grantActivation({
 				installationId: installation.id,
-				principalId: "actor-1",
+				principalId: "user:actor-1",
 				principalType: "actor",
 			}),
 		).resolves.toMatchObject({
 			installationId: installation.id,
 			permission: "activate",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 	});

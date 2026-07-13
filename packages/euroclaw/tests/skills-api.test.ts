@@ -51,7 +51,7 @@ describe("createClaw plugin APIs", () => {
 			status: "enabled",
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "team",
 			scopeId: "team-1",
 		});
@@ -132,7 +132,7 @@ describe("createClaw plugin APIs", () => {
 		});
 		await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 		});
 		await claw.api.createThread({
 			id: "thread-1",
@@ -156,7 +156,7 @@ describe("createClaw plugin APIs", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",

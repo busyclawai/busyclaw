@@ -146,7 +146,7 @@ export const factsOverlayFields = {
 	groups: field.json(type("string[]")),
 	resource: field.string(),
 	audit: field.boolean(),
-	updatedBy: field.string({ required: true }),
+	updatedBy: field.principal({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;

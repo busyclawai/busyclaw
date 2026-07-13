@@ -239,7 +239,7 @@ describe("governed read path (view + forgetSubject)", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			name: "assistant",
 		});
 		const thread = await claw.api.createThread({

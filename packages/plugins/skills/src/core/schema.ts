@@ -177,15 +177,15 @@ export const skillInstallationFields = {
 	// visibility + organizationId/teamId/ownerActorId columns double-encoded exactly this pair
 	// (visibility named the boundary KIND, the triple named its ID). Default at create:
 	// scope="personal", scopeId=createdBy.
-	createdBy: field.string({ required: true, index: true, immutable: true }),
+	createdBy: field.principal({ required: true, index: true, immutable: true }),
 	scope: field.string({ required: true, index: true }),
 	scopeId: field.string({ required: true, index: true }),
 	status: field.enum(skillInstallationStatusValues, {
 		required: true,
 		index: true,
 	}),
-	trustedBy: field.string({ index: true }),
-	enabledBy: field.string({ index: true }),
+	trustedBy: field.principal({ index: true }),
+	enabledBy: field.principal({ index: true }),
 	createdAt: field.string({ required: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
@@ -282,7 +282,7 @@ export const skillProposalFields = {
 	scope: field.string({ required: true, index: true }),
 	scopeId: field.string({ required: true, index: true }),
 	targetInstallationId: field.string({ index: true }),
-	proposerActorId: field.string({ required: true, index: true }),
+	proposerActorId: field.principal({ required: true, index: true }),
 	kind: field.enum(skillProposalKindValues, { required: true, index: true }),
 	status: field.enum(skillProposalStatusValues, {
 		required: true,

@@ -166,7 +166,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			organizationId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 		expect(report.added.sort()).toEqual([
 			"petstore.addPet",
@@ -180,7 +180,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		// The blob + report + version were persisted.
 		const stored = await stores.specRegistrations.get("org-a", "petstore");
 		expect(stored?.contentVersion).toBe(report.contentVersion);
-		expect(stored?.registeredBy).toBe("alice");
+		expect(stored?.registeredBy).toBe("user:alice");
 	});
 
 	it("re-registration with an operation removed DELETES exactly that row (fail-closed)", async () => {
@@ -189,7 +189,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const input = {
 			organizationId: "org-a",
 			source: "petstore",
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		};
 		await registry.registerOpenApiSpec({ ...input, document: petstore() });
 		const report = await registry.registerOpenApiSpec({
@@ -210,7 +210,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const input = {
 			organizationId: "org-a",
 			source: "petstore",
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		};
 		const first = await registry.registerOpenApiSpec({
 			...input,
@@ -240,7 +240,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const input = {
 			organizationId: "org-a",
 			source: "petstore",
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 			document: petstore(),
 		};
 		const first = await registry.registerOpenApiSpec(input);
@@ -259,7 +259,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				organizationId: "org-a",
 				source: "Bad.Slug",
 				document: petstore(),
-				registeredBy: "alice",
+				registeredBy: "user:alice",
 			}),
 		).rejects.toThrow("invalid registration source");
 		expect(stores.tools.size).toBe(0);
@@ -273,7 +273,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				organizationId: "org-a",
 				source: "petstore",
 				document: petstore(),
-				registeredBy: "alice",
+				registeredBy: "user:alice",
 			}),
 		).rejects.toThrow("too large");
 		expect(stores.tools.size).toBe(0);
@@ -287,14 +287,14 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			organizationId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 		expect(await authzChanges.count("org-a")).toBe(1);
 		expect(changes[0]).toMatchObject({
 			kind: "spec_registered",
 			organizationId: "org-a",
 			summary: { source: "petstore", contentVersion: report.contentVersion },
-			by: "alice",
+			by: "user:alice",
 		});
 	});
 
@@ -305,7 +305,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			organizationId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 		expect(report.added).toHaveLength(4); // the append is a no-op; registration still works
 	});
@@ -326,7 +326,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			organizationId: "org-a",
 			source: "svc",
 			document,
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 		expect(report.added).toEqual(["svc.dup"]);
 		expect(report.skipped).toHaveLength(1);

@@ -11,7 +11,7 @@ const sliceInput = (
 	name,
 	cedar: `forbid(principal, action == Action::"petstore.removePet", resource);`,
 	mode,
-	updatedBy: "admin",
+	updatedBy: "user:admin",
 });
 
 const stamps = () => {
@@ -30,7 +30,7 @@ describe("createRegistryStores — policy_slice", () => {
 			name: "reads-only",
 			mode: "enforce",
 			cedar: sliceInput("org-a").cedar,
-			updatedBy: "admin",
+			updatedBy: "user:admin",
 		});
 	});
 
@@ -43,7 +43,7 @@ describe("createRegistryStores — policy_slice", () => {
 			...sliceInput("org-a", "guard"),
 			cedar: `permit(principal, action, resource);`,
 			mode: "shadow",
-			updatedBy: "bob",
+			updatedBy: "user:bob",
 		});
 		expect(second.id).toBe(first.id); // replace-in-place, not a new row
 		expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
@@ -51,7 +51,7 @@ describe("createRegistryStores — policy_slice", () => {
 		const listed = await policySlices.listByOrganization("org-a");
 		expect(listed).toHaveLength(1); // one row per (org, name)
 		expect(listed[0]?.mode).toBe("shadow");
-		expect(listed[0]?.updatedBy).toBe("bob");
+		expect(listed[0]?.updatedBy).toBe("user:bob");
 	});
 
 	it("distinct names in one org coexist", async () => {
@@ -93,7 +93,7 @@ describe("createRegistryStores — policy_slice", () => {
 				organizationId: "org-bad",
 				name: "x",
 				mode: "enforce",
-				updatedBy: "a",
+				updatedBy: "user:a",
 				createdAt: "t",
 				updatedAt: "t",
 			},
@@ -114,7 +114,7 @@ describe("createRegistryStores — policy_slice", () => {
 				name: "x",
 				cedar: "permit(principal, action, resource);",
 				mode: "sometimes", // not enforce|shadow|off
-				updatedBy: "a",
+				updatedBy: "user:a",
 				createdAt: "t",
 				updatedAt: "t",
 			},

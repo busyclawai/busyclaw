@@ -134,7 +134,7 @@ describe("registry blueprint (composed slice 5)", () => {
 			organizationId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 
 		const assembleFor = async (organizationId: string) => {
@@ -238,7 +238,7 @@ describe("registry blueprint (composed slice 5)", () => {
 			organizationId: "org-a",
 			source: "petstore",
 			document: petstore(false), // removePet gone from the spec
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 
 		// The content version changed → the router misses → rebuilds without removePet.
@@ -256,7 +256,7 @@ describe("registry blueprint (composed slice 5)", () => {
 			actionId: "petstore.getPet",
 			access: "write", // a read tool, forced to write by the customer overlay
 			groups: ["audited"],
-			updatedBy: "admin",
+			updatedBy: "user:admin",
 		});
 		const assembled = await assembleFor("org-a");
 		const getPet = assembled.actions.find((a) => a.id === "petstore.getPet");
@@ -290,7 +290,7 @@ describe("the registration verb is itself governed", () => {
 		const registry = createSpecRegistry(stores);
 		const registerTool = registerOpenApiSpecTool(registry, {
 			organizationId: principalOrg,
-			registeredBy: "alice",
+			registeredBy: "user:alice",
 		});
 		const model = buildAuthzModel([REGISTER_OPENAPI_SPEC_ACTION]);
 		const runTool = async (call: ToolCall) =>

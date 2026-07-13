@@ -141,11 +141,11 @@ describe("@euroclaw/skills (simple)", () => {
 		// No organization anywhere: a personal skill is created and read org-free (org is additive).
 		const api = createSimpleSkillsApi(createSkillsStore(db()), {
 			readContext: {
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 			},
 		});
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:read-personal",
 			manifest: {
 				id: "read-personal",
@@ -156,15 +156,15 @@ describe("@euroclaw/skills (simple)", () => {
 			version: "1.0.0",
 		});
 		expect(personal.installation).toMatchObject({
-			createdBy: "actor-1",
-			enabledBy: "actor-1",
+			createdBy: "user:actor-1",
+			enabledBy: "user:actor-1",
 			scope: "personal",
-			scopeId: "actor-1",
+			scopeId: "user:actor-1",
 			status: "enabled",
 		});
 		expect(personal.grant).toMatchObject({
 			permission: "activate",
-			principalId: "actor-1",
+			principalId: "user:actor-1",
 			principalType: "actor",
 		});
 		expect(personal.readGrant).toMatchObject({ permission: "read" });
@@ -183,7 +183,7 @@ describe("@euroclaw/skills (simple)", () => {
 			manifest: { description: "Read personal" },
 			read: {
 				clawId: "claw-1",
-				readBy: "actor-1",
+				readBy: "user:actor-1",
 				runId: "run-1",
 				skillId: "read-personal",
 				source: "user",
@@ -199,11 +199,11 @@ describe("@euroclaw/skills (simple)", () => {
 		// An org-less activation context: personal skills need no organization at all.
 		const api = createSimpleSkillsApi(store, {
 			activationContext: {
-				activatedBy: "actor-1",
+				activatedBy: "user:actor-1",
 			},
 		});
 		const personal = await api.createPersonal({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			digest: "sha256:activate",
 			manifest: {
 				id: "email-only",
@@ -230,11 +230,11 @@ describe("@euroclaw/skills (simple)", () => {
 	it("does not authorize activation from caller-supplied principal fields", async () => {
 		const api = createSimpleSkillsApi(createSkillsStore(db()), {
 			activationContext: {
-				activatedBy: "actor-1",
+				activatedBy: "user:actor-1",
 			},
 		});
 		const personal = await api.createPersonal({
-			createdBy: "actor-2",
+			createdBy: "user:actor-2",
 			digest: "sha256:spoof",
 			manifest: {
 				id: "email-only",
@@ -249,7 +249,7 @@ describe("@euroclaw/skills (simple)", () => {
 		// stand inside personal:actor-2 — out-of-boundary reads as "not found" (existence-hiding).
 		await expect(
 			api.activate({
-				activatedBy: "actor-2",
+				activatedBy: "user:actor-2",
 				clawId: "claw-1",
 				installationId: personal.installation.id,
 			} as never),
@@ -448,7 +448,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -508,7 +508,7 @@ describe("@euroclaw/skills (simple)", () => {
 				packageId: pkg.packageId,
 				version: pkg.version,
 				digest: pkg.digest,
-				createdBy: "admin-1",
+				createdBy: "user:admin-1",
 				scope: "organization",
 				scopeId: "organization-1",
 				status: "enabled",
@@ -516,7 +516,7 @@ describe("@euroclaw/skills (simple)", () => {
 			await store.acl.grant({
 				installationId: installation.id,
 				permission: "activate",
-				...(principalType === "actor" ? { principalId: "actor-1" } : {}),
+				...(principalType === "actor" ? { principalId: "user:actor-1" } : {}),
 				...(principalType === "team" ? { principalId: "team-1" } : {}),
 				...(principalType === "organization"
 					? { principalId: "organization-1" }
@@ -534,7 +534,7 @@ describe("@euroclaw/skills (simple)", () => {
 				],
 				resolveContext: (ctx) => ({
 					...ctx,
-					[PRINCIPAL_CONTEXT_KEY]: "actor-1",
+					[PRINCIPAL_CONTEXT_KEY]: "user:actor-1",
 					[TEAM_CONTEXT_KEY]: "team-1",
 					[ORGANIZATION_CONTEXT_KEY]: "organization-1",
 				}),
@@ -565,7 +565,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: foreignPkg.packageId,
 			version: foreignPkg.version,
 			digest: foreignPkg.digest,
-			createdBy: "admin-2",
+			createdBy: "user:admin-2",
 			scope: "organization",
 			scopeId: "organization-2",
 			status: "enabled",
@@ -586,7 +586,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: unscopedPkg.packageId,
 			version: unscopedPkg.version,
 			digest: unscopedPkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -607,7 +607,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -619,7 +619,7 @@ describe("@euroclaw/skills (simple)", () => {
 			principalType: "organization",
 		});
 		await store.activations.create({
-			activatedBy: "actor-2",
+			activatedBy: "user:actor-2",
 			clawId: "claw-2",
 			digest: foreignPkg.digest,
 			installationId: foreignInstallation.id,
@@ -629,7 +629,7 @@ describe("@euroclaw/skills (simple)", () => {
 			threadId: "thread-2",
 		});
 		await store.activations.create({
-			activatedBy: "actor-1",
+			activatedBy: "user:actor-1",
 			clawId: "claw-1",
 			digest: unscopedPkg.digest,
 			installationId: unscopedInstallation.id,
@@ -638,7 +638,7 @@ describe("@euroclaw/skills (simple)", () => {
 			source: "user",
 		});
 		await store.activations.create({
-			activatedBy: "actor-1",
+			activatedBy: "user:actor-1",
 			clawId: "claw-1",
 			digest: pkg.digest,
 			installationId: installation.id,
@@ -686,7 +686,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: firstPkg.packageId,
 			version: firstPkg.version,
 			digest: firstPkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -707,7 +707,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: secondPkg.packageId,
 			version: secondPkg.version,
 			digest: secondPkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -756,7 +756,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "enabled",
@@ -832,7 +832,7 @@ describe("@euroclaw/skills (simple)", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "admin-1",
+			createdBy: "user:admin-1",
 			scope: "organization",
 			scopeId: "organization-1",
 			status: "installed",

@@ -6,6 +6,7 @@
 // shape and testable with a fake. `betterAuthAccess({ auth })` is the convenience that wires all
 // three from one instance — the "specify exactly what you need, not auth" pattern, with one entry.
 
+import { type Principal, userPrincipal } from "@euroclaw/contracts";
 import {
 	type BetterAuthAccessControlConfig,
 	betterAuthAccessControl,
@@ -19,10 +20,15 @@ type GetActiveMember = (input: {
 	headers: unknown;
 }) => Promise<{ organizationId: string; role: string | string[] } | null>;
 
-/** Resolve the operator (`actor`) from a better-auth session — needs only `getSession`. */
+/** Resolve the operator (the `principal`) from a better-auth session — needs only `getSession`. */
 export function betterAuthIdentity(deps: { getSession: GetSession }) {
-	return async (ctx: Record<string, unknown>): Promise<string | undefined> =>
-		(await deps.getSession({ headers: ctx.headers }))?.user.id;
+	return async (ctx: Record<string, unknown>): Promise<Principal | undefined> => {
+		// Tag the host's user id into the `user:<id>` principal at the point it is PRODUCED (matching
+		// sessionIdentity), so the stamped principal is a legible, authorizable identity — never a bare
+		// host id. A blank session ⇒ undefined.
+		const id = (await deps.getSession({ headers: ctx.headers }))?.user.id;
+		return id === undefined ? undefined : userPrincipal(id);
+	};
 }
 
 /** Resolve the active org + role from a better-auth member — needs only `getActiveMember`. */
@@ -51,7 +57,7 @@ export type BetterAuthLike = BetterAuthAccessControlConfig["auth"] & {
  * (Named `betterAuthAccess`, not `betterAuth`, to avoid clashing with better-auth's own `betterAuth`.)
  */
 export function betterAuthAccess(config: { auth: BetterAuthLike }): {
-	identity: (ctx: Record<string, unknown>) => Promise<string | undefined>;
+	identity: (ctx: Record<string, unknown>) => Promise<Principal | undefined>;
 	membership: (
 		ctx: Record<string, unknown>,
 	) => Promise<{ team: string; role: string } | undefined>;

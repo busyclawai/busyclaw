@@ -13,7 +13,7 @@ async function seedClawAndThread(adapter: Adapter = memoryAdapter()) {
 	const claws = store(adapter);
 	const claw = await claws.claws.create({
 		id: "claw-1",
-		createdBy: "actor-1",
+		createdBy: "user:actor-1",
 		context: { locale: "en" },
 	});
 	const thread = await claws.threads.create({
@@ -62,7 +62,7 @@ describe("createClawsStore", () => {
 		// CreateClawInput type — the store's typed contract stays base; extra fields are runtime.
 		const input = {
 			id: "claw-x",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			priority: 5,
 		};
 		const created = await claws.claws.create(input);
@@ -86,7 +86,7 @@ describe("createClawsStore", () => {
 			},
 		});
 		await expect(
-			claws.claws.create({ id: "claw-y", createdBy: "actor-1" }),
+			claws.claws.create({ id: "claw-y", createdBy: "user:actor-1" }),
 		).rejects.toThrow(/create claw input invalid/);
 	});
 
@@ -228,7 +228,7 @@ describe("createClawsStore", () => {
 		});
 		await claws.claws.create({
 			id: "claw-1",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 		});
 		await claws.threads.create({
 			id: "thread-1",

@@ -39,22 +39,22 @@ describe("createSkillsStore", () => {
 			packageId: pkg.packageId,
 			version: pkg.version,
 			digest: pkg.digest,
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			scope: "team",
 			scopeId: "team-1",
 		});
 		expect(installation).toMatchObject({
 			status: "installed",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			scope: "team",
 			scopeId: "team-1",
 		});
 		expect(
 			await store.installations.updateStatus("install-1", {
 				status: "trusted",
-				trustedBy: "admin-1",
+				trustedBy: "user:admin-1",
 			}),
-		).toMatchObject({ status: "trusted", trustedBy: "admin-1" });
+		).toMatchObject({ status: "trusted", trustedBy: "user:admin-1" });
 		expect(
 			await store.installations.listForScope({
 				status: "trusted",
@@ -121,7 +121,7 @@ describe("createSkillsStore", () => {
 			scope: "team",
 			scopeId: "team-1",
 			targetInstallationId: "install-1",
-			proposerActorId: "actor-1",
+			proposerActorId: "user:actor-1",
 			kind: "share",
 			// The state column is schema-first (the versioned share shape) — a kind without an owned
 			// state schema (e.g. patch) cannot be stored until its schema joins the union.

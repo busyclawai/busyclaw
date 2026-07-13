@@ -17,7 +17,7 @@ const specInput = (organizationId: string, source = "petstore") => ({
 		skipped: [],
 		warnings: [],
 	},
-	registeredBy: "alice",
+	registeredBy: "user:alice",
 });
 
 const toolInput = (
@@ -46,7 +46,7 @@ const overlayInput = (
 	groups: ["audited"],
 	resource: "Pet",
 	audit: true,
-	updatedBy: "alice",
+	updatedBy: "user:alice",
 });
 
 const stamps = () => {
@@ -62,7 +62,7 @@ describe("createRegistryStores over memory adapter", () => {
 		const read = await specRegistrations.get("org-a", "petstore");
 		expect(read?.specBlob).toEqual(specInput("org-a").specBlob); // parsed back, not a string
 		expect(read?.report).toEqual(specInput("org-a").report);
-		expect(read?.registeredBy).toBe("alice");
+		expect(read?.registeredBy).toBe("user:alice");
 	});
 
 	it("spec_registration upsert REPLACES by (organizationId, source), id preserved", async () => {
@@ -73,7 +73,7 @@ describe("createRegistryStores over memory adapter", () => {
 		const second = await specRegistrations.upsert({
 			...specInput("org-a"),
 			contentVersion: "spec-v2",
-			registeredBy: "bob",
+			registeredBy: "user:bob",
 		});
 		expect(second.id).toBe(first.id); // replace-in-place
 		expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
@@ -81,7 +81,7 @@ describe("createRegistryStores over memory adapter", () => {
 		const all = await specRegistrations.listByOrganization("org-a");
 		expect(all).toHaveLength(1); // one row per (org, source)
 		expect(all[0]?.contentVersion).toBe("spec-v2");
-		expect(all[0]?.registeredBy).toBe("bob");
+		expect(all[0]?.registeredBy).toBe("user:bob");
 	});
 
 	it("registered_tool round-trips schema/governance/binding and updates in place", async () => {
@@ -130,7 +130,7 @@ describe("createRegistryStores over memory adapter", () => {
 			organizationId: "org-a",
 			actionId: "petstore.addPet",
 			access: "write",
-			updatedBy: "bob",
+			updatedBy: "user:bob",
 		});
 		const listed = await factsOverlay.listByOrganization("org-a");
 		expect(listed).toHaveLength(1); // one row per (org, actionId)
@@ -179,7 +179,7 @@ describe("createRegistryStores over memory adapter", () => {
 				organizationId: "org-bad",
 				source: "x",
 				contentVersion: "v",
-				registeredBy: "a",
+				registeredBy: "user:a",
 				createdAt: "t",
 				updatedAt: "t",
 			},

@@ -321,11 +321,12 @@ export type {
 	SecretProviderPlugin,
 	UnionToIntersection,
 } from "./governance/plugin";
-// ── governance: the Principal vocabulary — the one authorizable identity (producers rewire in later
-// slices; additive here, nothing consumes it yet) ──
+// ── governance: the Principal vocabulary — the one authorizable identity (the `principal` schema is
+// the boundary validator behind field.principal) ──
 export type { Principal } from "./governance/principal";
 export {
 	parsePrincipal,
+	principal,
 	SYSTEM_ANONYMOUS,
 	SYSTEM_CRON,
 	systemPrincipal,

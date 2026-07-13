@@ -16,7 +16,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			organizationId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "reads-only" },
-			by: "admin",
+			by: "user:admin",
 		});
 		expect(record.id).toMatch(/^[0-9a-f]{32}$/);
 		expect(record.at).toBe("2026-01-01T00:00:00Z");
@@ -25,7 +25,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 		expect(listed[0]).toMatchObject({
 			kind: "policy_changed",
 			summary: { slice: "reads-only" },
-			by: "admin",
+			by: "user:admin",
 		});
 	});
 
@@ -34,7 +34,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 		const record = await authzChanges.append({
 			organizationId: "org-a",
 			kind: "spec_registered",
-			by: "alice",
+			by: "user:alice",
 		});
 		expect(record.summary).toBeUndefined();
 	});
@@ -45,13 +45,13 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 		await authzChanges.append({
 			organizationId: "org-a",
 			kind: "overlay_changed",
-			by: "admin",
+			by: "user:admin",
 		});
 		expect(await authzChanges.count("org-a")).toBe(1);
 		await authzChanges.append({
 			organizationId: "org-a",
 			kind: "policy_changed",
-			by: "admin",
+			by: "user:admin",
 		});
 		expect(await authzChanges.count("org-a")).toBe(2);
 	});
@@ -61,12 +61,12 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 		await authzChanges.append({
 			organizationId: "org-a",
 			kind: "policy_changed",
-			by: "admin",
+			by: "user:admin",
 		});
 		await authzChanges.append({
 			organizationId: "org-a",
 			kind: "policy_changed",
-			by: "admin",
+			by: "user:admin",
 		});
 		expect(await authzChanges.count("org-a")).toBe(2);
 		expect(await authzChanges.count("org-b")).toBe(0);
@@ -80,18 +80,18 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			organizationId: "org-a",
 			kind: "spec_registered",
 			summary: { source: "petstore" },
-			by: "alice",
+			by: "user:alice",
 		});
 		await authzChanges.append({
 			organizationId: "org-b",
 			kind: "policy_changed",
-			by: "bob",
+			by: "user:bob",
 		});
 		await authzChanges.append({
 			organizationId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "guard" },
-			by: "alice",
+			by: "user:alice",
 		});
 		const a = await authzChanges.listByOrganization("org-a");
 		expect(a.map((c) => c.kind)).toEqual(["spec_registered", "policy_changed"]);
@@ -108,7 +108,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 				organizationId: "org-bad",
 				kind: "mystery", // not a known change kind
 				at: "t",
-				by: "a",
+				by: "user:a",
 			},
 		});
 		await expect(authzChanges.listByOrganization("org-bad")).rejects.toThrow(
@@ -122,14 +122,14 @@ const slice = (organizationId: string, name: string) => ({
 	name,
 	cedar: `forbid(principal, action == Action::"x", resource);`,
 	mode: "enforce" as const,
-	updatedBy: "admin",
+	updatedBy: "user:admin",
 });
 
 const overlay = (organizationId: string, actionId: string) => ({
 	organizationId,
 	actionId,
 	access: "read" as const,
-	updatedBy: "admin",
+	updatedBy: "user:admin",
 });
 
 describe("authz changes are appended on every mutation", () => {
@@ -143,7 +143,7 @@ describe("authz changes are appended on every mutation", () => {
 		expect(change).toMatchObject({
 			kind: "policy_changed",
 			summary: { slice: "guard" },
-			by: "admin",
+			by: "user:admin",
 		});
 	});
 

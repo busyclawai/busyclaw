@@ -1,4 +1,8 @@
-import { endpoints, parsePrincipal, validationError } from "@euroclaw/contracts";
+import {
+	endpoints,
+	principal as principalSchema,
+	validationError,
+} from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
@@ -22,31 +26,20 @@ const nonEmptyString = type("string").narrow(
 	(value, ctx) => value.trim().length > 0 || ctx.reject("non-empty"),
 );
 
-/** A well-formed `Principal` at the boundary: non-empty AND parseable as a `<kind>:<id>` tag (the host
- *  constructs it via `userPrincipal(userId)`). A bare or malformed value is rejected here, so a row is
- *  never keyed to an untagged / unauthorizable owner. */
-const principalInput = type("string").narrow((value, ctx) => {
-	if (value.trim().length === 0) return ctx.reject("non-empty");
-	try {
-		parsePrincipal(value);
-		return true;
-	} catch {
-		return ctx.reject("a well-formed `<kind>:<id>` principal");
-	}
-});
-
 // The boundary inputs — host-passed, UNTRUSTED, so arktype validates HERE (internal store calls stay
 // plain TS). Personal-only, so there is no scope/scopeId param: the principal is the whole boundary.
+// `principalSchema` (the contracts `principal` narrow) rejects a bare / malformed value, so a row is
+// never keyed to an untagged / unauthorizable owner — the host constructs it via `userPrincipal(id)`.
 export const setSecretInput = type({
 	name: nonEmptyString,
 	value: "string",
-	principal: principalInput,
+	principal: principalSchema,
 });
 export const deleteSecretInput = type({
 	name: nonEmptyString,
-	principal: principalInput,
+	principal: principalSchema,
 });
-export const listSecretInput = type({ principal: principalInput });
+export const listSecretInput = type({ principal: principalSchema });
 
 export type SetSecretInput = typeof setSecretInput.infer;
 export type DeleteSecretInput = typeof deleteSecretInput.infer;

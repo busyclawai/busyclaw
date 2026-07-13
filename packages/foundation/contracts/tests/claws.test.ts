@@ -15,7 +15,7 @@ describe("euroclaw core — durable Claw contracts", () => {
 	it("validates the durable claw/thread/message/tool record shapes", () => {
 		const claw = clawRecord({
 			id: "claw-1",
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			scope: "personal",
 			scopeId: "actor-1",
 			status: "active",
@@ -131,7 +131,7 @@ describe("euroclaw core — durable Claw contracts", () => {
 
 	it("derives create input and storage schema from the entity fields", () => {
 		const input = createClawInput({
-			createdBy: "actor-1",
+			createdBy: "user:actor-1",
 			name: "Recruiting claw",
 		});
 

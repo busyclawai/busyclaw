@@ -24,7 +24,7 @@ describe("@euroclaw/better-auth — three concerns from one instance, each a fun
 		const identity = betterAuthIdentity({
 			getSession: fakeAuth.api.getSession,
 		});
-		expect(await identity({ headers: "alice-token" })).toBe("alice");
+		expect(await identity({ headers: "alice-token" })).toBe("user:alice");
 		expect(await identity({ headers: "nope" })).toBeUndefined();
 	});
 
@@ -51,7 +51,7 @@ describe("@euroclaw/better-auth — three concerns from one instance, each a fun
 
 	it("betterAuthAccess({ auth }) wires identity + membership + the authz plugin from ONE auth", async () => {
 		const ba = betterAuthAccess({ auth: fakeAuth });
-		expect(await ba.identity({ headers: "alice-token" })).toBe("alice");
+		expect(await ba.identity({ headers: "alice-token" })).toBe("user:alice");
 		expect(await ba.membership({ headers: "alice-token" })).toEqual({
 			team: "acme",
 			role: "approver",

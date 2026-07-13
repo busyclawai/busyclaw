@@ -197,7 +197,7 @@ describe("createClaw engine", () => {
 		const run = await claw.api.startRun({
 			ctx: { team: "acme" },
 			prompt: "hello",
-			run: { principal: "alice", team: "acme" },
+			run: { principal: "user:alice", team: "acme" },
 		});
 		const result = await claw.$context.engine?.work?.();
 
@@ -206,7 +206,7 @@ describe("createClaw engine", () => {
 		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
 			id: run.id,
 			status: "completed",
-			principal: "alice",
+			principal: "user:alice",
 			team: "acme",
 		});
 		await expect(claw.api.listRunEvents({ runId: run.id })).resolves.toEqual(

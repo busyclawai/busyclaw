@@ -5,6 +5,7 @@
 // discriminate via `parsePrincipal`; never hand-format the tag. See docs/plans/principal-standardization.md.
 
 import { validationError } from "@euroclaw/errors";
+import { type } from "arktype";
 
 /**
  * A Principal is an AUTHORIZABLE identity — the thing you could write a Cedar `permit`/`forbid`
@@ -63,6 +64,33 @@ export function systemPrincipal(name: string): Principal {
 	return `system:${name}`;
 }
 
+/** The discriminated parts of a principal, or a rejection phrase for the one broken rule — the ONE
+ *  place the well-formedness rules live, shared by {@link parsePrincipal} (throws) and the
+ *  {@link principal} arktype schema (rejects at a boundary). `reject` reads as an arktype "must be…"
+ *  expected-clause. Splits on the FIRST colon only, so an id may itself contain colons. */
+function principalParts(
+	value: string,
+): { kind: "user" | "system"; id: string } | { reject: string } {
+	const colon = value.indexOf(":");
+	if (colon === -1) {
+		return { reject: "a `<kind>:<id>` tagged principal — no colon found" };
+	}
+	const kind = value.slice(0, colon);
+	const id = value.slice(colon + 1);
+	if (kind === "") {
+		return { reject: "a principal with a non-empty kind before the colon" };
+	}
+	if (id === "") {
+		return { reject: "a principal with a non-empty id after the colon" };
+	}
+	if (kind === "user" || kind === "system") {
+		return { kind, id };
+	}
+	return {
+		reject: `a principal of kind "user" or "system" (got "${kind}")`,
+	};
+}
+
 /**
  * Split a Principal into the `kind` (the discriminator authz/audit/erasure branch on) and its `id`.
  * Splits on the FIRST colon only, so an id may itself contain colons
@@ -73,39 +101,28 @@ export function systemPrincipal(name: string): Principal {
 export function parsePrincipal(
 	principal: Principal,
 ): { kind: "user" | "system"; id: string } {
-	const colon = principal.indexOf(":");
-	if (colon === -1) {
-		throw validationError(
-			"principal invalid",
-			"expected a `<kind>:<id>` tagged principal — no colon found",
-			{ principal },
-		);
+	const parts = principalParts(principal);
+	if ("reject" in parts) {
+		throw validationError("principal invalid", `expected ${parts.reject}`, {
+			principal,
+		});
 	}
-	const kind = principal.slice(0, colon);
-	const id = principal.slice(colon + 1);
-	if (kind === "") {
-		throw validationError(
-			"principal invalid",
-			"the kind before the first colon is empty",
-			{ principal },
-		);
-	}
-	if (id === "") {
-		throw validationError(
-			"principal invalid",
-			"the id after the first colon is empty",
-			{ principal },
-		);
-	}
-	if (kind === "user" || kind === "system") {
-		return { kind, id };
-	}
-	throw validationError(
-		"principal invalid",
-		`unknown principal kind "${kind}" — only "user" and "system" are principals`,
-		{ principal },
-	);
+	return parts;
 }
+
+/**
+ * The BOUNDARY validator: a `string` that validates as a well-formed principal — the same rules
+ * {@link parsePrincipal} enforces (a colon, a non-empty `user`|`system` kind, a non-empty id),
+ * expressed as an arktype narrow. This is the `ark` behind {@link field.principal}, so a stamp
+ * column validates a raw principal string on the way in (create inputs) and on the way out (durable
+ * reads through the record schema) — an untagged / unauthorizable value can never enter or leave a
+ * principal column. It stays a plain `string` at the persisted level (no morph): the tagged form IS
+ * the stored form.
+ */
+export const principal = type("string").narrow((value, ctx) => {
+	const parts = principalParts(value);
+	return "reject" in parts ? ctx.reject(parts.reject) : true;
+});
 
 /** The well-known system principal for a scheduled run. */
 export const SYSTEM_CRON: Principal = systemPrincipal("cron");

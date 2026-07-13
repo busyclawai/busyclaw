@@ -31,7 +31,7 @@ export const authzChangeFields = {
 	// What changed — the audit detail (source / actionId / slice name). Opaque JSON; optional.
 	summary: field.jsonObject(),
 	at: field.string({ required: true, immutable: true }),
-	by: field.string({ required: true, immutable: true }),
+	by: field.principal({ required: true, immutable: true }),
 } as const;
 
 export const authzChangeEntity = entity("authz_change", authzChangeFields);

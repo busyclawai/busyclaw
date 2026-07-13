@@ -128,7 +128,7 @@ async function registeredPetstore() {
 		organizationId: "org-a",
 		source: "petstore",
 		document: petstore(),
-		registeredBy: "alice",
+		registeredBy: "user:alice",
 	});
 	const rows = await stores.registeredTools.listByOrganization("org-a");
 	const { model } = assembleOrgActions({ registeredTools: rows });

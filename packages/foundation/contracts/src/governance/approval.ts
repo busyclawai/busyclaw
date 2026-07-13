@@ -31,7 +31,7 @@ export const approvalFields = {
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
 	reasonCode: field.string({ index: true, immutable: true }),
-	principal: field.string({ index: true, immutable: true }),
+	principal: field.principal({ index: true, immutable: true }),
 	reason: field.string(),
 	metadata: field.jsonObject(),
 	decidedBy: field.string(),

@@ -56,7 +56,7 @@ export const clawFields = {
 	// over its life (created personal, promoted org-wide). `scope` is an OPAQUE string the core never
 	// interprets ("personal"/"team"/"organization"/"global" mean nothing to core — the org plugin
 	// interprets them, keeping core org-blind). Default at create: scope="personal", scopeId=createdBy.
-	createdBy: field.string({ required: true, index: true, immutable: true }),
+	createdBy: field.principal({ required: true, index: true, immutable: true }),
 	scope: field.string({ required: true, index: true }),
 	scopeId: field.string({ required: true, index: true }),
 	status: field.enum(clawStatusValues, { required: true }),

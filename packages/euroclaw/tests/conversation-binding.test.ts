@@ -19,7 +19,7 @@ describe("createClaw conversation binding", () => {
 			externalActorId: "user-1",
 			metadata: { source: "webhook" },
 			// the creator is claw-creation data — it rides the claw bind defaults, not the binding key
-			claw: { name: "Recruiting assistant", createdBy: "actor-1" },
+			claw: { name: "Recruiting assistant", createdBy: "user:actor-1" },
 			thread: { title: "Telegram chat" },
 		});
 		const second = await claw.api.bindConversation({
@@ -33,10 +33,10 @@ describe("createClaw conversation binding", () => {
 		expect(second.binding.id).toBe(first.binding.id);
 		expect(second.claw.id).toBe(first.claw.id);
 		expect(second.thread.id).toBe(first.thread.id);
-		expect(first.claw.createdBy).toBe("actor-1");
+		expect(first.claw.createdBy).toBe("user:actor-1");
 		// a bound claw defaults to personal scope, keyed to its creator, until re-shared
 		expect(first.claw.scope).toBe("personal");
-		expect(first.claw.scopeId).toBe("actor-1");
+		expect(first.claw.scopeId).toBe("user:actor-1");
 		expect(first.binding).toMatchObject({
 			provider: "telegram",
 			endpointKey: "default",

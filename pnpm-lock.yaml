@@ -224,6 +224,9 @@ importers:
 
   packages/plugins/better-auth:
     dependencies:
+      '@euroclaw/contracts':
+        specifier: workspace:*
+        version: link:../../foundation/contracts
       '@euroclaw/policy-better-auth':
         specifier: workspace:*
         version: link:../../policy/better-auth

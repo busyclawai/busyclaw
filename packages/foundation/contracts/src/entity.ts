@@ -4,6 +4,7 @@ import {
 	jsonObject as jsonObjectSchema,
 	jsonValue as jsonValueSchema,
 } from "./common";
+import { type Principal, principal as principalSchema } from "./governance/principal";
 import type { FieldAttribute, FieldType } from "./storage";
 
 // A field's persisted meta IS the storage protocol's FieldAttribute — one definition, aliased here
@@ -21,7 +22,8 @@ type FieldKind =
 	| "jsonObject"
 	| "jsonValue"
 	| "json"
-	| "enum";
+	| "enum"
+	| "principal";
 
 // The base/constraint form leaves `Value` as `unknown`: `Record<string, EntityField>` (the bound
 // every entity helper carries) must admit fields whose value type isn't pure JSON — a schema-first
@@ -322,6 +324,30 @@ export const field = {
 			},
 		);
 	},
+	// Schema-first principal — the accountability-STAMP analog of `field.json`. The value is the
+	// `Principal` tagged string and the `ark` is the shared `principal` narrow, so a stamp column
+	// (createdBy / updatedBy / by / …) validates a raw principal string BOTH at the create boundary
+	// (the input schema) and on every durable read (the record schema, the store's read boundary) —
+	// an untagged or unauthorizable value can never enter or leave the column. It persists as a plain
+	// `string` (the tagged form IS the stored form), so retyping a `field.string` stamp column to
+	// `field.principal` is a type + validation change, NOT a migration.
+	principal: <
+		const Meta extends Omit<EntityFieldMeta, "type"> = EmptyFieldMeta,
+	>(
+		meta?: Meta,
+	) =>
+		makeField<
+			"principal",
+			readonly string[],
+			Principal,
+			Meta & { type: "string" }
+		>({
+			...(meta ?? ({} as Meta)),
+			type: "string",
+			kind: "principal",
+			ark: principalSchema,
+			optionalArk: principalSchema.or("undefined"),
+		}),
 };
 
 function shapeFor(

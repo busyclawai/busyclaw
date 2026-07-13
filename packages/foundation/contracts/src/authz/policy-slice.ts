@@ -32,7 +32,7 @@ export const policySliceFields = {
 	cedar: field.string({ required: true }),
 	// enforce = in the live set; shadow = a real second evaluation (diffed, never applied); off = dropped.
 	mode: field.enum(["enforce", "shadow", "off"], { required: true }),
-	updatedBy: field.string({ required: true }),
+	updatedBy: field.principal({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
