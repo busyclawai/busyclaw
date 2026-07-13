@@ -7,13 +7,25 @@ import {
 import { type Principal, principal as principalSchema } from "./governance/principal";
 import type { FieldAttribute, FieldType } from "./storage";
 
-// A field's persisted meta IS the storage protocol's FieldAttribute — one definition, aliased here
-// so the DSL and the schema format can never drift. (`immutable`: set once at create, never changed
-// by an update — enforced at the storage layer and dropped from the derived update input; distinct
-// from `input: false`, which is set by the store, not the caller.) EntityField below layers the
-// compile-time extras on top: the kind/value generics and the ark validators.
+// A field's PERSISTED meta IS the storage protocol's FieldAttribute — one definition, extended (never
+// forked) so the DSL and the schema format can never drift. (`immutable`: set once at create, never
+// changed by an update — enforced at the storage layer and dropped from the derived update input;
+// distinct from `input: false`, which is set by the store, not the caller.) The doc pair below is
+// DESCRIPTOR-ONLY: carried on the field like the flags, attached to the arktype types the derived
+// schemas materialize (see `documentedField`), and never projected by `entity().storage` — docs are
+// validator/doc-consumer metadata, not migration input. EntityField below layers the compile-time
+// extras on top: the kind/value generics and the ark validators.
 export type EntityFieldType = FieldType;
-export type EntityFieldMeta = FieldAttribute;
+export type EntityFieldMeta = FieldAttribute & {
+	/** Terse noun phrase for the field — becomes the derived schemas' `.describe()` text, so it
+	 *  reads as the validation error ("must be <description>") and lands as standard JSON-Schema
+	 *  `description` wherever a derived schema emits `toJsonSchema()`. */
+	description?: string;
+	/** Rich behavioral prose — rides the euroclaw doc meta channel (`{ euroclaw: { doc } }`,
+	 *  governance/doc.ts) on the materialized field type, read via `docOf`; never part of
+	 *  validation error messages. */
+	doc?: string;
+};
 
 type FieldKind =
 	| "string"
@@ -350,6 +362,40 @@ export const field = {
 		}),
 };
 
+// Materialize a field's ark DEFINITION as a Type: an arktype Type is its own callable and passes
+// through untouched (never re-parsed — schema-first morph roots included); string expressions and
+// literal definitions go through the one generic `type()` call, whose typed overloads can't accept
+// an `unknown` definition — hence the single cast alias.
+const parseDefinition = ark as unknown as (definition: unknown) => Type;
+function materializeArk(definition: unknown): Type {
+	return typeof definition === "function"
+		? (definition as Type)
+		: parseDefinition(definition);
+}
+
+/**
+ * A doc-carrying field materialized as an arktype Type with its docs attached. `description`
+ * describes the INNER type BEFORE the `| undefined` union: a required-field error then reads
+ * "must be <description>", an optional union keeps arktype's branch rendering ("… or undefined",
+ * unchanged from an undocumented field), and JSON-Schema emission carries the description on the
+ * typed branch instead of spamming the union wrapper. `doc` configures the euroclaw meta channel
+ * on the FULL property type — `docOf` reads it off exactly what the derived shape holds. The
+ * optional form composes from `ark` (every builder constructs `optionalArk` as `ark | undefined`,
+ * so this is the same union); fields without docs never reach this — they stay on the raw
+ * `ark`/`optionalArk` fast path in `shapeFor`.
+ */
+function documentedField(field: EntityField, optional: boolean): Type {
+	let materialized = materializeArk(field.ark);
+	if (field.description !== undefined) {
+		materialized = materialized.describe(field.description);
+	}
+	if (optional) materialized = materialized.or("undefined");
+	if (field.doc !== undefined) {
+		materialized = materialized.configure({ euroclaw: { doc: field.doc } });
+	}
+	return materialized;
+}
+
 function shapeFor(
 	fields: Record<string, EntityField>,
 	input: {
@@ -366,9 +412,13 @@ function shapeFor(
 		if (omit.has(name)) continue;
 		if (pick && !pick.has(name)) continue;
 		const required = field.required === true && !optional.has(name);
-		shape[required ? name : `${name}?`] = required
-			? field.ark
-			: field.optionalArk;
+		const documented =
+			field.description !== undefined || field.doc !== undefined;
+		shape[required ? name : `${name}?`] = documented
+			? documentedField(field, !required)
+			: required
+				? field.ark
+				: field.optionalArk;
 	}
 	return shape;
 }

@@ -2,6 +2,7 @@ import { type } from "arktype";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
 	approvalSchema,
+	docOf,
 	effectRecord,
 	effectSchema,
 	entity,
@@ -9,6 +10,12 @@ import {
 	type JsonObject,
 	piiMappingSchema,
 } from "../src/index";
+
+/** Guard-narrowed error summary — the test fails loud when validation unexpectedly passed. */
+function summaryOf(result: unknown): string {
+	if (result instanceof type.errors) return result.summary;
+	throw new Error("expected validation to fail");
+}
 
 describe("euroclaw core — entity-derived schemas", () => {
 	it("derives approval/effect/PII storage schemas from entity fields", () => {
@@ -152,5 +159,113 @@ describe("entity schemas — undefined-valued keys drop at the parse", () => {
 		expect(
 			thing.schema({ omit: ["id"] })({ label: undefined, note: "x" }),
 		).toBeInstanceOf(type.errors);
+	});
+});
+
+describe("field docs — description/doc ride every derived schema", () => {
+	// Twin entities differing ONLY in docs — the storage/wording comparisons below lean on that.
+	const documented = entity("thing", {
+		id: field.string({ required: true, unique: true, immutable: true }),
+		name: field.string({
+			required: true,
+			description: "the display name shown in listings",
+			doc: "Renamable at any time; listings sort by it.",
+		}),
+		note: field.string({ description: "a short free-form note" }),
+		mode: field.enum(["fast", "safe"], {
+			doc: "Safe mode re-checks every write.",
+		}),
+		point: field.json(type({ x: "number", y: "number" }), {
+			required: true,
+			description: "a 2d point",
+		}),
+	} as const);
+	const bare = entity("thing", {
+		id: field.string({ required: true, unique: true, immutable: true }),
+		name: field.string({ required: true }),
+		note: field.string(),
+		mode: field.enum(["fast", "safe"]),
+		point: field.json(type({ x: "number", y: "number" }), { required: true }),
+	} as const);
+	const valid = { id: "a", name: "n", point: { x: 1, y: 2 } };
+
+	it("the derived create-input's toJsonSchema() carries the property description", () => {
+		const create = documented.schema({ omit: ["id"] });
+		// The exact emission options the OpenAPI generator uses (adapter-core schemaJson).
+		const emitted = create.toJsonSchema({
+			dialect: null,
+			fallback: (ctx) => ctx.base,
+		}) as {
+			properties: Record<
+				string,
+				{ description?: string; anyOf?: { description?: string }[] }
+			>;
+		};
+		expect(emitted.properties.name?.description).toBe(
+			"the display name shown in listings",
+		);
+		expect(emitted.properties.point?.description).toBe("a 2d point");
+		// Optional composition: the description is described onto the INNER type before the
+		// `| undefined` union, so it rides the typed branch — not the union wrapper.
+		expect(emitted.properties.note?.anyOf?.[0]?.description).toBe(
+			"a short free-form note",
+		);
+	});
+
+	it("a described field's validation error reads 'must be <description>'", () => {
+		expect(summaryOf(documented.record({ ...valid, name: 5 }))).toBe(
+			"name must be the display name shown in listings (was a number)",
+		);
+		// docs never change what validates — only how a failure reads
+		expect(documented.record(valid)).not.toBeInstanceOf(type.errors);
+	});
+
+	it("optional described fields keep the union rendering; undocumented fields are unchanged", () => {
+		// The inner-describe composition leaves the optional union's baked branch rendering
+		// intact — byte-identical to the undocumented twin (never "must be undefined"-corrupted).
+		const wrongNote = { ...valid, note: 5 };
+		expect(summaryOf(documented.record(wrongNote))).toBe(
+			"note must be a string or undefined (was a number)",
+		);
+		expect(summaryOf(documented.record(wrongNote))).toBe(
+			summaryOf(bare.record(wrongNote)),
+		);
+		// an undocumented field errors identically on both twins
+		const missingId = { name: "n", point: { x: 1, y: 2 } };
+		expect(summaryOf(documented.record(missingId))).toBe(
+			summaryOf(bare.record(missingId)),
+		);
+	});
+
+	it("docOf reads the doc off the materialized field types the derived shapes hold", () => {
+		// The record validator's input side holds exactly what shapeFor materialized; its props
+		// carry the per-field types (the access path a field-level doc consumer would walk).
+		const props = (
+			documented.record as unknown as {
+				in: { props: readonly { key: string; value: unknown }[] };
+			}
+		).in.props;
+		const fieldTypeOf = (key: string): unknown => {
+			const prop = props.find((entry) => entry.key === key);
+			if (!prop) throw new Error(`missing prop ${key}`);
+			return prop.value;
+		};
+		expect(docOf(fieldTypeOf("name"))).toBe(
+			"Renamable at any time; listings sort by it.",
+		);
+		// optional union: the doc is configured on the FULL property type, so it reads here too
+		expect(docOf(fieldTypeOf("mode"))).toBe("Safe mode re-checks every write.");
+		// describe-only required field: docOf falls back to the described text
+		expect(docOf(fieldTypeOf("point"))).toBe("a 2d point");
+		expect(docOf(fieldTypeOf("id"))).toBeUndefined();
+	});
+
+	it("the storage projection is byte-identical with and without docs", () => {
+		// Docs are validator/doc-consumer metadata, never migration input: the generate-CLI
+		// SchemaDeclaration must not move when prose is added.
+		expect(JSON.stringify(documented.storage)).toBe(
+			JSON.stringify(bare.storage),
+		);
+		expect(documented.storage).toEqual(bare.storage);
 	});
 });

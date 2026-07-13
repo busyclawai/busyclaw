@@ -56,13 +56,29 @@ export const clawFields = {
 	// over its life (created personal, promoted org-wide). `scope` is an OPAQUE string the core never
 	// interprets ("personal"/"team"/"organization"/"global" mean nothing to core — the org plugin
 	// interprets them, keeping core org-blind). Default at create: scope="personal", scopeId=createdBy.
-	createdBy: field.principal({ required: true, index: true, immutable: true }),
-	scope: field.string({ required: true, index: true }),
-	scopeId: field.string({ required: true, index: true }),
+	createdBy: field.principal({
+		required: true,
+		index: true,
+		immutable: true,
+		doc: "Immutable creator principal — the accountability and erasure key, never the access boundary (that is the mutable scope/scopeId pair); at create it also seeds the default scopeId.",
+	}),
+	scope: field.string({
+		required: true,
+		index: true,
+		doc: "Access-boundary KIND, opaque to the core ('personal'/'organization' mean something to plugins, not here); mutable — a claw can be re-shared over its life. Defaults to 'personal' at create.",
+	}),
+	scopeId: field.string({
+		required: true,
+		index: true,
+		doc: "The access boundary's id — with scope it names who the claw is shared with; defaults to createdBy at create (personal until re-shared).",
+	}),
 	status: field.enum(clawStatusValues, { required: true }),
 	name: field.string(),
 	instructions: field.string({ pii: "possible" }),
-	context: field.jsonObject({ required: true }),
+	context: field.jsonObject({
+		required: true,
+		doc: "Defaults to {} when omitted at create.",
+	}),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;
@@ -77,11 +93,17 @@ export const threadFields = {
 		index: true,
 		immutable: true,
 		references: { model: "claw", field: "id" },
+		doc: "The owning claw, fixed at create — a thread's access is its claw's (threads carry no scope columns of their own).",
 	}),
 	title: field.string(),
 	status: field.enum(threadStatusValues, { required: true }),
-	currentMessageId: field.string(),
-	currentSequence: field.number({ required: true }),
+	currentMessageId: field.string({
+		doc: "Id of the newest appended message — advanced by the store inside the append transaction; a new message's parentMessageId defaults to it.",
+	}),
+	currentSequence: field.number({
+		required: true,
+		doc: "The thread's message cursor — starts at 0 and advances by exactly 1 per appended message; an append must land at currentSequence + 1.",
+	}),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
@@ -92,18 +114,36 @@ export const messageFields = {
 		required: true,
 		index: true,
 		references: { model: "claw", field: "id" },
+		doc: "Must match the thread's own clawId — the append transaction rejects a mismatched pair (denormalized containment, kept honest).",
 	}),
 	threadId: field.string({
 		required: true,
 		index: true,
 		references: { model: "thread", field: "id" },
 	}),
-	runId: field.string({ index: true }),
-	parentMessageId: field.string({ index: true }),
-	sequence: field.number({ required: true, index: true }),
+	runId: field.string({
+		index: true,
+		doc: "The run that produced the message: sendMessage stamps its (minted or caller-supplied) run id on the persisted user message, and the run's assistant reply carries the same id.",
+	}),
+	parentMessageId: field.string({
+		index: true,
+		doc: "Defaults to the thread's currentMessageId at append, so consecutive appends form the reply chain without the caller threading ids.",
+	}),
+	sequence: field.number({
+		required: true,
+		index: true,
+		doc: "The append cursor position, starting at 1: when supplied it must be exactly the thread's currentSequence + 1 or the append fails; omitted, the store assigns it.",
+	}),
 	role: field.enum(messageRoleValues, { required: true }),
-	content: field.jsonValue({ required: true, pii: "redacted" }),
-	visibility: field.enum(messageVisibilityValues, { required: true }),
+	content: field.jsonValue({
+		required: true,
+		pii: "redacted",
+		doc: "When redaction is configured the product api persists this tokenized (rows at rest hold placeholders), and listMessages view:'original' re-identifies only the returned copies.",
+	}),
+	visibility: field.enum(messageVisibilityValues, {
+		required: true,
+		doc: "Defaults to 'user' when omitted at append.",
+	}),
 	createdAt: field.string({ required: true }),
 } as const;
 
@@ -126,12 +166,27 @@ export const toolCallFields = {
 	}),
 	runId: field.string({ required: true, index: true, immutable: true }),
 	assistantMessageId: field.string({ index: true, immutable: true }),
-	toolCallId: field.string({ required: true, index: true, immutable: true }),
+	toolCallId: field.string({
+		required: true,
+		index: true,
+		immutable: true,
+		doc: "The provider-issued call id from the runtime, not the row id — (runId, toolCallId) is the natural key getToolCallByProviderId reads and the runtime event sink correlates lifecycle updates through.",
+	}),
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
-	status: field.enum(toolCallStatusValues, { required: true, index: true }),
-	approvalId: field.string({ index: true }),
-	effectId: field.string({ index: true }),
+	status: field.enum(toolCallStatusValues, {
+		required: true,
+		index: true,
+		doc: "Lifecycle, advanced by the runtime event sink: created 'proposed', parks at 'waiting_approval' (approvalId set), then 'completed' (effectId set when the call ran through the effect ledger), 'denied', or 'failed'.",
+	}),
+	approvalId: field.string({
+		index: true,
+		doc: "The approval row the call waits on — set when status becomes 'waiting_approval'.",
+	}),
+	effectId: field.string({
+		index: true,
+		doc: "The exactly-once effect-ledger record of the execution — set at completion when the tool ran through the effect store.",
+	}),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;
@@ -149,11 +204,24 @@ export const toolResultFields = {
 		references: { model: "thread", field: "id" },
 	}),
 	runId: field.string({ required: true, index: true }),
-	toolCallId: field.string({ required: true, index: true }),
-	status: field.enum(toolResultStatusValues, { required: true }),
-	output: field.jsonValue({ pii: "redacted" }),
+	toolCallId: field.string({
+		required: true,
+		index: true,
+		doc: "The provider-issued call id — with runId it ties the result to its tool_call row (listToolResults reads by the pair).",
+	}),
+	status: field.enum(toolResultStatusValues, {
+		required: true,
+		doc: "'failed' covers denials too: the runtime sink records a denied call as a failed result whose error carries the denial reason.",
+	}),
+	output: field.jsonValue({
+		pii: "redacted",
+		doc: "Present on completed results; denials and failures carry `error` instead.",
+	}),
 	error: field.jsonObject({ pii: "redacted" }),
-	outputMode: field.enum(toolResultOutputModeValues, { required: true }),
+	outputMode: field.enum(toolResultOutputModeValues, {
+		required: true,
+		doc: "How much of the output the row carries — 'none' (no output persisted), 'redacted' (persisted post-redaction), 'full' (verbatim); the runtime event sink always writes 'redacted'.",
+	}),
 	createdAt: field.string({ required: true }),
 } as const;
 
@@ -171,7 +239,11 @@ export const checkpointFields = {
 		references: { model: "thread", field: "id" },
 	}),
 	parentCheckpointId: field.string({ index: true }),
-	kind: field.enum(checkpointKindValues, { required: true, index: true }),
+	kind: field.enum(checkpointKindValues, {
+		required: true,
+		index: true,
+		doc: "Product history written by the runtime event sink: 'step' marks a yield boundary (state.checkpointId points at the runtime's operational run_checkpoint — resume state lives there, not here — and step carries the run's step count); 'approval_wait' marks a run parked on approvals (state.approvalIds).",
+	}),
 	step: field.number(),
 	state: field.jsonObject({ required: true, pii: "redacted" }),
 	messageCursor: field.number(),

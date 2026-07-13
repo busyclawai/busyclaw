@@ -18,32 +18,60 @@ export const channelRegistrationStatusValues = ["active", "disabled"] as const;
 export const channelRegistrationFields = {
 	// id = hash(provider, endpointKey): the natural key IS the primary key (see core/id.ts).
 	id: field.string({ required: true, unique: true, immutable: true }),
-	provider: field.string({ required: true, index: true, immutable: true }),
+	provider: field.string({
+		required: true,
+		index: true,
+		immutable: true,
+		doc: "Must name a provider handed to channels([...]) — register rejects unknown providers; with endpointKey it forms the natural key the row id hashes.",
+	}),
 	// The stable identity a registration binds under (`registrations/${endpointKey}`) — chosen at
 	// register time (e.g. an org id), NOT in the webhook URL, and never rotated.
-	endpointKey: field.string({ required: true, index: true, immutable: true }),
+	endpointKey: field.string({
+		required: true,
+		index: true,
+		immutable: true,
+		doc: "A single path-segment key (letters, digits, _ or -; no slash — enforced at register). Becomes the `registrations/`-prefixed conversation binding key, disjoint from app-bot keys by construction; re-registering the same (provider, endpointKey) rotates the row in place.",
+	}),
 	// Enforced at resolution: a disabled registration receives no webhooks. Revoke is soft — the row
 	// (and its audit trail) survives.
 	status: field.enum(channelRegistrationStatusValues, {
 		required: true,
 		index: true,
+		doc: "Soft lifecycle: revoke sets 'disabled' — the row stops resolving webhooks (indistinguishable from absent to callers) but survives with its audit trail; re-registering sets 'active' again.",
 	}),
 	// The egress credential (e.g. the bot token), stored in the row and read back at use time — the
 	// sso `oidcConfig` model. `redacted` keeps it out of audit/exports; at-rest protection is the
 	// host's database concern.
-	secret: field.string({ pii: "redacted" }),
+	secret: field.string({
+		pii: "redacted",
+		doc: "The egress credential (e.g. the bot token) dispatch reads back to call the provider; rotated in place by re-registering the same key.",
+	}),
 	// The INBOUND routing key AND verifier: the secret the provider echoes in each webhook (telegram's
 	// secret_token). The plugin resolves the row by matching it, so it's REQUIRED and unique per provider;
 	// `verify` then checks it. Indexed for the by-secret lookup; `redacted` keeps it out of audit/exports.
-	webhookSecret: field.string({ required: true, index: true, pii: "redacted" }),
+	webhookSecret: field.string({
+		required: true,
+		index: true,
+		pii: "redacted",
+		doc: "Inbound routing key and verifier: the provider echoes it on each webhook (e.g. telegram's secret_token) and the row is resolved by matching it, so it must be unique per provider — registering it under a second endpointKey fails loud.",
+	}),
 	// Whose bot this is — the organizationId analog. Merged into the claw bind defaults at dispatch.
-	organizationId: field.string({ index: true }),
+	organizationId: field.string({
+		index: true,
+		doc: "When set, dispatch places bound conversations under (scope 'organization', scopeId = organizationId), overriding any scope in the row's claw defaults; when absent the claw defaults decide (personal at create).",
+	}),
 	// Bind defaults for conversations on this registration (sans organization — organizationId above wins).
 	// Schema-first: the bindConversation claw/thread inputs are all-optional, so they hold at rest —
 	// a bad default fails at REGISTER time (and on read), not first at dispatch. The context assembly
 	// still re-validates the MERGED value (the org scope lands on top of these defaults).
-	claw: field.json(bindConversationClawInput, { pii: "possible" }),
-	thread: field.json(bindConversationThreadInput, { pii: "possible" }),
+	claw: field.json(bindConversationClawInput, {
+		pii: "possible",
+		doc: "Bind defaults for the claw a fresh conversation creates — validated at register (a bad default fails there, not at first traffic) and re-validated at dispatch after the org scope merges on top; createdBy is filled at bind time.",
+	}),
+	thread: field.json(bindConversationThreadInput, {
+		pii: "possible",
+		doc: "Bind defaults for the thread a fresh conversation creates; validated at register, read back at dispatch.",
+	}),
 	// Webhook state — the last error (cleared on receipt) and the last time traffic arrived.
 	lastError: field.jsonValue({ pii: "redacted" }),
 	lastReceivedAt: field.string({ index: true }),
@@ -75,7 +103,10 @@ export const registerChannelRegistrationInput = channelRegistrationEntity
 	.schema(registerChannelRegistrationInputOptions)
 	.configure({
 		euroclaw: {
-			doc: "Registers a user's bot, or re-registers an existing one — the SSO-provider analog. Idempotent on the (provider, endpointKey) natural key: re-submitting the same key rotates the stored credentials and bind defaults in place and re-activates a revoked row (registration is the trust grant). `provider` must be one configured on this claw or the call is rejected; `endpointKey` becomes the conversation binding-key prefix `registrations/${endpointKey}`, so it must be a single slash-free segment. `webhookSecret` is the inbound routing key the provider echoes on each webhook and must be unique per provider. `organizationId`, when set, scopes the bound conversations to that org at dispatch and overrides any scope in the claw defaults.",
+			// Operation-level prose only — the per-field semantics (provider/endpointKey/
+			// webhookSecret/organizationId/…) now ride the field map above and flow into this
+			// derived schema's properties, so restating them here would be the drift machine.
+			doc: "Registers a user's bot, or re-registers an existing one — the SSO-provider analog. Idempotent on the (provider, endpointKey) natural key: re-submitting the same key rotates the stored credentials and bind defaults in place and re-activates a revoked row (registration is the trust grant).",
 		},
 	});
 
