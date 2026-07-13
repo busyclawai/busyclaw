@@ -24,18 +24,25 @@ import { type } from "arktype";
  * a **role** (what a principal may do), a **tool** (a capability), the **external party**
  * (`externalActorId` — attribution/pii), the **transport endpoint** (`endpointKey` — routing).
  *
- * Slice 1: a plain `string` alias. Slice 4 brands it, so passing a raw string / external id where a
- * Principal is expected becomes a compile error — which is why call sites should construct via
- * {@link userPrincipal} / {@link systemPrincipal} and branch via {@link parsePrincipal}, not the raw tag.
+ * BRANDED (slice 4): a raw `string` is no longer assignable where a `Principal` is expected — passing
+ * a bare host id or an external id at a stamp column / principal boundary is now a COMPILE error. The
+ * brand is minted ONLY by construction ({@link userPrincipal} / {@link systemPrincipal}) or by parsing
+ * a raw string through the {@link principal} schema (durable-store reads, host-input validators). It is
+ * still a plain `string` at runtime — the `__brand` is phantom, never present on the persisted value.
+ *
+ * A structural brand (not arktype's `.brand`) so the type is self-contained in contracts: every entity
+ * / record / input that transitively carries a principal column must name `Principal` in its emitted
+ * declaration, and a `@ark/util`-referencing brand is not portable across the consumer packages.
  *
  * @see docs/plans/principal-standardization.md
  */
-export type Principal = string;
+export type Principal = string & { readonly __brand: "Principal" };
 
 /**
  * Build the principal for a human the host authenticated: `` `user:${id}` ``. The `id` is the host's
  * own user id (opaque to euroclaw, may itself contain colons, e.g. `auth0|abc`). A blank id is
- * rejected — a principal must identify someone.
+ * rejected — a principal must identify someone. This constructor is a sanctioned brand producer: the
+ * value is well-formed by construction, so the brand is stamped without re-parsing.
  */
 export function userPrincipal(id: string): Principal {
 	if (id.trim() === "") {
@@ -45,7 +52,7 @@ export function userPrincipal(id: string): Principal {
 			{ id },
 		);
 	}
-	return `user:${id}`;
+	return `user:${id}` as Principal;
 }
 
 /**
@@ -61,7 +68,7 @@ export function systemPrincipal(name: string): Principal {
 			{ name },
 		);
 	}
-	return `system:${name}`;
+	return `system:${name}` as Principal;
 }
 
 /** The discriminated parts of a principal, or a rejection phrase for the one broken rule — the ONE
@@ -99,7 +106,7 @@ function principalParts(
  * exactly `"user"` or `"system"`.
  */
 export function parsePrincipal(
-	principal: Principal,
+	principal: string,
 ): { kind: "user" | "system"; id: string } {
 	const parts = principalParts(principal);
 	if ("reject" in parts) {
@@ -108,6 +115,20 @@ export function parsePrincipal(
 		});
 	}
 	return parts;
+}
+
+/**
+ * Validate a raw string AT A BOUNDARY and return it as a branded {@link Principal}. The parse-to-brand
+ * primitive for values that arrive untyped — a stamped context fact, a durable-store read, a host
+ * input — where the static type is only `string` but the value must already be a well-formed principal
+ * (typically produced upstream by {@link userPrincipal}). Throws a `validationError` (via
+ * {@link parsePrincipal}) when it is not, so a non-principal can never be branded past the boundary.
+ * Use the constructors at PRODUCERS (mint a fresh principal from an id); use this at PARSE boundaries
+ * (re-establish the brand on a value that is already tagged).
+ */
+export function asPrincipal(value: string): Principal {
+	parsePrincipal(value);
+	return value as Principal;
 }
 
 /**

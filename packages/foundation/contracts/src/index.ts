@@ -325,6 +325,7 @@ export type {
 // the boundary validator behind field.principal) ──
 export type { Principal } from "./governance/principal";
 export {
+	asPrincipal,
 	parsePrincipal,
 	principal,
 	SYSTEM_ANONYMOUS,

@@ -3,7 +3,7 @@
 // create-input types, the base config stays unchanged, undeclared fields never appear, and a schema
 // that redefines a core column is rejected at `createClaw` — the compile-time mirror of the
 // getEuroclawTables runtime guard.
-import { type EuroclawPlugin, field } from "@euroclaw/contracts";
+import { type EuroclawPlugin, field, type Principal } from "@euroclaw/contracts";
 import { describe, expectTypeOf, test } from "vitest";
 import { createClaw } from "../src/index";
 import type { ClawRecordOf, CreateClawInputOf } from "../src/models";
@@ -27,9 +27,10 @@ describe("model extension — derived types", () => {
 		expectTypeOf<ClawA["priority"]>().toEqualTypeOf<number | undefined>();
 		expectTypeOf<ClawA["id"]>().toEqualTypeOf<string>(); // base field still present
 		expectTypeOf<CreateA["priority"]>().toEqualTypeOf<number | undefined>();
-		// a claw's creator is a required core column; its (scope, scopeId) access boundary is optional
-		// on input — the store defaults it to personal/creator, and it stays mutable for re-sharing
-		expectTypeOf<CreateA["createdBy"]>().toEqualTypeOf<string>();
+		// a claw's creator is a required core column, now a branded Principal (not a raw string); its
+		// (scope, scopeId) access boundary is optional on input — the store defaults it to
+		// personal/creator, and it stays mutable for re-sharing
+		expectTypeOf<CreateA["createdBy"]>().toEqualTypeOf<Principal>();
 		expectTypeOf<CreateA["scope"]>().toEqualTypeOf<string | undefined>();
 		expectTypeOf<ClawA>().not.toHaveProperty("nope"); // undeclared field never appears
 	});

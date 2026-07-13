@@ -176,13 +176,13 @@ describe("applyCredentials — AND / OR alternatives", () => {
 			plan(),
 			binding([{ oauth: ["pets:read", "pets:write"] }]),
 			secrets,
-			{ organizationId: "org-a", source: "petstore", principal: "alice" },
+			{ organizationId: "org-a", source: "petstore", principal: "user:alice" },
 		);
 		// Resolution is source-keyed: the reader sees the registration source + the turn's org/principal.
 		// The scheme + scopes are NOT part of the name — they drive APPLICATION (from the securityScheme).
 		expect(seen[0]).toEqual({
 			ref: "petstore",
-			ctx: { organizationId: "org-a", principal: "alice" },
+			ctx: { organizationId: "org-a", principal: "user:alice" },
 		});
 	});
 });

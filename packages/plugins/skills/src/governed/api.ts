@@ -1,4 +1,4 @@
-import { endpoints, validationError } from "@euroclaw/contracts";
+import { asPrincipal, endpoints, validationError } from "@euroclaw/contracts";
 import { type as ark } from "arktype";
 import type { SkillsApiOptions } from "../common/contracts";
 import { assertSkillManifest } from "../common/manifest";
@@ -166,7 +166,7 @@ async function createShareProposal(input: {
 	});
 	return input.store.proposals.create({
 		kind: "share",
-		proposerActorId: input.share.requestedBy,
+		proposerActorId: asPrincipal(input.share.requestedBy),
 		state: {
 			installationId: installation.id,
 			permission: "activate",
@@ -224,7 +224,7 @@ export function createGovernedSkillsApi(
 					store: resolvedStore(),
 				});
 				return resolvedStore().installations.create({
-					createdBy: valid.createdBy,
+					createdBy: asPrincipal(valid.createdBy),
 					digest: pkg.digest,
 					packageId: pkg.packageId,
 					scope: valid.scope,
@@ -256,7 +256,7 @@ export function createGovernedSkillsApi(
 					installation.id,
 					{
 						status: "trusted",
-						trustedBy: valid.trustedBy,
+						trustedBy: asPrincipal(valid.trustedBy),
 					},
 				);
 				if (!updated)
@@ -285,7 +285,7 @@ export function createGovernedSkillsApi(
 				const updated = await resolvedStore().installations.updateStatus(
 					installation.id,
 					{
-						enabledBy: valid.enabledBy,
+						enabledBy: asPrincipal(valid.enabledBy),
 						status: "enabled",
 					},
 				);

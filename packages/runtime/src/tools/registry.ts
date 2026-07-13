@@ -12,6 +12,7 @@
 // only this flow and the domain-verb action constant.
 
 import {
+	asPrincipal,
 	type AuthzChangeStore,
 	type JsonObject,
 	jsonObject,
@@ -253,7 +254,7 @@ export function createSpecRegistry(
 				organizationId: input.organizationId,
 				kind: "spec_registered",
 				summary: { source: input.source, contentVersion },
-				by: input.registeredBy,
+				by: asPrincipal(input.registeredBy),
 			});
 
 			return { ...report, contentVersion };

@@ -38,6 +38,7 @@ import type {
 import {
 	appendMessageInput,
 	approvalStatus,
+	asPrincipal,
 	bindConversationInput,
 	bindConversationResult,
 	CLAW_API_METHOD_NAMES,
@@ -844,7 +845,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			}).actions;
 		},
 
-		putPolicySlice: (args) => registry().policySlices.upsert(args),
+		putPolicySlice: (args) =>
+			registry().policySlices.upsert({
+				...args,
+				updatedBy: asPrincipal(args.updatedBy),
+			}),
 		listPolicySlices: ({ organizationId }) =>
 			registry().policySlices.listByOrganization(organizationId),
 		deletePolicySlice: ({ organizationId, id }) =>

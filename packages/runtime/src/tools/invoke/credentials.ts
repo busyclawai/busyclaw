@@ -16,7 +16,7 @@ import type {
 	SecretMaterial,
 	Secrets,
 } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import { asPrincipal, configurationError } from "@euroclaw/contracts";
 import type {
 	OpenApiAuthScheme,
 	OpenApiBinding,
@@ -48,7 +48,10 @@ export async function applyCredentials(
 	// material is APPLIED below.
 	const resolveCtx: ResolveContext = {
 		organizationId: context.organizationId,
-		principal: context.principal,
+		principal:
+			context.principal === undefined
+				? undefined
+				: asPrincipal(context.principal),
 	};
 
 	const unmet: string[] = [];

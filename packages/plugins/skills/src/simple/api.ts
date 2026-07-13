@@ -1,4 +1,5 @@
 import {
+	asPrincipal,
 	configurationError,
 	endpoints,
 	ORGANIZATION_CONTEXT_KEY,
@@ -565,9 +566,9 @@ export function simpleSkillsEndpoints(
 				});
 				// The store defaults the boundary to personal:createdBy — exactly what "personal" means.
 				const installation = await resolvedStore().installations.create({
-					createdBy: valid.createdBy,
+					createdBy: asPrincipal(valid.createdBy),
 					digest: pkg.digest,
-					enabledBy: valid.createdBy,
+					enabledBy: asPrincipal(valid.createdBy),
 					packageId: pkg.packageId,
 					status: "enabled",
 					version: pkg.version,

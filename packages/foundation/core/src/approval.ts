@@ -6,6 +6,7 @@ import {
 	type AfterGate,
 	type ApprovalMetadataResolver,
 	type ApprovalStore,
+	asPrincipal,
 	PRINCIPAL_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 
@@ -32,7 +33,7 @@ export function approvalGate(
 				reasonCode: outcome.reasonCode,
 				principal:
 					typeof ctx[PRINCIPAL_CONTEXT_KEY] === "string"
-						? ctx[PRINCIPAL_CONTEXT_KEY]
+						? asPrincipal(ctx[PRINCIPAL_CONTEXT_KEY])
 						: undefined,
 				reason: outcome.reason,
 				metadata: metadata?.(call.toolCall, ctx, outcome),

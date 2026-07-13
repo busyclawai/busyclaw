@@ -14,10 +14,12 @@
 
 import type { Adapter, JsonObject } from "@euroclaw/contracts";
 import {
+	asPrincipal,
 	configurationError,
 	type EntityUpdateInput,
 	errorMessage,
 	jsonObject as jsonObjectSchema,
+	type Principal,
 	stateError,
 	validationError,
 } from "@euroclaw/contracts";
@@ -55,7 +57,11 @@ export const RunRecord = ark({
 	createdAt: "string",
 	updatedAt: "string",
 });
-export type RunRecord = typeof RunRecord.infer;
+// `principal` is the branded Principal (the `run.principal` stamp column, validated by the entityDb
+// read schema); the local arktype checks the string shape, the type carries the brand.
+export type RunRecord = Omit<typeof RunRecord.infer, "principal"> & {
+	principal?: Principal;
+};
 
 export const RuntimeTask = ark({
 	id: "string",
@@ -332,7 +338,10 @@ export function createSqlEngineStore(
 					id: input.id ?? newId(),
 					status: "queued",
 					input: asJsonRecord(input.input ?? {}, "run input"),
-					principal: input.principal,
+					principal:
+						input.principal === undefined
+							? undefined
+							: asPrincipal(input.principal),
 					team: input.team,
 					createdAt: ts,
 					updatedAt: ts,
