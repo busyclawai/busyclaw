@@ -28,7 +28,7 @@
 		"@euroclaw/egress": "workspace:*",
 		"@euroclaw/storage-durable": "workspace:*",
 		"@noble/hashes": "2.2.0",
-		"ai": "5.0.203",
+		"ai": "7.0.22",
 		"arktype": "2.2.0"
 	},
 	"devDependencies": {

@@ -50,7 +50,7 @@
 		"@euroclaw/secrets-plugin": "workspace:*",
 		"@euroclaw/storage-core": "workspace:*",
 		"@euroclaw/storage-durable": "workspace:*",
-		"ai": "5.0.203",
+		"ai": "7.0.22",
 		"euroclaw": "workspace:*"
 	}
 }

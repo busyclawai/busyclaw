@@ -34,7 +34,7 @@
 	},
 	"dependencies": {
 		"@euroclaw/contracts": "workspace:*",
-		"ai": "5.0.203"
+		"ai": "7.0.22"
 	},
 	"devDependencies": {
 		"@euroclaw/core": "workspace:*",

@@ -65,7 +65,9 @@ export type ToolInput<S> =
 export type AuthoredTool<I, O> = {
 	description?: string;
 	inputSchema: SdkSchema<I>;
-	execute: ToolExecuteFunction<I, O>;
+	// CONTEXT = unknown: euroclaw tools are context-agnostic — the runtime injects capabilities
+	// (subInvoke) through its own blessed seam, never through the AI SDK toolsContext channel.
+	execute: ToolExecuteFunction<I, O, unknown>;
 };
 
 /** A tool carrying its governance stamp — what euroclaw's `tool()` returns. */
@@ -77,7 +79,7 @@ export function tool<const S extends ToolSchemaLike, OUTPUT>(
 	definition: {
 		description?: string;
 		inputSchema: S;
-		execute: ToolExecuteFunction<ToolInput<S>, OUTPUT>;
+		execute: ToolExecuteFunction<ToolInput<S>, OUTPUT, unknown>;
 	} & ToolGovernance,
 ): GovernedTool<AuthoredTool<ToolInput<S>, OUTPUT>> {
 	// Split the stamp off the AI-SDK definition; drop undefined facts so the stamp stays clean

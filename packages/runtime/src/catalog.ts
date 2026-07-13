@@ -287,7 +287,9 @@ export function createToolCatalog(
 type ToolSetLike = Record<
 	string,
 	{
-		description?: string;
+		// v7 allows context-dependent description FUNCTIONS; the catalog is a static visibility
+		// surface, so those render as absent rather than being invoked with a fabricated context.
+		description?: string | ((...args: never[]) => string);
 		inputSchema?: unknown;
 		outputSchema?: unknown;
 		euroclaw?: { effect?: { risk?: ToolRisk } };
@@ -308,7 +310,8 @@ export function toolEntriesFromToolSet(tools: ToolSetLike): ToolEntry[] {
 		address: name,
 		name,
 		source: "host",
-		description: t.description,
+		description:
+			typeof t.description === "string" ? t.description : undefined,
 		inputSchema: t.inputSchema,
 		outputSchema: t.outputSchema,
 		risk: t.euroclaw?.effect?.risk,

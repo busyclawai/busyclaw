@@ -1,7 +1,7 @@
 import { configurationError, stateError } from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
 import type { ModelMessage, ToolSet } from "ai";
-import { generateText, stepCountIs, wrapLanguageModel } from "ai";
+import { generateText, isStepCount, wrapLanguageModel } from "ai";
 import type { RuntimeEventPayloadInput } from "./events";
 import { modelMiddleware } from "./model-middleware";
 import { abortIfNeeded, type RunState } from "./run-state";
@@ -105,9 +105,9 @@ export async function runAiSdkLoop(
 		const res = await generateText({
 			model,
 			tools: input.tools,
-			system: input.system,
+			instructions: input.system,
 			messages,
-			stopWhen: stepCountIs(1),
+			stopWhen: isStepCount(1),
 			...(input.abortSignal ? { abortSignal: input.abortSignal as never } : {}),
 		});
 		abortIfNeeded(input.abortSignal);

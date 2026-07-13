@@ -2,7 +2,7 @@ import type { Detector, PiiSpan } from "@euroclaw/contracts";
 import { createStoredRedactor } from "@euroclaw/core";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createPiiMappingStore } from "@euroclaw/storage-durable";
-import { jsonSchema, tool, type wrapLanguageModel } from "ai";
+import { jsonSchema, type Tool, tool, type wrapLanguageModel } from "ai";
 
 export type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -86,7 +86,9 @@ export function approvalToolModel(): V2Model {
 
 export function emailTool(input: {
 	onExecute: (to: string) => unknown | Promise<unknown>;
-}) {
+	// Explicit annotation: the inferred type reaches into `ai` internals that aren't exported
+	// (non-portable under vitest typecheck on v7).
+}): Tool<{ to: string }, unknown> {
 	return tool({
 		description: "Send email.",
 		inputSchema: jsonSchema<{ to: string }>({

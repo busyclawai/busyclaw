@@ -762,6 +762,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						toolCallId: newId("nested"),
 						messages: [],
 						abortSignal: state.abortSignal as never,
+						// v7 requires the toolsContext channel field; euroclaw injects capabilities
+						// through its own seam, so nested leaf calls run context-less.
+						context: undefined,
 					});
 					// The caller is untrusted BRAIN (an invoker tool's sandboxed code / a future
 					// subagent), so the real leaf-tool output must be re-redacted before it crosses back.

@@ -51,13 +51,13 @@
 		"memfs": "4.57.8"
 	},
 	"peerDependencies": {
-		"ai": "^5.0.203"
+		"ai": "^7.0.22"
 	},
 	"devDependencies": {
 		"@euroclaw/core": "workspace:*",
 		"@euroclaw/runtime": "workspace:*",
 		"@euroclaw/storage-core": "workspace:*",
-		"ai": "5.0.203",
+		"ai": "7.0.22",
 		"euroclaw": "workspace:*"
 	}
 }
