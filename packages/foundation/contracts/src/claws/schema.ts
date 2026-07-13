@@ -325,23 +325,63 @@ export const bindConversationThreadInput = threadEntity.schema(
 );
 
 export const bindConversationInput = type({
-	"claw?": bindConversationClawInput.or("undefined"),
-	"clawId?": "string | undefined",
-	// Which ingress the conversation arrived on — required and explicit: it is part of the binding's
-	// identity, and a silently defaulted key would invite cross-endpoint collisions.
-	endpointKey: "string",
-	"externalActorId?": "string | undefined",
-	externalConversationId: "string",
-	"metadata?": jsonObject.or("undefined"),
-	provider: "string",
-	"thread?": bindConversationThreadInput.or("undefined"),
-	"threadId?": "string | undefined",
+	"claw?": bindConversationClawInput.or("undefined").configure({
+		euroclaw: {
+			doc: "Nested claw-create input, read ONLY on the create path: when neither clawId nor threadId resolves an existing claw, the bind creates a fresh claw from this. Ignored when binding to an existing claw or thread.",
+		},
+	}),
+	"clawId?": type("string | undefined").configure({
+		euroclaw: {
+			doc: "Binds to this existing claw — it becomes the source of truth (its createdBy/scope stand; the nested `claw` input is not read). Takes precedence over a threadId-derived claw.",
+		},
+	}),
+	endpointKey: type("string")
+		.describe("the ingress endpoint the conversation arrived on")
+		.configure({
+			euroclaw: {
+				doc: "Scopes external conversation ids (they repeat across bots), so it is part of the (provider, endpointKey, externalConversationId) natural key getByExternal looks up for idempotency. Required and explicit — no default, since a silent one would invite cross-endpoint key collisions.",
+			},
+		}),
+	"externalActorId?": type("string | undefined").configure({
+		euroclaw: {
+			doc: "The external sender (a stranger). Recorded on the binding row only — never promoted to the claw's createdBy, which stays a real principal (system:anonymous for an unauthenticated conversation).",
+		},
+	}),
+	externalConversationId: type("string").configure({
+		euroclaw: {
+			doc: "Third leg of the (provider, endpointKey, externalConversationId) idempotency key: a repeat bind with the same triple returns the existing binding as a no-op (created=false).",
+		},
+	}),
+	"metadata?": jsonObject.or("undefined").configure({
+		euroclaw: {
+			doc: "Opaque pass-through stored verbatim on the binding row; the bind logic never interprets it (pii:'possible' on the row, so erasure can sweep it).",
+		},
+	}),
+	provider: type("string").configure({
+		euroclaw: {
+			doc: "The channel provider (e.g. telegram). First leg of the (provider, endpointKey, externalConversationId) natural key.",
+		},
+	}),
+	"thread?": bindConversationThreadInput.or("undefined").configure({
+		euroclaw: {
+			doc: "Nested thread-create input, read ONLY when creating a fresh thread; ignored when a threadId resolves an existing thread. Its clawId is supplied by the bind from the created/resolved claw, never by the caller.",
+		},
+	}),
+	"threadId?": type("string | undefined").configure({
+		euroclaw: {
+			doc: "Binds to this existing thread; its claw becomes the source of truth. If a clawId is also given and the thread's claw differs, the bind throws validationError.",
+		},
+	}),
 });
 
 export const bindConversationResult = type({
 	binding: conversationBindingRecord,
 	claw: clawRecord,
-	created: "boolean",
+	created: type("boolean").configure({
+		euroclaw: {
+			doc: "false = an existing binding matched the (provider, endpointKey, externalConversationId) natural key and was returned unchanged (idempotent no-op); true = a fresh binding — and possibly a fresh claw and/or thread — was created.",
+		},
+	}),
 	thread: threadRecord,
 });
 

@@ -34,15 +34,41 @@ const nonEmptyString = type("string")
 // `principalSchema` (the contracts `principal` narrow) rejects a bare / malformed value, so a row is
 // never keyed to an untagged / unauthorizable owner — the host constructs it via `userPrincipal(id)`.
 export const setSecretInput = type({
-	name: nonEmptyString,
-	value: "string",
-	principal: principalSchema,
+	name: nonEmptyString.configure({
+		euroclaw: {
+			doc: "The natural-key name component: re-setting the same name for this principal rotates the stored value in place (an upsert on `(personal, principal, name)`) — it never creates a second row.",
+		},
+	}),
+	value: type("string").configure({
+		euroclaw: {
+			doc: "Write-only material: the store seals it (AES-256-GCM) before any adapter call, so plaintext is never at rest. It is never returned by set or list and there is no get-plaintext method — it exits solely through the store provider (`secrets.get`).",
+		},
+	}),
+	principal: principalSchema.configure({
+		euroclaw: {
+			doc: "The host-passed Principal that IS the whole v0 access boundary: the handler keys strictly to `(personal, principal)` and stamps `createdBy = principal`, so a caller can only ever touch their own rows (structural scoping stands in for the not-yet-built app-authz PEP).",
+		},
+	}),
 });
 export const deleteSecretInput = type({
-	name: nonEmptyString,
-	principal: principalSchema,
+	name: nonEmptyString.configure({
+		euroclaw: {
+			doc: "Delete is idempotent by construction: the store no-ops when `(personal, principal, name)` matches nothing, so deleting an absent or foreign name silently succeeds — only infrastructure failure throws.",
+		},
+	}),
+	principal: principalSchema.configure({
+		euroclaw: {
+			doc: "Must match the scopeId the row was written under in set; scopes the delete to the caller's own `(personal, principal)` boundary.",
+		},
+	}),
 });
-export const listSecretInput = type({ principal: principalSchema });
+export const listSecretInput = type({
+	principal: principalSchema.configure({
+		euroclaw: {
+			doc: "Reads the whole `(personal, principal)` boundary; rows come back with the SEALED value and are stripped to metadata views (name/kind/createdBy/timestamps) — the value is never opened on the list path.",
+		},
+	}),
+});
 
 export type SetSecretInput = typeof setSecretInput.infer;
 export type DeleteSecretInput = typeof deleteSecretInput.infer;

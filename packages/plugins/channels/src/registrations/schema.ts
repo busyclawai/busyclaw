@@ -71,22 +71,37 @@ export const registerChannelRegistrationInputOptions = {
 		"updatedAt",
 	],
 } as const;
-export const registerChannelRegistrationInput =
-	channelRegistrationEntity.schema(registerChannelRegistrationInputOptions);
+export const registerChannelRegistrationInput = channelRegistrationEntity
+	.schema(registerChannelRegistrationInputOptions)
+	.configure({
+		euroclaw: {
+			doc: "Registers a user's bot, or re-registers an existing one — the SSO-provider analog. Idempotent on the (provider, endpointKey) natural key: re-submitting the same key rotates the stored credentials and bind defaults in place and re-activates a revoked row (registration is the trust grant). `provider` must be one configured on this claw or the call is rejected; `endpointKey` becomes the conversation binding-key prefix `registrations/${endpointKey}`, so it must be a single slash-free segment. `webhookSecret` is the inbound routing key the provider echoes on each webhook and must be unique per provider. `organizationId`, when set, scopes the bound conversations to that org at dispatch and overrides any scope in the claw defaults.",
+		},
+	});
 
 export const channelRegistrationLookupInputOptions = {
 	pick: ["provider", "endpointKey"],
 } as const;
-export const channelRegistrationLookupInput = channelRegistrationEntity.schema(
-	channelRegistrationLookupInputOptions,
-);
+export const channelRegistrationLookupInput = channelRegistrationEntity
+	.schema(channelRegistrationLookupInputOptions)
+	.configure({
+		euroclaw: {
+			doc: "Addresses one registration by its (provider, endpointKey) natural key — the pair is hashed into the row id, so there is no separate lookup index. Backs `getByKey` (read) and `revoke`, which soft-disables the row: it stops resolving webhooks but survives with its audit trail.",
+		},
+	});
 
 // The list filter stays a plain-TS query shape in-process, but as a routed endpoint input it crosses
 // the HTTP boundary — derived from the entity's own columns so the status enum can't drift.
-export const listChannelRegistrationsInput = channelRegistrationEntity.schema({
-	pick: ["provider", "organizationId", "status"],
-	optional: ["provider", "status"],
-});
+export const listChannelRegistrationsInput = channelRegistrationEntity
+	.schema({
+		pick: ["provider", "organizationId", "status"],
+		optional: ["provider", "status"],
+	})
+	.configure({
+		euroclaw: {
+			doc: "Filters the registration list; the supplied fields are AND-combined. `provider` and `status` narrow the set and `organizationId` scopes to one org's bots. The filter columns are picked from the entity so the `status` enum stays a single source of truth with storage.",
+		},
+	});
 
 // The update patch derives from the fields — every mutable column, all optional (identity and
 // server-managed columns drop out via their flags).

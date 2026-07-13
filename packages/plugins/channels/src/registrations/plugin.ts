@@ -78,7 +78,11 @@ export function assertUniqueProviders(channels: readonly Channel[]): void {
 const WEBHOOK_PATH = "/channels/:provider/registrations/webhook";
 
 // Boundary input for the by-id read — the row id, the base api's idInput shape.
-const registrationIdInput = type({ id: "string" });
+const registrationIdInput = type({ id: "string" }).configure({
+	euroclaw: {
+		doc: "The row id for the by-id read. The id is the (provider, endpointKey) natural key hashed (`endpointId`), not a random surrogate, so a caller holding the pair can compute it without a prior lookup.",
+	},
+});
 
 /**
  * The registrations mode of channels() — user-registered bots, the SSO analog: hosts let their users

@@ -95,17 +95,41 @@ export type ClawSendResult = {
 };
 
 export const clawCronHandlerSecretConfig = ark({
-	"headerName?": "string | undefined",
-	"limit?": "number | undefined",
-	secret: "string",
+	"headerName?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "The request header the cron trigger presents the shared secret in; defaults to `x-euroclaw-cron-secret` when omitted.",
+		},
+	}),
+	"limit?": ark("number | undefined").configure({
+		euroclaw: {
+			doc: "Caps how many due claws are processed per cron tick; unset processes every due claw.",
+		},
+	}),
+	secret: ark("string").configure({
+		euroclaw: {
+			doc: "The shared secret the incoming `/cron` request must present (in `headerName`) — this is the authenticated cron variant; a mismatch is rejected 401.",
+		},
+	}),
 });
 export type ClawCronHandlerSecretConfig =
 	typeof clawCronHandlerSecretConfig.infer;
 
 export const clawCronHandlerUnsafeConfig = ark({
-	"headerName?": "string | undefined",
-	"limit?": "number | undefined",
-	unsafeAllowUnauthenticated: "true",
+	"headerName?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Inert in the unauthenticated variant — no secret is compared, so this header is never read.",
+		},
+	}),
+	"limit?": ark("number | undefined").configure({
+		euroclaw: {
+			doc: "Caps due claws processed per cron tick, the same throttle as the authenticated variant.",
+		},
+	}),
+	unsafeAllowUnauthenticated: ark("true").configure({
+		euroclaw: {
+			doc: "Must be `true` — an explicit opt-out of cron authentication that exposes `/cron` with no secret check; named to be alarming.",
+		},
+	}),
 });
 export type ClawCronHandlerUnsafeConfig =
 	typeof clawCronHandlerUnsafeConfig.infer;
@@ -280,17 +304,50 @@ export type ClawApiRouteDefinition<
 const idInput = ark({ id: "string" });
 const clawIdInput = ark({ clawId: "string" });
 const runIdInput = ark({ runId: "string" });
-const runToolCallInput = ark({ runId: "string", toolCallId: "string" });
-const jsonObjectOrUndefined = jsonObject.or("undefined");
-const runtimeAbortSignalInput = ark({ aborted: "boolean" });
+const runToolCallInput = ark({
+	runId: "string",
+	toolCallId: ark("string").configure({
+		euroclaw: {
+			doc: "The provider-assigned tool-call id (not the internal record id); tool-call ids are unique only within a run, so `runId` scopes the lookup.",
+		},
+	}),
+});
+const jsonObjectOrUndefined = jsonObject.or("undefined").configure({
+	euroclaw: {
+		doc: "Opaque JSON run context threaded to the run; any key using the reserved context prefix is rejected — those are host-injected, not caller-supplied.",
+	},
+});
+const runtimeAbortSignalInput = ark({
+	aborted: ark("boolean").configure({
+		euroclaw: {
+			doc: "The serialized `AbortSignal`, reduced to its `aborted` boolean to cross the api boundary.",
+		},
+	}),
+});
 const runtimeRunOptionsInput = ark({
-	"abortSignal?": runtimeAbortSignalInput.or("undefined"),
+	"abortSignal?": runtimeAbortSignalInput.or("undefined").configure({
+		euroclaw: {
+			doc: "The only run option accepted over the wire — the schema drops `runMode`/recording, which are set server-side.",
+		},
+	}),
 });
 const runtimeRunOptionsOrUndefined = runtimeRunOptionsInput.or("undefined");
 const engineRunMetadataInput = ark({
-	"principal?": "string | undefined",
-	"id?": "string | undefined",
-	"team?": "string | undefined",
+	"principal?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Caller-supplied principal recorded on the durable run for attribution.",
+		},
+	}),
+	"id?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Pins the durable run id (idempotency / correlation) instead of letting the engine mint one.",
+		},
+	}),
+	"team?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Team/tenant tag carried on the durable run for attribution.",
+		},
+	}),
 });
 const engineRunMetadataOrUndefined = engineRunMetadataInput.or("undefined");
 // Both derive straight from the entities' immutable/input flags — every mutable, caller-facing column,
@@ -316,70 +373,184 @@ export {
 } from "@euroclaw/contracts";
 
 const listMessagesInput = ark({
-	"afterSequence?": "number | undefined",
+	"afterSequence?": ark("number | undefined").configure({
+		euroclaw: {
+			doc: "Keyset cursor — returns only messages whose `sequence` is greater than this, not an offset.",
+		},
+	}),
 	"limit?": "number | undefined",
-	threadId: "string",
-	"view?": "'redacted' | 'original' | undefined",
+	threadId: ark("string").configure({
+		euroclaw: {
+			doc: "The thread to list; also resolves the claw scope when `view: 'original'` re-identifies the returned rows.",
+		},
+	}),
+	"view?": ark("'redacted' | 'original' | undefined").configure({
+		euroclaw: {
+			doc: "`'original'` re-identifies ONLY the returned copies (rows at rest stay tokenized) and is audited as `pii.reidentification`; defaults to `'redacted'` and is a silent no-op when no redaction is configured.",
+		},
+	}),
 });
 const sendMessageInput = ark({
-	clawId: "string",
+	clawId: ark("string").configure({
+		euroclaw: {
+			doc: "The claw whose transcript the user message is appended to; also the redaction scope id used to tokenize the persisted message.",
+		},
+	}),
 	"ctx?": jsonObjectOrUndefined,
-	message: "string",
-	"runId?": "string | undefined",
-	threadId: "string",
-	"view?": "'redacted' | 'original' | undefined",
+	message: ark("string").configure({
+		euroclaw: {
+			doc: "Persisted tokenized as a `role: 'user'` message before the run, then passed verbatim to the runtime as the prompt.",
+		},
+	}),
+	"runId?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Optional caller-supplied run id; when omitted a fresh `run`-prefixed id is minted, and it ties the persisted user message to the run recording.",
+		},
+	}),
+	threadId: ark("string").configure({
+		euroclaw: {
+			doc: "The thread the message belongs to; recorded on the run recording metadata.",
+		},
+	}),
+	"view?": ark("'redacted' | 'original' | undefined").configure({
+		euroclaw: {
+			doc: "Like `listMessages`, `'original'` re-identifies only the returned result object and is audited; a no-op without redaction.",
+		},
+	}),
 });
-const forgetSubjectInput = ark({ subjectId: "string" });
+const forgetSubjectInput = ark({
+	subjectId: ark("string").configure({
+		euroclaw: {
+			doc: "The data-subject key crypto-shredded across every PII mapping; fails loud (not a silent success) when the deployment cannot honor erasure, and is audited as `pii.erasure`.",
+		},
+	}),
+});
 const runInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"options?": runtimeRunOptionsOrUndefined,
-	prompt: "string",
+	prompt: ark("string").configure({
+		euroclaw: {
+			doc: "Passed straight to the runtime as the prompt; unlike `sendMessage` this does NOT persist a transcript message.",
+		},
+	}),
 });
 const continueRunInput = ark({
-	approvalId: "string",
+	approvalId: ark("string").configure({
+		euroclaw: {
+			doc: "The approval being resumed; the handler loads it and rebuilds the run recording from its metadata to continue the original run.",
+		},
+	}),
 	"ctx?": jsonObjectOrUndefined,
 	"options?": runtimeRunOptionsOrUndefined,
 });
-const grantApprovalInput = ark({ approvalId: "string", by: "string" });
+const grantApprovalInput = ark({
+	approvalId: "string",
+	by: ark("string").configure({
+		euroclaw: {
+			doc: "The grantor identity, coerced via `asPrincipal` before it is recorded — a principal, not a free-form name.",
+		},
+	}),
+});
 const denyApprovalInput = ark({
 	approvalId: "string",
-	by: "string",
+	by: ark("string").configure({
+		euroclaw: {
+			doc: "The denier identity, coerced via `asPrincipal` — a principal string.",
+		},
+	}),
 	"reason?": "string | undefined",
 });
 const listApprovalsInput = ark({
-	"principal?": "string | undefined",
+	"principal?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Optional principal filter; the wire type is a plain string here even though the api models it as `Principal`.",
+		},
+	}),
 	"status?": approvalStatus.or("undefined"),
 });
 const startRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
-	prompt: "string",
+	prompt: ark("string").configure({
+		euroclaw: {
+			doc: "The prompt for the durable engine run — distinct from the runtime `run` path.",
+		},
+	}),
 	"run?": engineRunMetadataOrUndefined,
 });
 const continueEngineRunInput = ark({
-	approvalId: "string",
+	approvalId: ark("string").configure({
+		euroclaw: {
+			doc: "The approval whose grant resumes the durable engine run.",
+		},
+	}),
 	"ctx?": jsonObjectOrUndefined,
 	"run?": engineRunMetadataOrUndefined,
 });
 const registerOpenApiSpecInput = ark({
-	document: jsonObject,
+	document: jsonObject.configure({
+		euroclaw: {
+			doc: "The full OpenAPI spec as JSON; size-capped and parsed into governed per-tool records (rejected unless OpenAPI 3.x).",
+		},
+	}),
 	organizationId: "string",
-	registeredBy: "string",
-	source: "string",
+	registeredBy: ark("string").configure({
+		euroclaw: {
+			doc: "Registrant identity stored raw on the spec-registration row for provenance (not on the per-tool records); `asPrincipal` is applied only to the authz change-log entry the registration appends.",
+		},
+	}),
+	source: ark("string").configure({
+		euroclaw: {
+			doc: "Address prefix grouping the spec's tools (`<source>.<tool>`); must be a dot-free slug, and later filters `listRegisteredTools` by source.",
+		},
+	}),
 });
 const listRegisteredToolsInput = ark({
 	organizationId: "string",
-	"source?": "string | undefined",
+	"source?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Optional source filter — present narrows to that source, absent lists the whole org.",
+		},
+	}),
 });
-const listActionsInput = ark({ organizationId: "string" });
+const listActionsInput = ark({
+	organizationId: ark("string").configure({
+		euroclaw: {
+			doc: "The tenant whose assembled action vocabulary is returned — the base register-spec action plus registered tools merged with the facts overlay, i.e. what the policy router compiles against.",
+		},
+	}),
+});
 const putPolicySliceInput = ark({
-	cedar: "string",
-	mode: "'enforce' | 'shadow' | 'off'",
-	name: "string",
+	cedar: ark("string").configure({
+		euroclaw: {
+			doc: "Raw Cedar policy text, stored verbatim — euroclaw stays engine-agnostic; the host composes the Cedar engine.",
+		},
+	}),
+	mode: ark("'enforce' | 'shadow' | 'off'").configure({
+		euroclaw: {
+			doc: "`enforce` blocks, `shadow` evaluates without blocking, `off` disables — the slice's effect over the code-owned system posture.",
+		},
+	}),
+	name: ark("string").configure({
+		euroclaw: {
+			doc: "Upsert key within the org — `putPolicySlice` upserts by (organization, name), not create-only.",
+		},
+	}),
 	organizationId: "string",
-	updatedBy: "string",
+	updatedBy: ark("string").configure({
+		euroclaw: {
+			doc: "Editor identity, coerced via `asPrincipal`; the edit appends to the authz change log so the org router rebuilds on the next decision.",
+		},
+	}),
 });
 const listPolicySlicesInput = ark({ organizationId: "string" });
-const deletePolicySliceInput = ark({ organizationId: "string", id: "string" });
+const deletePolicySliceInput = ark({
+	organizationId: ark("string").configure({
+		euroclaw: {
+			doc: "Scopes the delete — keyed by (organizationId, id), so a slice is only removable within its owning org.",
+		},
+	}),
+	id: "string",
+});
 export const clawApiInputSchemas = {
 	bindConversation: bindConversationInput,
 	appendMessage: appendMessageInput,
