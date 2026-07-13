@@ -4,6 +4,7 @@
 
 import { type } from "arktype";
 import { jsonObject } from "../common";
+import { principal } from "./principal";
 
 const OptionalString = type("string | undefined");
 
@@ -20,8 +21,10 @@ const AuditInputShape = {
 	"reason?": OptionalString,
 	/** The stable machine-readable governance reason code, when the deciding gate set one. */
 	"reasonCode?": OptionalString,
-	/** The accountable operator (the `principal`), when an IdentityResolver stamped one. */
-	"principal?": OptionalString,
+	/** The accountable operator (the `principal`), when an IdentityResolver stamped one. Validated as a
+	 *  well-formed principal (the same narrow behind `field.principal`) — an untagged value can't enter
+	 *  the log. It stays a plain `string` in the inferred record (the narrow doesn't brand). */
+	"principal?": principal.or("undefined"),
 	/** The REDACTED details (tool args, or { messages }) — tokens only, never raw PII. */
 	payload: jsonObject,
 } as const;
