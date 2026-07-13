@@ -399,7 +399,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		// The in-process path is untouched: the namespace method is the handler itself.
 		await expect(
-			api.secrets.set({ name: "SEEDED", value: "v0", actor: "alice" }),
+			api.secrets.set({ name: "SEEDED", value: "v0", principal: "user:alice" }),
 		).resolves.toMatchObject({ name: "SEEDED", kind: "value" });
 
 		const set = await handler(
@@ -407,7 +407,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 				body: JSON.stringify({
 					name: "NOTION",
 					value: "tok-1",
-					actor: "alice",
+					principal: "user:alice",
 				}),
 				method: "POST",
 			}),
@@ -428,7 +428,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		// list is a GET by the name rule; input rides the ?input= JSON convention.
 		const list = await handler(
-			new Request(encodedInputUrl("/secrets/list", { actor: "alice" }), {
+			new Request(encodedInputUrl("/secrets/list", { principal: "user:alice" }), {
 				method: "GET",
 			}),
 		);
@@ -440,13 +440,13 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const remove = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/delete", {
-				body: JSON.stringify({ name: "NOTION", actor: "alice" }),
+				body: JSON.stringify({ name: "NOTION", principal: "user:alice" }),
 				method: "POST",
 			}),
 		);
 		expect(remove.status).toBe(200);
 		const afterDelete = await handler(
-			new Request(encodedInputUrl("/secrets/list", { actor: "alice" }), {
+			new Request(encodedInputUrl("/secrets/list", { principal: "user:alice" }), {
 				method: "GET",
 			}),
 		);
@@ -462,8 +462,8 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const response = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				// actor must be non-empty — rejected by the declared schema, not the store.
-				body: JSON.stringify({ name: "K", value: "v", actor: "" }),
+				// principal must be non-empty and tagged — rejected by the declared schema, not the store.
+				body: JSON.stringify({ name: "K", value: "v", principal: "" }),
 				method: "POST",
 			}),
 		);
@@ -566,7 +566,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const set = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				body: JSON.stringify({ name: "E2E", value: "v", actor: "alice" }),
+				body: JSON.stringify({ name: "E2E", value: "v", principal: "user:alice" }),
 				method: "POST",
 			}),
 		);
@@ -577,7 +577,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		});
 		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors.
 		await expect(
-			claw.api.secrets.list({ actor: "alice" }),
+			claw.api.secrets.list({ principal: "user:alice" }),
 		).resolves.toMatchObject([{ name: "E2E" }]);
 	});
 });
