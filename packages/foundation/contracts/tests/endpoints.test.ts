@@ -117,6 +117,24 @@ describe("endpoints() — callable namespace + route metadata", () => {
 		expect(routes?.[0]?.input({ value: 42 })).toBeInstanceOf(type.errors);
 	});
 
+	it("carries the declared output schema in metadata AS-IS, and only when declared", () => {
+		const echoOutput = type({ echoed: "string" });
+		const ns = endpoints({
+			set: {
+				input: echoInput,
+				output: echoOutput,
+				handler: () => ({ echoed: "ok" }),
+			},
+			delete: { input: echoInput, handler: () => undefined },
+		});
+
+		const routes = endpointRoutesOf(ns);
+		// Identity, not a copy: the OpenAPI generator reads the very schema the plugin declared. It is
+		// NEVER run against handler results — outputs are trusted server code (arktype at boundaries).
+		expect(routes?.[0]?.output).toBe(echoOutput);
+		expect(routes?.[1]?.output).toBeUndefined();
+	});
+
 	it("keeps the metadata non-enumerable: the namespace shape is api-identical and a spread drops it", () => {
 		const ns = endpoints({
 			set: { input: echoInput, handler: () => "ok" },

@@ -16,6 +16,15 @@ export type EndpointHttpMethod = "GET" | "POST";
  *  loose callable euroclaw's `ClawApiInputSchema` uses (call it; an errors instance means invalid). */
 export type EndpointInputSchema = (input: unknown) => unknown;
 
+/** The declared response schema — an arktype type in practice, typed structurally against its
+ *  `infer` phantom (the one property the type-level handler pin reads). NEVER runtime-validated:
+ *  a handler result is produced by trusted server code, and arktype validates only where untrusted
+ *  data crosses a boundary — this schema exists to pin the handler's return TYPE and to document
+ *  the operation (OpenAPI 200 `data`). */
+export type EndpointOutputSchema = {
+	readonly infer: unknown;
+};
+
 export type EndpointDefinition = {
 	/** Validates at the HTTP boundary ONLY: the adapter route parses+validates and hands the handler
 	 *  the validated value. In-process calls go straight into the handler, schema untouched. */
@@ -23,8 +32,11 @@ export type EndpointDefinition = {
 	handler: (input: never) => unknown;
 	/** Verb override for the exceptions; absent ⇒ the shared `get*`/`list*` → GET name rule. */
 	method?: EndpointHttpMethod;
-	/** Operation summary for the later OpenAPI slice — carried in metadata, nothing consumes it yet. */
+	/** Operation summary for the OpenAPI generator — carried in metadata. */
 	description?: string;
+	/** Declared response schema: pins the handler's return type (see {@link ValidateEndpointOutputs})
+	 *  and documents the OpenAPI 200 `data`. Carried in metadata; never runtime-validated. */
+	output?: EndpointOutputSchema;
 };
 
 /** A record of definitions, optionally grouped: a nested record is a GROUP whose key becomes a path
@@ -43,6 +55,21 @@ export type InferEndpoints<Defs> = {
 		: InferEndpoints<Defs[K]>;
 };
 
+/** The type-level half of `output`: a definition that declares an output schema must have a handler
+ *  returning that schema's inferred type (sync or promised) — `endpoints()` intersects its argument
+ *  with this, so a drifted return shape fails to compile at the definition. Without `output` the
+ *  handler return stays free (`unknown` imposes nothing). Purely a compile-time pin — the schema is
+ *  never run against the result (see {@link EndpointOutputSchema}). */
+export type ValidateEndpointOutputs<Defs> = {
+	[K in keyof Defs]: Defs[K] extends { handler: (input: never) => unknown }
+		? Defs[K] extends { output: infer Output extends EndpointOutputSchema }
+			? {
+					handler: (input: never) => Output["infer"] | Promise<Output["infer"]>;
+				}
+			: unknown
+		: ValidateEndpointOutputs<Defs[K]>;
+};
+
 /** One declared route, PATH-RELATIVE to its namespace mount (the adapter prefixes the api key). */
 export type EndpointRoute = {
 	/** Dot-joined definition keys relative to the namespace root (e.g. `"set"`, `"packages.create"`). */
@@ -53,6 +80,8 @@ export type EndpointRoute = {
 	input: EndpointInputSchema;
 	handler: (input: never) => unknown;
 	description?: string;
+	/** The declared response schema as passed — documentation + typing only, never run. */
+	output?: EndpointOutputSchema;
 };
 
 /**
@@ -122,6 +151,9 @@ function buildNamespace(
 				...(value.description !== undefined
 					? { description: value.description }
 					: {}),
+				// Carried for the OpenAPI generator only — the route handler never validates against it
+				// (outputs are trusted server code; arktype guards boundaries, not our own returns).
+				...(value.output !== undefined ? { output: value.output } : {}),
 			});
 		} else {
 			namespace[name] = buildNamespace(value, [...names, name], path, routes);
@@ -131,13 +163,15 @@ function buildNamespace(
 }
 
 /**
- * Declare a plugin api namespace: `{ input, handler, method?, description? }` per method, nested
- * records as groups. Returns the CALLABLE namespace (methods are the handlers, identity-preserved)
- * with the flattened {@link EndpointRoute} table attached non-enumerably under
- * {@link ENDPOINTS_METADATA} — read it with {@link endpointRoutesOf}.
+ * Declare a plugin api namespace: `{ input, handler, method?, description?, output? }` per method,
+ * nested records as groups. Returns the CALLABLE namespace (methods are the handlers,
+ * identity-preserved) with the flattened {@link EndpointRoute} table attached non-enumerably under
+ * {@link ENDPOINTS_METADATA} — read it with {@link endpointRoutesOf}. The
+ * {@link ValidateEndpointOutputs} intersection pins each handler's return to its declared `output`
+ * schema at compile time.
  */
 export function endpoints<const Defs extends EndpointDefinitions>(
-	defs: Defs,
+	defs: Defs & ValidateEndpointOutputs<Defs>,
 ): InferEndpoints<Defs> {
 	const routes: EndpointRoute[] = [];
 	const namespace = buildNamespace(defs, [], [], routes);

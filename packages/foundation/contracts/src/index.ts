@@ -289,8 +289,10 @@ export type {
 	EndpointDefinitions,
 	EndpointHttpMethod,
 	EndpointInputSchema,
+	EndpointOutputSchema,
 	EndpointRoute,
 	InferEndpoints,
+	ValidateEndpointOutputs,
 } from "./governance/endpoints";
 export {
 	ENDPOINTS_METADATA,
