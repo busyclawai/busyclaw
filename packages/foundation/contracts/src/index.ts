@@ -273,6 +273,22 @@ export {
 	THREAD_ID_CONTEXT_KEY,
 	toolCall,
 } from "./governance/boundary";
+// ── governance: declared plugin api endpoints (routable namespaces + the one kebab/verb source) ──
+export type {
+	EndpointDefinition,
+	EndpointDefinitions,
+	EndpointHttpMethod,
+	EndpointInputSchema,
+	EndpointRoute,
+	InferEndpoints,
+} from "./governance/endpoints";
+export {
+	ENDPOINTS_METADATA,
+	endpointHttpMethod,
+	endpointRoutesOf,
+	endpoints,
+	toKebabCase,
+} from "./governance/endpoints";
 export type {
 	EuroclawCronContext,
 	EuroclawCronFlag,

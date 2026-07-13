@@ -1,17 +1,35 @@
-import { validationError } from "@euroclaw/contracts";
+import { endpoints, validationError } from "@euroclaw/contracts";
 import { type as ark } from "arktype";
 import type { SkillsApiOptions } from "../common/contracts";
 import { assertSkillManifest } from "../common/manifest";
 import { requireSkillsStore } from "../common/plugin";
 import type {
+	CreateSkillAclInput,
+	CreateSkillInstallationInput,
+	CreateSkillPackageInput,
+	CreateSkillProposalInput,
+	SkillAclPermission,
+	SkillAclPrincipalType,
 	SkillInstallationRecord,
+	SkillInstallationStatus,
+	SkillInstallationStatusPatch,
 	SkillPackageRecord,
+	SkillPackageSource,
 	SkillProposalRecord,
+	SkillProposalStatus,
+	SkillProposalStatusPatch,
 	SkillsStore,
 } from "../core";
-import { createSimpleSkillsApi } from "../simple/api";
+import {
+	createSkillAclInput,
+	createSkillInstallationInput,
+	createSkillPackageInput,
+	createSkillProposalInput,
+} from "../core";
+import { simpleSkillsEndpoints } from "../simple/api";
 import type {
 	EnableSkillInstallationInput,
+	GrantActivationInput,
 	InstallSkillInput,
 	RequestShareInput,
 	ShareSkillInput,
@@ -26,9 +44,24 @@ import {
 } from "./grants";
 import {
 	enableSkillInstallationInput,
+	grantActivationInput,
 	installSkillInput,
+	listSkillAclForInstallationInput,
+	listSkillAclForPrincipalInput,
+	listSkillInstallationsInput,
+	listSkillPackagesInput,
+	listSkillProposalsInput,
+	requestShareInput,
+	shareSkillInput,
 	shareSkillResult,
+	skillPackageDigestLookupInput,
+	skillPackageVersionLookupInput,
+	skillRowLookupInput,
+	skillRunLookupInput,
+	skillThreadLookupInput,
 	trustSkillInstallationInput,
+	updateSkillInstallationStatusInput,
+	updateSkillProposalStatusInput,
 } from "./schema";
 
 function assertInstallSkillInput(input: unknown): InstallSkillInput {
@@ -177,169 +210,291 @@ export function createGovernedSkillsApi(
 	options: SkillsApiOptions = {},
 ): SkillsApi {
 	const resolvedStore = () => requireSkillsStore(store);
-	return {
-		...createSimpleSkillsApi(store, options),
-		async install(input) {
-			const valid = assertInstallSkillInput(input);
-			const pkg = await packageForInstall({
-				install: valid,
-				store: resolvedStore(),
-			});
-			return resolvedStore().installations.create({
-				createdBy: valid.createdBy,
-				digest: pkg.digest,
-				packageId: pkg.packageId,
-				scope: valid.scope,
-				scopeId: valid.scopeId,
-				status: valid.initialStatus ?? "installed",
-				version: pkg.version,
-			});
+	// ONE endpoints() call over the whole surface — the simple DEFS spread in (never the built
+	// namespace, whose metadata a spread would drop), the lifecycle methods beside them, and the raw
+	// substores as GROUPS (`/skills/packages/create` and friends fall out of the group keys).
+	return endpoints({
+		...simpleSkillsEndpoints(store, options),
+		install: {
+			input: installSkillInput,
+			handler: async (input: InstallSkillInput) => {
+				const valid = assertInstallSkillInput(input);
+				const pkg = await packageForInstall({
+					install: valid,
+					store: resolvedStore(),
+				});
+				return resolvedStore().installations.create({
+					createdBy: valid.createdBy,
+					digest: pkg.digest,
+					packageId: pkg.packageId,
+					scope: valid.scope,
+					scopeId: valid.scopeId,
+					status: valid.initialStatus ?? "installed",
+					version: pkg.version,
+				});
+			},
 		},
-		async trustInstallation(input) {
-			const valid = assertTrustSkillInstallationInput(input);
-			const installation = await requireInstallation({
-				installationId: valid.installationId,
-				label: "trust skill installation input invalid",
-				store: resolvedStore(),
-			});
-			if (
-				installation.status !== "installed" &&
-				installation.status !== "quarantined"
-			) {
-				throw validationError(
-					"trust skill installation input invalid",
-					"installation must be installed or quarantined",
+		trustInstallation: {
+			input: trustSkillInstallationInput,
+			handler: async (input: TrustSkillInstallationInput) => {
+				const valid = assertTrustSkillInstallationInput(input);
+				const installation = await requireInstallation({
+					installationId: valid.installationId,
+					label: "trust skill installation input invalid",
+					store: resolvedStore(),
+				});
+				if (
+					installation.status !== "installed" &&
+					installation.status !== "quarantined"
+				) {
+					throw validationError(
+						"trust skill installation input invalid",
+						"installation must be installed or quarantined",
+					);
+				}
+				const updated = await resolvedStore().installations.updateStatus(
+					installation.id,
+					{
+						status: "trusted",
+						trustedBy: valid.trustedBy,
+					},
 				);
-			}
-			const updated = await resolvedStore().installations.updateStatus(
-				installation.id,
-				{
-					status: "trusted",
-					trustedBy: valid.trustedBy,
-				},
-			);
-			if (!updated)
-				throw validationError(
-					"trust skill installation input invalid",
-					"installation not found",
+				if (!updated)
+					throw validationError(
+						"trust skill installation input invalid",
+						"installation not found",
+					);
+				return updated;
+			},
+		},
+		enableInstallation: {
+			input: enableSkillInstallationInput,
+			handler: async (input: EnableSkillInstallationInput) => {
+				const valid = assertEnableSkillInstallationInput(input);
+				const installation = await requireInstallation({
+					installationId: valid.installationId,
+					label: "enable skill installation input invalid",
+					store: resolvedStore(),
+				});
+				if (installation.status !== "trusted") {
+					throw validationError(
+						"enable skill installation input invalid",
+						"installation must be trusted",
+					);
+				}
+				const updated = await resolvedStore().installations.updateStatus(
+					installation.id,
+					{
+						enabledBy: valid.enabledBy,
+						status: "enabled",
+					},
 				);
-			return updated;
+				if (!updated)
+					throw validationError(
+						"enable skill installation input invalid",
+						"installation not found",
+					);
+				return updated;
+			},
 		},
-		async enableInstallation(input) {
-			const valid = assertEnableSkillInstallationInput(input);
-			const installation = await requireInstallation({
-				installationId: valid.installationId,
-				label: "enable skill installation input invalid",
-				store: resolvedStore(),
-			});
-			if (installation.status !== "trusted") {
-				throw validationError(
-					"enable skill installation input invalid",
-					"installation must be trusted",
-				);
-			}
-			const updated = await resolvedStore().installations.updateStatus(
-				installation.id,
-				{
-					enabledBy: valid.enabledBy,
-					status: "enabled",
-				},
-			);
-			if (!updated)
-				throw validationError(
-					"enable skill installation input invalid",
-					"installation not found",
-				);
-			return updated;
+		grantActivation: {
+			input: grantActivationInput,
+			handler: async (input: GrantActivationInput) => {
+				const valid = assertGrantActivationInput(input);
+				await requireInstallation({
+					installationId: valid.installationId,
+					label: "grant activation input invalid",
+					store: resolvedStore(),
+				});
+				return resolvedStore().acl.grant({
+					installationId: valid.installationId,
+					permission: "activate",
+					principalId: valid.principalId,
+					principalType: valid.principalType,
+				});
+			},
 		},
-		async grantActivation(input) {
-			const valid = assertGrantActivationInput(input);
-			await requireInstallation({
-				installationId: valid.installationId,
-				label: "grant activation input invalid",
-				store: resolvedStore(),
-			});
-			return resolvedStore().acl.grant({
-				installationId: valid.installationId,
-				permission: "activate",
-				principalId: valid.principalId,
-				principalType: valid.principalType,
-			});
+		requestShare: {
+			input: requestShareInput,
+			handler: async (input: RequestShareInput) => {
+				const valid = assertRequestShareInput(input);
+				return createShareProposal({
+					share: valid,
+					store: resolvedStore(),
+				});
+			},
 		},
-		async requestShare(input) {
-			const valid = assertRequestShareInput(input);
-			return createShareProposal({
-				share: valid,
-				store: resolvedStore(),
-			});
-		},
-		async share(input) {
-			const valid = assertShareSkillInput(input);
-			// Governed share requires explicit approval: with no approver, emit a proposal for
-			// review; an approver short-circuits straight to the grant.
-			if (valid.approvedBy === undefined) {
+		share: {
+			input: shareSkillInput,
+			handler: async (input: ShareSkillInput) => {
+				const valid = assertShareSkillInput(input);
+				// Governed share requires explicit approval: with no approver, emit a proposal for
+				// review; an approver short-circuits straight to the grant.
+				if (valid.approvedBy === undefined) {
+					return assertShareSkillResult({
+						proposal: await createShareProposal({
+							share: valid,
+							store: resolvedStore(),
+						}),
+						status: "proposed",
+					});
+				}
 				return assertShareSkillResult({
-					proposal: await createShareProposal({
+					grant: await grantShare({
 						share: valid,
 						store: resolvedStore(),
 					}),
-					status: "proposed",
-				});
-			}
-			return assertShareSkillResult({
-				grant: await grantShare({
-					share: valid,
-					store: resolvedStore(),
-				}),
-				status: "granted",
-			});
-		},
-		packages: {
-			async create(input) {
-				return resolvedStore().packages.create({
-					...input,
-					manifest: assertSkillManifest(input.manifest),
+					status: "granted",
 				});
 			},
-			get: ({ id }) => resolvedStore().packages.get(id),
-			getByDigest: ({ digest }) => resolvedStore().packages.getByDigest(digest),
-			getByPackageVersion: (input) =>
-				resolvedStore().packages.getByPackageVersion(input),
-			list: (input) => resolvedStore().packages.list(input),
+		},
+		packages: {
+			create: {
+				input: createSkillPackageInput,
+				handler: async (input: CreateSkillPackageInput) => {
+					return resolvedStore().packages.create({
+						...input,
+						manifest: assertSkillManifest(input.manifest),
+					});
+				},
+			},
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) => resolvedStore().packages.get(id),
+			},
+			getByDigest: {
+				input: skillPackageDigestLookupInput,
+				handler: ({ digest }: { digest: string }) =>
+					resolvedStore().packages.getByDigest(digest),
+			},
+			getByPackageVersion: {
+				input: skillPackageVersionLookupInput,
+				handler: (input: { packageId: string; version: string }) =>
+					resolvedStore().packages.getByPackageVersion(input),
+			},
+			list: {
+				input: listSkillPackagesInput,
+				handler: (input?: {
+					publisher?: string;
+					source?: SkillPackageSource;
+				}) => resolvedStore().packages.list(input),
+			},
 		},
 		installations: {
-			create: (input) => resolvedStore().installations.create(input),
-			get: ({ id }) => resolvedStore().installations.get(id),
-			listForScope: (input) =>
-				resolvedStore().installations.listForScope(input),
-			updateStatus: ({ id, patch }) =>
-				resolvedStore().installations.updateStatus(id, patch),
+			create: {
+				input: createSkillInstallationInput,
+				handler: (input: CreateSkillInstallationInput) =>
+					resolvedStore().installations.create(input),
+			},
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) =>
+					resolvedStore().installations.get(id),
+			},
+			listForScope: {
+				input: listSkillInstallationsInput,
+				handler: (input: {
+					status?: SkillInstallationStatus;
+					scope: string;
+					scopeId: string;
+				}) => resolvedStore().installations.listForScope(input),
+			},
+			updateStatus: {
+				input: updateSkillInstallationStatusInput,
+				handler: ({
+					id,
+					patch,
+				}: {
+					id: string;
+					patch: SkillInstallationStatusPatch;
+				}) => resolvedStore().installations.updateStatus(id, patch),
+			},
 		},
 		acl: {
-			grant: (input) => resolvedStore().acl.grant(input),
-			get: ({ id }) => resolvedStore().acl.get(id),
-			listForInstallation: ({ installationId }) =>
-				resolvedStore().acl.listForInstallation(installationId),
-			listForPrincipal: (input) => resolvedStore().acl.listForPrincipal(input),
+			grant: {
+				input: createSkillAclInput,
+				handler: (input: CreateSkillAclInput) =>
+					resolvedStore().acl.grant(input),
+			},
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) => resolvedStore().acl.get(id),
+			},
+			listForInstallation: {
+				input: listSkillAclForInstallationInput,
+				handler: ({ installationId }: { installationId: string }) =>
+					resolvedStore().acl.listForInstallation(installationId),
+			},
+			listForPrincipal: {
+				input: listSkillAclForPrincipalInput,
+				handler: (input: {
+					permission?: SkillAclPermission;
+					principalId?: string;
+					principalType: SkillAclPrincipalType;
+				}) => resolvedStore().acl.listForPrincipal(input),
+			},
 		},
 		activations: {
-			get: ({ id }) => resolvedStore().activations.get(id),
-			listForRun: ({ runId }) => resolvedStore().activations.listForRun(runId),
-			listForThread: ({ threadId }) =>
-				resolvedStore().activations.listForThread(threadId),
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) =>
+					resolvedStore().activations.get(id),
+			},
+			listForRun: {
+				input: skillRunLookupInput,
+				handler: ({ runId }: { runId: string }) =>
+					resolvedStore().activations.listForRun(runId),
+			},
+			listForThread: {
+				input: skillThreadLookupInput,
+				handler: ({ threadId }: { threadId: string }) =>
+					resolvedStore().activations.listForThread(threadId),
+			},
 		},
 		reads: {
-			get: ({ id }) => resolvedStore().reads.get(id),
-			listForRun: ({ runId }) => resolvedStore().reads.listForRun(runId),
-			listForThread: ({ threadId }) =>
-				resolvedStore().reads.listForThread(threadId),
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) => resolvedStore().reads.get(id),
+			},
+			listForRun: {
+				input: skillRunLookupInput,
+				handler: ({ runId }: { runId: string }) =>
+					resolvedStore().reads.listForRun(runId),
+			},
+			listForThread: {
+				input: skillThreadLookupInput,
+				handler: ({ threadId }: { threadId: string }) =>
+					resolvedStore().reads.listForThread(threadId),
+			},
 		},
 		proposals: {
-			create: (input) => resolvedStore().proposals.create(input),
-			get: ({ id }) => resolvedStore().proposals.get(id),
-			listForScope: (input) => resolvedStore().proposals.listForScope(input),
-			updateStatus: ({ id, patch }) =>
-				resolvedStore().proposals.updateStatus(id, patch),
+			create: {
+				input: createSkillProposalInput,
+				handler: (input: CreateSkillProposalInput) =>
+					resolvedStore().proposals.create(input),
+			},
+			get: {
+				input: skillRowLookupInput,
+				handler: ({ id }: { id: string }) => resolvedStore().proposals.get(id),
+			},
+			listForScope: {
+				input: listSkillProposalsInput,
+				handler: (input: {
+					status?: SkillProposalStatus;
+					scope: string;
+					scopeId: string;
+				}) => resolvedStore().proposals.listForScope(input),
+			},
+			updateStatus: {
+				input: updateSkillProposalStatusInput,
+				handler: ({
+					id,
+					patch,
+				}: {
+					id: string;
+					patch: SkillProposalStatusPatch;
+				}) => resolvedStore().proposals.updateStatus(id, patch),
+			},
 		},
-	};
+	});
 }

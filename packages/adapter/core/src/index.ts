@@ -1,4 +1,5 @@
 import type {
+	EndpointRoute,
 	EuroclawCronResult,
 	EuroclawCronTask,
 	EuroclawPlugin,
@@ -8,7 +9,10 @@ import type {
 import {
 	configurationError,
 	EuroclawError,
+	endpointRoutesOf,
 	errorMessage,
+	toKebabCase,
+	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "euroclaw";
@@ -461,11 +465,99 @@ function pluginRoutes(
 	);
 }
 
+type MountedEndpoints = {
+	/** Dotted api keys as written (`channels.registrations`) — error messages speak the caller's names. */
+	name: string;
+	/** Kebab mount prefix (`/channels/registrations`) — same splitter as the routes it prefixes. */
+	prefix: string;
+	routes: readonly EndpointRoute[];
+};
+
+// Find every endpoints() namespace under an api value: a metadata carrier mounts (its own route table
+// is already flattened — no recursion past it); a plain object recurses so wrappers like
+// `{ channels: { registrations: <endpoints> } }` mount at their full key path; functions are flat api
+// methods and plain values are in-process-only members — neither is walked. The WeakSet keeps a
+// self-referential api object from hanging assembly.
+function collectEndpointNamespaces(input: {
+	value: unknown;
+	name: string;
+	prefix: string;
+	seen: WeakSet<object>;
+	out: MountedEndpoints[];
+}): void {
+	const { value } = input;
+	if (value === null || typeof value !== "object" || Array.isArray(value))
+		return;
+	if (input.seen.has(value)) return;
+	input.seen.add(value);
+	const routes = endpointRoutesOf(value);
+	if (routes) {
+		input.out.push({ name: input.name, prefix: input.prefix, routes });
+		return;
+	}
+	for (const [key, child] of Object.entries(value)) {
+		collectEndpointNamespaces({
+			value: child,
+			name: `${input.name}.${key}`,
+			prefix: `${input.prefix}/${toKebabCase(key)}`,
+			seen: input.seen,
+			out: input.out,
+		});
+	}
+}
+
+// Plugin api namespaces declared with endpoints() become routes under `/<namespace>/…` — mounted
+// beside the flat api routes and plugin webhook routes, so checkRouteConflicts fails loud on any
+// collision at assembly. The arktype boundary sits HERE: the route parses+validates and hands the
+// handler the validated value; the in-process namespace call never sees the schema.
+function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
+	const namespaces: MountedEndpoints[] = [];
+	const seen = new WeakSet<object>();
+	for (const [key, value] of Object.entries(
+		(claw.api ?? {}) as Record<string, unknown>,
+	)) {
+		collectEndpointNamespaces({
+			value,
+			name: key,
+			prefix: `/${toKebabCase(key)}`,
+			seen,
+			out: namespaces,
+		});
+	}
+	return namespaces.flatMap((namespace) =>
+		namespace.routes.map((route) => {
+			const path = `${namespace.prefix}${route.path}`;
+			return {
+				id: `endpoint:${route.method}:${path}`,
+				method: route.method,
+				path,
+				handler: async ({ request }) => {
+					const valid = route.input(await readInput(request, route.method));
+					if (valid instanceof type.errors) {
+						throw validationError(
+							`claw.api.${namespace.name}.${route.name} input`,
+							valid.summary,
+						);
+					}
+					const data = await (route.handler as (input: unknown) => unknown)(
+						valid,
+					);
+					return { body: { data, ok: true } };
+				},
+			} satisfies ResolvedRoute;
+		}),
+	);
+}
+
 export function toRequestHandler(
 	claw: Claw,
 	options: ClawRequestHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
-	const routes = [...baseRoutes(claw, options), ...pluginRoutes(claw, options)];
+	const routes = [
+		...baseRoutes(claw, options),
+		...pluginRoutes(claw, options),
+		...pluginEndpointRoutes(claw),
+	];
 	checkRouteConflicts(routes);
 	const staticRoutes = routes.filter((route) => !isPattern(route.path));
 	const patternRoutes = routes

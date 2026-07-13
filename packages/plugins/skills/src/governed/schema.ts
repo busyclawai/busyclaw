@@ -1,5 +1,15 @@
 import { type } from "arktype";
-import { nonEmptyString, skillAclRecord, skillProposalRecord } from "../core";
+import {
+	nonEmptyString,
+	skillAclPermission,
+	skillAclPrincipalType,
+	skillAclRecord,
+	skillInstallationStatus,
+	skillPackageSource,
+	skillProposalRecord,
+	skillProposalState,
+	skillProposalStatus,
+} from "../core";
 
 // Identity fields (ids, boundary refs, actor refs) must be non-empty — enforced at the schema so the
 // API layer parses instead of re-checking each field with assertNonEmptyString.
@@ -65,4 +75,54 @@ export const shareSkillResult = type({
 }).or({
 	proposal: skillProposalRecord,
 	status: "'proposed'",
+});
+
+// ── Substore boundary inputs ─────────────────────────────────────────────────
+// The raw substore accessors (packages/installations/acl/activations/reads/proposals) are routed
+// endpoints too, so their query/patch shapes get validators here. In-process they stay the plain TS
+// signatures the stores declare; over HTTP these parse the wire input. Patch shapes mirror the
+// hand-declared Status-patch types exactly — entity.updateSchema() would admit every mutable column,
+// wider than the api's contract.
+export const skillRowLookupInput = type({ id: nes });
+export const skillPackageDigestLookupInput = type({ digest: nes });
+export const skillPackageVersionLookupInput = type({
+	packageId: nes,
+	version: nes,
+});
+export const listSkillPackagesInput = type({
+	"publisher?": optionalNes,
+	"source?": skillPackageSource.or("undefined"),
+});
+export const listSkillInstallationsInput = type({
+	scope: nes,
+	scopeId: nes,
+	"status?": skillInstallationStatus.or("undefined"),
+});
+export const updateSkillInstallationStatusInput = type({
+	id: nes,
+	patch: {
+		"enabledBy?": optionalNes,
+		"status?": skillInstallationStatus.or("undefined"),
+		"trustedBy?": optionalNes,
+	},
+});
+export const listSkillAclForInstallationInput = type({ installationId: nes });
+export const listSkillAclForPrincipalInput = type({
+	"permission?": skillAclPermission.or("undefined"),
+	"principalId?": optionalNes,
+	principalType: skillAclPrincipalType,
+});
+export const skillRunLookupInput = type({ runId: nes });
+export const skillThreadLookupInput = type({ threadId: nes });
+export const listSkillProposalsInput = type({
+	scope: nes,
+	scopeId: nes,
+	"status?": skillProposalStatus.or("undefined"),
+});
+export const updateSkillProposalStatusInput = type({
+	id: nes,
+	patch: {
+		"state?": skillProposalState.or("undefined"),
+		"status?": skillProposalStatus.or("undefined"),
+	},
 });

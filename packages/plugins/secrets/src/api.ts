@@ -1,4 +1,4 @@
-import { parsePrincipal, validationError } from "@euroclaw/contracts";
+import { endpoints, parsePrincipal, validationError } from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
@@ -114,41 +114,52 @@ export type SecretsPluginApi = {
 };
 
 /**
- * Build the management api over the store's lazy guard. Every method resolves `requireStore()` at
+ * Build the management api over the store's lazy guard — a DECLARED `endpoints()` namespace, so the
+ * adapter can route it (`POST /secrets/set`, `POST /secrets/delete`, `GET /secrets/list`) while the
+ * in-process methods stay the plain handlers below. Every method resolves `requireStore()` at
  * call time (fails loud with no database, the provider's posture) and keys strictly to
  * `(personal, principal)` — the structural principal-scoping that IS v0's access control.
  */
 export function createSecretsManagementApi(
 	requireStore: () => StoredSecretsStore,
 ): SecretsManagementApi {
-	return {
-		async set(input) {
-			const valid = assertSetSecretInput(input);
-			// Structural scoping: personal:principal, always. The HOST passes the already-tagged
-			// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the api takes it
-			// directly. Both `createdBy` and the personal boundary key are that principal — the caller never
-			// names a target — and because sessionIdentity stamps the same principal onto ctx.principal, the
-			// written `scopeId` matches the provider's read. `kind` is the store's to write (value-kind
-			// rows), so it is not passed here.
-			const record = await requireStore().set({
-				name: valid.name,
-				value: valid.value,
-				createdBy: valid.principal,
-				scope: "personal",
-				scopeId: valid.principal,
-			});
-			return toView(record);
+	return endpoints({
+		set: {
+			input: setSecretInput,
+			handler: async (input: SetSecretInput): Promise<StoredSecretView> => {
+				const valid = assertSetSecretInput(input);
+				// Structural scoping: personal:principal, always. The HOST passes the already-tagged
+				// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the api takes it
+				// directly. Both `createdBy` and the personal boundary key are that principal — the caller never
+				// names a target — and because sessionIdentity stamps the same principal onto ctx.principal, the
+				// written `scopeId` matches the provider's read. `kind` is the store's to write (value-kind
+				// rows), so it is not passed here.
+				const record = await requireStore().set({
+					name: valid.name,
+					value: valid.value,
+					createdBy: valid.principal,
+					scope: "personal",
+					scopeId: valid.principal,
+				});
+				return toView(record);
+			},
 		},
-		async delete(input) {
-			const valid = assertDeleteSecretInput(input);
-			// Keys on the principal boundary, so it must match `set`'s scopeId.
-			await requireStore().delete("personal", valid.principal, valid.name);
+		delete: {
+			input: deleteSecretInput,
+			handler: async (input: DeleteSecretInput): Promise<void> => {
+				const valid = assertDeleteSecretInput(input);
+				// Keys on the principal boundary, so it must match `set`'s scopeId.
+				await requireStore().delete("personal", valid.principal, valid.name);
+			},
 		},
-		async list(input) {
-			const valid = assertListSecretInput(input);
-			// Reads the principal boundary the rows were written under.
-			const records = await requireStore().list("personal", valid.principal);
-			return records.map(toView);
+		list: {
+			input: listSecretInput,
+			handler: async (input: ListSecretInput): Promise<StoredSecretView[]> => {
+				const valid = assertListSecretInput(input);
+				// Reads the principal boundary the rows were written under.
+				const records = await requireStore().list("personal", valid.principal);
+				return records.map(toView);
+			},
 		},
-	};
+	});
 }

@@ -81,6 +81,13 @@ export const channelRegistrationLookupInput = channelRegistrationEntity.schema(
 	channelRegistrationLookupInputOptions,
 );
 
+// The list filter stays a plain-TS query shape in-process, but as a routed endpoint input it crosses
+// the HTTP boundary — derived from the entity's own columns so the status enum can't drift.
+export const listChannelRegistrationsInput = channelRegistrationEntity.schema({
+	pick: ["provider", "organizationId", "status"],
+	optional: ["provider", "status"],
+});
+
 // The update patch derives from the fields — every mutable column, all optional (identity and
 // server-managed columns drop out via their flags).
 export const updateChannelRegistrationInput =

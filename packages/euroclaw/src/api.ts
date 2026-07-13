@@ -46,10 +46,12 @@ import {
 	createThreadInput,
 	createToolCallInput,
 	createToolResultInput,
+	endpointHttpMethod,
 	jsonObject,
 	RESERVED_CONTEXT_PREFIX,
 	SYSTEM_ANONYMOUS,
 	stateError,
+	toKebabCase,
 	toolCallEntity,
 	validationError,
 } from "@euroclaw/contracts";
@@ -419,12 +421,15 @@ export const clawApiInputSchemas = {
 	updateToolCallStatus: ark({ id: "string", patch: toolCallStatusPatchInput }),
 } satisfies { readonly [Method in ClawApiMethod]: ClawApiInputSchema };
 
+// Path + verb derive from the ONE shared source in contracts (`toKebabCase` / `endpointHttpMethod`)
+// — the same functions plugin `endpoints()` mounts use, so the flat api and plugin namespaces can
+// never disagree on the splitter or the read rule.
 function apiMethodPath(method: ClawApiMethod): `/${string}` {
-	return `/${method.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
+	return `/${toKebabCase(method)}`;
 }
 
 function apiHttpMethod(method: ClawApiMethod): ClawApiHttpMethod {
-	return method.startsWith("get") || method.startsWith("list") ? "GET" : "POST";
+	return endpointHttpMethod(method);
 }
 
 function apiRoute<Method extends ClawApiMethod>(

@@ -32,6 +32,13 @@ importers:
       euroclaw:
         specifier: workspace:*
         version: link:../../euroclaw
+    devDependencies:
+      '@euroclaw/secrets-plugin':
+        specifier: workspace:*
+        version: link:../../plugins/secrets
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../../storage/core
 
   packages/adapter/nextjs:
     dependencies:

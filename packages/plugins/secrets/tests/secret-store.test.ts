@@ -5,7 +5,11 @@
 // store + reader arrive at configure (tests hand a schema-wrapped memory adapter, the channels
 // pattern). `secrets([], { store })` isolates the store provider (empty base ⇒ it is providers[0]).
 
-import { type Adapter, userPrincipal } from "@euroclaw/contracts";
+import {
+	type Adapter,
+	endpointRoutesOf,
+	userPrincipal,
+} from "@euroclaw/contracts";
 import { buildSecrets, env } from "@euroclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
@@ -563,5 +567,20 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		await expect(api.list({ principal: "   " })).rejects.toMatchObject(
 			validationFailed,
 		);
+	});
+
+	it("is a DECLARED endpoints() namespace — route metadata rides the same callable api", () => {
+		const { api } = connectedStore();
+		if (!api) throw new Error("expected the store path to expose an api");
+		// The declared routes an HTTP adapter mounts under /secrets — set/delete write (POST), list
+		// reads (GET by the name rule). The namespace's enumerable shape stays the three methods.
+		expect(
+			endpointRoutesOf(api)?.map((route) => [route.path, route.method]),
+		).toEqual([
+			["/set", "POST"],
+			["/delete", "POST"],
+			["/list", "GET"],
+		]);
+		expect(Object.keys(api).sort()).toEqual(["delete", "list", "set"]);
 	});
 });

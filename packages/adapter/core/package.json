@@ -26,5 +26,9 @@
 		"@euroclaw/contracts": "workspace:*",
 		"arktype": "2.2.0",
 		"euroclaw": "workspace:*"
+	},
+	"devDependencies": {
+		"@euroclaw/secrets-plugin": "workspace:*",
+		"@euroclaw/storage-core": "workspace:*"
 	}
 }

@@ -1,5 +1,6 @@
 import {
 	configurationError,
+	endpoints,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
@@ -479,120 +480,149 @@ async function installedCatalogEntries(input: {
 	return out;
 }
 
+/**
+ * The additive surface as endpoint DEFINITIONS — exported so the governed api composes by spreading
+ * DEFS and calling `endpoints()` once over the whole record (spreading a built `endpoints()`
+ * namespace would silently drop its non-enumerable route metadata).
+ */
+export function simpleSkillsEndpoints(
+	store: SkillsStore | undefined,
+	options: SkillsApiOptions = {},
+) {
+	const resolvedStore = () => requireSkillsStore(store);
+	return {
+		catalog: {
+			input: skillCatalogInput,
+			// A pure browse — the one read whose name doesn't say so, hence the verb override.
+			method: "GET",
+			handler: async (
+				input?: SkillCatalogInput,
+			): Promise<SkillCatalogEntry[]> => {
+				const catalog = assertSkillCatalogInput(input);
+				const staticEntries =
+					catalog.includeStatic === false
+						? []
+						: (options.staticSkills ?? []).map(staticCatalogEntry);
+				return [
+					...staticEntries,
+					...(await installedCatalogEntries({ catalog, store })),
+				];
+			},
+		},
+		// read WRITES (the read-audit row), so it keeps the name rule's POST.
+		read: {
+			input: readSkillInput,
+			handler: async (input: ReadSkillInput): Promise<ReadSkillResult> => {
+				const read = assertReadSkillInput(input);
+				if (read.id !== undefined) {
+					const staticManifest = options.staticSkills?.find(
+						(skill) => skill.id === read.id,
+					);
+					if (staticManifest) {
+						let record: SkillReadRecord | undefined;
+						if (store && options.readContext) {
+							const readContext = await resolveReadSkillContext({
+								read,
+								resolver: options.readContext,
+							});
+							record = await createReadRecord({
+								read,
+								readBy: readContext.readBy,
+								skillId: staticManifest.id,
+								store,
+							});
+						}
+						return assertReadSkillResult({
+							id: staticManifest.id,
+							kind: "static",
+							manifest: staticManifest,
+							read: record,
+						});
+					}
+				}
+				const readContext = await resolveReadSkillContext({
+					read,
+					resolver: options.readContext,
+				});
+				return readInstalledSkillById({
+					read,
+					readContext,
+					store: resolvedStore(),
+				});
+			},
+		},
+		createPersonal: {
+			input: createPersonalSkillInput,
+			handler: async (input: CreatePersonalSkillInput) => {
+				const valid = assertCreatePersonalSkillInput(input);
+				const pkg = await resolvedStore().packages.create({
+					digest: valid.digest,
+					manifest: valid.manifest,
+					packageId: valid.packageId,
+					publisher: valid.createdBy,
+					source: valid.source ?? "local",
+					version: valid.version,
+				});
+				// The store defaults the boundary to personal:createdBy — exactly what "personal" means.
+				const installation = await resolvedStore().installations.create({
+					createdBy: valid.createdBy,
+					digest: pkg.digest,
+					enabledBy: valid.createdBy,
+					packageId: pkg.packageId,
+					status: "enabled",
+					version: pkg.version,
+				});
+				const grant = await resolvedStore().acl.grant({
+					installationId: installation.id,
+					permission: "activate",
+					principalId: valid.createdBy,
+					principalType: "actor",
+				});
+				const readGrant = await resolvedStore().acl.grant({
+					installationId: installation.id,
+					permission: "read",
+					principalId: valid.createdBy,
+					principalType: "actor",
+				});
+				return assertCreatePersonalSkillResult({
+					grant,
+					installation,
+					package: pkg,
+					readGrant,
+				});
+			},
+		},
+		activate: {
+			input: activateSkillInput,
+			handler: async (input: ActivateSkillInput) => {
+				const valid = assertActivateSkillInput(input);
+				const activationContext = await resolveActivateSkillContext({
+					activation: valid,
+					resolver: options.activationContext,
+				});
+				const { installation, manifest } = await assertActivatableInstallation({
+					activationContext,
+					activation: valid,
+					store: resolvedStore(),
+				});
+				return resolvedStore().activations.create({
+					activatedBy: activationContext.activatedBy,
+					clawId: valid.clawId,
+					digest: installation.digest,
+					installationId: installation.id,
+					runId: valid.runId,
+					skillId: manifest.id,
+					source: valid.source ?? "user",
+					threadId: valid.threadId,
+				});
+			},
+		},
+	} as const;
+}
+
 export function createSimpleSkillsApi(
 	store: SkillsStore | undefined,
 	options: SkillsApiOptions = {},
 ): SimpleSkillsApi {
-	const resolvedStore = () => requireSkillsStore(store);
-	return {
-		async catalog(input) {
-			const catalog = assertSkillCatalogInput(input);
-			const staticEntries =
-				catalog.includeStatic === false
-					? []
-					: (options.staticSkills ?? []).map(staticCatalogEntry);
-			return [
-				...staticEntries,
-				...(await installedCatalogEntries({ catalog, store })),
-			];
-		},
-		async read(input) {
-			const read = assertReadSkillInput(input);
-			if (read.id !== undefined) {
-				const staticManifest = options.staticSkills?.find(
-					(skill) => skill.id === read.id,
-				);
-				if (staticManifest) {
-					let record: SkillReadRecord | undefined;
-					if (store && options.readContext) {
-						const readContext = await resolveReadSkillContext({
-							read,
-							resolver: options.readContext,
-						});
-						record = await createReadRecord({
-							read,
-							readBy: readContext.readBy,
-							skillId: staticManifest.id,
-							store,
-						});
-					}
-					return assertReadSkillResult({
-						id: staticManifest.id,
-						kind: "static",
-						manifest: staticManifest,
-						read: record,
-					});
-				}
-			}
-			const readContext = await resolveReadSkillContext({
-				read,
-				resolver: options.readContext,
-			});
-			return readInstalledSkillById({
-				read,
-				readContext,
-				store: resolvedStore(),
-			});
-		},
-		async createPersonal(input) {
-			const valid = assertCreatePersonalSkillInput(input);
-			const pkg = await resolvedStore().packages.create({
-				digest: valid.digest,
-				manifest: valid.manifest,
-				packageId: valid.packageId,
-				publisher: valid.createdBy,
-				source: valid.source ?? "local",
-				version: valid.version,
-			});
-			// The store defaults the boundary to personal:createdBy — exactly what "personal" means.
-			const installation = await resolvedStore().installations.create({
-				createdBy: valid.createdBy,
-				digest: pkg.digest,
-				enabledBy: valid.createdBy,
-				packageId: pkg.packageId,
-				status: "enabled",
-				version: pkg.version,
-			});
-			const grant = await resolvedStore().acl.grant({
-				installationId: installation.id,
-				permission: "activate",
-				principalId: valid.createdBy,
-				principalType: "actor",
-			});
-			const readGrant = await resolvedStore().acl.grant({
-				installationId: installation.id,
-				permission: "read",
-				principalId: valid.createdBy,
-				principalType: "actor",
-			});
-			return assertCreatePersonalSkillResult({
-				grant,
-				installation,
-				package: pkg,
-				readGrant,
-			});
-		},
-		async activate(input) {
-			const valid = assertActivateSkillInput(input);
-			const activationContext = await resolveActivateSkillContext({
-				activation: valid,
-				resolver: options.activationContext,
-			});
-			const { installation, manifest } = await assertActivatableInstallation({
-				activationContext,
-				activation: valid,
-				store: resolvedStore(),
-			});
-			return resolvedStore().activations.create({
-				activatedBy: activationContext.activatedBy,
-				clawId: valid.clawId,
-				digest: installation.digest,
-				installationId: installation.id,
-				runId: valid.runId,
-				skillId: manifest.id,
-				source: valid.source ?? "user",
-				threadId: valid.threadId,
-			});
-		},
-	};
+	return endpoints(simpleSkillsEndpoints(store, options));
 }

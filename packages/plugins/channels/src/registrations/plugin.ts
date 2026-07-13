@@ -8,6 +8,7 @@ import {
 	type EuroclawPluginRuntime,
 	type EuroclawRoute,
 	type EuroclawRouteContext,
+	endpoints,
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
@@ -19,7 +20,12 @@ import {
 	type EndpointContext,
 } from "../core/contracts";
 import { dispatchWebhook } from "../core/dispatch";
-import { channelRegistrationsModels } from "./schema";
+import {
+	channelRegistrationLookupInput,
+	channelRegistrationsModels,
+	listChannelRegistrationsInput,
+	registerChannelRegistrationInput,
+} from "./schema";
 import {
 	type ChannelRegistrationListFilter,
 	type ChannelRegistrationLookup,
@@ -70,6 +76,9 @@ export function assertUniqueProviders(channels: readonly Channel[]): void {
 // same URL; the row is resolved from the request by its inbound secret (Channel.identify → getBySecret),
 // so hosts hand this one URL (plus a per-registration secret_token) to setWebhook.
 const WEBHOOK_PATH = "/channels/:provider/registrations/webhook";
+
+// Boundary input for the by-id read — the row id, the base api's idInput shape.
+const registrationIdInput = type({ id: "string" });
 
 /**
  * The registrations mode of channels() — user-registered bots, the SSO analog: hosts let their users
@@ -279,15 +288,37 @@ export function buildRegistrationsPlugin(
 
 		return {
 			routes: [webhookRoute],
+			// The management api is a declared endpoints() namespace nested under the `channels` key —
+			// the adapter mounts it at /channels/registrations/<method> (register/revoke POST by the name
+			// rule, get/get-by-key/list GET), while `claw.api.channels.registrations.*` stays these
+			// same handlers called directly.
 			api: () => ({
 				channels: {
-					registrations: {
-						register,
-						get: ({ id }) => requireStore().get(id),
-						getByKey: (input) => requireStore().getByKey(input),
-						list: (filter) => requireStore().list(filter),
-						revoke: (input) => requireStore().revoke(input),
-					},
+					registrations: endpoints({
+						register: {
+							input: registerChannelRegistrationInput,
+							handler: register,
+						},
+						get: {
+							input: registrationIdInput,
+							handler: ({ id }: { id: string }) => requireStore().get(id),
+						},
+						getByKey: {
+							input: channelRegistrationLookupInput,
+							handler: (input: ChannelRegistrationLookup) =>
+								requireStore().getByKey(input),
+						},
+						list: {
+							input: listChannelRegistrationsInput,
+							handler: (filter?: ChannelRegistrationListFilter) =>
+								requireStore().list(filter),
+						},
+						revoke: {
+							input: channelRegistrationLookupInput,
+							handler: (input: ChannelRegistrationLookup) =>
+								requireStore().revoke(input),
+						},
+					}),
 				},
 			}),
 		};
