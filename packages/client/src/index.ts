@@ -3,16 +3,18 @@
 // plugin namespaces ride the recursive function proxy with the one camelCase→kebab convention and
 // the `get*`/`list*` → GET verb rule — the SAME `toKebabCase`/`endpointHttpMethod` pair the server
 // mounts routes with, so client and server cannot disagree on a path. Zero server runtime in the
-// bundle: `euroclaw` types cross via `import type` only; the runtime deps are contracts (wire
-// protocol) and nanostores (reactivity).
+// bundle: `euroclaw` types cross via `import type` only, and contracts VALUES cross only through
+// the docless wire subpaths (the contracts BARREL is import-type-only here — the structural
+// guarantee tests/contracts-wire.test.ts enforces); runtime deps are those subpaths,
+// @euroclaw/errors, and nanostores.
 
-import type { EndpointHttpMethod } from "@euroclaw/contracts";
+import { CLAW_API_METHOD_NAMES } from "@euroclaw/contracts/claw-api";
+import type { EndpointHttpMethod } from "@euroclaw/contracts/governance/endpoints";
 import {
-	CLAW_API_METHOD_NAMES,
-	configurationError,
 	endpointHttpMethod,
 	toKebabCase,
-} from "@euroclaw/contracts";
+} from "@euroclaw/contracts/governance/endpoints";
+import { configurationError } from "@euroclaw/errors";
 import type { ReadableAtom, WritableAtom } from "nanostores";
 import { createRouteProxy } from "./proxy";
 import { createTransport } from "./transport";

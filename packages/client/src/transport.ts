@@ -4,11 +4,10 @@
 // against the contracts envelope — never cast. Resolves `{ data, error }`, never throws: a
 // transport-level throw (DNS, abort, a broken injected fetch) becomes `error.status: 0`.
 
-import type {
-	ClawResponseEnvelope,
-	EndpointHttpMethod,
-} from "@euroclaw/contracts";
-import { errorMessage, parseClawResponseEnvelope } from "@euroclaw/contracts";
+import type { ClawResponseEnvelope } from "@euroclaw/contracts/claw-api";
+import { parseClawResponseEnvelope } from "@euroclaw/contracts/claw-api";
+import type { EndpointHttpMethod } from "@euroclaw/contracts/governance/endpoints";
+import { errorMessage } from "@euroclaw/errors";
 import type {
 	ClawClientError,
 	ClawClientOptions,

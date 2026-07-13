@@ -21,6 +21,14 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./claw-api": {
+			"types": "./dist/claw-api.d.ts",
+			"import": "./dist/claw-api.js"
+		},
+		"./governance/endpoints": {
+			"types": "./dist/governance/endpoints.d.ts",
+			"import": "./dist/governance/endpoints.js"
 		}
 	},
 	"main": "./dist/index.js",

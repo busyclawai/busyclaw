@@ -54,6 +54,9 @@ importers:
       '@euroclaw/contracts':
         specifier: workspace:*
         version: link:../foundation/contracts
+      '@euroclaw/errors':
+        specifier: workspace:*
+        version: link:../foundation/errors
       nanostores:
         specifier: 1.4.0
         version: 1.4.0

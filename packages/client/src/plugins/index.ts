@@ -3,7 +3,7 @@
 // (a query atom + the signal that refetches it). Both import server types via `import type` only.
 
 import type { ApprovalRecord } from "@euroclaw/contracts";
-import { toKebabCase } from "@euroclaw/contracts";
+import { toKebabCase } from "@euroclaw/contracts/governance/endpoints";
 import type { SecretsStorePlugin } from "@euroclaw/secrets-plugin";
 import { atom } from "nanostores";
 import { createQueryAtom } from "../query";

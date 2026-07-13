@@ -45,6 +45,7 @@
 	},
 	"dependencies": {
 		"@euroclaw/contracts": "workspace:*",
+		"@euroclaw/errors": "workspace:*",
 		"nanostores": "1.4.0"
 	},
 	"peerDependencies": {

@@ -5,7 +5,7 @@
 // as a `useStore`-backed hook. React must never leak into the root entry: this subpath is the
 // only module graph that imports it, which is what lets `react` stay an OPTIONAL peer.
 
-import { configurationError } from "@euroclaw/contracts";
+import { configurationError } from "@euroclaw/errors";
 import { createClawClient as createVanillaClawClient } from "../index";
 import type {
 	ClawClient,
