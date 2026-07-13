@@ -1,22 +1,17 @@
 // The recursive FUNCTION proxy behind plugin namespaces (adapted from better-auth's
 // createDynamicPathProxy — see THIRD_PARTY_NOTICES.md): every node is both navigable and callable,
-// so `client.secrets.set(...)` needs no per-namespace registration. Known values (the base method
-// table, plugin actions, atoms, `$fetch`/`$store`) resolve through the walk and are returned
-// as-is; anything unresolved deepens the path and calling it dispatches by convention.
+// so `client.secrets.set(...)` needs no per-namespace registration. EVERY known value (the base
+// method table, plugin actions, atoms, `$fetch`/`$store`) is returned verbatim — functions,
+// atoms, and plain objects alike, so `client.$store` IS the concrete registry (enumerable,
+// identity-stable) rather than a proxy node; only unresolved names deepen the path, and calling
+// an unresolved node dispatches by convention. Corollary: an unknown member under a KNOWN
+// object-valued key is a natural `undefined`, never a route — a name a plugin owns cannot also
+// silently address the server.
 //
 // The thenable guard is load-bearing: without `then`/`catch`/`finally` → `undefined`, an
 // `await client.secrets` would treat the proxy as a promise and hang the await forever.
 
 const proxyTarget = () => undefined;
-
-function isAtomLike(value: unknown): boolean {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		typeof (value as { get?: unknown }).get === "function" &&
-		typeof (value as { subscribe?: unknown }).subscribe === "function"
-	);
-}
 
 export function createRouteProxy(input: {
 	known: Readonly<Record<string, unknown>>;
@@ -44,8 +39,7 @@ export function createRouteProxy(input: {
 				}
 				const path = [...segments, prop];
 				const resolved = resolveKnown(path);
-				if (typeof resolved === "function") return resolved;
-				if (isAtomLike(resolved)) return resolved;
+				if (resolved !== undefined) return resolved;
 				return createNode(path);
 			},
 			apply(_target, _thisArg, args) {

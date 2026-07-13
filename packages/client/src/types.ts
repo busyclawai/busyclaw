@@ -139,7 +139,8 @@ export type InferClientApi<Api> = {
 	[K in keyof Api]: InferClientApiValue<Api[K]>;
 };
 
-type EmptyObject = Record<never, never>;
+/** Shared with the framework bindings (`./react`) — intentionally not re-exported at the root. */
+export type EmptyObject = Record<never, never>;
 
 /** The `plugins` tuple carried by a concrete options type; `readonly []` when the options are the
  *  wide contract (no generic inference happened — e.g. an explicit `<typeof claw>` call, where the
@@ -169,8 +170,8 @@ type AtomsOf<P> = P extends { getAtoms: (...args: never[]) => infer Atoms }
 	: EmptyObject;
 
 // `UnionToIntersection<never>` is `never` and would poison the whole client type, so every fold
-// guards the empty-plugins case first.
-type FoldPlugins<Plugins extends readonly ClawClientPlugin[], Folded> = [
+// guards the empty-plugins case first. Exported for the framework bindings' own folds (`./react`).
+export type FoldPlugins<Plugins extends readonly ClawClientPlugin[], Folded> = [
 	Plugins[number],
 ] extends [never]
 	? EmptyObject

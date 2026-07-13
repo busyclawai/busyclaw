@@ -255,6 +255,17 @@ describe("plugin namespaces (the recursive function proxy)", () => {
 		expect(typeof awaited).toBe("function");
 	});
 
+	it("returns every KNOWN value verbatim — $store is the concrete registry, not a node", () => {
+		const client = createClawClient({ plugins: [approvalsClient()] });
+
+		// Identity-stable and enumerable: framework bindings iterate $store.atoms to build hooks.
+		expect(client.$store).toBe(client.$store);
+		expect(Object.keys(client.$store.atoms).sort()).toEqual([
+			"$pendingApprovalsSignal",
+			"pendingApprovals",
+		]);
+	});
+
 	it("lets a plugin pathMethods entry override the derived verb", async () => {
 		const { calls, fetch } = recordingFetch(() =>
 			envelopeResponse({ data: [], ok: true }),

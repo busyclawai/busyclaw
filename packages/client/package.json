@@ -25,6 +25,10 @@
 		"./plugins": {
 			"types": "./dist/plugins/index.d.ts",
 			"import": "./dist/plugins/index.js"
+		},
+		"./react": {
+			"types": "./dist/react/index.d.ts",
+			"import": "./dist/react/index.js"
 		}
 	},
 	"main": "./dist/index.js",
@@ -43,10 +47,23 @@
 		"@euroclaw/contracts": "workspace:*",
 		"nanostores": "1.4.0"
 	},
+	"peerDependencies": {
+		"react": "^18.0.0 || ^19.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
 		"@euroclaw/adapter-core": "workspace:*",
 		"@euroclaw/secrets-plugin": "workspace:*",
 		"@euroclaw/storage-core": "workspace:*",
-		"euroclaw": "workspace:*"
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"euroclaw": "workspace:*",
+		"happy-dom": "20.10.6",
+		"react": "19.2.7",
+		"react-dom": "19.2.7"
 	}
 }

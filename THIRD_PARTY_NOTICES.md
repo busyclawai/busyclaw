@@ -35,6 +35,11 @@ back here.
 	format, based on Better Auth's database adapter (`packages/core/src/db`, `DBAdapter`) and
     its plugin schema files (`packages/better-auth/src/plugins/*/schema.ts`). euroclaw's port is
     a leaner subset.
+  - `packages/client/src/` — the client machinery adapted from Better Auth's client
+    **patterns**: the recursive function-path proxy (`client/proxy.ts`), the lazy query atom
+    (`useAuthQuery`, `session-atom.ts`), and the react binding (`client/react/index.ts`'s
+    `use${Capitalize(key)}` hook renaming plus `react-store.ts`'s `useSyncExternalStore`
+    snapshot-ref store binding, which Better Auth itself mirrors from `@nanostores/react`).
   - `packages/storage/kysely/src/index.ts` / `packages/storage/drizzle/src/index.ts` — the SQL
     storage adapters, modeled on Better Auth's `packages/kysely-adapter` /
     `packages/drizzle-adapter` (the CRUD/where translation reimplemented against each ORM's
