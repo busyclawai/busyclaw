@@ -3,6 +3,7 @@ import {
 	type ContextResolver,
 	ORGANIZATION_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
+	userPrincipal,
 } from "@euroclaw/contracts";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createTeamStore } from "@euroclaw/storage-durable";
@@ -18,15 +19,16 @@ function resolverFor(
 }
 
 describe("runtime context", () => {
-	it("resolves actor from a swappable session function", async () => {
+	it("resolves a tagged user principal from a swappable session function", async () => {
 		const resolve = resolverFor({
 			identity: sessionIdentity({
 				getSession: async ({ headers }) =>
 					headers === "tok" ? { user: { id: "alice" } } : null,
 			}),
 		});
+		// sessionIdentity tags the host id at the producing boundary — the stamped actor is `user:alice`.
 		expect((await resolve({ headers: "tok" }))[ACTOR_CONTEXT_KEY]).toBe(
-			"alice",
+			userPrincipal("alice"),
 		);
 	});
 

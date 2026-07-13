@@ -1,4 +1,4 @@
-import { validationError } from "@euroclaw/contracts";
+import { userPrincipal, validationError } from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
@@ -112,25 +112,38 @@ export function createSecretsManagementApi(
 	return {
 		async set(input) {
 			const valid = assertSetSecretInput(input);
-			// Structural scoping: personal:actor, always. `createdBy` and the boundary are the actor the
-			// host authenticated — the caller never names a target. `kind` is the store's to write (it
-			// writes value-kind rows), so it is not passed here.
+			// Structural scoping: personal:principal, always. The store is end-user self-service, so the
+			// host-authenticated actor is always a user — tag it as the `user:<id>` principal at this
+			// producing boundary (the api INPUT stays a raw host id). Both `createdBy` and the boundary
+			// take that principal — the caller never names a target — and because sessionIdentity stamps
+			// the same `user:<id>` onto ctx.actor, the written `scopeId` matches the provider's read.
+			// `kind` is the store's to write (value-kind rows), so it is not passed here.
+			const principal = userPrincipal(valid.actor);
 			const record = await requireStore().set({
 				name: valid.name,
 				value: valid.value,
-				createdBy: valid.actor,
+				createdBy: principal,
 				scope: "personal",
-				scopeId: valid.actor,
+				scopeId: principal,
 			});
 			return toView(record);
 		},
 		async delete(input) {
 			const valid = assertDeleteSecretInput(input);
-			await requireStore().delete("personal", valid.actor, valid.name);
+			// Same tag as the write — delete keys on the principal boundary, so it must match `set`'s scopeId.
+			await requireStore().delete(
+				"personal",
+				userPrincipal(valid.actor),
+				valid.name,
+			);
 		},
 		async list(input) {
 			const valid = assertListSecretInput(input);
-			const records = await requireStore().list("personal", valid.actor);
+			// Same tag as the write — list reads the principal boundary the rows were written under.
+			const records = await requireStore().list(
+				"personal",
+				userPrincipal(valid.actor),
+			);
 			return records.map(toView);
 		},
 	};

@@ -48,6 +48,7 @@ import {
 	jsonObject,
 	RESERVED_CONTEXT_PREFIX,
 	stateError,
+	SYSTEM_ANONYMOUS,
 	toolCallEntity,
 	validationError,
 } from "@euroclaw/contracts";
@@ -608,21 +609,21 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			const existingThread = args.threadId
 				? await requireThreadRecord(clawsStore, args.threadId)
 				: undefined;
-			// A fresh binding creates a claw whose creator is the external actor; it defaults to
-			// personal scope (see claws.create). Binding an existing claw/thread makes that claw the
-			// source of truth.
+			// A fresh binding creates a claw; a stranger's (unauthenticated) conversation has no
+			// principal of its own, so its creator is system:anonymous. It defaults to personal scope
+			// (see claws.create). Binding an existing claw/thread makes that claw the source of truth.
 			const claw = args.clawId
 				? await requireClawRecord(clawsStore, args.clawId)
 				: existingThread
 					? await requireClawRecord(clawsStore, existingThread.clawId)
 					: await clawsStore.claws.create({
 							...args.claw,
-							// The external user is the creator; fall back to the bot endpoint when the
-							// conversation carries no actor (createdBy is required — a claw has a creator).
-							createdBy:
-								args.claw?.createdBy ??
-								args.externalActorId ??
-								args.endpointKey,
+							// createdBy is a PRINCIPAL (owner-rule / "my resources" / erasure key), never a
+							// telegram id or a bot key: a stranger's conversation is created by
+							// system:anonymous. The stranger (externalActorId) and the endpoint (provider/
+							// endpointKey) are recorded on the binding row below, so nothing is lost for
+							// erasure or routing — they are simply not creators.
+							createdBy: args.claw?.createdBy ?? SYSTEM_ANONYMOUS,
 						});
 
 			const thread = existingThread

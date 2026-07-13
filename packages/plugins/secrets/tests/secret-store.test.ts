@@ -5,7 +5,7 @@
 // store + reader arrive at configure (tests hand a schema-wrapped memory adapter, the channels
 // pattern). `secrets([], { store })` isolates the store provider (empty base ⇒ it is providers[0]).
 
-import type { Adapter } from "@euroclaw/contracts";
+import { type Adapter, userPrincipal } from "@euroclaw/contracts";
 import { buildSecrets, env } from "@euroclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
@@ -425,18 +425,22 @@ describe("the personal management api — claw.api.secrets.*", () => {
 			value: "secret-v1",
 			actor: "alice",
 		});
+		// The api tags the raw host actor — createdBy is the `user:alice` principal, not a bare id.
 		expect(view).toMatchObject({
 			name: "MY_NOTION_TOKEN",
 			kind: "value",
-			createdBy: "alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(view).not.toHaveProperty("value");
 		// The name shows in alice's inventory, still with no value…
 		const listed = await api.list({ actor: "alice" });
 		expect(listed.map((v) => v.name)).toEqual(["MY_NOTION_TOKEN"]);
 		expect(listed[0]).not.toHaveProperty("value");
-		// …and the write-side meets the read-side: the provider opens the sealed row for alice's ctx.
-		expect(await provider.get("MY_NOTION_TOKEN", { actor: "alice" })).toEqual({
+		// …and the write-side meets the read-side: the row was written under `user:alice`, so the
+		// provider resolves it for the SAME tagged ctx actor sessionIdentity stamps (the round-trip).
+		expect(
+			await provider.get("MY_NOTION_TOKEN", { actor: userPrincipal("alice") }),
+		).toEqual({
 			kind: "token",
 			value: "secret-v1",
 		});
@@ -453,9 +457,10 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		expect((await api.list({ actor: "alice" })).map((v) => v.name)).toEqual([
 			"X",
 		]);
-		// …bob cannot read alice's X through the provider, and alice still can.
-		expect(await provider.get("X", { actor: "bob" })).toBeNull();
-		expect(await provider.get("X", { actor: "alice" })).toEqual({
+		// …and the isolation holds on the tagged boundary: alice's row lives at `user:alice`, so
+		// `user:bob` cannot read it through the provider and `user:alice` can (disjoint principals).
+		expect(await provider.get("X", { actor: userPrincipal("bob") })).toBeNull();
+		expect(await provider.get("X", { actor: userPrincipal("alice") })).toEqual({
 			kind: "token",
 			value: "alices",
 		});
@@ -483,11 +488,13 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		await api.set({ name: "ROT", value: "v2", actor: "alice" });
 		// one row, not two…
 		expect(await api.list({ actor: "alice" })).toHaveLength(1);
-		// …and the resolved value is the latest.
-		expect(await provider.get("ROT", { actor: "alice" })).toEqual({
-			kind: "token",
-			value: "v2",
-		});
+		// …and the resolved value is the latest (read on the tagged boundary the api wrote under).
+		expect(await provider.get("ROT", { actor: userPrincipal("alice") })).toEqual(
+			{
+				kind: "token",
+				value: "v2",
+			},
+		);
 	});
 
 	it("delete — set then delete leaves an empty list and the provider resolves null", async () => {
@@ -496,7 +503,9 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		await api.set({ name: "GONE", value: "v", actor: "alice" });
 		await api.delete({ name: "GONE", actor: "alice" });
 		expect(await api.list({ actor: "alice" })).toEqual([]);
-		expect(await provider.get("GONE", { actor: "alice" })).toBeNull();
+		expect(
+			await provider.get("GONE", { actor: userPrincipal("alice") }),
+		).toBeNull();
 	});
 
 	it("a missing or blank actor fails loud — validationError on both set and list", async () => {

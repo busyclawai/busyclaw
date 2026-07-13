@@ -9,9 +9,10 @@ import {
 	ROLE_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
+	userPrincipal,
 } from "@euroclaw/contracts";
 
-/** Resolves the accountable operator → the `actor` (or undefined). `() => "system:cron"` for background runs. */
+/** Resolves the accountable operator → the `actor` (or undefined). `() => SYSTEM_CRON` for background runs. */
 export type IdentityResolver = (
 	ctx: TurnContext,
 ) => string | undefined | Promise<string | undefined>;
@@ -35,8 +36,13 @@ export function sessionIdentity(deps: {
 		headers: unknown;
 	}) => Promise<{ user: { id: string } } | null>;
 }): IdentityResolver {
-	return async (ctx) =>
-		(await deps.getSession({ headers: ctx.headers }))?.user.id;
+	return async (ctx) => {
+		// Tag the host's user id into the `user:<id>` principal form at the point it is PRODUCED, so the
+		// stamped ACTOR_CONTEXT_KEY is a legible principal — and matches the tagged `scopeId` the store
+		// api writes for the same user (the store-resolution round-trip). A blank session ⇒ undefined.
+		const id = (await deps.getSession({ headers: ctx.headers }))?.user.id;
+		return id === undefined ? undefined : userPrincipal(id);
+	};
 }
 
 /** Build a MembershipResolver from any `roleOf(team, actor)` lookup — the native team store, better-auth, your own. */

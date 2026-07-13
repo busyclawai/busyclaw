@@ -1,3 +1,4 @@
+import { SYSTEM_ANONYMOUS } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import { durableRedactor, textModel } from "./fixtures";
@@ -57,5 +58,40 @@ describe("createClaw conversation binding", () => {
 			{ content: { text: "hello from telegram" }, role: "user" },
 			{ content: { text: "done" }, role: "assistant" },
 		]);
+	});
+
+	it("attributes an unauthenticated conversation to system:anonymous — external id + endpoint stay on the binding", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: { redactor },
+		});
+
+		// A stranger's bot conversation carries no principal (no claw.createdBy) — the fresh claw's
+		// creator is system:anonymous, NOT the telegram id or the bot endpoint (the bleed the principal
+		// standardization closes: createdBy is a principal, read by the owner-rule / erasure).
+		const bound = await claw.api.bindConversation({
+			provider: "telegram",
+			endpointKey: "sales",
+			externalConversationId: "chat-9",
+			externalActorId: "stranger-9",
+			claw: { name: "Sales assistant" },
+			thread: { title: "Telegram chat" },
+		});
+
+		expect(bound.created).toBe(true);
+		expect(bound.claw.createdBy).toBe(SYSTEM_ANONYMOUS);
+		// personal scope keyed to the (anonymous) creator, exactly like an authenticated bind
+		expect(bound.claw.scope).toBe("personal");
+		expect(bound.claw.scopeId).toBe(SYSTEM_ANONYMOUS);
+		// nothing is lost: the stranger and the endpoint are still recorded on the binding row for
+		// erasure + routing — they are simply no longer masquerading as the creator.
+		expect(bound.binding).toMatchObject({
+			provider: "telegram",
+			endpointKey: "sales",
+			externalConversationId: "chat-9",
+			externalActorId: "stranger-9",
+		});
 	});
 });
