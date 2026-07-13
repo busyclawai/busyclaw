@@ -1,3 +1,4 @@
+import { userPrincipal } from "@euroclaw/contracts";
 import {
 	createRuntime,
 	type Runtime,
@@ -196,7 +197,7 @@ describe("@euroclaw/engine-sql", () => {
 			method: "POST",
 			path: "/runs",
 			organizationId: "organization-1",
-			actor: "alice",
+			principal: userPrincipal("alice"),
 			requestHash,
 			responseStatus: 202,
 			responseBody: { runId: run.id },
@@ -207,7 +208,7 @@ describe("@euroclaw/engine-sql", () => {
 			method: "POST",
 			path: "/runs",
 			organizationId: "organization-1",
-			actor: "alice",
+			principal: userPrincipal("alice"),
 			requestHash,
 		});
 		expect(replay?.responseStatus).toBe(202);
@@ -219,7 +220,7 @@ describe("@euroclaw/engine-sql", () => {
 				method: "POST",
 				path: "/runs",
 				organizationId: "organization-1",
-				actor: "alice",
+				principal: userPrincipal("alice"),
 				requestHash: store.requestHash({ prompt: "different" }),
 				responseStatus: 202,
 				responseBody: { runId: run.id },

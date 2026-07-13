@@ -117,7 +117,7 @@ export const IdempotencyRecord = ark({
 	method: "string",
 	path: "string",
 	"organizationId?": OptionalString,
-	"actor?": OptionalString,
+	"principal?": OptionalString,
 	requestHash: "string",
 	responseStatus: "number",
 	responseBody: JsonRecord,
@@ -162,7 +162,10 @@ export type IdempotencyLookup = {
 	method: string;
 	path: string;
 	organizationId?: string;
-	actor?: string;
+	// The request's principal — a component of the idempotency key tuple. The (future) request handler
+	// passes ctx's already-branded Principal; it is a plain string at runtime, so it hashes into the
+	// key exactly as before.
+	principal?: Principal;
 	requestHash: string;
 };
 
@@ -273,7 +276,7 @@ function idempotencyId(input: IdempotencyLookup): string {
 			method: input.method,
 			path: input.path,
 			organizationId: input.organizationId ?? null,
-			actor: input.actor ?? null,
+			principal: input.principal ?? null,
 		}),
 	);
 }
@@ -636,9 +639,9 @@ export function createSqlEngineStore(
 		},
 
 		async getIdempotency(input) {
-			// The id IS the hash of the scope tuple (key/method/path/organizationId/actor), so a primary-key
-			// lookup is exactly the scoped match — and it sidesteps `WHERE col = NULL` (never true in SQL,
-			// and undefined !== null in the memory adapter) for absent organization/actor.
+			// The id IS the hash of the scope tuple (key/method/path/organizationId/principal), so a
+			// primary-key lookup is exactly the scoped match — and it sidesteps `WHERE col = NULL` (never
+			// true in SQL, and undefined !== null in the memory adapter) for absent organization/principal.
 			const record = await db.findOne({
 				model: "idempotency_key",
 				where: [{ field: "id", value: idempotencyId(input) }],
@@ -669,7 +672,7 @@ export function createSqlEngineStore(
 						method: input.method,
 						path: input.path,
 						organizationId: input.organizationId,
-						actor: input.actor,
+						principal: input.principal,
 						requestHash: input.requestHash,
 						responseStatus: input.responseStatus,
 						responseBody: asJsonRecord(input.responseBody, "response body"),
