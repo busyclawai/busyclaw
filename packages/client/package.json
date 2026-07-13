@@ -1,0 +1,52 @@
+{
+	"name": "@euroclaw/client",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "The vanilla euroclaw client: table-driven base api calls, convention-routed plugin namespaces over a recursive proxy, and nanostores reactivity — typed from `typeof claw` with zero server runtime in the bundle.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"directory": "packages/client"
+	},
+	"bugs": {
+		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./plugins": {
+			"types": "./dist/plugins/index.d.ts",
+			"import": "./dist/plugins/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/contracts": "workspace:*",
+		"nanostores": "1.4.0"
+	},
+	"devDependencies": {
+		"@euroclaw/adapter-core": "workspace:*",
+		"@euroclaw/secrets-plugin": "workspace:*",
+		"@euroclaw/storage-core": "workspace:*",
+		"euroclaw": "workspace:*"
+	}
+}
