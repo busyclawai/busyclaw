@@ -5,6 +5,7 @@ import type {
 	BindConversationInput,
 	BindConversationResult,
 	CheckpointRecord,
+	ClawApiMethodName,
 	ClawEngineHandle,
 	ClawRecord,
 	ClawRunReadModel,
@@ -39,6 +40,7 @@ import {
 	approvalStatus,
 	bindConversationInput,
 	bindConversationResult,
+	CLAW_API_METHOD_NAMES,
 	clawEntity,
 	configurationError,
 	createCheckpointInput,
@@ -419,7 +421,13 @@ export const clawApiInputSchemas = {
 	startRun: startRunInput,
 	updateClaw: ark({ id: "string", patch: updateClawPatchInput }),
 	updateToolCallStatus: ark({ id: "string", patch: toolCallStatusPatchInput }),
-} satisfies { readonly [Method in ClawApiMethod]: ClawApiInputSchema };
+	// Keyed by the SHARED name list (contracts), which closes the drift triangle at compile time:
+	// this satisfies pins the map's keys to CLAW_API_METHOD_NAMES exactly; apiRoute() below pins the
+	// list to ClawApi (each listed name must be an api method to call it, and indexing this map by
+	// the full ClawApiMethod union fails if an api method is missing from the list). So list, map,
+	// and api keys are provably one set — a drifted name cannot silently lose its route (server) or
+	// its call (client).
+} satisfies { readonly [Method in ClawApiMethodName]: ClawApiInputSchema };
 
 // Path + verb derive from the ONE shared source in contracts (`toKebabCase` / `endpointHttpMethod`)
 // — the same functions plugin `endpoints()` mounts use, so the flat api and plugin namespaces can
@@ -443,11 +451,10 @@ function apiRoute<Method extends ClawApiMethod>(
 	};
 }
 
+// Derives from the shared name list (NOT this package's schema-map keys), so the server route
+// table and the remote client's call table come from the one contracts source by construction.
 export const clawApiRoutes = Object.fromEntries(
-	(Object.keys(clawApiInputSchemas) as ClawApiMethod[]).map((method) => [
-		method,
-		apiRoute(method),
-	]),
+	CLAW_API_METHOD_NAMES.map((method) => [method, apiRoute(method)]),
 ) as { readonly [Method in ClawApiMethod]: ClawApiRouteDefinition<Method> };
 
 export const clawApiRouteList = Object.values(clawApiRoutes);

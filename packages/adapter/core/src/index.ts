@@ -1,4 +1,5 @@
 import type {
+	ClawResponseEnvelope,
 	EndpointRoute,
 	EuroclawCronResult,
 	EuroclawCronTask,
@@ -11,6 +12,7 @@ import {
 	EuroclawError,
 	endpointRoutesOf,
 	errorMessage,
+	parseClawResponseEnvelope,
 	toKebabCase,
 	validationError,
 } from "@euroclaw/contracts";
@@ -20,15 +22,10 @@ import { clawApiRouteList, parseClawApiInput } from "euroclaw";
 
 export type ClawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
-// The HTTP wire contract every euroclaw adapter response carries: a success/error envelope around
-// the claw api result. One schema — the server builds it (errorResponse + the route handler bodies)
-// and the client PARSES it (readClientResponse) rather than casting untrusted network JSON.
-export const clawResponseEnvelope = type({
-	"ok?": "boolean",
-	"data?": "unknown",
-	"error?": { message: "string" },
-});
-export type ClawResponseEnvelope = typeof clawResponseEnvelope.infer;
+// The response envelope is wire PROTOCOL, so it lives in @euroclaw/contracts (the client parses it
+// without importing any server package); re-exported here for existing consumers.
+export type { ClawResponseEnvelope } from "@euroclaw/contracts";
+export { clawResponseEnvelope } from "@euroclaw/contracts";
 
 export type ClawRequestHandlerOptions = {
 	basePath?: string;
@@ -60,9 +57,15 @@ function errorResponse(
 	error: unknown,
 	status = statusForError(error),
 ): Response {
+	// EuroclawError failures carry their stable code onto the wire — the client surfaces it as
+	// `error.code` so callers can branch on the code instead of matching message text.
+	const code = error instanceof EuroclawError ? error.code : undefined;
 	return json(
 		{
-			error: { message: errorMessage(error) },
+			error: {
+				message: errorMessage(error),
+				...(code !== undefined ? { code } : {}),
+			},
 			ok: false,
 		},
 		{ status },
@@ -381,8 +384,7 @@ function parseEnvelope(text: string): ClawResponseEnvelope | undefined {
 		// Not JSON (a proxy/gateway error page, say) — let the HTTP status drive the error message.
 		return undefined;
 	}
-	const valid = clawResponseEnvelope(body);
-	return valid instanceof type.errors ? undefined : valid;
+	return parseClawResponseEnvelope(body);
 }
 
 async function readClientResponse(response: Response): Promise<unknown> {

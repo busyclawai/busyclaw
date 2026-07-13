@@ -52,6 +52,16 @@ export {
 } from "./authz/policy-slice";
 export type { EntityRef, PolicyRequest, PolicyResult } from "./authz/request";
 export { entityRef, policyRequest, policyResult } from "./authz/request";
+// ── claw product-api wire protocol (base method-name list + response envelope) ──
+export type {
+	ClawApiMethodName,
+	ClawResponseEnvelope,
+} from "./claw-api";
+export {
+	CLAW_API_METHOD_NAMES,
+	clawResponseEnvelope,
+	parseClawResponseEnvelope,
+} from "./claw-api";
 // ── claws (conversational/agent-state domain) ────────────────────────────────
 export type {
 	AppendMessageInput,
