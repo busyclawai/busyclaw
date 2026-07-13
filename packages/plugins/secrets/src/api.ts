@@ -21,10 +21,12 @@ import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 //     exits solely through the store provider (`secrets.get`) into governed consumers.
 
 /** A string that is non-empty after trimming (plain `"string"` accepts `""`). The secret name is
- *  validated non-empty at the boundary, so a blank name never keys a row to nowhere. */
-const nonEmptyString = type("string").narrow(
-	(value, ctx) => value.trim().length > 0 || ctx.reject("non-empty"),
-);
+ *  validated non-empty at the boundary, so a blank name never keys a row to nowhere. The
+ *  `.describe()` doubles as documentation: it flows through `toJsonSchema()` into the generated
+ *  OpenAPI document (and into the domain-mismatch error message). */
+const nonEmptyString = type("string")
+	.narrow((value, ctx) => value.trim().length > 0 || ctx.reject("non-empty"))
+	.describe("a non-empty secret name");
 
 // The boundary inputs — host-passed, UNTRUSTED, so arktype validates HERE (internal store calls stay
 // plain TS). Personal-only, so there is no scope/scopeId param: the principal is the whole boundary.

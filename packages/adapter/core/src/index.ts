@@ -1,6 +1,5 @@
 import type {
 	ClawResponseEnvelope,
-	EndpointRoute,
 	EuroclawCronResult,
 	EuroclawCronTask,
 	EuroclawPlugin,
@@ -10,15 +9,15 @@ import type {
 import {
 	configurationError,
 	EuroclawError,
-	endpointRoutesOf,
 	errorMessage,
 	parseClawResponseEnvelope,
-	toKebabCase,
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "euroclaw";
 import { clawApiRouteList, parseClawApiInput } from "euroclaw";
+import { mountedEndpointNamespaces } from "./endpoints";
+import { type ClawOpenApiOptions, clawOpenApi } from "./openapi";
 
 export type ClawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
@@ -26,10 +25,20 @@ export type ClawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 // without importing any server package); re-exported here for existing consumers.
 export type { ClawResponseEnvelope } from "@euroclaw/contracts";
 export { clawResponseEnvelope } from "@euroclaw/contracts";
+export type {
+	ClawOpenApiDocument,
+	ClawOpenApiOperation,
+	ClawOpenApiOptions,
+	ClawOpenApiSchema,
+} from "./openapi";
+export { clawOpenApi } from "./openapi";
 
 export type ClawRequestHandlerOptions = {
 	basePath?: string;
 	plugins?: readonly EuroclawPlugin[];
+	/** Opt-in `GET /openapi.json` serving the generated document — absent ⇒ no route. `true` for
+	 *  default info; `{ enabled: true, info }` to title/version the document. */
+	openApi?: true | { enabled: true; info?: ClawOpenApiOptions };
 };
 
 type CronTaskResult = EuroclawCronResult & { id: string };
@@ -467,66 +476,13 @@ function pluginRoutes(
 	);
 }
 
-type MountedEndpoints = {
-	/** Dotted api keys as written (`channels.registrations`) — error messages speak the caller's names. */
-	name: string;
-	/** Kebab mount prefix (`/channels/registrations`) — same splitter as the routes it prefixes. */
-	prefix: string;
-	routes: readonly EndpointRoute[];
-};
-
-// Find every endpoints() namespace under an api value: a metadata carrier mounts (its own route table
-// is already flattened — no recursion past it); a plain object recurses so wrappers like
-// `{ channels: { registrations: <endpoints> } }` mount at their full key path; functions are flat api
-// methods and plain values are in-process-only members — neither is walked. The WeakSet keeps a
-// self-referential api object from hanging assembly.
-function collectEndpointNamespaces(input: {
-	value: unknown;
-	name: string;
-	prefix: string;
-	seen: WeakSet<object>;
-	out: MountedEndpoints[];
-}): void {
-	const { value } = input;
-	if (value === null || typeof value !== "object" || Array.isArray(value))
-		return;
-	if (input.seen.has(value)) return;
-	input.seen.add(value);
-	const routes = endpointRoutesOf(value);
-	if (routes) {
-		input.out.push({ name: input.name, prefix: input.prefix, routes });
-		return;
-	}
-	for (const [key, child] of Object.entries(value)) {
-		collectEndpointNamespaces({
-			value: child,
-			name: `${input.name}.${key}`,
-			prefix: `${input.prefix}/${toKebabCase(key)}`,
-			seen: input.seen,
-			out: input.out,
-		});
-	}
-}
-
 // Plugin api namespaces declared with endpoints() become routes under `/<namespace>/…` — mounted
 // beside the flat api routes and plugin webhook routes, so checkRouteConflicts fails loud on any
-// collision at assembly. The arktype boundary sits HERE: the route parses+validates and hands the
-// handler the validated value; the in-process namespace call never sees the schema.
+// collision at assembly. Discovery lives in ./endpoints (shared with the OpenAPI generator). The
+// arktype boundary sits HERE: the route parses+validates and hands the handler the validated value;
+// the in-process namespace call never sees the schema.
 function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
-	const namespaces: MountedEndpoints[] = [];
-	const seen = new WeakSet<object>();
-	for (const [key, value] of Object.entries(
-		(claw.api ?? {}) as Record<string, unknown>,
-	)) {
-		collectEndpointNamespaces({
-			value,
-			name: key,
-			prefix: `/${toKebabCase(key)}`,
-			seen,
-			out: namespaces,
-		});
-	}
-	return namespaces.flatMap((namespace) =>
+	return mountedEndpointNamespaces(claw.api ?? {}).flatMap((namespace) =>
 		namespace.routes.map((route) => {
 			const path = `${namespace.prefix}${route.path}`;
 			return {
@@ -551,6 +507,27 @@ function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
 	);
 }
 
+// The opt-in spec route: `GET /openapi.json` with the document generated ONCE at assembly (routes
+// are fixed then, and a generation failure surfaces at boot, not first traffic). The document IS
+// the whole response body — deliberately NOT wrapped in the success envelope: this is a spec
+// document, and spec tooling (generators, reference UIs) expects the bare OpenAPI object here.
+function openApiRoutes(
+	claw: Claw,
+	options: ClawRequestHandlerOptions,
+): ResolvedRoute[] {
+	const openApi = options.openApi;
+	if (openApi === undefined) return [];
+	const document = clawOpenApi(claw, openApi === true ? {} : openApi.info);
+	return [
+		{
+			id: "openapi",
+			method: "GET",
+			path: "/openapi.json",
+			handler: () => ({ body: document }),
+		},
+	];
+}
+
 export function toRequestHandler(
 	claw: Claw,
 	options: ClawRequestHandlerOptions = {},
@@ -559,6 +536,7 @@ export function toRequestHandler(
 		...baseRoutes(claw, options),
 		...pluginRoutes(claw, options),
 		...pluginEndpointRoutes(claw),
+		...openApiRoutes(claw, options),
 	];
 	checkRouteConflicts(routes);
 	const staticRoutes = routes.filter((route) => !isPattern(route.path));
