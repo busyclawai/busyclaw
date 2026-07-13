@@ -32,7 +32,7 @@ export type PlanEgressInput = {
 	capability: EgressCapability;
 	/** The Cedar engine the interceptor outbound authorizes each request against (slice 3). */
 	policy: PolicyEngine;
-	/** The runtime-stamped identity facts (actor/org/runMode) the outbound carries into policy. */
+	/** The runtime-stamped identity facts (principal/org/runMode) the outbound carries into policy. */
 	facts: StampedFacts;
 	/** The one-door reader for claim-check credential injection at egress (slice 3). */
 	secrets: Secrets;

@@ -8,6 +8,8 @@
 // `securitySchemes`, never from the reader. Token-minting flows (OAuth client-credentials, refresh)
 // live INSIDE a provider's `get` — it returns a fresh token like any other material.
 
+import type { Principal } from "../governance/principal";
+
 /** Secret material, shaped by what schemes need — never how to apply it (the spec knows that). */
 export type SecretMaterial =
 	| { kind: "token"; value: string }
@@ -16,7 +18,7 @@ export type SecretMaterial =
 /** Context a resolution may narrow on — the org whose binding to use, the acting principal for a
  *  per-user credential. Optional and extensible on purpose: a new fact must never be a breaking
  *  signature change. */
-export type ResolveContext = { organizationId?: string; actor?: string };
+export type ResolveContext = { organizationId?: string; principal?: Principal };
 
 /** A secret backend (Executor's `CredentialProvider`): where values actually live. euroclaw lists
  *  these as deployment infra and resolves through them — it never holds the value itself. */

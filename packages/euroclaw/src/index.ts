@@ -1,6 +1,5 @@
 import type { ClawEngineFactory, ClawEngineHandle } from "@euroclaw/contracts";
 import {
-	ACTOR_CONTEXT_KEY,
 	type Adapter,
 	type AuditSink,
 	type ClawsStore,
@@ -12,6 +11,7 @@ import {
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	type Secrets,
 } from "@euroclaw/contracts";
 import {
@@ -347,7 +347,7 @@ function createPluginApi(input: {
 
 /**
  * Build the per-run tool resolver for an organization's registered rows: synthesize its rows into
- * invoker-backed tools, with org/actor read from the RESOLVED turn context and closure-captured at
+ * invoker-backed tools, with org/principal read from the RESOLVED turn context and closure-captured at
  * synthesis (never the AI-SDK execute options, which carry no turn context). The provider is built
  * once here (over the one-door reader); the returned resolver runs per turn.
  *
@@ -367,10 +367,10 @@ function registeredToolResolver(
 		if (typeof organizationId !== "string") return {};
 		const rows =
 			await stores.registeredTools.listByOrganization(organizationId);
-		const actor = ctx[ACTOR_CONTEXT_KEY];
+		const principal = ctx[PRINCIPAL_CONTEXT_KEY];
 		return provider(rows, {
 			organizationId,
-			actor: typeof actor === "string" ? actor : undefined,
+			principal: typeof principal === "string" ? principal : undefined,
 		});
 	};
 }
@@ -584,20 +584,9 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 
 export type { Runtime, RuntimeConfig, RuntimeResult } from "@euroclaw/runtime";
 export { govern } from "@euroclaw/runtime";
+export type { MessageView } from "./api";
 export type { ClawDatabase } from "./database";
 export { createClawRuntimeEventSink } from "./events";
-export type { ActionView } from "./registry";
-export {
-	assembleOrgActions,
-	registerOpenApiSpecTool,
-	serverForActionFromRegisteredTools,
-} from "./registry";
-export type {
-	SecretBootWarning,
-	ValidateSecretsAtBootInput,
-} from "./secrets";
-export { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
-export type { MessageView } from "./api";
 export type {
 	ClawRedactionHandle,
 	PerClawRedactionConfig,
@@ -610,4 +599,15 @@ export {
 	REDACTION_POSTURES,
 	REDACTION_SYSTEM_FRAGMENT,
 } from "./redaction";
+export type { ActionView } from "./registry";
+export {
+	assembleOrgActions,
+	registerOpenApiSpecTool,
+	serverForActionFromRegisteredTools,
+} from "./registry";
+export type {
+	SecretBootWarning,
+	ValidateSecretsAtBootInput,
+} from "./secrets";
+export { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
 export { getEuroclawModels, getEuroclawTables } from "./tables";

@@ -33,7 +33,7 @@ describe("stampedFacts — the one typed reader of the reserved identity stamps"
 	it("absent stamps stay absent; unrelated and other reserved keys are ignored", () => {
 		const facts = stampedFacts({
 			principal: "alice",
-			euroclaw__actor: "alice",
+			euroclaw__principal: "alice",
 			hostKey: 42,
 		});
 		expect(facts).toEqual({});

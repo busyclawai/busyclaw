@@ -87,7 +87,7 @@ describe("engine-core contract", () => {
 			engine.startRun({
 				ctx: { team: "acme" },
 				prompt: "hello",
-				run: { actor: "alice", id: "run-id", team: "acme" },
+				run: { principal: "alice", id: "run-id", team: "acme" },
 			}),
 		).resolves.toEqual({ id: "run-id" });
 		await expect(

@@ -8,6 +8,7 @@ import type { JsonObject as JsonObjectType } from "../common";
 import type { EntityInput, EntityRecord } from "../entity";
 import { entity, field } from "../entity";
 import type { HandleResult, ToolCall, TurnContext } from "./boundary";
+import type { Principal } from "./principal";
 
 const approvalStatusValues = [
 	"pending",
@@ -30,7 +31,7 @@ export const approvalFields = {
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
 	reasonCode: field.string({ index: true, immutable: true }),
-	actor: field.string({ index: true, immutable: true }),
+	principal: field.string({ index: true, immutable: true }),
 	reason: field.string(),
 	metadata: field.jsonObject(),
 	decidedBy: field.string(),
@@ -84,6 +85,6 @@ export type ApprovalStore = {
 	/** List approvals, optionally filtered — the human-review queue reads `{ status: "pending" }`. */
 	list: (filter?: {
 		status?: ApprovalStatus;
-		actor?: string;
+		principal?: Principal;
 	}) => Promise<ApprovalRecord[]>;
 };

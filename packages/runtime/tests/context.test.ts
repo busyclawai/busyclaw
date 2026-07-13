@@ -1,5 +1,5 @@
 import {
-	ACTOR_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	type ContextResolver,
 	ORGANIZATION_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
@@ -26,8 +26,8 @@ describe("runtime context", () => {
 					headers === "tok" ? { user: { id: "alice" } } : null,
 			}),
 		});
-		// sessionIdentity tags the host id at the producing boundary — the stamped actor is `user:alice`.
-		expect((await resolve({ headers: "tok" }))[ACTOR_CONTEXT_KEY]).toBe(
+		// sessionIdentity tags the host id at the producing boundary — the stamped principal is `user:alice`.
+		expect((await resolve({ headers: "tok" }))[PRINCIPAL_CONTEXT_KEY]).toBe(
 			userPrincipal("alice"),
 		);
 	});
@@ -47,7 +47,7 @@ describe("runtime context", () => {
 		});
 		const ctx = await resolve({ team: "acme" });
 
-		expect(ctx[ACTOR_CONTEXT_KEY]).toBe("bob");
+		expect(ctx[PRINCIPAL_CONTEXT_KEY]).toBe("bob");
 		expect(ctx[ROLE_CONTEXT_KEY]).toBe("approver");
 	});
 

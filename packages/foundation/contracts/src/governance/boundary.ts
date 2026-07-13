@@ -96,8 +96,8 @@ export type TurnContext = Record<string, unknown>;
 export const RESERVED_CONTEXT_PREFIX = "euroclaw__";
 
 // The well-known reserved context keys (the `euroclaw__` namespace). Governance OWNS the namespace and
-// records the `actor`; the claw's identity/membership wiring populates these. Plugins read them.
-export const ACTOR_CONTEXT_KEY = "euroclaw__actor";
+// records the `principal`; the claw's identity/membership wiring populates these. Plugins read them.
+export const PRINCIPAL_CONTEXT_KEY = "euroclaw__principal";
 export const TEAM_CONTEXT_KEY = "euroclaw__team";
 export const ROLE_CONTEXT_KEY = "euroclaw__role";
 export const CLAW_ID_CONTEXT_KEY = "euroclaw__clawId";
@@ -165,7 +165,7 @@ export const stampedFacts = type({
 
 /**
  * A trusted hook to enrich the (already reserved-key-stripped) context before gates run — the seam
- * where the claw stamps the resolved actor/team/role. Governance stays NEUTRAL: it runs this once per call
+ * where the claw stamps the resolved principal/team/role. Governance stays NEUTRAL: it runs this once per call
  * with the right ordering (after strip, before gates); it does not know what identity or membership
  * *are*. That resolution is claw-level wiring composed into this one hook.
  */

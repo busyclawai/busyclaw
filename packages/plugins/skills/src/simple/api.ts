@@ -1,7 +1,7 @@
 import {
-	ACTOR_CONTEXT_KEY,
 	configurationError,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	validationError,
@@ -190,7 +190,7 @@ async function resolveReadSkillContext(input: {
 
 function activationTurnContext(input: ActivateSkillContext): TurnContext {
 	return {
-		[ACTOR_CONTEXT_KEY]: input.activatedBy,
+		[PRINCIPAL_CONTEXT_KEY]: input.activatedBy,
 		...(input.teamId !== undefined ? { [TEAM_CONTEXT_KEY]: input.teamId } : {}),
 		...(input.organizationId !== undefined
 			? { [ORGANIZATION_CONTEXT_KEY]: input.organizationId }
@@ -200,7 +200,7 @@ function activationTurnContext(input: ActivateSkillContext): TurnContext {
 
 function readTurnContext(input: ReadSkillContext): TurnContext {
 	return {
-		[ACTOR_CONTEXT_KEY]: input.readBy,
+		[PRINCIPAL_CONTEXT_KEY]: input.readBy,
 		...(input.teamId !== undefined ? { [TEAM_CONTEXT_KEY]: input.teamId } : {}),
 		...(input.organizationId !== undefined
 			? { [ORGANIZATION_CONTEXT_KEY]: input.organizationId }

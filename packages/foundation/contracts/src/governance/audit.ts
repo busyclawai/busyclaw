@@ -20,8 +20,8 @@ const AuditInputShape = {
 	"reason?": OptionalString,
 	/** The stable machine-readable governance reason code, when the deciding gate set one. */
 	"reasonCode?": OptionalString,
-	/** The accountable operator (the `actor`), when an IdentityResolver stamped one. */
-	"actor?": OptionalString,
+	/** The accountable operator (the `principal`), when an IdentityResolver stamped one. */
+	"principal?": OptionalString,
 	/** The REDACTED details (tool args, or { messages }) — tokens only, never raw PII. */
 	payload: jsonObject,
 } as const;

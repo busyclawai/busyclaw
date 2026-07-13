@@ -3,7 +3,6 @@
 // See docs/architecture/07-approval-and-audit.md.
 
 import {
-	ACTOR_CONTEXT_KEY,
 	type AfterGate,
 	type AnchorProof,
 	type AuditChainProblem,
@@ -16,6 +15,7 @@ import {
 	type BoundaryCall,
 	type JsonObject,
 	type JsonValue,
+	PRINCIPAL_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 import { validationError } from "@euroclaw/errors";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -195,9 +195,9 @@ export function auditGate(sink: AuditSink, now: () => string): AfterGate {
 				gateId: "gateId" in outcome ? outcome.gateId : undefined,
 				reason: "reason" in outcome ? outcome.reason : undefined,
 				reasonCode: "reasonCode" in outcome ? outcome.reasonCode : undefined,
-				actor:
-					typeof ctx[ACTOR_CONTEXT_KEY] === "string"
-						? ctx[ACTOR_CONTEXT_KEY]
+				principal:
+					typeof ctx[PRINCIPAL_CONTEXT_KEY] === "string"
+						? ctx[PRINCIPAL_CONTEXT_KEY]
 						: undefined,
 				payload: auditPayload(call), // REDACTED payload — no PII in the log
 			});

@@ -64,7 +64,7 @@ function recordingStore(): { store: ApprovalStore; created: ApprovalRecord[] } {
 			[...rows.values()].filter(
 				(r) =>
 					(!f?.status || r.status === f.status) &&
-					(!f?.actor || r.actor === f.actor),
+					(!f?.principal || r.principal === f.principal),
 			),
 	};
 	return { store, created };
@@ -883,30 +883,30 @@ describe("euroclaw governance — the resolveContext hook (neutral; the claw com
 		handler: () => ({ decision: "needs-approval" as const }),
 	};
 
-	it("a resolveContext hook stamps the actor → recorded on audit + approvals", async () => {
+	it("a resolveContext hook stamps the principal → recorded on audit + approvals", async () => {
 		const { store } = recordingStore();
 		const ec = createGovernance({
-			resolveContext: (ctx) => ({ ...ctx, euroclaw__actor: "alice" }),
+			resolveContext: (ctx) => ({ ...ctx, euroclaw__principal: "alice" }),
 			audit: createMemoryAudit(),
 			approvalStore: store,
 		}).registerGate(needsApproval);
 
 		await ec.handleToolCall({ name: "reject", args: {} });
 
-		expect((await store.list())[0]?.actor).toBe("alice"); // on the approval
-		expect(ec.audit?.entries().at(-1)?.actor).toBe("alice"); // and the audit trail
+		expect((await store.list())[0]?.principal).toBe("alice"); // on the approval
+		expect(ec.audit?.entries().at(-1)?.principal).toBe("alice"); // and the audit trail
 	});
 
-	it("runs AFTER strip — a caller can't forge the actor; the trusted hook wins", async () => {
+	it("runs AFTER strip — a caller can't forge the principal; the trusted hook wins", async () => {
 		const { store } = recordingStore();
 		const ec = createGovernance({
-			resolveContext: (ctx) => ({ ...ctx, euroclaw__actor: "real" }),
+			resolveContext: (ctx) => ({ ...ctx, euroclaw__principal: "real" }),
 			approvalStore: store,
 		}).registerGate(needsApproval);
 		await ec.handleToolCall(
 			{ name: "reject", args: {} },
-			{ euroclaw__actor: "FORGED" },
+			{ euroclaw__principal: "FORGED" },
 		);
-		expect((await store.list())[0]?.actor).toBe("real");
+		expect((await store.list())[0]?.principal).toBe("real");
 	});
 });

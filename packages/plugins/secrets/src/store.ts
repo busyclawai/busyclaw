@@ -44,7 +44,7 @@ export type StoredSecretsStore = {
 	/** Delete the row at the exact `(scope, scopeId, name)` key — a no-op when no such row exists
 	 *  (so the management api's `delete` is idempotent by construction). */
 	delete: (scope: string, scopeId: string, name: string) => Promise<void>;
-	/** Every row inside one `(scope, scopeId)` boundary (for personal: one actor's secrets). Returns
+	/** Every row inside one `(scope, scopeId)` boundary (for personal: one principal's secrets). Returns
 	 *  FULL records — the `value` is the SEALED form, NEVER opened here; the read side strips it to a
 	 *  metadata view. The store stays a dumb data port: no decrypt, no projection. */
 	list: (scope: string, scopeId: string) => Promise<StoredSecretRecord[]>;

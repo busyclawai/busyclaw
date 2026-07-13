@@ -78,7 +78,7 @@ describe("@euroclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), { now: () => current });
 		const run = await store.createRun({
 			input: { prompt: "hello" },
-			actor: "alice",
+			principal: "alice",
 			team: "acme",
 		});
 		const task = await store.enqueueTask({ runId: run.id, kind: "turn" });
@@ -179,7 +179,7 @@ describe("@euroclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const run = await store.createRun({ actor: "alice", team: "acme" });
+		const run = await store.createRun({ principal: "alice", team: "acme" });
 
 		await store.appendEvent({
 			runId: run.id,
@@ -273,7 +273,7 @@ describe("@euroclaw/engine-sql", () => {
 		});
 		const run = await store.createRun({
 			input: { prompt: "hello" },
-			actor: "alice",
+			principal: "alice",
 			team: "acme",
 		});
 		const task = await store.enqueueTask({

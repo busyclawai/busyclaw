@@ -1,6 +1,6 @@
 import {
-	ACTOR_CONTEXT_KEY,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 } from "@euroclaw/contracts";
@@ -29,7 +29,7 @@ export function withinScope(
 ): boolean {
 	switch (boundary.scope) {
 		case "personal":
-			return contextString(ctx, ACTOR_CONTEXT_KEY) === boundary.scopeId;
+			return contextString(ctx, PRINCIPAL_CONTEXT_KEY) === boundary.scopeId;
 		case "team":
 			return contextString(ctx, TEAM_CONTEXT_KEY) === boundary.scopeId;
 		case "organization":
@@ -56,7 +56,7 @@ export async function hasSkillGrant(input: {
 	const grants = await input.store.acl.listForInstallation(
 		input.installation.id,
 	);
-	const actorId = contextString(input.ctx, ACTOR_CONTEXT_KEY);
+	const actorId = contextString(input.ctx, PRINCIPAL_CONTEXT_KEY);
 	const teamId = contextString(input.ctx, TEAM_CONTEXT_KEY);
 	const organizationId = contextString(input.ctx, ORGANIZATION_CONTEXT_KEY);
 	return grants.some(

@@ -3,11 +3,11 @@
 // the tool set beside code tools and ride the SAME chokepoint (redact → gate → execute → audit).
 //
 // Two seam invariants:
-//   • The binding, the credentials, the resolver, and the turn's org/actor are ALL closure-captured
+//   • The binding, the credentials, the resolver, and the turn's org/principal are ALL closure-captured
 //     inside `execute` — never object fields on the tool. So `modelFacingTools` (which strips only
 //     `euroclaw` + `execute`) cannot leak a binding or a credential to the model.
-//   • organizationId/actor come from the per-run CONTEXT passed to the provider (the turn's trusted
-//     org + actor), NOT from the AI-SDK execute options — those carry no turn context.
+//   • organizationId/principal come from the per-run CONTEXT passed to the provider (the turn's trusted
+//     org + principal), NOT from the AI-SDK execute options — those carry no turn context.
 //
 // Governance rides through typed: the registry column is schema-first (`field.json(toolGovernance)`),
 // so the store validates it on read and `row.governance` is a `ToolGovernance` here — no cast. The
@@ -38,10 +38,10 @@ import { assertEgressAllowed, type EgressLookup } from "./egress";
 import { planHttpRequest } from "./request-plan";
 
 /** The per-run turn context the provider closes each tool over. NONE of it comes from model args or
- *  the AI-SDK execute options (which carry no turn context) — it is the run's trusted org + actor. */
+ *  the AI-SDK execute options (which carry no turn context) — it is the run's trusted org + principal. */
 export type RegisteredToolContext = {
 	organizationId: string;
-	actor?: string;
+	principal?: string;
 };
 
 /** The response the invoker returns to the model — untrusted data. A non-2xx status arrives here,
@@ -54,7 +54,7 @@ export type InvokerResponse = {
 
 export type RegisteredToolProviderOptions = {
 	/** The one-door reader the invoker resolves each registration's credential through
-	 *  (`secrets.get(source, { organizationId, actor })`). */
+	 *  (`secrets.get(source, { organizationId, principal })`). */
 	secrets: Secrets;
 	/** Injected for tests; defaults to the platform global `fetch`. */
 	fetch?: typeof fetch;
@@ -87,7 +87,7 @@ export function createRegisteredToolProvider(
 	return (rows, context) => {
 		const tools: ToolSet = {};
 		for (const row of rows) {
-			// Closure captures: binding source, resolver, org/actor — none become object fields.
+			// Closure captures: binding source, resolver, org/principal — none become object fields.
 			const execute = async (
 				args: unknown,
 				_callOptions: unknown,
@@ -116,7 +116,7 @@ export function createRegisteredToolProvider(
 					{
 						organizationId: context.organizationId,
 						source: row.source,
-						...(context.actor !== undefined ? { actor: context.actor } : {}),
+						principal: context.principal,
 					},
 				);
 				// The floor resolves + blocks + pins BEFORE the socket opens; a blocked target throws.

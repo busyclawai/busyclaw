@@ -24,6 +24,7 @@ import type {
 	JsonObject,
 	MessageRecord,
 	PolicySliceRecord,
+	Principal,
 	RegisteredToolRecord,
 	SecretDeclaration,
 	Secrets,
@@ -47,8 +48,8 @@ import {
 	createToolResultInput,
 	jsonObject,
 	RESERVED_CONTEXT_PREFIX,
-	stateError,
 	SYSTEM_ANONYMOUS,
+	stateError,
 	toolCallEntity,
 	validationError,
 } from "@euroclaw/contracts";
@@ -212,7 +213,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	getApproval: (input: { id: string }) => Promise<ApprovalRecord | null>;
 	listApprovals: (input?: {
 		status?: ApprovalStatus;
-		actor?: string;
+		principal?: Principal;
 	}) => Promise<ApprovalRecord[]>;
 
 	getEffect: (input: { id: string }) => ReturnType<EffectStore["get"]>;
@@ -282,7 +283,7 @@ const runtimeRunOptionsInput = ark({
 });
 const runtimeRunOptionsOrUndefined = runtimeRunOptionsInput.or("undefined");
 const engineRunMetadataInput = ark({
-	"actor?": "string | undefined",
+	"principal?": "string | undefined",
 	"id?": "string | undefined",
 	"team?": "string | undefined",
 });
@@ -341,7 +342,7 @@ const denyApprovalInput = ark({
 	"reason?": "string | undefined",
 });
 const listApprovalsInput = ark({
-	"actor?": "string | undefined",
+	"principal?": "string | undefined",
 	"status?": approvalStatus.or("undefined"),
 });
 const startRunInput = ark({

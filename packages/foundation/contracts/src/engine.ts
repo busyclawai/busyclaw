@@ -8,6 +8,7 @@
 import { configurationError } from "@euroclaw/errors";
 import type { JsonObject } from "./common";
 import type { EuroclawCronFlag, EuroclawPlugin } from "./governance/plugin";
+import type { Principal } from "./governance/principal";
 
 export type EngineRunHandle = {
 	id: string;
@@ -15,7 +16,7 @@ export type EngineRunHandle = {
 
 export type EngineRunMetadata = {
 	id?: string;
-	actor?: string;
+	principal?: Principal;
 	team?: string;
 };
 
@@ -37,7 +38,7 @@ export type EngineRunRecord = {
 	id: string;
 	status: string;
 	input: JsonObject;
-	actor?: string;
+	principal?: Principal;
 	team?: string;
 	createdAt: string;
 	updatedAt: string;

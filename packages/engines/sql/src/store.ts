@@ -50,7 +50,7 @@ export const RunRecord = ark({
 	id: "string",
 	status: RunStatus,
 	input: JsonRecord,
-	"actor?": OptionalString,
+	"principal?": OptionalString,
 	"team?": OptionalString,
 	createdAt: "string",
 	updatedAt: "string",
@@ -131,7 +131,7 @@ export type SqlEngineStoreOptions = {
 export type CreateRunInput = {
 	id?: string;
 	input?: Record<string, unknown>;
-	actor?: string;
+	principal?: string;
 	team?: string;
 };
 
@@ -332,7 +332,7 @@ export function createSqlEngineStore(
 					id: input.id ?? newId(),
 					status: "queued",
 					input: asJsonRecord(input.input ?? {}, "run input"),
-					actor: input.actor,
+					principal: input.principal,
 					team: input.team,
 					createdAt: ts,
 					updatedAt: ts,

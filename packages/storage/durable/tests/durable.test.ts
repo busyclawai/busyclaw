@@ -377,7 +377,7 @@ suite(
 		sqlite.exec(
 			`CREATE TABLE approval (
 						id TEXT PRIMARY KEY, status TEXT, gateId TEXT, toolName TEXT, args TEXT, reasonCode TEXT, metadata TEXT,
-						actor TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT
+						principal TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT
 					)`,
 		);
 		return kyselyAdapter(db);

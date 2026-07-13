@@ -3,19 +3,20 @@
 // a JWT decoder, a role lookup — vendor-neutral and testable with a fake.
 
 import {
-	ACTOR_CONTEXT_KEY,
 	type ContextResolver,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
+	type Principal,
 	ROLE_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	userPrincipal,
 } from "@euroclaw/contracts";
 
-/** Resolves the accountable operator → the `actor` (or undefined). `() => SYSTEM_CRON` for background runs. */
+/** Resolves the accountable operator → the `principal` (or undefined). `() => SYSTEM_CRON` for background runs. */
 export type IdentityResolver = (
 	ctx: TurnContext,
-) => string | undefined | Promise<string | undefined>;
+) => Principal | undefined | Promise<Principal | undefined>;
 
 /** The actor's membership for a run: which team, and their role on it. */
 export type Membership = { team: string; role: string };
@@ -38,7 +39,7 @@ export function sessionIdentity(deps: {
 }): IdentityResolver {
 	return async (ctx) => {
 		// Tag the host's user id into the `user:<id>` principal form at the point it is PRODUCED, so the
-		// stamped ACTOR_CONTEXT_KEY is a legible principal — and matches the tagged `scopeId` the store
+		// stamped PRINCIPAL_CONTEXT_KEY is a legible principal — and matches the tagged `scopeId` the store
 		// api writes for the same user (the store-resolution round-trip). A blank session ⇒ undefined.
 		const id = (await deps.getSession({ headers: ctx.headers }))?.user.id;
 		return id === undefined ? undefined : userPrincipal(id);
@@ -59,7 +60,7 @@ export function roleMembership(deps: {
 		((ctx) => (typeof ctx.team === "string" ? ctx.team : undefined));
 	return async (ctx) => {
 		const team = teamOf(ctx);
-		const actor = ctx[ACTOR_CONTEXT_KEY];
+		const actor = ctx[PRINCIPAL_CONTEXT_KEY];
 		if (team === undefined || typeof actor !== "string") return undefined;
 		const role = await deps.roleOf(team, actor);
 		return role === null ? undefined : { team, role };
@@ -81,8 +82,8 @@ export function composeContext(parts: {
 				ctx[ORGANIZATION_CONTEXT_KEY] = organizationId;
 		}
 		if (identity) {
-			const actor = await identity(ctx);
-			if (typeof actor === "string") ctx[ACTOR_CONTEXT_KEY] = actor;
+			const principal = await identity(ctx);
+			if (typeof principal === "string") ctx[PRINCIPAL_CONTEXT_KEY] = principal;
 		}
 		if (membership) {
 			const m = await membership(ctx);

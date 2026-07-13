@@ -1,40 +1,52 @@
-import { userPrincipal, validationError } from "@euroclaw/contracts";
+import { parsePrincipal, validationError } from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
 // The personal secret-store MANAGEMENT api — end-user self-service over a caller's OWN secrets
 // (docs/plans/secret-store-plugin.md, "Management surface"). Two posture decisions are load-bearing:
 //
-//   - PERSONAL-ONLY, structurally actor-scoped. Every method keys strictly to `(personal,
-//     input.actor)`; none takes a scope/scopeId or a target actor, so a caller can only ever touch
-//     their own rows. That scoping IS the access control in v0: the app-authz PEP that will wrap
+//   - PERSONAL-ONLY, structurally principal-scoped. Every method keys strictly to `(personal,
+//     input.principal)`; none takes a scope/scopeId or a target principal, so a caller can only ever
+//     touch their own rows. That scoping IS the access control in v0: the app-authz PEP that will wrap
 //     claw.api (docs/plans/app-authz.md) is NOT built yet, so the surface is HOST-GATED — the host
-//     authenticates the user and passes `actor` through function-intake, and euroclaw trusts that
-//     actor exactly like the rest of claw.api. Org-wide / admin-tier rows are deferred WITH app-authz.
+//     authenticates the user and passes `principal` through function-intake, and euroclaw trusts that
+//     principal exactly like the rest of claw.api. Org-wide / admin-tier rows are deferred WITH app-authz.
 //
 //   - VALUES ARE WRITE-ONLY. `set` and `list` return metadata VIEWS only — never the value, nor the
 //     `provider`/`ref` pointer fields — and there is no get-plaintext method at all. The material
 //     exits solely through the store provider (`secrets.get`) into governed consumers.
 
-/** A string that is non-empty after trimming (plain `"string"` accepts `""`). The identity fields —
- *  the secret name and the owning actor — are validated non-empty at the boundary, so a missing or
- *  blank actor fails loud rather than keying a row to nobody. */
+/** A string that is non-empty after trimming (plain `"string"` accepts `""`). The secret name is
+ *  validated non-empty at the boundary, so a blank name never keys a row to nowhere. */
 const nonEmptyString = type("string").narrow(
 	(value, ctx) => value.trim().length > 0 || ctx.reject("non-empty"),
 );
 
+/** A well-formed `Principal` at the boundary: non-empty AND parseable as a `<kind>:<id>` tag (the host
+ *  constructs it via `userPrincipal(userId)`). A bare or malformed value is rejected here, so a row is
+ *  never keyed to an untagged / unauthorizable owner. */
+const principalInput = type("string").narrow((value, ctx) => {
+	if (value.trim().length === 0) return ctx.reject("non-empty");
+	try {
+		parsePrincipal(value);
+		return true;
+	} catch {
+		return ctx.reject("a well-formed `<kind>:<id>` principal");
+	}
+});
+
 // The boundary inputs — host-passed, UNTRUSTED, so arktype validates HERE (internal store calls stay
-// plain TS). Personal-only, so there is no scope/scopeId param: the actor is the whole boundary.
+// plain TS). Personal-only, so there is no scope/scopeId param: the principal is the whole boundary.
 export const setSecretInput = type({
 	name: nonEmptyString,
 	value: "string",
-	actor: nonEmptyString,
+	principal: principalInput,
 });
 export const deleteSecretInput = type({
 	name: nonEmptyString,
-	actor: nonEmptyString,
+	principal: principalInput,
 });
-export const listSecretInput = type({ actor: nonEmptyString });
+export const listSecretInput = type({ principal: principalInput });
 
 export type SetSecretInput = typeof setSecretInput.infer;
 export type DeleteSecretInput = typeof deleteSecretInput.infer;
@@ -87,12 +99,12 @@ function assertListSecretInput(input: unknown): ListSecretInput {
 
 /** The `claw.api.secrets.*` management methods (present only on the store path). */
 export type SecretsManagementApi = {
-	/** Upsert a personal `value`-kind secret for `actor` — pasting the same name again rotates the
+	/** Upsert a personal `value`-kind secret for `principal` — pasting the same name again rotates the
 	 *  value in place (one row). Returns the metadata VIEW, never the value. */
 	set: (input: SetSecretInput) => Promise<StoredSecretView>;
-	/** Delete `actor`'s secret by name — idempotent (a no-op when the name isn't theirs / is absent). */
+	/** Delete `principal`'s secret by name — idempotent (a no-op when the name isn't theirs / is absent). */
 	delete: (input: DeleteSecretInput) => Promise<void>;
-	/** `actor`'s own secrets as metadata VIEWS — names + timestamps, never values. */
+	/** `principal`'s own secrets as metadata VIEWS — names + timestamps, never values. */
 	list: (input: ListSecretInput) => Promise<StoredSecretView[]>;
 };
 
@@ -104,7 +116,7 @@ export type SecretsPluginApi = {
 /**
  * Build the management api over the store's lazy guard. Every method resolves `requireStore()` at
  * call time (fails loud with no database, the provider's posture) and keys strictly to
- * `(personal, actor)` — the structural actor-scoping that IS v0's access control.
+ * `(personal, principal)` — the structural principal-scoping that IS v0's access control.
  */
 export function createSecretsManagementApi(
 	requireStore: () => StoredSecretsStore,
@@ -112,38 +124,30 @@ export function createSecretsManagementApi(
 	return {
 		async set(input) {
 			const valid = assertSetSecretInput(input);
-			// Structural scoping: personal:principal, always. The store is end-user self-service, so the
-			// host-authenticated actor is always a user — tag it as the `user:<id>` principal at this
-			// producing boundary (the api INPUT stays a raw host id). Both `createdBy` and the boundary
-			// take that principal — the caller never names a target — and because sessionIdentity stamps
-			// the same `user:<id>` onto ctx.actor, the written `scopeId` matches the provider's read.
-			// `kind` is the store's to write (value-kind rows), so it is not passed here.
-			const principal = userPrincipal(valid.actor);
+			// Structural scoping: personal:principal, always. The HOST passes the already-tagged
+			// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the api takes it
+			// directly. Both `createdBy` and the personal boundary key are that principal — the caller never
+			// names a target — and because sessionIdentity stamps the same principal onto ctx.principal, the
+			// written `scopeId` matches the provider's read. `kind` is the store's to write (value-kind
+			// rows), so it is not passed here.
 			const record = await requireStore().set({
 				name: valid.name,
 				value: valid.value,
-				createdBy: principal,
+				createdBy: valid.principal,
 				scope: "personal",
-				scopeId: principal,
+				scopeId: valid.principal,
 			});
 			return toView(record);
 		},
 		async delete(input) {
 			const valid = assertDeleteSecretInput(input);
-			// Same tag as the write — delete keys on the principal boundary, so it must match `set`'s scopeId.
-			await requireStore().delete(
-				"personal",
-				userPrincipal(valid.actor),
-				valid.name,
-			);
+			// Keys on the principal boundary, so it must match `set`'s scopeId.
+			await requireStore().delete("personal", valid.principal, valid.name);
 		},
 		async list(input) {
 			const valid = assertListSecretInput(input);
-			// Same tag as the write — list reads the principal boundary the rows were written under.
-			const records = await requireStore().list(
-				"personal",
-				userPrincipal(valid.actor),
-			);
+			// Reads the principal boundary the rows were written under.
+			const records = await requireStore().list("personal", valid.principal);
 			return records.map(toView);
 		},
 	};

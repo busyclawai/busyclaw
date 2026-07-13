@@ -137,10 +137,13 @@ describe("buildSecrets — the one-door resolver", () => {
 		};
 		await buildSecrets([spy]).get("CANON", {
 			organizationId: "org_1",
-			actor: "user_1",
+			principal: "user_1",
 		});
 		expect(calls).toEqual([
-			{ ref: "backend-key", ctx: { organizationId: "org_1", actor: "user_1" } },
+			{
+				ref: "backend-key",
+				ctx: { organizationId: "org_1", principal: "user_1" },
+			},
 		]);
 	});
 
@@ -239,20 +242,22 @@ describe("secrets.require — the fail-loud, kind-narrowing branch", () => {
 });
 
 describe("secrets.with — a pre-bound reader", () => {
-	it("pre-binds ctx onto get so a per-actor provider resolves the bound actor (the store-row shape)", async () => {
-		// A provider that returns a different value per actor — the personal-row shape.
+	it("pre-binds ctx onto get so a per-principal provider resolves the bound principal (the store-row shape)", async () => {
+		// A provider that returns a different value per principal — the personal-row shape.
 		const perActor: SecretProvider = {
-			name: "per-actor",
+			name: "per-principal",
 			tier: "data",
 			capability: { manage: true },
 			get: async (ref, ctx) =>
-				ctx.actor === "alice" ? { kind: "token", value: `alice:${ref}` } : null,
+				ctx.principal === "alice"
+					? { kind: "token", value: `alice:${ref}` }
+					: null,
 		};
 		const secrets = buildSecrets([perActor]);
-		// No bound actor ⇒ the provider has nothing for it.
+		// No bound principal ⇒ the provider has nothing for it.
 		expect(await secrets.get("TOKEN")).toBeNull();
-		// with({ actor }) threads the actor to every call — the invoker/endpoint per-turn shape.
-		expect(await secrets.with({ actor: "alice" }).get("TOKEN")).toEqual({
+		// with({ principal }) threads the principal to every call — the invoker/endpoint per-turn shape.
+		expect(await secrets.with({ principal: "alice" }).get("TOKEN")).toEqual({
 			kind: "token",
 			value: "alice:TOKEN",
 		});
@@ -270,10 +275,10 @@ describe("secrets.with — a pre-bound reader", () => {
 		};
 		const bound = buildSecrets([spy]).with({
 			organizationId: "org",
-			actor: "alice",
+			principal: "alice",
 		});
-		await bound.get("X", { actor: "bob" });
-		expect(calls).toEqual([{ organizationId: "org", actor: "bob" }]);
+		await bound.get("X", { principal: "bob" });
+		expect(calls).toEqual([{ organizationId: "org", principal: "bob" }]);
 	});
 
 	it("pre-binds ctx onto require too", async () => {
@@ -287,8 +292,8 @@ describe("secrets.with — a pre-bound reader", () => {
 			},
 		};
 		await buildSecrets([spy])
-			.with({ actor: "alice" })
+			.with({ principal: "alice" })
 			.require("X", { kind: "token" });
-		expect(calls).toEqual([{ actor: "alice" }]);
+		expect(calls).toEqual([{ principal: "alice" }]);
 	});
 });

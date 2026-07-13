@@ -1,5 +1,5 @@
 import {
-	ACTOR_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	ORGANIZATION_CONTEXT_KEY,
 	RUN_ID_CONTEXT_KEY,
@@ -534,7 +534,7 @@ describe("@euroclaw/skills (simple)", () => {
 				],
 				resolveContext: (ctx) => ({
 					...ctx,
-					[ACTOR_CONTEXT_KEY]: "actor-1",
+					[PRINCIPAL_CONTEXT_KEY]: "actor-1",
 					[TEAM_CONTEXT_KEY]: "team-1",
 					[ORGANIZATION_CONTEXT_KEY]: "organization-1",
 				}),

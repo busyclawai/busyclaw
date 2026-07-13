@@ -98,7 +98,7 @@ describe("createClaw deadline slicing", () => {
 
 		const run = await claw.api.startRun({
 			prompt: "email alice@personal.com",
-			run: { actor: "alice" },
+			run: { principal: "alice" },
 		});
 
 		// Invocation 1: slice runs step 0, yields, and the drain stops claiming past the budget.
@@ -122,7 +122,7 @@ describe("createClaw deadline slicing", () => {
 
 		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
 			status: "completed",
-			actor: "alice",
+			principal: "alice",
 		});
 		expect(toolRuns).toBe(2); // each step executed exactly once across all slices
 

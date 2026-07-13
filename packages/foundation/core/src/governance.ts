@@ -455,7 +455,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				throw validationError("invalid tool call", valid.summary);
 			}
 			// Trust seam: a caller cannot forge euroclaw__* identity — stripped, then the configured
-			// resolver (if any) stamps the actor.
+			// resolver (if any) stamps the principal.
 			const ctx = await resolveCtx(ctxInput);
 			// Redact at the edge — only if configured. Otherwise the call passes through.
 			const args = redactionOn

@@ -87,8 +87,8 @@ describe("plugin folds — the better-auth pattern (compile-time, checked by tsc
 			id: "identity",
 			matcher: () => true,
 			handler: (_call, ctx) => {
-				seen.push(ctx.euroclaw__actor); // the caller's forged value was stripped → undefined
-				ctx.euroclaw__actor = "real-subject"; // a trusted gate establishes it
+				seen.push(ctx.euroclaw__principal); // the caller's forged value was stripped → undefined
+				ctx.euroclaw__principal = "real-subject"; // a trusted gate establishes it
 				return { decision: "permit" };
 			},
 			sealed: true,
@@ -97,14 +97,14 @@ describe("plugin folds — the better-auth pattern (compile-time, checked by tsc
 			id: "reader",
 			matcher: () => true,
 			handler: (_call, ctx) => {
-				seen.push(ctx.euroclaw__actor); // now reads the trusted value
+				seen.push(ctx.euroclaw__principal); // now reads the trusted value
 				return { decision: "permit" };
 			},
 		});
 
 		await ec.handleToolCall(
 			{ name: "x", args: {} },
-			{ euroclaw__actor: "FORGED" },
+			{ euroclaw__principal: "FORGED" },
 		);
 		expect(seen).toEqual([undefined, "real-subject"]);
 	});

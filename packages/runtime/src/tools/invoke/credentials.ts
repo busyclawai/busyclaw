@@ -4,7 +4,7 @@
 // unconfigured.
 //
 // RESOLUTION and APPLICATION are separate concerns. Resolution: the material comes ONLY from the
-// reader, keyed by the registration SOURCE name with the turn's {organizationId, actor?} context
+// reader, keyed by the registration SOURCE name with the turn's {organizationId, principal?} context
 // (never from model args, never from the spec) — one credential per registration (the per-scheme
 // override is a later slice). Application: HOW to place that material (header/query/basic/bearer) is
 // read from the spec's own securityScheme, per scheme. A required-but-unconfigured source fails the
@@ -23,12 +23,12 @@ import type {
 } from "../sources/openapi/binding";
 import type { HttpRequestPlan } from "./request-plan";
 
-/** The trusted keying context for credential resolution — the turn's org + actor, plus the row's
+/** The trusted keying context for credential resolution — the turn's org + principal, plus the row's
  *  registration source. NONE of it comes from model args. */
 export type CredentialContext = {
 	organizationId: string;
 	source: string;
-	actor?: string;
+	principal?: string;
 };
 
 /** Apply the first fully satisfiable security alternative to a COPY of the plan. Public operations
@@ -43,12 +43,12 @@ export async function applyCredentials(
 	// Undefined or `[]` security ⇒ the operation declared no auth ⇒ public.
 	if (!requirements || requirements.length === 0) return plan;
 
-	// Resolution context — the turn's org + actor (never model args). The scheme/scopes are NOT part of
-	// the name (name = the registration source); they are read from the spec's securityScheme when the
+	// Resolution context — the turn's org + principal (never model args). The scheme/scopes are NOT part
+	// of the name (name = the registration source); they are read from the spec's securityScheme when the
 	// material is APPLIED below.
 	const resolveCtx: ResolveContext = {
 		organizationId: context.organizationId,
-		...(context.actor !== undefined ? { actor: context.actor } : {}),
+		principal: context.principal,
 	};
 
 	const unmet: string[] = [];

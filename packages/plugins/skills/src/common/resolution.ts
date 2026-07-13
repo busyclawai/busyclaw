@@ -1,7 +1,7 @@
 import {
-	ACTOR_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	RUN_ID_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	THREAD_ID_CONTEXT_KEY,
@@ -40,7 +40,7 @@ export function contextScopePairs(
 	ctx: TurnContext,
 ): Array<{ scope: string; scopeId: string }> {
 	const pairs: Array<{ scope: string; scopeId: string }> = [];
-	const actorId = contextString(ctx, ACTOR_CONTEXT_KEY);
+	const actorId = contextString(ctx, PRINCIPAL_CONTEXT_KEY);
 	if (actorId !== undefined)
 		pairs.push({ scope: "personal", scopeId: actorId });
 	const teamId = contextString(ctx, TEAM_CONTEXT_KEY);

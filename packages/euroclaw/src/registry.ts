@@ -119,7 +119,7 @@ export function serverForActionFromRegisteredTools(
 
 /**
  * The agent-facing GOVERNED registration tool. The model may set ONLY `{ source, document }`;
- * organizationId + registeredBy are BOUND here from trusted turn context (the claw's org + actor),
+ * organizationId + registeredBy are BOUND here from trusted turn context (the claw's org + principal),
  * NEVER from model args — the input schema has no such field, so a prompt-injected model cannot
  * register into another organization. "Who may register" is a policy over register_openapi_spec.
  */

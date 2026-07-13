@@ -168,7 +168,7 @@ describe("applyCredentials — AND / OR alternatives", () => {
 		expect(out.headers["X-API-Key"]).toBe("cred");
 	});
 
-	it("threads the source name and the turn's org + actor into the reader — never model args", async () => {
+	it("threads the source name and the turn's org + principal into the reader — never model args", async () => {
 		const { secrets, seen } = sourceSecrets({
 			petstore: { kind: "token", value: "t" },
 		});
@@ -176,13 +176,13 @@ describe("applyCredentials — AND / OR alternatives", () => {
 			plan(),
 			binding([{ oauth: ["pets:read", "pets:write"] }]),
 			secrets,
-			{ organizationId: "org-a", source: "petstore", actor: "alice" },
+			{ organizationId: "org-a", source: "petstore", principal: "alice" },
 		);
-		// Resolution is source-keyed: the reader sees the registration source + the turn's org/actor.
+		// Resolution is source-keyed: the reader sees the registration source + the turn's org/principal.
 		// The scheme + scopes are NOT part of the name — they drive APPLICATION (from the securityScheme).
 		expect(seen[0]).toEqual({
 			ref: "petstore",
-			ctx: { organizationId: "org-a", actor: "alice" },
+			ctx: { organizationId: "org-a", principal: "alice" },
 		});
 	});
 });

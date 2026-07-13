@@ -79,7 +79,7 @@ async function materialOf(
  * provider.
  *
  * `get(name, ctx)` walks the context's OWN boundaries nearest-first, one exact single-scope lookup per
- * rung: `(personal, ctx.actor)` → miss → `(organization, ctx.organizationId)` → miss → `null`
+ * rung: `(personal, ctx.principal)` → miss → `(organization, ctx.organizationId)` → miss → `null`
  * (fall-through to the deployment chain). `tier: "data"` puts it BEFORE env/vault in the chain (data
  * beats config). The plugin is BOTH provider and consumer: it serves rows AND resolves its own master
  * key through the `context.secrets` reader captured at configure (lazily, at first use) — the bootstrap
@@ -145,8 +145,8 @@ function buildStore(options: SecretStoreOptions): {
 			// (get → decrypt → resolve key → get …). Immediately a miss; env/vault/config own it.
 			if (name === SECRET_STORE_KEY_NAME) return null;
 			const rows = requireStore();
-			if (ctx.actor !== undefined) {
-				const personal = await rows.get("personal", ctx.actor, name);
+			if (ctx.principal !== undefined) {
+				const personal = await rows.get("personal", ctx.principal, name);
 				if (personal) return materialOf(personal, cipher);
 			}
 			// team rung: ResolveContext carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,

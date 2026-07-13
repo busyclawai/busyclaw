@@ -115,8 +115,12 @@ export function createApprovalStore(
 			const where: ApprovalWhere[] = [];
 			if (filter?.status !== undefined)
 				where.push({ field: "status", value: filter.status });
-			if (filter?.actor !== undefined)
-				where.push({ field: "actor", value: filter.actor, connector: "AND" });
+			if (filter?.principal !== undefined)
+				where.push({
+					field: "principal",
+					value: filter.principal,
+					connector: "AND",
+				});
 			return db.findMany({ model: MODEL, where });
 		},
 	};

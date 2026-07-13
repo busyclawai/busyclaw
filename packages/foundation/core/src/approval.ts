@@ -3,10 +3,10 @@
 // @euroclaw/contracts. See docs/architecture/07-approval-and-audit.md.
 
 import {
-	ACTOR_CONTEXT_KEY,
 	type AfterGate,
 	type ApprovalMetadataResolver,
 	type ApprovalStore,
+	PRINCIPAL_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 
 /**
@@ -30,9 +30,9 @@ export function approvalGate(
 				toolName: call.toolCall.name,
 				args: call.toolCall.args,
 				reasonCode: outcome.reasonCode,
-				actor:
-					typeof ctx[ACTOR_CONTEXT_KEY] === "string"
-						? ctx[ACTOR_CONTEXT_KEY]
+				principal:
+					typeof ctx[PRINCIPAL_CONTEXT_KEY] === "string"
+						? ctx[PRINCIPAL_CONTEXT_KEY]
 						: undefined,
 				reason: outcome.reason,
 				metadata: metadata?.(call.toolCall, ctx, outcome),

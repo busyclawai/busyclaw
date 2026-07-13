@@ -254,13 +254,13 @@ export type {
 	TurnContext,
 } from "./governance/boundary";
 export {
-	ACTOR_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	gateDecision,
 	handleResult,
 	modelCall,
 	modelMessage,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	ROLE_CONTEXT_KEY,
 	RUN_ID_CONTEXT_KEY,

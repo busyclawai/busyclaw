@@ -120,7 +120,9 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 			createdBy: "alice",
 		});
 		expect(second.id).toBe(first.id);
-		expect(await provider.get("MY_NOTION_TOKEN", { actor: "alice" })).toEqual({
+		expect(
+			await provider.get("MY_NOTION_TOKEN", { principal: "alice" }),
+		).toEqual({
 			kind: "token",
 			value: "v2",
 		});
@@ -151,20 +153,23 @@ describe("the store provider — nearest-scope resolution", () => {
 		});
 		expect(
 			await provider.get("MY_TOKEN", {
-				actor: "alice",
+				principal: "alice",
 				organizationId: "org-a",
 			}),
 		).toEqual({ kind: "token", value: "alices-own" });
 		// bob saved nothing personally — the org-wide row serves him.
 		expect(
-			await provider.get("MY_TOKEN", { actor: "bob", organizationId: "org-a" }),
+			await provider.get("MY_TOKEN", {
+				principal: "bob",
+				organizationId: "org-a",
+			}),
 		).toEqual({ kind: "token", value: "org-wide" });
 	});
 
-	it("isolates scopes — another actor's personal row is unreachable", async () => {
+	it("isolates scopes — another principal's personal row is unreachable", async () => {
 		const { provider, store } = connectedStore();
 		await store.set({ name: "PRIVATE", value: "alices", createdBy: "alice" });
-		expect(await provider.get("PRIVATE", { actor: "mallory" })).toBeNull();
+		expect(await provider.get("PRIVATE", { principal: "mallory" })).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
 			await provider.get("PRIVATE", { organizationId: "org-a" }),
@@ -174,7 +179,7 @@ describe("the store provider — nearest-scope resolution", () => {
 	it("an ORG-LESS context resolves personal rows — org is fully additive", async () => {
 		const { provider, store } = connectedStore();
 		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "alice" });
-		expect(await provider.get("MY_TOKEN", { actor: "alice" })).toEqual({
+		expect(await provider.get("MY_TOKEN", { principal: "alice" })).toEqual({
 			kind: "token",
 			value: "v",
 		});
@@ -184,7 +189,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		const { provider } = connectedStore();
 		expect(
 			await provider.get("NOWHERE", {
-				actor: "alice",
+				principal: "alice",
 				organizationId: "org-a",
 			}),
 		).toBeNull();
@@ -197,9 +202,9 @@ describe("the store provider — nearest-scope resolution", () => {
 			),
 		});
 		const [brokenProvider] = broken.secrets.providers;
-		await expect(brokenProvider.get("ANY", { actor: "alice" })).rejects.toThrow(
-			/connection refused/,
-		);
+		await expect(
+			brokenProvider.get("ANY", { principal: "alice" }),
+		).rejects.toThrow(/connection refused/);
 	});
 
 	it("wraps a missing-table error into a clear configurationError (not-migrated)", async () => {
@@ -211,25 +216,25 @@ describe("the store provider — nearest-scope resolution", () => {
 			),
 		});
 		const [provider] = plugin.secrets.providers;
-		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
-			{
-				code: "EUROCLAW_CONFIGURATION_ERROR",
-				message: expect.stringMatching(
-					/stored_secret table isn't in your database/,
-				),
-			},
-		);
+		await expect(
+			provider.get("ANY", { principal: "alice" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(
+				/stored_secret table isn't in your database/,
+			),
+		});
 	});
 
 	it("fails loud when resolved before configure wires a database", async () => {
 		const plugin = secrets([], { store: { key: TEST_KEY } });
 		const [provider] = plugin.secrets.providers;
-		await expect(provider.get("ANY", { actor: "alice" })).rejects.toMatchObject(
-			{
-				code: "EUROCLAW_CONFIGURATION_ERROR",
-				message: expect.stringMatching(/secret store has no database/),
-			},
-		);
+		await expect(
+			provider.get("ANY", { principal: "alice" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/secret store has no database/),
+		});
 	});
 
 	it("refuses a pointer-kind row loud — no write surface exists for one yet", async () => {
@@ -252,12 +257,12 @@ describe("the store provider — nearest-scope resolution", () => {
 				updatedAt: ts,
 			},
 		});
-		await expect(provider.get("PTR", { actor: "alice" })).rejects.toMatchObject(
-			{
-				code: "EUROCLAW_CONFIGURATION_ERROR",
-				message: expect.stringMatching(/pointers are not supported yet/),
-			},
-		);
+		await expect(
+			provider.get("PTR", { principal: "alice" }),
+		).rejects.toMatchObject({
+			code: "EUROCLAW_CONFIGURATION_ERROR",
+			message: expect.stringMatching(/pointers are not supported yet/),
+		});
 	});
 });
 
@@ -274,12 +279,12 @@ describe("data-tier precedence through buildSecrets", () => {
 			env({ vars: { SHARED_NAME: "from-env" } }),
 			provider,
 		]);
-		expect(await secrets.get("SHARED_NAME", { actor: "alice" })).toEqual({
+		expect(await secrets.get("SHARED_NAME", { principal: "alice" })).toEqual({
 			kind: "token",
 			value: "from-store",
 		});
 		// a store miss falls through to the config tier — env still serves everyone else.
-		expect(await secrets.get("SHARED_NAME", { actor: "bob" })).toEqual({
+		expect(await secrets.get("SHARED_NAME", { principal: "bob" })).toEqual({
 			kind: "token",
 			value: "from-env",
 		});
@@ -294,7 +299,7 @@ describe("encryption at rest", () => {
 			value: "plain-secret",
 			createdBy: "alice",
 		});
-		expect(await provider.get("ROUNDTRIP", { actor: "alice" })).toEqual({
+		expect(await provider.get("ROUNDTRIP", { principal: "alice" })).toEqual({
 			kind: "token",
 			value: "plain-secret",
 		});
@@ -338,7 +343,7 @@ describe("encryption at rest", () => {
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("LOCKED", { actor: "alice" }),
+			provider.get("LOCKED", { principal: "alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			// secrets.require names the key and fails loud when nothing resolves it.
@@ -362,7 +367,7 @@ describe("encryption at rest", () => {
 		plugin.configure?.({ adapter: db });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ROTATED", { actor: "alice" }),
+			provider.get("ROTATED", { principal: "alice" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/cannot decrypt stored secret/),
@@ -397,12 +402,12 @@ describe("encryption at rest", () => {
 		});
 
 		// The key name resolves from ENV (the short-circuit made the data tier a miss)…
-		expect(await reader.get(SECRET_STORE_KEY_NAME, { actor: "alice" })).toEqual(
-			{ kind: "token", value: TEST_KEY },
-		);
+		expect(
+			await reader.get(SECRET_STORE_KEY_NAME, { principal: "alice" }),
+		).toEqual({ kind: "token", value: TEST_KEY });
 		// …and a normal name resolves THROUGH that same reader-resolved key: the full loop — store
 		// row → decrypt → lazy key via env — with no recursion and no hang.
-		expect(await reader.get("USER_TOKEN", { actor: "alice" })).toEqual({
+		expect(await reader.get("USER_TOKEN", { principal: "alice" })).toEqual({
 			kind: "token",
 			value: "sealed",
 		});
@@ -410,7 +415,7 @@ describe("encryption at rest", () => {
 });
 
 // The personal management api (claw.api.secrets.*) — end-user self-service, PERSONAL-ONLY. Every
-// method keys to `(personal, input.actor)`, values are WRITE-ONLY (set/list return metadata views,
+// method keys to `(personal, input.principal)`, values are WRITE-ONLY (set/list return metadata views,
 // there is no get-plaintext), and the material only ever exits via the provider (secrets.get). The
 // api rides configure's runtime half; connectedStore exposes it (`api`).
 describe("the personal management api — claw.api.secrets.*", () => {
@@ -423,9 +428,9 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		const view = await api.set({
 			name: "MY_NOTION_TOKEN",
 			value: "secret-v1",
-			actor: "alice",
+			principal: userPrincipal("alice"),
 		});
-		// The api tags the raw host actor — createdBy is the `user:alice` principal, not a bare id.
+		// The HOST passes the already-tagged principal — createdBy is that `user:alice`, stored verbatim.
 		expect(view).toMatchObject({
 			name: "MY_NOTION_TOKEN",
 			kind: "value",
@@ -433,34 +438,46 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		});
 		expect(view).not.toHaveProperty("value");
 		// The name shows in alice's inventory, still with no value…
-		const listed = await api.list({ actor: "alice" });
+		const listed = await api.list({ principal: userPrincipal("alice") });
 		expect(listed.map((v) => v.name)).toEqual(["MY_NOTION_TOKEN"]);
 		expect(listed[0]).not.toHaveProperty("value");
 		// …and the write-side meets the read-side: the row was written under `user:alice`, so the
-		// provider resolves it for the SAME tagged ctx actor sessionIdentity stamps (the round-trip).
+		// provider resolves it for the SAME tagged ctx principal sessionIdentity stamps (the round-trip).
 		expect(
-			await provider.get("MY_NOTION_TOKEN", { actor: userPrincipal("alice") }),
+			await provider.get("MY_NOTION_TOKEN", {
+				principal: userPrincipal("alice"),
+			}),
 		).toEqual({
 			kind: "token",
 			value: "secret-v1",
 		});
 	});
 
-	it("actor isolation — a caller only ever touches their OWN personal rows (the security invariant)", async () => {
+	it("principal isolation — a caller only ever touches their OWN personal rows (the security invariant)", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({ name: "X", value: "alices", actor: "alice" });
+		await api.set({
+			name: "X",
+			value: "alices",
+			principal: userPrincipal("alice"),
+		});
 		// bob's list does not include alice's X…
-		expect(await api.list({ actor: "bob" })).toEqual([]);
-		// …bob's delete of X is a no-op (alice's row survives — a caller cannot reach across actors)…
-		await api.delete({ name: "X", actor: "bob" });
-		expect((await api.list({ actor: "alice" })).map((v) => v.name)).toEqual([
-			"X",
-		]);
+		expect(await api.list({ principal: userPrincipal("bob") })).toEqual([]);
+		// …bob's delete of X is a no-op (alice's row survives — a caller cannot reach across principals)…
+		await api.delete({ name: "X", principal: userPrincipal("bob") });
+		expect(
+			(await api.list({ principal: userPrincipal("alice") })).map(
+				(v) => v.name,
+			),
+		).toEqual(["X"]);
 		// …and the isolation holds on the tagged boundary: alice's row lives at `user:alice`, so
 		// `user:bob` cannot read it through the provider and `user:alice` can (disjoint principals).
-		expect(await provider.get("X", { actor: userPrincipal("bob") })).toBeNull();
-		expect(await provider.get("X", { actor: userPrincipal("alice") })).toEqual({
+		expect(
+			await provider.get("X", { principal: userPrincipal("bob") }),
+		).toBeNull();
+		expect(
+			await provider.get("X", { principal: userPrincipal("alice") }),
+		).toEqual({
 			kind: "token",
 			value: "alices",
 		});
@@ -469,12 +486,16 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("values are write-only — neither set's return nor list's entries carry value/provider/ref", async () => {
 		const { api } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		const view = await api.set({ name: "WO", value: "hidden", actor: "alice" });
+		const view = await api.set({
+			name: "WO",
+			value: "hidden",
+			principal: userPrincipal("alice"),
+		});
 		for (const key of ["value", "provider", "ref"]) {
 			expect(view).not.toHaveProperty(key);
 		}
 		expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
-		const [listed] = await api.list({ actor: "alice" });
+		const [listed] = await api.list({ principal: userPrincipal("alice") });
 		for (const key of ["value", "provider", "ref"]) {
 			expect(listed).not.toHaveProperty(key);
 		}
@@ -484,43 +505,62 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("upsert — re-setting a name rotates the value in place (one row, latest wins)", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({ name: "ROT", value: "v1", actor: "alice" });
-		await api.set({ name: "ROT", value: "v2", actor: "alice" });
+		await api.set({
+			name: "ROT",
+			value: "v1",
+			principal: userPrincipal("alice"),
+		});
+		await api.set({
+			name: "ROT",
+			value: "v2",
+			principal: userPrincipal("alice"),
+		});
 		// one row, not two…
-		expect(await api.list({ actor: "alice" })).toHaveLength(1);
-		// …and the resolved value is the latest (read on the tagged boundary the api wrote under).
-		expect(await provider.get("ROT", { actor: userPrincipal("alice") })).toEqual(
-			{
-				kind: "token",
-				value: "v2",
-			},
+		expect(await api.list({ principal: userPrincipal("alice") })).toHaveLength(
+			1,
 		);
+		// …and the resolved value is the latest (read on the tagged boundary the api wrote under).
+		expect(
+			await provider.get("ROT", { principal: userPrincipal("alice") }),
+		).toEqual({
+			kind: "token",
+			value: "v2",
+		});
 	});
 
 	it("delete — set then delete leaves an empty list and the provider resolves null", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({ name: "GONE", value: "v", actor: "alice" });
-		await api.delete({ name: "GONE", actor: "alice" });
-		expect(await api.list({ actor: "alice" })).toEqual([]);
+		await api.set({
+			name: "GONE",
+			value: "v",
+			principal: userPrincipal("alice"),
+		});
+		await api.delete({ name: "GONE", principal: userPrincipal("alice") });
+		expect(await api.list({ principal: userPrincipal("alice") })).toEqual([]);
 		expect(
-			await provider.get("GONE", { actor: userPrincipal("alice") }),
+			await provider.get("GONE", { principal: userPrincipal("alice") }),
 		).toBeNull();
 	});
 
-	it("a missing or blank actor fails loud — validationError on both set and list", async () => {
+	it("a missing, blank, or malformed principal fails loud — validationError on both set and list", async () => {
 		const { api } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
 		const validationFailed = { code: "EUROCLAW_VALIDATION_FAILED" };
-		// A personal secret must have an owner — no actor is not a silent global write.
+		// A personal secret must have an owner — no principal is not a silent global write.
 		await expect(
 			api.set({ name: "X", value: "v" } as never),
 		).rejects.toMatchObject(validationFailed);
 		await expect(
-			api.set({ name: "X", value: "v", actor: "" }),
+			api.set({ name: "X", value: "v", principal: "" }),
+		).rejects.toMatchObject(validationFailed);
+		// A bare (untagged) host id is rejected at the boundary — the host must pass a `<kind>:<id>`
+		// principal (`userPrincipal(id)`), never a raw string that cannot be authorized.
+		await expect(
+			api.set({ name: "X", value: "v", principal: "alice" }),
 		).rejects.toMatchObject(validationFailed);
 		await expect(api.list({} as never)).rejects.toMatchObject(validationFailed);
-		await expect(api.list({ actor: "   " })).rejects.toMatchObject(
+		await expect(api.list({ principal: "   " })).rejects.toMatchObject(
 			validationFailed,
 		);
 	});
