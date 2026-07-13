@@ -295,6 +295,16 @@ export type {
 	SecretProviderPlugin,
 	UnionToIntersection,
 } from "./governance/plugin";
+// ── governance: the Principal vocabulary — the one authorizable identity (producers rewire in later
+// slices; additive here, nothing consumes it yet) ──
+export type { Principal } from "./governance/principal";
+export {
+	parsePrincipal,
+	SYSTEM_ANONYMOUS,
+	SYSTEM_CRON,
+	systemPrincipal,
+	userPrincipal,
+} from "./governance/principal";
 export type { ReasonCode } from "./governance/reason-codes";
 export { defineReasonCodes } from "./governance/reason-codes";
 export type {
