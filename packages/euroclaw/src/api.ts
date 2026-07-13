@@ -66,7 +66,12 @@ import {
 import type { RegistryStores } from "@euroclaw/storage-durable";
 import { type as ark } from "arktype";
 import type { ClawRecordOf, CreateClawInputOf } from "./models";
+import type { ClawRedactionHandle } from "./redaction";
 import { type ActionView, assembleOrgActions } from "./registry";
+
+/** How a read presents stored message content: `"redacted"` (default) returns it as persisted —
+ *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
+export type MessageView = "redacted" | "original";
 
 export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	clawId: string;
@@ -74,6 +79,7 @@ export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	message: string;
 	ctx?: RunContext<Config>;
 	runId?: string;
+	view?: MessageView;
 };
 
 export type ClawSendResult = {
@@ -116,6 +122,9 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly secrets?: Secrets;
 	/** The collected required-secret-name declarations across plugins (feeds boot coverage). */
 	readonly secretDeclarations?: readonly SecretDeclaration[];
+	/** The governed redaction read-path (original view + erasure) — present when a `redaction`
+	 *  group is configured. */
+	readonly redaction?: ClawRedactionHandle;
 };
 
 export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
@@ -146,8 +155,14 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		threadId: string;
 		afterSequence?: number;
 		limit?: number;
+		view?: MessageView;
 	}) => Promise<MessageRecord[]>;
 	sendMessage: (input: ClawSendInput<Config>) => Promise<ClawSendResult>;
+
+	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
+	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
+	 *  no redaction configured): a no-op "success" would be false comfort. */
+	forgetSubject: (input: { subjectId: string }) => Promise<void>;
 
 	createToolCall: (input: CreateToolCallInput) => Promise<ToolCallRecord>;
 	getToolCall: (input: { id: string }) => Promise<ToolCallRecord | null>;
@@ -297,6 +312,7 @@ const listMessagesInput = ark({
 	"afterSequence?": "number | undefined",
 	"limit?": "number | undefined",
 	threadId: "string",
+	"view?": "'redacted' | 'original' | undefined",
 });
 const sendMessageInput = ark({
 	clawId: "string",
@@ -304,7 +320,9 @@ const sendMessageInput = ark({
 	message: "string",
 	"runId?": "string | undefined",
 	threadId: "string",
+	"view?": "'redacted' | 'original' | undefined",
 });
+const forgetSubjectInput = ark({ subjectId: "string" });
 const runInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"options?": runtimeRunOptionsOrUndefined,
@@ -369,6 +387,7 @@ export const clawApiInputSchemas = {
 	createToolResult: createToolResultInput,
 	deletePolicySlice: deletePolicySliceInput,
 	denyApproval: denyApprovalInput,
+	forgetSubject: forgetSubjectInput,
 	getApproval: idInput,
 	getCheckpoint: idInput,
 	getClaw: idInput,
@@ -547,6 +566,28 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	const { context, newId } = input;
 	const store = () => requireClawsStore(context.clawsStore);
 	const registry = () => requireRegistry(context.registry);
+	const requireRedaction = () => {
+		if (!context.redaction) {
+			throw configurationError("this deployment has no redaction configured", {
+				reason: "pass redaction to createClaw",
+			});
+		}
+		return context.redaction;
+	};
+	// The privacy lifecycle is ACCOUNTABLE: every re-identifying read and every erasure lands in
+	// the same hash-chained audit log as tool/model calls. Payloads carry identifiers only.
+	const auditPrivacy = async (
+		name: "pii.reidentification" | "pii.erasure",
+		payload: JsonObject,
+	): Promise<void> => {
+		await context.runtime.audit?.append({
+			ts: new Date().toISOString(),
+			boundary: "privacy",
+			name,
+			status: "ok",
+			payload,
+		});
+	};
 
 	const api = {
 		async bindConversation(args) {
@@ -621,17 +662,60 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		listThreads: ({ clawId }) => store().threads.listForClaw(clawId),
 		archiveThread: ({ id }) => store().threads.archive(id),
 
-		appendMessage: (args) => store().messages.append(args),
+		async appendMessage(args) {
+			// The api's own write-side ingress: content persists tokenized (posture-aware; a
+			// per-claw raw row passes through). Already-tokenized text is a no-op.
+			const content = context.redaction
+				? await context.redaction.redact(args.content, {
+						scope: "claw",
+						scopeId: args.clawId,
+					})
+				: args.content;
+			return store().messages.append({ ...args, content });
+		},
 		getMessage: ({ id }) => store().messages.get(id),
-		listMessages: (args) => store().messages.listForThread(args),
+		async listMessages(args) {
+			const rows = await store().messages.listForThread(args);
+			// Read-side ONLY: the original view re-identifies the RETURNED copies; the rows at
+			// rest stay tokens. No redaction configured → nothing was ever mapped → as stored.
+			if (args.view !== "original" || context.redaction === undefined) {
+				return rows;
+			}
+			const thread = await store().threads.get(args.threadId);
+			if (!thread) return rows;
+			const container = { scope: "claw", scopeId: thread.clawId };
+			const revealed = await Promise.all(
+				rows.map(async (message) => ({
+					...message,
+					content: await requireRedaction().original(
+						message.content,
+						container,
+					),
+				})),
+			);
+			await auditPrivacy("pii.reidentification", {
+				...container,
+				threadId: args.threadId,
+				messages: rows.length,
+			});
+			return revealed;
+		},
 
 		async sendMessage(args) {
 			assertNoReservedContext(args.ctx);
 			const clawsStore = store();
 			const runId = args.runId ?? newId("run");
+			// Write-side ingress for the product transcript: the persisted user message is
+			// tokenized like everything else durable (posture-aware per claw row).
+			const userContent = context.redaction
+				? await context.redaction.redact(
+						{ text: args.message },
+						{ scope: "claw", scopeId: args.clawId },
+					)
+				: { text: args.message };
 			const userMessage = await clawsStore.messages.append({
 				clawId: args.clawId,
-				content: { text: args.message },
+				content: userContent,
 				runId,
 				role: "user",
 				threadId: args.threadId,
@@ -651,7 +735,25 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					},
 				),
 			);
-			return { result, userMessage };
+			const response = { result, userMessage };
+			if (args.view !== "original" || context.redaction === undefined) {
+				return response;
+			}
+			// Same read-side rule as listMessages: only the RETURNED copy is re-identified.
+			const container = { scope: "claw", scopeId: args.clawId };
+			const revealed = await requireRedaction().original(response, container);
+			await auditPrivacy("pii.reidentification", {
+				...container,
+				threadId: args.threadId,
+				runId,
+				messages: 1,
+			});
+			return revealed;
+		},
+
+		async forgetSubject({ subjectId }) {
+			await requireRedaction().forgetSubject(subjectId);
+			await auditPrivacy("pii.erasure", { subjectId });
 		},
 
 		createToolCall: (args) => store().toolCalls.create(args),

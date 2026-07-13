@@ -215,6 +215,143 @@ describe("per-claw posture routing", () => {
 	});
 });
 
+describe("governed read path (view + forgetSubject)", () => {
+	const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
+
+	async function chatClaw() {
+		const { createMemoryAudit } = await import("@euroclaw/core");
+		const { memoryAdapter } = await import("@euroclaw/storage-core");
+		const db = memoryAdapter();
+		const audit = createMemoryAudit();
+		const claw = createClaw({
+			database: db,
+			model: textModel("noted"),
+			audit,
+			redaction: { detector: emailDetector, indexKey: "test-key" },
+		});
+		const agent = await claw.api.createClaw({
+			id: "claw-1",
+			createdBy: "actor-1",
+			name: "assistant",
+		});
+		const thread = await claw.api.createThread({
+			id: "thread-1",
+			clawId: agent.id,
+			title: "t",
+		});
+		return { claw, db, audit, agent, thread };
+	}
+
+	it("view defaults to redacted; original re-identifies; rows at rest stay tokens", async () => {
+		const { claw, audit, thread } = await chatClaw();
+		await claw.api.sendMessage({
+			clawId: "claw-1",
+			threadId: thread.id,
+			message: "email alice@personal.com the offer",
+		});
+
+		const redacted = await claw.api.listMessages({ threadId: thread.id });
+		expect(JSON.stringify(redacted)).not.toContain("alice@personal.com");
+		expect(JSON.stringify(redacted)).toMatch(TOKEN);
+
+		const original = await claw.api.listMessages({
+			threadId: thread.id,
+			view: "original",
+		});
+		expect(JSON.stringify(original)).toContain("alice@personal.com");
+
+		// Read-side ONLY: the original view must never write back.
+		const again = await claw.api.listMessages({ threadId: thread.id });
+		expect(JSON.stringify(again)).not.toContain("alice@personal.com");
+
+		const entry = audit
+			.entries()
+			.find((record) => record.name === "pii.reidentification");
+		expect(entry).toMatchObject({
+			boundary: "privacy",
+			status: "ok",
+			payload: { scope: "claw", scopeId: "claw-1", threadId: thread.id },
+		});
+	});
+
+	it("sendMessage view original re-identifies the returned copy", async () => {
+		const { claw, thread } = await chatClaw();
+		const sent = await claw.api.sendMessage({
+			clawId: "claw-1",
+			threadId: thread.id,
+			message: "email alice@personal.com the offer",
+			view: "original",
+		});
+		expect(JSON.stringify(sent.userMessage.content)).toContain(
+			"alice@personal.com",
+		);
+		const stored = await claw.api.listMessages({ threadId: thread.id });
+		expect(JSON.stringify(stored)).not.toContain("alice@personal.com");
+	});
+
+	it("forgetSubject shreds the mappings: the original view degrades to tokens, audited", async () => {
+		const { claw, db, audit, thread } = await chatClaw();
+		const { createPiiMappingStore } = await import("@euroclaw/storage-durable");
+		// A subject-linked mapping in the claw's own store (subjects are stamped by the
+		// identity resolution in real deployments; seeded directly here).
+		await createPiiMappingStore(db).save(
+			{
+				placeholder: "{{pii:email:seededtoken00}}",
+				original: "subject@x.com",
+				kind: "email",
+				scope: "claw",
+				scopeId: "claw-1",
+				createdAt: "2026-07-13T00:00:00.000Z",
+			},
+			["subject-1"],
+		);
+		await claw.api.appendMessage({
+			clawId: "claw-1",
+			threadId: thread.id,
+			content: { text: "reach {{pii:email:seededtoken00}}" },
+			role: "user",
+			visibility: "user",
+		});
+
+		const before = await claw.api.listMessages({
+			threadId: thread.id,
+			view: "original",
+		});
+		expect(JSON.stringify(before)).toContain("subject@x.com");
+
+		await claw.api.forgetSubject({ subjectId: "subject-1" });
+
+		const after = await claw.api.listMessages({
+			threadId: thread.id,
+			view: "original",
+		});
+		expect(JSON.stringify(after)).not.toContain("subject@x.com");
+		expect(JSON.stringify(after)).toContain("{{pii:email:seededtoken00}}");
+		expect(
+			audit.entries().find((record) => record.name === "pii.erasure"),
+		).toMatchObject({ boundary: "privacy", payload: { subjectId: "subject-1" } });
+	});
+
+	it("fails loud where erasure would be false comfort", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const { memoryAdapter } = await import("@euroclaw/storage-core");
+		const raw = createClaw({
+			database: memoryAdapter(),
+			model: textModel("ok"),
+			redaction: { posture: "raw" },
+		});
+		await expect(
+			raw.api.forgetSubject({ subjectId: "s1" }),
+		).rejects.toThrow(/erasure is impossible/);
+		warn.mockRestore();
+
+		const none = createClaw({ model: textModel("ok") });
+		await expect(
+			none.api.forgetSubject({ subjectId: "s1" }),
+		).rejects.toThrow(/no redaction configured/);
+	});
+});
+
 describe("per-claw schema injection", () => {
 	it("adds the assembly-owned redaction column to the claw table", () => {
 		const withPosture = getEuroclawTables({

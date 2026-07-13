@@ -70,12 +70,28 @@ export const REDACTION_SYSTEM_FRAGMENT = [
 	"stands for.",
 ].join(" ");
 
+/** The governed privacy handle the api uses — the ONLY sanctioned door to redaction/originals/
+ *  erasure outside the runtime. `original` is read-side ONLY: its results must never be persisted
+ *  or cached durably. `redact` is the write-side twin for the api's OWN persistence (e.g. the
+ *  sendMessage user-message append) — posture-aware, so per-claw raw rows pass through. */
+export type ClawRedactionHandle = {
+	original: <T>(
+		value: T,
+		ctx: { scope: string; scopeId: string },
+	) => Promise<T>;
+	redact: <T>(value: T, ctx: { scope: string; scopeId: string }) => Promise<T>;
+	/** Crypto-shred every mapping this subject appears on. */
+	forgetSubject: (subjectId: string) => Promise<void>;
+};
+
 export type ResolvedRedaction = {
 	redactor?: Redactor;
 	/** A detector or custom redactor is present — placeholders can actually appear, so the model
 	 *  gets the placeholder contract appended to its system prompt. */
 	armed: boolean;
 	perClaw: boolean;
+	/** Present whenever a `redaction` group is configured. Absent → no mappings exist anywhere. */
+	handle?: ClawRedactionHandle;
 };
 
 /** Reject a `redaction` patch — posture is a birth fact of the row. Wrapped ONCE by the assembly
@@ -117,7 +133,24 @@ export function resolveRedaction(input: {
 		input.warn(
 			'redaction posture "raw": durable state persists unredacted — per-subject erasure is unavailable for this deployment',
 		);
-		return { redactor: createInertRedactor(), armed: false, perClaw: false };
+		const inert = createInertRedactor();
+		return {
+			redactor: inert,
+			armed: false,
+			perClaw: false,
+			handle: {
+				original: (value) => Promise.resolve(value),
+				redact: (value) => Promise.resolve(value),
+				forgetSubject: () => {
+					// Fail loud, never comfort falsely: raw durable state holds unredacted values
+					// that no mapping deletion can reach.
+					throw configurationError(
+						'per-subject erasure is impossible under redaction posture "raw"',
+						{ reason: "durable state persists unredacted values with no mappings" },
+					);
+				},
+			},
+		};
 	}
 
 	if (cfg.redactor && (cfg.detector !== undefined || cfg.indexKey !== undefined)) {
@@ -126,20 +159,41 @@ export function resolveRedaction(input: {
 			{ reason: "a custom redactor owns its own detection and dedup" },
 		);
 	}
-	const strict =
-		cfg.redactor ??
-		createStoredRedactor({
-			mappings: input.adapter
-				? createPiiMappingStore(input.adapter)
-				: createMemoryPiiMappingStore(),
+	let strict: Redactor;
+	let forgetSubject: ClawRedactionHandle["forgetSubject"];
+	if (cfg.redactor !== undefined) {
+		strict = cfg.redactor;
+		forgetSubject = () => {
+			throw configurationError(
+				"per-subject erasure needs the built-in mapping store",
+				{ reason: "a custom redaction.redactor owns its own erasure" },
+			);
+		};
+	} else {
+		const mappings = input.adapter
+			? createPiiMappingStore(input.adapter)
+			: createMemoryPiiMappingStore();
+		strict = createStoredRedactor({
+			mappings,
 			...(cfg.detector !== undefined ? { detector: cfg.detector } : {}),
 			...(cfg.indexKey !== undefined ? { indexKey: cfg.indexKey } : {}),
 			warn: input.warn,
 		});
+		forgetSubject = async (subjectId) => {
+			await mappings.deleteForSubject(subjectId);
+		};
+	}
 	const armed = cfg.redactor !== undefined || cfg.detector !== undefined;
+	// The handle rides the FINAL resolved redactor (routing included), so its `redact`/`original`
+	// honor per-claw posture exactly like the runtime does.
+	const handleOver = (redactor: Redactor): ClawRedactionHandle => ({
+		original: (value, ctx) => redactor.rehydrateValue(value, ctx),
+		redact: (value, ctx) => redactor.redactValue(value, ctx),
+		forgetSubject,
+	});
 
 	if (cfg.posture !== "per-claw") {
-		return { redactor: strict, armed, perClaw: false };
+		return { redactor: strict, armed, perClaw: false, handle: handleOver(strict) };
 	}
 
 	const clawsStore = input.clawsStore;
@@ -168,9 +222,11 @@ export function resolveRedaction(input: {
 		postureCache.set(scopeId, posture);
 		return posture;
 	};
+	const routing = createRoutingRedactor({ strict, postureOf });
 	return {
-		redactor: createRoutingRedactor({ strict, postureOf }),
+		redactor: routing,
 		armed,
 		perClaw: true,
+		handle: handleOver(routing),
 	};
 }

@@ -109,6 +109,7 @@ describe("createClaw engine", () => {
 			"createToolResult",
 			"deletePolicySlice",
 			"denyApproval",
+			"forgetSubject",
 			"getApproval",
 			"getCheckpoint",
 			"getClaw",

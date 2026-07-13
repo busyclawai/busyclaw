@@ -9,9 +9,11 @@ const OptionalString = type("string | undefined");
 
 const AuditInputShape = {
 	ts: "string",
-	/** Which boundary produced this record — one log covers both. */
-	boundary: "'tool' | 'model'",
-	/** The tool name, or "model" for an LLM call. */
+	/** Which boundary produced this record — one log covers all three: governed tool calls,
+	 *  model egress, and the privacy lifecycle (re-identifying reads, per-subject erasure). */
+	boundary: "'tool' | 'model' | 'privacy'",
+	/** The tool name, "model" for an LLM call, or the privacy event name
+	 *  ("pii.reidentification" | "pii.erasure"). */
 	name: "string",
 	status: "'ok' | 'denied' | 'needs-approval' | 'error'",
 	"gateId?": OptionalString,

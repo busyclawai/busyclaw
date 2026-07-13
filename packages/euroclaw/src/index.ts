@@ -544,6 +544,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		audit: runtime.audit,
 		approvals: runtime.approvals,
 		clawsStore,
+		redaction: redaction.handle,
 		cronHandler: config.cronHandler,
 		effects: effectsStore,
 		engine: engine?.engine,
@@ -596,7 +597,9 @@ export type {
 	ValidateSecretsAtBootInput,
 } from "./secrets";
 export { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
+export type { MessageView } from "./api";
 export type {
+	ClawRedactionHandle,
 	PerClawRedactionConfig,
 	RawRedactionConfig,
 	RedactionConfig,
