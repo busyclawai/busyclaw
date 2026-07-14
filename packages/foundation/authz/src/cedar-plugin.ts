@@ -30,7 +30,11 @@ import {
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
-import { actionEntitiesFromModel, modelToCedarSchema } from "./cedar";
+import {
+	actionEntitiesFromModel,
+	apiActionEntities,
+	modelToCedarSchema,
+} from "./cedar";
 import { cedarEngine } from "./cedar-engine";
 import type {
 	CedarContext,
@@ -136,6 +140,28 @@ export function cedarFloorEngine(config: {
 	return cedarEngine({
 		policies: config.policies,
 		entities: actionEntitiesFromModel(config.model) as Entities,
+	});
+}
+
+/**
+ * Build the product-api Cedar PolicyEngine (`decideApiCall`'s engine) from the compiled api policy
+ * text + the governed method names: the `ClawApi::Action` hierarchy becomes the engine's entities so
+ * `action in ClawApi::Action::"api"`/`"creates"` resolves at evaluation time. The api-side sibling of
+ * `cedarFloorEngine` — the tool floor's SYSTEM_POSTURE is deliberately NOT here: reads/writes/confirm
+ * is an AGENT-autonomy floor, meaningless for product-api calls, whose sealed floor is the generic
+ * `API_ACCESS_BASELINE`. So this engine only ever sees `ClawApi::` policies + entities.
+ */
+export function cedarApiEngine(config: {
+	policies: string;
+	methods: readonly string[];
+	createMethods: readonly string[];
+}): PolicyEngine {
+	return cedarEngine({
+		policies: config.policies,
+		entities: apiActionEntities({
+			methods: config.methods,
+			createMethods: config.createMethods,
+		}) as Entities,
 	});
 }
 

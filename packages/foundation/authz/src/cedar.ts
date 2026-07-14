@@ -13,6 +13,7 @@ import type {
 	EntityRef,
 	JsonObject,
 } from "@euroclaw/contracts";
+import { API_ACTION_GROUP, API_ACTION_TYPE, API_CREATE_GROUP } from "./api";
 import { cedarQuote, projectArgs } from "./projection";
 
 export type CedarSchemaOptions = {
@@ -128,6 +129,37 @@ export function actionEntitiesFromModel(model: AuthzModel): CedarEntityJson[] {
 		uid: groupRef(a.id),
 		attrs: {},
 		parents: a.groups.map(groupRef),
+	}));
+	return [...groups, ...actions];
+}
+
+/**
+ * The `ClawApi::Action` hierarchy for the product-api PEP — every governed method under the `"api"`
+ * umbrella group (the owner/scope/grant permits target it), create methods additionally under
+ * `"creates"` (the create-permit targets it; `"creates" in "api"`, so a create action is still in the
+ * umbrella by transitivity). The api engine needs this at EVALUATION time, exactly as the tool floor
+ * needs `actionEntitiesFromModel` — but under the ClawApi ACTION NAMESPACE, which is the whole reason a
+ * `ClawApi::` policy cannot reach a `Tool::` request. Kept beside the tool renderer because this is
+ * where the cedar-wasm entity shape lives. `buildAuthzModel` is deliberately NOT reused: it hardcodes
+ * an access→`reads`/`writes` group (the pre-§6 tool-risk axis) and `actionEntitiesFromModel` emits
+ * UNQUALIFIED `Action::…` uids — both wrong for the generic, namespaced permission-level model.
+ */
+export function apiActionEntities(input: {
+	methods: readonly string[];
+	createMethods: readonly string[];
+}): CedarEntityJson[] {
+	const ref = (id: string): EntityRef => ({ type: API_ACTION_TYPE, id });
+	const creates = new Set(input.createMethods);
+	const groups: CedarEntityJson[] = [
+		{ uid: ref(API_ACTION_GROUP), attrs: {}, parents: [] },
+		{ uid: ref(API_CREATE_GROUP), attrs: {}, parents: [ref(API_ACTION_GROUP)] },
+	];
+	const actions: CedarEntityJson[] = input.methods.map((method) => ({
+		uid: ref(method),
+		attrs: {},
+		parents: [
+			creates.has(method) ? ref(API_CREATE_GROUP) : ref(API_ACTION_GROUP),
+		],
 	}));
 	return [...groups, ...actions];
 }

@@ -5,16 +5,35 @@
 // lives in @euroclaw/core; the `cedar()` / `betterAuthPolicy()` policy SOURCES live in
 // @euroclaw/policy-* (they contribute policy TEXT, never the engine).
 
+export type {
+	AccessGrant,
+	ApiCaller,
+	ApiMembership,
+	ApiPermissionLevel,
+	ApiResourceShape,
+	DecideApiCallInput,
+} from "./api";
+export {
+	API_ACCESS_BASELINE,
+	API_ACTION_GROUP,
+	API_ACTION_TYPE,
+	API_CREATE_GROUP,
+	API_PERMISSION_RANK,
+	API_RESOURCE_TYPE,
+	decideApiCall,
+} from "./api";
 export type { AuthzActionInput, BuildAuthzModelOptions } from "./build";
 export { buildAuthzModel } from "./build";
 export type { CedarEntityJson, CedarSchemaOptions } from "./cedar";
 export {
 	actionEntitiesFromModel,
+	apiActionEntities,
 	entitiesToCedarJson,
 	modelToCedarSchema,
 } from "./cedar";
 export { cedarEngine } from "./cedar-engine";
 export {
+	cedarApiEngine,
 	cedarFloorEngine,
 	cedarMapCall,
 	cedarPolicyPlugin,
