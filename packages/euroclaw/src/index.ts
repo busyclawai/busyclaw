@@ -8,6 +8,7 @@ import {
 	type EuroclawCronFlag,
 	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
+	type EventSink,
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
@@ -287,14 +288,21 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
 }
 
 function configurePlugins(input: {
+	/** The shared context WITHOUT `events` — the door is per plugin, bound below. */
 	context: EuroclawPluginConfigureContext;
+	/** Per-plugin emit door — bound to the plugin's id so a claw-less door redaction attributes
+	 *  its mappings to the emitting plugin's own container, never a shared bucket. */
+	events: (plugin: EuroclawPlugin) => EventSink;
 	plugins: readonly EuroclawPlugin[];
 }): EuroclawPlugin[] {
 	return input.plugins.map((plugin) => {
 		// configure returns only the RUNTIME half (routes/cron/api built over the arriving store/reader);
 		// merge it over the static plugin. The static fields (schema, secrets, gates, $phantoms) are the
 		// plugin's own — the runtime half can only add/replace routes/cron/api, never a static field.
-		const runtime = plugin.configure?.(input.context);
+		const runtime = plugin.configure?.({
+			...input.context,
+			events: input.events(plugin),
+		});
 		return runtime ? { ...plugin, ...runtime } : plugin;
 	});
 }
@@ -532,6 +540,16 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		observers: observerSinks,
 		warn,
 	};
+	// Door redaction (docs/plans/observability-plan.md, slice 5): a plugin-emitted event's payload
+	// is tokenized BEFORE fan-out, but only under redacted postures — `armed` is false for the
+	// no-redaction recipe and posture "raw", and that path stays byte-identical (the door never
+	// walks the payload). Each plugin gets its OWN door: a claw-less emit (boot/cron/webhook — no
+	// recording) lands in that plugin's ("plugin", id) container, while a recording-carrying emit
+	// lands in the claw's ("claw", clawId) container — the same container transcript writes use,
+	// over the same resolved redactor, so per-claw birth posture decides door events exactly like
+	// transcript rows. The runtime's own event kinds never pass through the door; they are
+	// redacted at their source boundaries.
+	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -546,9 +564,15 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			adapter: adapter ? entityAdapter(adapter, models) : undefined,
 			clawsStore,
 			effects: effectsStore,
-			events: pluginEventSink(eventFanout),
 			secrets,
 		},
+		events: (plugin) =>
+			pluginEventSink(
+				eventFanout,
+				doorRedactor
+					? { plugin: plugin.id, redactor: doorRedactor }
+					: undefined,
+			),
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
 	});
 	// The always-on governance FLOOR — the assembly's ONE internal Cedar engine (SYSTEM_POSTURE + every

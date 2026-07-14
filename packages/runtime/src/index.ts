@@ -3,6 +3,7 @@ export { govern } from "@euroclaw/contracts";
 export * from "./catalog";
 export * from "./context";
 export type {
+	PluginEventRedaction,
 	RuntimeEvent,
 	RuntimeEventBase,
 	RuntimeEventError,
