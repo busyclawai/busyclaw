@@ -505,12 +505,21 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		? registeredToolResolver(registryStores, secrets)
 		: undefined;
 	// The recording/observer split: the claws-store transcript sink is the ONE load-bearing
-	// recording sink (its failures fail the run); every user-configured sink is an observer —
-	// isolated in the fan-out, warned on failure. The plugin emit door rides the same pipeline.
+	// recording sink (its failures fail the run); every user-configured AND plugin-contributed sink
+	// is an observer — isolated in the fan-out, warned on failure. Plugin sinks are read STATICALLY
+	// off the raw plugin list (same as secrets.providers above): the emit door below closes over this
+	// fan-out before any `configure` runs, and events only FIRE at runtime — a sink that needs
+	// configured state closes over a binding its plugin's `configure` assigns. The ONE merged list
+	// feeds both pipelines — the plugin emit door here and the runtime's own emit path (`events`
+	// passed to createRuntime below) — so a plugin sink never sees door-emitted events but misses
+	// runtime events, or vice versa.
 	const recordingSink = clawsStore
 		? createClawRuntimeEventSink(clawsStore)
 		: undefined;
-	const observerSinks = eventSinksFrom(config.events);
+	const observerSinks: readonly RuntimeEventSink[] = [
+		...eventSinksFrom(config.events),
+		...pluginList.flatMap((plugin) => plugin.eventSinks ?? []),
+	];
 	const eventFanout = {
 		recording: recordingSink,
 		observers: observerSinks,
@@ -540,6 +549,9 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		plugins: configuredPlugins,
 		...(adapter ? { database: adapter } : {}),
 		...(effectsStore ? { effectStore: effectsStore } : {}),
+		// Explicit, AFTER the spread: overrides `config.events` with the merged host+plugin observer
+		// list so the runtime's own fan-out fires the SAME sink instances as the plugin emit door.
+		events: observerSinks,
 		...(recordingSink ? { recording: recordingSink } : {}),
 		...(resolveTools ? { resolveTools } : {}),
 		...(redaction.redactor ? { redactor: redaction.redactor } : {}),

@@ -182,6 +182,15 @@ export type EuroclawPlugin<
 	boundaryGates?: BoundaryGate[];
 	/** After-gates this plugin installs (observe). */
 	afterGates?: AfterGate[];
+	/** Operational event sinks this plugin contributes — OBSERVE-ONLY by construction (`EventSink.emit`
+	 *  returns void: nothing to veto, nothing to rewrite; decisions belong to gates). Sinks receive the
+	 *  same merged stream as host sinks (runtime lifecycle events + plugin-emitted) and join the
+	 *  fan-out's observer class: isolated per-sink, failures warned, never propagated into the run.
+	 *  Read STATICALLY off the raw plugin object BEFORE `configure` runs (same as `secrets.providers`) —
+	 *  events only fire at runtime, so a sink that needs configure-time state closes over a binding its
+	 *  plugin's `configure` assigns later. A sink must NOT emit through the configure context's `events`
+	 *  door: that re-enters the very fan-out it observes (loop). */
+	eventSinks?: readonly EventSink[];
 	/** Compose this plugin against host-created stores/context, returning ONLY the RUNTIME half
 	 *  ({@link EuroclawPluginRuntime}) — routes/cron/api built over the store/reader that arrive here.
 	 *  Returns `undefined` when a plugin has nothing runtime to add (a static-only plugin skips
