@@ -1,12 +1,12 @@
 import { type EuroclawPlugin, field } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, textModel } from "./fixtures";
+import { durableRedactor, owned, textModel } from "./fixtures";
 
 describe("createClaw model extension", () => {
 	it("persists and returns host additionalFields through the public claw api", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },
@@ -40,7 +40,7 @@ describe("createClaw model extension", () => {
 			id: "tagging",
 			schema: { claw: { fields: { tag: field.string() } } },
 		} satisfies EuroclawPlugin;
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },

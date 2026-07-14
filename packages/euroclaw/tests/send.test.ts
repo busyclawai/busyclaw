@@ -5,20 +5,25 @@ import {
 	durableRedactor,
 	emailTool,
 	textModel,
+	withPrincipal,
 } from "./fixtures";
 
+const ACTOR = "user:actor-1";
+
 async function createAgentThread(claw: ReturnType<typeof createClaw>) {
-	const agent = await claw.api.createClaw({
+	// The app-authz caller is bound to the claw owner, so its owner rule permits the claw-scoped calls.
+	const api = withPrincipal(claw, ACTOR).api;
+	const agent = await api.createClaw({
 		id: "claw-1",
-		createdBy: "user:actor-1",
+		createdBy: ACTOR,
 		name: "Recruiting assistant",
 	});
-	const thread = await claw.api.createThread({
+	const thread = await api.createThread({
 		id: "thread-1",
 		clawId: agent.id,
 		title: "Candidate Alice",
 	});
-	return { agent, thread };
+	return { api, agent, thread };
 }
 
 describe("createClaw send", () => {
@@ -29,9 +34,9 @@ describe("createClaw send", () => {
 			model: textModel("done"),
 			redaction: { redactor },
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
 			runId: "run-1",
@@ -40,7 +45,7 @@ describe("createClaw send", () => {
 
 		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
 		expect(sent.userMessage).toMatchObject({ role: "user", sequence: 1 });
-		const messages = await claw.api.listMessages({
+		const messages = await api.listMessages({
 			threadId: thread.id,
 		});
 		expect(messages).toMatchObject([
@@ -52,7 +57,7 @@ describe("createClaw send", () => {
 				sequence: 2,
 			},
 		]);
-		expect(await claw.api.getThread({ id: thread.id })).toMatchObject({
+		expect(await api.getThread({ id: thread.id })).toMatchObject({
 			currentMessageId: messages[1]?.id,
 			currentSequence: 2,
 		});
@@ -70,9 +75,9 @@ describe("createClaw send", () => {
 				}),
 			},
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
 			runId: "run-approval",
@@ -80,7 +85,7 @@ describe("createClaw send", () => {
 		});
 
 		expect(sent.result.status).toBe("waiting_approval");
-		const messages = await claw.api.listMessages({
+		const messages = await api.listMessages({
 			threadId: thread.id,
 		});
 		expect(messages).toMatchObject([
@@ -93,7 +98,7 @@ describe("createClaw send", () => {
 				sequence: 1,
 			},
 		]);
-		const checkpoint = await claw.api.getLatestCheckpoint({
+		const checkpoint = await api.getLatestCheckpoint({
 			runId: "run-approval",
 		});
 		expect(checkpoint).toMatchObject({
@@ -102,7 +107,7 @@ describe("createClaw send", () => {
 			state: { approvalIds: expect.any(Array) },
 			threadId: thread.id,
 		});
-		const toolCall = await claw.api.getToolCallByProviderId({
+		const toolCall = await api.getToolCallByProviderId({
 			runId: "run-approval",
 			toolCallId: "c1",
 		});
@@ -112,12 +117,10 @@ describe("createClaw send", () => {
 			toolName: "send_email",
 		});
 		expect(JSON.stringify(toolCall)).not.toContain("alice@personal.com");
-		const approvals = await claw.api.listApprovals({ status: "pending" });
+		const approvals = await api.listApprovals({ status: "pending" });
 		expect(JSON.stringify(approvals)).not.toContain("alice@personal.com");
 		expect(
-			JSON.stringify(
-				await claw.api.getLatestCheckpoint({ runId: "run-approval" }),
-			),
+			JSON.stringify(await api.getLatestCheckpoint({ runId: "run-approval" })),
 		).not.toContain("alice@personal.com");
 	});
 
@@ -140,9 +143,9 @@ describe("createClaw send", () => {
 				),
 			},
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
 			runId: "run-resume",
@@ -154,12 +157,12 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
-		await claw.api.grantApproval({ approvalId, by: "user:alice" });
-		const resumed = await claw.api.continueRun({ approvalId });
+		await api.grantApproval({ approvalId, by: "user:alice" });
+		const resumed = await api.continueRun({ approvalId });
 
 		expect(resumed).toMatchObject({ status: "completed", text: "done" });
 		expect(toolSaw).toBe("alice@personal.com");
-		const messages = await claw.api.listMessages({
+		const messages = await api.listMessages({
 			threadId: thread.id,
 		});
 		expect(messages.map((message) => message.role)).toEqual([
@@ -172,13 +175,13 @@ describe("createClaw send", () => {
 			sequence: 2,
 		});
 		expect(
-			await claw.api.getToolCallByProviderId({
+			await api.getToolCallByProviderId({
 				runId: "run-resume",
 				toolCallId: "c1",
 			}),
 		).toMatchObject({ status: "completed" });
 		expect(
-			await claw.api.listToolResults({
+			await api.listToolResults({
 				runId: "run-resume",
 				toolCallId: "c1",
 			}),
@@ -202,9 +205,9 @@ describe("createClaw send", () => {
 				}),
 			},
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
 			runId: "run-denied",
@@ -216,30 +219,30 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
-		await claw.api.denyApproval({
+		await api.denyApproval({
 			approvalId,
 			by: "user:alice",
 			reason: "Not allowed",
 		});
-		await expect(claw.api.continueRun({ approvalId })).resolves.toMatchObject({
+		await expect(api.continueRun({ approvalId })).resolves.toMatchObject({
 			approvalId,
 			decidedBy: "user:alice",
 			reason: "Not allowed",
 			status: "denied",
 		});
 
-		const messages = await claw.api.listMessages({
+		const messages = await api.listMessages({
 			threadId: thread.id,
 		});
 		expect(messages.map((message) => message.role)).toEqual(["user"]);
 		expect(
-			await claw.api.getToolCallByProviderId({
+			await api.getToolCallByProviderId({
 				runId: "run-denied",
 				toolCallId: "c1",
 			}),
 		).toMatchObject({ status: "denied" });
 		expect(
-			await claw.api.listToolResults({
+			await api.listToolResults({
 				runId: "run-denied",
 				toolCallId: "c1",
 			}),
@@ -249,9 +252,9 @@ describe("createClaw send", () => {
 				status: "failed",
 			},
 		]);
-		await claw.api.continueRun({ approvalId });
+		await api.continueRun({ approvalId });
 		expect(
-			await claw.api.listToolResults({
+			await api.listToolResults({
 				runId: "run-denied",
 				toolCallId: "c1",
 			}),
@@ -274,9 +277,9 @@ describe("createClaw send", () => {
 				}),
 			},
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
 			runId: "run-tools",
@@ -286,7 +289,7 @@ describe("createClaw send", () => {
 		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
 		expect(toolSaw).toBe("alice@personal.com");
 		expect(
-			await claw.api.getToolCallByProviderId({
+			await api.getToolCallByProviderId({
 				runId: "run-tools",
 				toolCallId: "c1",
 			}),
@@ -295,7 +298,7 @@ describe("createClaw send", () => {
 			status: "completed",
 			toolName: "send_email",
 		});
-		const results = await claw.api.listToolResults({
+		const results = await api.listToolResults({
 			runId: "run-tools",
 			toolCallId: "c1",
 		});
@@ -312,9 +315,10 @@ describe("createClaw send", () => {
 
 	it("requires a ClawsStore", async () => {
 		const claw = createClaw({ model: textModel("done") });
+		const api = withPrincipal(claw, ACTOR).api;
 
 		await expect(
-			claw.api.sendMessage({
+			api.sendMessage({
 				clawId: "claw-1",
 				message: "hello",
 				threadId: "thread-1",
@@ -336,9 +340,9 @@ describe("createClaw send", () => {
 			redaction: { redactor },
 			warn: (message) => warnings.push(message),
 		});
-		const { agent, thread } = await createAgentThread(claw);
+		const { api, agent, thread } = await createAgentThread(claw);
 
-		const sent = await claw.api.sendMessage({
+		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
 			runId: "run-observer",
@@ -347,7 +351,7 @@ describe("createClaw send", () => {
 
 		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
 		// The recording sink still persisted the transcript — only the observer failed.
-		const messages = await claw.api.listMessages({ threadId: thread.id });
+		const messages = await api.listMessages({ threadId: thread.id });
 		expect(messages.map((message) => message.role)).toEqual([
 			"user",
 			"assistant",

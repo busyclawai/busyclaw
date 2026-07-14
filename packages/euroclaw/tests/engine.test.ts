@@ -7,6 +7,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	owned,
 	textModel,
 } from "./fixtures";
 
@@ -60,7 +61,7 @@ function fakeWorkflowEngine(
 describe("createClaw engine", () => {
 	it("runs through a non-SQL engine factory", async () => {
 		const events: string[] = [];
-		const claw = createClaw({
+		const claw = owned({
 			engine: fakeWorkflowEngine(events),
 			model: textModel("done"),
 		});
@@ -82,7 +83,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
 			model: textModel("done"),
@@ -145,7 +146,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(db, {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			database: db,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
@@ -187,7 +188,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
 			model: textModel("done"),
@@ -226,7 +227,7 @@ describe("createClaw engine", () => {
 		const abortObserved = new Promise<void>((resolve) => {
 			resolveAbort = resolve;
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1", leaseTtlMs: 1 }),
 			model: {

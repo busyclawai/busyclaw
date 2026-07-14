@@ -14,7 +14,7 @@ import {
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { emailDetector, textModel } from "./fixtures";
+import { emailDetector, owned, textModel } from "./fixtures";
 
 const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
 
@@ -94,7 +94,7 @@ describe("plugin redaction handles", () => {
 	// container-LOCAL: sharing the claw's container with the transcript means sharing its tokens.
 	it("redact({ clawId }) mints the SAME token the transcript minted for the same value", async () => {
 		const { captured, plugin } = capture();
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: textModel("noted"),
 			plugins: [plugin],
@@ -133,7 +133,7 @@ describe("plugin redaction handles", () => {
 
 	it("per-claw: redact({ clawId }) follows the claw's birth posture — strict tokenizes, raw passes", async () => {
 		const { captured, plugin } = capture();
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: textModel("done"),
 			plugins: [plugin],
@@ -248,7 +248,7 @@ describe("plugin redaction handles", () => {
 
 	it("subjectIds joins the erasure index: after forgetSubject the plugin token no longer resolves", async () => {
 		const { captured, plugin } = capture();
-		const claw = createClaw({
+		const claw = owned({
 			model: textModel("done"),
 			plugins: [plugin],
 			redaction: { detector: emailDetector, indexKey: "test-key" },

@@ -15,6 +15,7 @@ import {
 	durableRedactor,
 	emailDetector,
 	emailTool,
+	owned,
 	textModel,
 } from "./fixtures";
 
@@ -37,7 +38,7 @@ describe("plugin.eventSinks", () => {
 		const seen: string[] = [];
 		let doorEmit: Promise<void> | undefined;
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			plugins: [
@@ -84,7 +85,7 @@ describe("plugin.eventSinks", () => {
 	it("a throwing plugin sink never breaks the run — warned, run completes, transcript persists", async () => {
 		const warnings: string[] = [];
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			plugins: [
@@ -131,7 +132,7 @@ describe("plugin.eventSinks", () => {
 		let mode = "unconfigured";
 		const seen: string[] = [];
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			plugins: [
@@ -169,7 +170,7 @@ describe("plugin.eventSinks", () => {
 		const seen: string[] = [];
 		let door: EventSink | undefined;
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			plugins: [
@@ -390,7 +391,7 @@ describe("door redaction", () => {
 	it("per-claw with recording: the claw's birth posture decides — strict claw tokenized, raw claw passes", async () => {
 		const host = observed();
 		let door: EventSink | undefined;
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: textModel("done"),
 			events: host.sink,
@@ -522,7 +523,7 @@ describe("door redaction", () => {
 	it("token coherence: a claw-attributed door token equals the transcript token; the plugin container mints its own", async () => {
 		const host = observed();
 		let door: EventSink | undefined;
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: textModel("noted"),
 			events: host.sink,

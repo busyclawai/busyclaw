@@ -3,6 +3,7 @@ import { createStoredRedactor } from "@euroclaw/core";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createPiiMappingStore } from "@euroclaw/storage-durable";
 import { jsonSchema, type Tool, tool, type wrapLanguageModel } from "ai";
+import { createClaw } from "../src/index";
 
 export type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -125,3 +126,53 @@ export function durableRedactor(db = memoryAdapter()) {
 		}),
 	};
 }
+
+function bindCaller(api: object, principal: string): object {
+	return new Proxy(api, {
+		get(target, prop, receiver) {
+			const value = Reflect.get(target, prop, receiver);
+			if (typeof value === "function") {
+				// The app-authz caller rides at arg index 1, beside the single domain input — inject the
+				// fixed principal when the test didn't pass one (its existing `method(input)` calls).
+				return (...args: unknown[]) =>
+					(value as (...a: unknown[]) => unknown).call(
+						target,
+						args[0],
+						args[1] ?? { principal },
+					);
+			}
+			if (
+				value !== null &&
+				typeof value === "object" &&
+				!Array.isArray(value)
+			) {
+				return bindCaller(value, principal);
+			}
+			return value;
+		},
+	});
+}
+
+/**
+ * Bind a fixed caller principal onto every governed `claw.api` call (flat + nested plugin namespaces)
+ * so a test's existing `claw.api.method(input)` calls satisfy the app-authz actor floor without a
+ * per-call edit. Pass the claw's `createdBy` so the owner rule permits its claw-scoped reads/writes.
+ */
+export function withPrincipal<T extends { readonly api: object }>(
+	claw: T,
+	principal: string,
+): T {
+	return new Proxy(claw, {
+		get(target, prop, receiver) {
+			if (prop === "api") {
+				return bindCaller(Reflect.get(target, prop, receiver), principal);
+			}
+			return Reflect.get(target, prop, receiver);
+		},
+	});
+}
+
+/** `createClaw` + a bound `user:actor-1` owner caller in one — for the common test whose api calls all
+ *  act as the claw owner. `owned(config).api.method(input)` reads exactly like the pre-PEP call. */
+export const owned: typeof createClaw = (config) =>
+	withPrincipal(createClaw(config), "user:actor-1");

@@ -6,6 +6,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	owned,
 	textModel,
 } from "./fixtures";
 
@@ -18,7 +19,7 @@ const summarizeSkill = {
 describe("createClaw plugin APIs", () => {
 	it("exposes skills plugin API namespaces on claw.api", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },
@@ -73,7 +74,7 @@ describe("createClaw plugin APIs", () => {
 	});
 
 	it("allows static-only skills without a SkillsStore", () => {
-		const claw = createClaw({
+		const claw = owned({
 			model: textModel("done"),
 			plugins: [
 				governedSkillsPlugin({
@@ -104,7 +105,7 @@ describe("createClaw plugin APIs", () => {
 	it("resolves database-backed skill gates from createClaw database wiring", async () => {
 		let toolSaw = "";
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },

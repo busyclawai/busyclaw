@@ -11,7 +11,7 @@ import {
 	resolveRedaction,
 	withImmutableRedaction,
 } from "../src/redaction";
-import { emailDetector, textModel } from "./fixtures";
+import { emailDetector, owned, textModel } from "./fixtures";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -58,7 +58,7 @@ describe("createClaw redaction group", () => {
 	it('posture "raw" boots with a database, warns once, and redacts nothing', async () => {
 		const warnings: string[] = [];
 		const received = { prompt: "" };
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
 			redaction: { posture: "raw" },
@@ -76,7 +76,7 @@ describe("createClaw redaction group", () => {
 
 	it("strict + detector: redacts, and teaches the model the placeholder contract", async () => {
 		const received = { prompt: "" };
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
 			redaction: { detector: emailDetector, indexKey: "test-key" },
@@ -90,7 +90,7 @@ describe("createClaw redaction group", () => {
 
 	it("armed-but-silent (no detector): no placeholder contract in the system prompt", async () => {
 		const received = { prompt: "" };
-		const claw = createClaw({
+		const claw = owned({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
 			redaction: {},
@@ -230,7 +230,7 @@ describe("governed read path (view + forgetSubject)", () => {
 		const { memoryAdapter } = await import("@euroclaw/storage-core");
 		const db = memoryAdapter();
 		const audit = createMemoryAudit();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("noted"),
 			audit,
@@ -344,7 +344,7 @@ describe("governed read path (view + forgetSubject)", () => {
 
 	it("fails loud where erasure would be false comfort", async () => {
 		const { memoryAdapter } = await import("@euroclaw/storage-core");
-		const raw = createClaw({
+		const raw = owned({
 			database: memoryAdapter(),
 			model: textModel("ok"),
 			redaction: { posture: "raw" },
@@ -354,7 +354,7 @@ describe("governed read path (view + forgetSubject)", () => {
 			/erasure is impossible/,
 		);
 
-		const none = createClaw({ model: textModel("ok") });
+		const none = owned({ model: textModel("ok") });
 		await expect(none.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
 			/no redaction configured/,
 		);

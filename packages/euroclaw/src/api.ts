@@ -80,6 +80,12 @@ import { type ActionView, assembleOrgActions } from "./registry";
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
 export type MessageView = "redacted" | "original";
 
+/** The out-of-band caller context every governed `claw.api` method takes as its 2nd argument — the
+ *  function-intake image of better-auth's server `auth.api.x({ headers })`. Identity travels BESIDE the
+ *  pure domain input, never inside it; the PEP reads `principal` as the authz subject and threads it
+ *  into a run context. Defined here (the api surface) so the WithCaller transform names one type. */
+export type ClawApiCaller = { principal?: Principal };
+
 export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	clawId: string;
 	threadId: string;
@@ -694,6 +700,10 @@ function requireRegistry(registry: RegistryStores | undefined): RegistryStores {
 	return registry;
 }
 
+/** Reject a caller-supplied reserved (`euroclaw__`) context key — identity/authz facts are euroclaw's
+ *  word, written only by trusted resolution, never a caller claim. Co-located with the ctx-bearing
+ *  handlers that call it (the run-context methods): the input schema declaring a `ctx` IS the contract
+ *  for who asserts. (The runtime also strips reserved keys defensively; this fails loud at the api.) */
 function assertNoReservedContext(ctx: unknown): void {
 	if (ctx === undefined || ctx === null || typeof ctx !== "object") return;
 	for (const key of Object.keys(ctx)) {
@@ -956,6 +966,9 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getCheckpoint: ({ id }) => store().checkpoints.get(id),
 		getLatestCheckpoint: ({ runId }) => store().checkpoints.latestForRun(runId),
 
+		// `as never` bridges the base-`satisfies ClawApi` ctx type to the runtime's generic
+		// `RunContext<Config>` — the same bridge `sendMessage` uses. The run's principal is the runtime's
+		// resolveContext concern; the PEP already decided the caller may make this call (see authz-pep).
 		run: ({ prompt, ctx, options }) => {
 			assertNoReservedContext(ctx);
 			return context.runtime.run(prompt, ctx as never, options);

@@ -3,7 +3,7 @@ import { createRunCheckpointStore } from "@euroclaw/storage-durable";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, type V2Model } from "./fixtures";
+import { durableRedactor, owned, type V2Model } from "./fixtures";
 
 /** Tool-calls for `toolSteps` model turns, then finishes with text — a run too long for one slice. */
 function multiStepModel(toolSteps: number): V2Model {
@@ -60,7 +60,7 @@ describe("createClaw deadline slicing", () => {
 		const now = () => iso(clock);
 		const store = createSqlEngineStore(db, { now });
 		let toolRuns = 0;
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: { secret: "s3cret" },
 			database: db,
 			effectLeaseTtlMs: 600_000,
@@ -158,7 +158,7 @@ describe("createClaw deadline slicing", () => {
 		const clock = 0;
 		const now = () => iso(clock);
 		const store = createSqlEngineStore(db, { now });
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: { secret: "s3cret" },
 			database: db,
 			engine: sqlEngine({

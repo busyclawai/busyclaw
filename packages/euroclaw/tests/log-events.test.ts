@@ -1,10 +1,11 @@
 import type { EventSink } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { createClaw, logEvents } from "../src/index";
+import { type createClaw, logEvents } from "../src/index";
 import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	owned,
 	textModel,
 } from "./fixtures";
 
@@ -26,7 +27,7 @@ describe("logEvents", () => {
 	it("prints one line per event over a real 2-step tool run — tool duration and model tokens on their lines", async () => {
 		const lines: string[] = [];
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			events: logEvents({ log: (line) => lines.push(line) }),
 			model: approvalToolModel(),
@@ -65,7 +66,7 @@ describe("logEvents", () => {
 		const lines: string[] = [];
 		let door: EventSink | undefined;
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			events: logEvents({ log: (line) => lines.push(line) }),
 			model: textModel("done"),
@@ -95,7 +96,7 @@ describe("cost ledger example", () => {
 			{ inputTokens: number; outputTokens: number }
 		> = {};
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			events: {
 				emit(event) {

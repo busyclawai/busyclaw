@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
-import { approvalToolModel, durableRedactor, emailTool } from "./fixtures";
+import {
+	approvalToolModel,
+	durableRedactor,
+	emailTool,
+	owned,
+} from "./fixtures";
 
 describe("createClaw approvals", () => {
 	it("runs approval resume with durable redaction and effect tracking", async () => {
 		let toolSaw = "";
 		let toolRuns = 0;
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },

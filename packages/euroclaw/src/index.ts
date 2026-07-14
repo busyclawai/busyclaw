@@ -42,6 +42,14 @@ import {
 	createClawApi,
 } from "./api";
 import { buildFloorPolicyPlugin } from "./authz-floor";
+import {
+	type AppAuthzConfig,
+	buildApiPolicyEngine,
+	CORE_API_CREATE_METHODS,
+	enumerateApiMethodIds,
+	governApi,
+	type WithCaller,
+} from "./authz-pep";
 import { type ClawDatabase, resolveDatabase } from "./database";
 import { createClawRuntimeEventSink } from "./events";
 import type { ClawModelsConfig, RequireNoCoreColumnCollision } from "./models";
@@ -60,6 +68,7 @@ export type {
 	BindConversationResult,
 	BindConversationThreadInput,
 	ClawApi,
+	ClawApiCaller,
 	ClawApiHttpMethod,
 	ClawApiInputSchema,
 	ClawApiMethod,
@@ -81,6 +90,7 @@ export {
 	clawCronHandlerUnsafeConfig,
 	parseClawApiInput,
 } from "./api";
+export type { AppAuthzConfig, WithCaller } from "./authz-pep";
 
 export type ClawStores = {
 	claws?: ClawsStore;
@@ -99,6 +109,9 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	| "resolveTools"
 	| "redactor"
 > & {
+	/** App-authz PEP posture (docs/plans/app-authz.md). Default: enforce. `unsafeOpen` restores the
+	 *  pre-PEP host-authorizes world; `posture: "shadow"` logs would-be denials without blocking. */
+	appAuthz?: AppAuthzConfig;
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
 	engine?: ClawEngineFactory<
@@ -222,7 +235,9 @@ type RequireDatabaseForPlugins<Config> =
 		: unknown;
 
 export type Claw<Config extends RuntimeConfig = RuntimeConfig> = {
-	readonly api: ClawApi<Config> & InferPluginApi<Config>;
+	// The app-authz PEP appends the out-of-band caller context to every governed method (flat core +
+	// nested plugin), so `claw.api.getClaw({ id }, { principal })` — identity beside the domain input.
+	readonly api: WithCaller<ClawApi<Config> & InferPluginApi<Config>>;
 	readonly $context: ClawContext<Config> & {
 		readonly audit?: AuditSink;
 		readonly approvals: Runtime<Config>["approvals"];
@@ -686,10 +701,27 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		secretDeclarations,
 	};
 	const baseApi = createClawApi({ context, newId });
-	const api = {
+	// The assembled api BEFORE the PEP — core methods + plugin namespaces. The product-api PEP
+	// (docs/plans/app-authz.md) wraps the WHOLE surface: every governed method routes through
+	// `decideApiCall` (the actor floor + the GENERIC owner∪scope∪grant ACL) before executing. The
+	// engine's action model is derived from the assembled method ids (core flat + plugin dotted), so a
+	// plugin method is a first-class `ClawApi::Action` under the same generic baseline.
+	const mergedApi = {
 		...baseApi,
 		...createPluginApi({ baseApi, context, plugins }),
-	} as Claw<ResolvedConfig<Config>>["api"];
+	} as Record<string, unknown>;
+	const apiEngine = buildApiPolicyEngine({
+		methodIds: enumerateApiMethodIds(mergedApi),
+		createMethodIds: CORE_API_CREATE_METHODS,
+		plugins,
+	});
+	const api = governApi({
+		api: mergedApi,
+		engine: apiEngine,
+		clawsStore,
+		appAuthz: config.appAuthz,
+		warn,
+	}) as Claw<ResolvedConfig<Config>>["api"];
 
 	// Boot validation — warn-only, fired fire-and-forget (createClaw is sync so it cannot await; the
 	// probe walks the provider chain). It NEVER fails boot: a rejected promise is caught and warned.
