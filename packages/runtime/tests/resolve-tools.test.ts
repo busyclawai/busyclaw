@@ -1,6 +1,6 @@
 import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
 import { jsonSchema, type ToolSet, type wrapLanguageModel } from "ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createRuntime, govern } from "../src/index";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -110,10 +110,10 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		expect(offered.names).not.toContain("reg_tool"); // org-b sees only code tools
 	});
 
-	it("a registered tool colliding with a code tool does not shadow it (code wins, logged)", async () => {
+	it("a registered tool colliding with a code tool does not shadow it (code wins, warned)", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const warnings: string[] = [];
 		const runtime = createRuntime({
 			model: callingModel("shared", offered),
 			tools: { shared: recordingTool(ran, "code") as ToolSet[string] },
@@ -121,12 +121,14 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 			resolveTools: () => ({
 				shared: recordingTool(ran, "registered") as ToolSet[string],
 			}),
+			warn: (message) => warnings.push(message),
 		});
 		await runtime.run("go", { org: "org-a" });
 		expect(ran).toEqual(["code"]); // the code tool ran; the registered one was skipped
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining('registered tool "shared" skipped'),
-		);
-		warn.mockRestore();
+		expect(
+			warnings.some((message) =>
+				message.includes('registered tool "shared" skipped'),
+			),
+		).toBe(true);
 	});
 });

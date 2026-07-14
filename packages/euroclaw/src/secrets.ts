@@ -37,7 +37,8 @@ export type ValidateSecretsAtBootInput = {
 	declarations: readonly SecretDeclaration[];
 	/** The one-door reader — probes resolvability (`has`) across the whole provider chain. */
 	secrets: Secrets;
-	/** Where warnings go. Defaults to console.warn in the assembly's fire-and-forget boot call. */
+	/** Where warnings go. The assembly's fire-and-forget boot call formats each warning onto the
+	 *  claw's one warn seam (`createClaw({ warn })`, default console.warn). */
 	warn?: (warning: SecretBootWarning) => void;
 };
 

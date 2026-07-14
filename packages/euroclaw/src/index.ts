@@ -426,6 +426,12 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			},
 		);
 	}
+	// The one operator-notice door (RuntimeConfig.warn): the assembly resolves it ONCE and routes
+	// every boot/assembly warning through it — redaction (prefix "euroclaw redaction:"), secrets boot
+	// (prefix "euroclaw secrets:"), and the event fan-out's observer-failure reports. `config.warn`
+	// also rides the createRuntime spread untouched, so the runtime's own sites (tool-name
+	// collisions) resolve the SAME door.
+	const warn = config.warn ?? ((message: string) => console.warn(message));
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
 	// Plugin-contributed providers come FIRST; `env()` is appended as the lowest-priority FALLBACK
 	// floor — always present, because installing a provider plugin must never silently REMOVE env
@@ -481,7 +487,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		config: config.redaction,
 		adapter,
 		clawsStore,
-		warn: (message) => console.warn(`euroclaw redaction: ${message}`),
+		warn: (message) => warn(`euroclaw redaction: ${message}`),
 	});
 	// The placeholder contract rides the system prompt whenever placeholders can actually appear.
 	const system = redaction.armed
@@ -523,7 +529,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const eventFanout = {
 		recording: recordingSink,
 		observers: observerSinks,
-		warn: config.warn,
+		warn,
 	};
 	const configuredPlugins = configurePlugins({
 		context: {
@@ -595,11 +601,9 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		void validateSecretsAtBoot({
 			declarations: secretDeclarations,
 			secrets,
-			warn: (warning) => console.warn(`euroclaw secrets: ${warning.message}`),
+			warn: (warning) => warn(`euroclaw secrets: ${warning.message}`),
 		}).catch((err) => {
-			console.warn(
-				`euroclaw secrets: boot validation failed — ${errorMessage(err)}`,
-			);
+			warn(`euroclaw secrets: boot validation failed — ${errorMessage(err)}`);
 		});
 	}
 
@@ -609,7 +613,13 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	};
 }
 
-export type { Runtime, RuntimeConfig, RuntimeResult } from "@euroclaw/runtime";
+export type {
+	Runtime,
+	RuntimeConfig,
+	RuntimeEvent,
+	RuntimeEventSink,
+	RuntimeResult,
+} from "@euroclaw/runtime";
 export { govern } from "@euroclaw/runtime";
 export type { MessageView } from "./api";
 export type { ClawDatabase } from "./database";

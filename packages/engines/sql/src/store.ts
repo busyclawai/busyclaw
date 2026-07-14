@@ -203,6 +203,8 @@ export type SqlEngineStore = {
 		reason: string;
 	}) => Promise<RuntimeTask | null>;
 	reapExpiredLeases: () => Promise<number>;
+	/** Append a `run_event` EXECUTION-STATE row (every worker emit lands here) — not the
+	 *  operational stream; observability is the runtime `EventSink`. See schema.ts. */
 	appendEvent: (input: {
 		runId: string;
 		type: string;

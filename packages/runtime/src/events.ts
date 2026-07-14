@@ -166,6 +166,11 @@ export const modelFailedEvent = ark({
 	error: runtimeEventError,
 });
 
+// The operational catalog. Correlation spine: `runId` on every event, plus clawId/threadId via
+// `recording` when the api layer runs the turn — the one id set that ties events, claws rows, and
+// spans together. engine-sql's `run_event` table deliberately shares kind NAMES (`run.started`, …)
+// but is durable execution state with engine payloads (taskId/workerId), written transactionally
+// with status flips — same names, different plane; never unify the two.
 export const runtimeEvent = runStartedEvent
 	.or(runCompletedEvent)
 	.or(runWaitingApprovalEvent)

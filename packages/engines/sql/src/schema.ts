@@ -55,6 +55,11 @@ export const runtimeTaskFields = {
 	completedAt: field.string({ index: true }),
 } as const;
 
+// EXECUTION STATE, not telemetry: run_event rows are the engine's transactional lifecycle record,
+// written alongside status flips with engine payloads (taskId, workerId, output). Kind names
+// deliberately mirror the runtime's operational stream (`run.started`, …), but the planes never
+// unify — operational observability is the runtime `EventSink` (best-effort, redacted at ingress);
+// this table is load-bearing history.
 export const runEventFields = {
 	id: field.string({ required: true, unique: true }),
 	runId: field.string({ required: true, index: true }),

@@ -1,7 +1,10 @@
 // A neutral port for OPERATIONAL lifecycle events that plugins (skills, channels, future)
-// emit while running. This is deliberately NOT the compliance audit log: audit lands on the
-// `AuditSink` port (audit.ts) with REDACTED, hash-chained records; events are a best-effort
-// operational stream. Keep the two separate — see docs/architecture/08 and 15.
+// emit while running. Of euroclaw's three planes this is the OPERATIONAL one: best-effort
+// delivery (a lost event loses telemetry, never state), payloads redacted at ingress. It is
+// NOT the compliance audit — that lands on `AuditSink` (audit.ts): sealed, hash-chained
+// evidence records. And it is NOT durable execution state — claws rows and engine-sql
+// `run_event` are load-bearing history that a run cannot proceed without. Keep the three
+// planes separate — see docs/architecture/08 and 15, docs/plans/observability-plan.md.
 //
 // Core owns only the PORT plus a minimal base event shape. The concrete event schemas and the
 // sink implementation live in @euroclaw/runtime (RuntimeEvent / RuntimeEventSink); core does NOT

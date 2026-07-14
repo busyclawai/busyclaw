@@ -56,18 +56,17 @@ describe("createClaw redaction group", () => {
 	});
 
 	it('posture "raw" boots with a database, warns once, and redacts nothing', async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const warnings: string[] = [];
 		const received = { prompt: "" };
 		const claw = createClaw({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
 			redaction: { posture: "raw" },
+			warn: (message) => warnings.push(message),
 		});
 		expect(
-			warn.mock.calls.some(([message]) =>
-				String(message).includes('posture "raw"'),
-			),
-		).toBe(true);
+			warnings.filter((message) => message.includes('posture "raw"')),
+		).toHaveLength(1);
 
 		const result = await claw.$context.runtime.run("email a@b.com the offer");
 		expect(result.status).toBe("completed");
@@ -344,17 +343,16 @@ describe("governed read path (view + forgetSubject)", () => {
 	});
 
 	it("fails loud where erasure would be false comfort", async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const { memoryAdapter } = await import("@euroclaw/storage-core");
 		const raw = createClaw({
 			database: memoryAdapter(),
 			model: textModel("ok"),
 			redaction: { posture: "raw" },
+			warn: () => {}, // the expected raw-posture boot warning is not this test's subject
 		});
 		await expect(raw.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
 			/erasure is impossible/,
 		);
-		warn.mockRestore();
 
 		const none = createClaw({ model: textModel("ok") });
 		await expect(none.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(

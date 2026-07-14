@@ -121,7 +121,9 @@ export type RuntimeConfig = {
 	 *  event, and its failures PROPAGATE — a run that cannot persist its transcript
 	 *  (tool_call/tool_result/message rows) must fail. */
 	recording?: RuntimeEventSink;
-	/** Operational warning seam (observer-sink failures, tool-name collisions). Default `console.warn`. */
+	/** The single operator-notice door — observer-sink failures, tool-name collisions, and (via the
+	 *  assembly) redaction/secrets boot warnings all route here; NOT a logger (no levels, no
+	 *  structure, no transport). Default `console.warn`. */
 	warn?: (message: string) => void;
 	plugins?: readonly EuroclawPlugin[];
 	maxSteps?: number;
