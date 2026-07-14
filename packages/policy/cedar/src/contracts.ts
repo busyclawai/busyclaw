@@ -26,6 +26,39 @@ export type CedarEngineConfig = {
 	approvalFlag?: string;
 };
 
+/** The subset of config the default `mapCall` (request mapper) reads — shared by `cedarPolicyPlugin`
+ *  (the engine-wrapper escape hatch) and the assembly's internal floor engine. */
+export type CedarMapCallConfig = {
+	/** The authorization model — switches the mapper to project `context.args` to the action's
+	 *  declared subset and read the resource type from the model. Absent → full args, default types. */
+	model?: AuthzModel;
+	/** Entity type for the mapped principal (from `ctx.principal`). Default "User". */
+	principalType?: string;
+	/** Entity type for the mapped resource (the tool). Default "Tool". */
+	resourceType?: string;
+	/** Context key for "confirmation was used" — the needs-approval probe. Default "confirmationUsed". */
+	approvalFlag?: string;
+	/** Namespace the resource id as `<prefix>:<tool>` (default none — the bare tool name). */
+	prefix?: string;
+	/** The egress origin for an action, from its registered binding's server — stamped as the
+	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived. */
+	serverForAction?: (actionId: string) => string | undefined;
+};
+
+/** `cedar({ policies })` — a policy SOURCE. Contributes raw Cedar TEXT that the assembly merges UNDER
+ *  the always-on SYSTEM_POSTURE floor into its ONE internal engine. It provides NO engine and NO
+ *  schema (both are the assembly's) — connect it only to ADD custom rules beneath the floor. */
+export type CedarSourceConfig = {
+	/** Raw Cedar policy text — one or more `permit`/`forbid` statements laid beneath the floor. */
+	policies: string;
+	/** A human label / stable slice id (audit + bundle identity). Default derived from `id`. */
+	name?: string;
+	/** Plugin id. Default "policy:cedar". */
+	id?: string;
+	/** Merge mode. `enforce` (default) joins the live set; `shadow` is evaluated but never applied. */
+	mode?: "enforce" | "shadow" | "off";
+};
+
 export type CedarPluginConfig = CedarEngineConfig & {
 	/** The authorization model: renders the Cedar schema, merges the action hierarchy into the
 	 *  entities, and switches `mapCall` to model-aware (projected-args filtering, resource types

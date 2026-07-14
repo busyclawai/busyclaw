@@ -22,7 +22,7 @@ import type {
 } from "@euroclaw/contracts";
 import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
-import { cedar, cedarEngine } from "@euroclaw/policy-cedar";
+import { cedarEngine, cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import {
 	createSpecRegistry,
 	REGISTER_OPENAPI_SPEC_ACTION,
@@ -301,7 +301,7 @@ describe("the registration verb is itself governed", () => {
 					)
 				: runEcho(call);
 		const coreWith = (policies: string) =>
-			createGovernance({ plugins: [cedar({ model, policies })], runTool });
+			createGovernance({ plugins: [cedarPolicyPlugin({ model, policies })], runTool });
 		return { stores, coreWith };
 	}
 

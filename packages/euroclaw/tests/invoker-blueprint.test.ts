@@ -7,7 +7,7 @@
 // is blocked by the floor.
 
 import type { JsonObject, Secrets } from "@euroclaw/contracts";
-import { cedar } from "@euroclaw/policy-cedar";
+import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { buildSecrets } from "@euroclaw/secrets";
 import {
 	createRegisteredToolProvider,
@@ -157,7 +157,7 @@ async function setup(options: {
 	const runtime = createRuntime({
 		model: getPetModel(options.petId),
 		plugins: [
-			cedar({
+			cedarPolicyPlugin({
 				model,
 				policies: options.policies,
 				serverForAction: serverForActionFromRegisteredTools(rows),

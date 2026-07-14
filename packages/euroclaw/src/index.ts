@@ -40,6 +40,7 @@ import {
 	clawCronHandlerUnsafeConfig,
 	createClawApi,
 } from "./api";
+import { buildFloorPolicyPlugin } from "./authz-floor";
 import { type ClawDatabase, resolveDatabase } from "./database";
 import { createClawRuntimeEventSink } from "./events";
 import type { ClawModelsConfig, RequireNoCoreColumnCollision } from "./models";
@@ -550,9 +551,19 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		},
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
 	});
+	// The always-on governance FLOOR — the assembly's ONE internal Cedar engine (SYSTEM_POSTURE + every
+	// plugin's `policies` sources), wired into the runtime chokepoint UNCONDITIONALLY. Sources are read
+	// STATICALLY off the raw plugin list (like secrets.providers); the model is built from the static
+	// tools that declare an access class. It is a runtime GATE only — invisible to the api/routes/cron
+	// surfaces below — so a zero-config claw is governed by the floor without any policy plugin.
+	const floorPlugin = buildFloorPolicyPlugin({
+		...(config.tools ? { tools: config.tools } : {}),
+		plugins: pluginList,
+		...(config.warn ? { warn: config.warn } : {}),
+	});
 	const runtime = createRuntime({
 		...config,
-		plugins: configuredPlugins,
+		plugins: [floorPlugin, ...configuredPlugins],
 		...(adapter ? { database: adapter } : {}),
 		...(effectsStore ? { effectStore: effectsStore } : {}),
 		// Explicit, AFTER the spread: overrides `config.events` with the merged host+plugin observer

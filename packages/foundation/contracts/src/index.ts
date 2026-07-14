@@ -324,6 +324,7 @@ export type {
 	InferPluginSchema,
 	InferPlugins,
 	InferReasonCodes,
+	PolicySourceSlice,
 	SecretProviderPlugin,
 	UnionToIntersection,
 } from "./governance/plugin";

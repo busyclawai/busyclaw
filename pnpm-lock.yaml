@@ -128,6 +128,9 @@ importers:
       '@euroclaw/engine-sql':
         specifier: workspace:*
         version: link:../engines/sql
+      '@euroclaw/policy-cedar':
+        specifier: workspace:*
+        version: link:../policy/cedar
       '@euroclaw/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -153,9 +156,6 @@ importers:
       '@euroclaw/core':
         specifier: workspace:*
         version: link:../foundation/core
-      '@euroclaw/policy-cedar':
-        specifier: workspace:*
-        version: link:../policy/cedar
       '@euroclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../plugins/secrets

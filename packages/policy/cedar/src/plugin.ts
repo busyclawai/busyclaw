@@ -1,10 +1,17 @@
-// The Cedar governance plugin — cedar(config) wires the engine into euroclaw's chokepoint.
+// The Cedar governance surfaces:
+//   - `cedar({ policies })`      — a policy SOURCE: it contributes raw Cedar TEXT that the ASSEMBLY
+//     merges UNDER the always-on SYSTEM_POSTURE floor into its ONE internal engine. It provides no
+//     engine and no schema; connect it only to add custom rules beneath the floor.
+//   - `cedarMapCall(config)`     — the default request mapper (tool call → PARC request): stamps the
+//     spoof-proof facts, projects `context.args` to the model's declared subset, and stamps the
+//     model-derived `context.server`. Used BOTH by the assembly's floor engine and `cedarPolicyPlugin`.
+//   - `cedarPolicyPlugin(config)`— the engine-wrapper ESCAPE HATCH (the shape `cedar()` used to be):
+//     `cedarEngine` + `cedarMapCall` behind `createPolicyPlugin`, with NO floor. For a host that wants
+//     Cedar as a standalone gate outside the assembly, and for the policy-engine test surface.
 //
-// The AUTHORIZATION MODEL drives the plugin when provided: `cedar({ model, policies })` renders
-// the Cedar schema from the model (@euroclaw/authz modelToCedarSchema), merges the model's action
-// hierarchy into the entities (so `action in Action::"writes"` works at evaluation time), and
-// maps calls model-aware — action id = the action's id, resource type from the model, and
-// `context.args` filtered to the PROJECTED subset (the same walker that rendered the schema, so
+// The AUTHORIZATION MODEL drives the mapper/engine when provided: it renders the Cedar schema, merges
+// the action hierarchy into the entities (so `action in Action::"writes"` works at evaluation time),
+// and filters `context.args` to the PROJECTED subset (the same walker that rendered the schema, so
 // request validation and reality never disagree).
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
@@ -16,7 +23,12 @@ import {
 	type PolicyPlugin,
 	projectArgs,
 } from "@euroclaw/authz";
-import type { AuthzModel, PolicyRequest, ToolCall } from "@euroclaw/contracts";
+import type {
+	AuthzModel,
+	PolicyEngine,
+	PolicyRequest,
+	ToolCall,
+} from "@euroclaw/contracts";
 import {
 	configurationError,
 	stampedFacts,
@@ -26,7 +38,9 @@ import { type } from "arktype";
 import type {
 	CedarContext,
 	CedarEntitiesInput,
+	CedarMapCallConfig,
 	CedarPluginConfig,
+	CedarSourceConfig,
 } from "./contracts";
 import { cedarEngine } from "./engine";
 
@@ -48,20 +62,16 @@ function indexModel(model: AuthzModel): Map<string, ModelIndexEntry> {
 }
 
 /**
- * The Cedar governance plugin. `euroclaw({ plugins: [cedar({ policies })] })` makes every tool call
- * answer to Cedar (deny-by-default), and `run(prompt, { principal })` supplies who's acting. The
- * default `mapCall` governs by tool name:
+ * The default request mapper: turn a governed tool call + the request context into a PARC request.
  *   principal = `${principalType}::"${ctx.principal}"`, action = `Action::"<tool>"`,
- *   resource  = `${resourceType}::"<tool>"`, context = `{ args, <approvalFlag>, … }`.
- * With `model`, the schema is rendered from the model and `context.args` carries only the
- * PROJECTED subset for the matched action.
+ *   resource  = `${resourceType}::"<tool>"`, context = `{ args, <approvalFlag>:false, <facts>, … }`.
+ * With `model`, `context.args` carries only the PROJECTED subset for the matched action and the
+ * resource type comes from the model. Exported so the assembly's internal floor engine and
+ * `cedarPolicyPlugin` share ONE mapping — request validation and reality never disagree.
  */
-export function cedar(config: CedarPluginConfig): PolicyPlugin<CedarContext> {
-	if (config.model && config.schema !== undefined) {
-		throw configurationError(
-			"cedar: provide `model` (schema is rendered from it) or `schema`, not both",
-		);
-	}
+export function cedarMapCall(
+	config: CedarMapCallConfig = {},
+): (call: ToolCall, ctx: CedarContext) => PolicyRequest {
 	const principalType = config.principalType ?? "User";
 	const resourceType = config.resourceType ?? "Tool";
 	const approvalFlag = config.approvalFlag ?? "confirmationUsed";
@@ -69,8 +79,87 @@ export function cedar(config: CedarPluginConfig): PolicyPlugin<CedarContext> {
 		config.prefix ? `${config.prefix}:${name}` : name;
 	const modelIndex = config.model ? indexModel(config.model) : undefined;
 
-	// With a model: the action hierarchy must exist at EVALUATION time for `action in`, so the
-	// model's action entities merge into whatever the host's entities (or provider) supply.
+	return (call: ToolCall, ctx: CedarContext): PolicyRequest => {
+		if (typeof ctx.principal !== "string") {
+			throw validationError(
+				"cedar context invalid",
+				"principal must be a string",
+			);
+		}
+		// The runtime-stamped facts (role/team from membership, clawId/runMode/organizationId from the
+		// runtime — spoof-proof: caller euroclaw__ keys are stripped upstream), read through the ONE
+		// typed contracts reader. A garbage stamp is a host config bug: fail loud here, never silently
+		// unstamped.
+		const facts = stampedFacts(ctx);
+		if (facts instanceof type.errors) {
+			throw validationError("cedar context invalid", facts.summary);
+		}
+		const indexed = modelIndex?.get(call.name);
+		// Model-aware args: only the PROJECTED subset crosses (Cedar records are closed — an undeclared
+		// attr fails request validation; the projection dropped it from the schema).
+		const args = indexed
+			? indexed.projection
+				? { args: indexed.projection.filter(call.args) }
+				: {}
+			: { args: call.args };
+		// The egress origin comes from the model/binding side provider, NOT ctx — a caller/model cannot
+		// forge context.server, and a tool cannot target a server it did not declare.
+		const server = config.serverForAction?.(call.name);
+		return {
+			principal: { type: principalType, id: ctx.principal },
+			action: { type: "Action", id: call.name },
+			resource: {
+				type: indexed?.resourceType ?? resourceType,
+				id: resourceId(call.name),
+			},
+			context: {
+				...args,
+				[approvalFlag]: false,
+				...facts,
+				// runMode is ALWAYS stamped (default autonomous) so policies can reference
+				// context.runMode without the missing-attribute error cedar-wasm raises on an absent
+				// optional — an unknown mode reads as autonomous, the fail-closed default.
+				runMode: facts.runMode ?? "autonomous",
+				...(server !== undefined ? { server } : {}),
+			},
+		};
+	};
+}
+
+/**
+ * Build a Cedar PolicyEngine from raw policy TEXT + the action MODEL: the model's action hierarchy
+ * becomes the engine's entities so `action in Action::"<group>"` resolves at evaluation time. This is
+ * what the ASSEMBLY compiles its internal floor bundle (SYSTEM_POSTURE + plugin `policies` sources)
+ * into — the cedar-wasm entity cast stays localized here, in the package that owns Cedar.
+ */
+export function cedarFloorEngine(config: {
+	policies: string;
+	model: AuthzModel;
+}): PolicyEngine {
+	return cedarEngine({
+		policies: config.policies,
+		entities: actionEntitiesFromModel(config.model) as Entities,
+	});
+}
+
+/**
+ * The engine-wrapper ESCAPE HATCH (the shape `cedar()` used to be): `cedarEngine` + `cedarMapCall`
+ * behind `createPolicyPlugin`, with NO SYSTEM_POSTURE floor. `createGovernance({ plugins: [
+ * cedarPolicyPlugin({ policies }) ] })` makes every matched tool call answer to Cedar directly
+ * (deny-by-default). The COMMON path is now the assembly's internal engine + `cedar()` sources —
+ * this remains for a host that wants Cedar as a standalone gate and for the policy-engine test surface.
+ */
+export function cedarPolicyPlugin(
+	config: CedarPluginConfig,
+): PolicyPlugin<CedarContext> {
+	if (config.model && config.schema !== undefined) {
+		throw configurationError(
+			"cedarPolicyPlugin: provide `model` (schema is rendered from it) or `schema`, not both",
+		);
+	}
+
+	// With a model: the action hierarchy must exist at EVALUATION time for `action in`, so the model's
+	// action entities merge into whatever the host's entities (or provider) supply.
 	const schema = config.model
 		? modelToCedarSchema(config.model)
 		: config.schema;
@@ -89,50 +178,21 @@ export function cedar(config: CedarPluginConfig): PolicyPlugin<CedarContext> {
 
 	const mapCall =
 		config.mapCall ??
-		((call: ToolCall, ctx: CedarContext): PolicyRequest => {
-			if (typeof ctx.principal !== "string") {
-				throw validationError(
-					"cedar context invalid",
-					"principal must be a string",
-				);
-			}
-			// The runtime-stamped facts (role/team from membership, clawId/runMode/organizationId
-			// from the runtime — spoof-proof: caller euroclaw__ keys are stripped upstream), read
-			// through the ONE typed contracts reader. A garbage stamp is a host config bug: fail
-			// loud here, never silently unstamped.
-			const facts = stampedFacts(ctx);
-			if (facts instanceof type.errors) {
-				throw validationError("cedar context invalid", facts.summary);
-			}
-			const indexed = modelIndex?.get(call.name);
-			// Model-aware args: only the PROJECTED subset crosses (Cedar records are closed — an
-			// undeclared attr fails request validation; the projection dropped it from the schema).
-			const args = indexed
-				? indexed.projection
-					? { args: indexed.projection.filter(call.args) }
-					: {}
-				: { args: call.args };
-			// The egress origin comes from the model/binding side provider, NOT ctx — a caller/model
-			// cannot forge context.server, and a tool cannot target a server it did not declare.
-			const server = config.serverForAction?.(call.name);
-			return {
-				principal: { type: principalType, id: ctx.principal },
-				action: { type: "Action", id: call.name },
-				resource: {
-					type: indexed?.resourceType ?? resourceType,
-					id: resourceId(call.name),
-				},
-				context: {
-					...args,
-					[approvalFlag]: false,
-					...facts,
-					// runMode is ALWAYS stamped (default autonomous) so policies can reference
-					// context.runMode without the missing-attribute error cedar-wasm raises on an
-					// absent optional — an unknown mode reads as autonomous, the fail-closed default.
-					runMode: facts.runMode ?? "autonomous",
-					...(server !== undefined ? { server } : {}),
-				},
-			};
+		cedarMapCall({
+			...(config.model !== undefined ? { model: config.model } : {}),
+			...(config.principalType !== undefined
+				? { principalType: config.principalType }
+				: {}),
+			...(config.resourceType !== undefined
+				? { resourceType: config.resourceType }
+				: {}),
+			...(config.approvalFlag !== undefined
+				? { approvalFlag: config.approvalFlag }
+				: {}),
+			...(config.prefix !== undefined ? { prefix: config.prefix } : {}),
+			...(config.serverForAction !== undefined
+				? { serverForAction: config.serverForAction }
+				: {}),
 		});
 	return createPolicyPlugin({
 		engine: cedarEngine({
@@ -151,4 +211,30 @@ export function cedar(config: CedarPluginConfig): PolicyPlugin<CedarContext> {
 		id: config.id ?? "policy:cedar",
 		sealed: config.sealed,
 	});
+}
+
+/**
+ * `cedar({ policies })` — a policy SOURCE. It contributes raw Cedar TEXT into the assembly's bundle,
+ * merged UNDER the sealed SYSTEM_POSTURE floor (`forbid` > `permit`) by the assembly's ONE internal
+ * engine. It provides NO engine and NO schema: `cedar()` connected or not, the engine is the
+ * assembly's. Connect it only to ADD custom rules beneath the floor — a `forbid` narrows, a `permit`
+ * widens, and neither can remove the floor's un-removable forbids.
+ *
+ * The `$InferContext` still surfaces (and requires) a `principal` on `run(prompt, ctx)`: the source's
+ * policies reference the principal, and the internal engine's mapper reads it.
+ */
+export function cedar(config: CedarSourceConfig): PolicyPlugin<CedarContext> {
+	const id = config.id ?? "policy:cedar";
+	return {
+		id,
+		// Phantom (types only): the request context these policies read, folded onto `run`'s ctx.
+		$InferContext: {} as CedarContext,
+		policies: [
+			{
+				name: config.name ?? id,
+				cedar: config.policies,
+				mode: config.mode ?? "enforce",
+			},
+		],
+	};
 }

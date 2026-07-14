@@ -2,12 +2,12 @@ import { buildAuthzModel } from "@euroclaw/authz";
 import type { ToolCall } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
-import { cedar, cedarEngine } from "../src/index";
+import { cedarEngine, cedarPolicyPlugin } from "../src/index";
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
 
 const coreWith = (config: Parameters<typeof cedar>[0]) =>
-	createGovernance({ plugins: [cedar(config)], runTool: runEcho });
+	createGovernance({ plugins: [cedarPolicyPlugin(config)], runTool: runEcho });
 
 describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 	it("permit: a tool with a matching permit policy runs", async () => {
@@ -78,7 +78,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 			},
 		];
 		const core = createGovernance({
-			plugins: [cedar({ policies, entities })],
+			plugins: [cedarPolicyPlugin({ policies, entities })],
 			runTool: runEcho,
 		});
 
@@ -120,7 +120,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		// came from roleMembership({ roleOf: teamStore.roleOf }) — connecting team membership → the decision)
 		const asRole = (role: string) =>
 			createGovernance({
-				plugins: [cedar({ policies })],
+				plugins: [cedarPolicyPlugin({ policies })],
 				resolveContext: (ctx) => ({ ...ctx, euroclaw__role: role }),
 				runTool: runEcho,
 			});
@@ -143,7 +143,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		const policies = `permit(principal, action == Action::"list_pets", resource) when { context.organizationId == "org-a" };`;
 		const inOrg = (organizationId: string) =>
 			createGovernance({
-				plugins: [cedar({ policies })],
+				plugins: [cedarPolicyPlugin({ policies })],
 				// resolveContext stamps euroclaw__organizationId exactly as the claw's organization resolver would.
 				resolveContext: (ctx) => ({
 					...ctx,
@@ -166,7 +166,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 
 		// A caller cannot forge the org: euroclaw__ keys are stripped before the trusted stamp.
 		const unstamped = createGovernance({
-			plugins: [cedar({ policies })],
+			plugins: [cedarPolicyPlugin({ policies })],
 			runTool: runEcho,
 		});
 		const forged = await unstamped.handleToolCall(
@@ -198,7 +198,7 @@ describe("model-driven cedar — slice 3", () => {
 
 	it("model + schema together fail loud", () => {
 		expect(() =>
-			cedar({
+			cedarPolicyPlugin({
 				model,
 				schema: "entity X;",
 				policies: "permit(principal, action, resource);",
@@ -208,7 +208,7 @@ describe("model-driven cedar — slice 3", () => {
 
 	it("the rendered schema parses under cedar-wasm (construction validates it)", () => {
 		expect(() =>
-			cedar({ model, policies: `permit(principal, action, resource);` }),
+			cedarPolicyPlugin({ model, policies: `permit(principal, action, resource);` }),
 		).not.toThrow();
 	});
 
@@ -225,7 +225,7 @@ describe("model-driven cedar — slice 3", () => {
 			},
 		]);
 		expect(() =>
-			cedar({
+			cedarPolicyPlugin({
 				model: hostile,
 				policies: `permit(principal, action, resource);`,
 			}),
@@ -235,7 +235,7 @@ describe("model-driven cedar — slice 3", () => {
 	it("policies condition on projected args; unprojected/unknown args are filtered, not fatal", async () => {
 		const core = createGovernance({
 			plugins: [
-				cedar({
+				cedarPolicyPlugin({
 					model,
 					policies: `permit(principal, action == Action::"refund", resource) when { context.args.amount <= 500 };`,
 				}),
@@ -264,7 +264,7 @@ describe("model-driven cedar — slice 3", () => {
 	it('group policies work at evaluation time (action in Action::"writes")', async () => {
 		const core = createGovernance({
 			plugins: [
-				cedar({
+				cedarPolicyPlugin({
 					model,
 					policies: `
 						permit(principal, action in Action::"reads", resource);

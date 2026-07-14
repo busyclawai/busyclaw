@@ -6,7 +6,7 @@
 import { buildAuthzModel, modelToCedarSchema } from "@euroclaw/authz";
 import type { JsonObject, ToolCall } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
-import { cedar } from "@euroclaw/policy-cedar";
+import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { toolsFromOpenApi } from "@euroclaw/runtime";
 import { describe, expect, it } from "vitest";
 
@@ -98,7 +98,7 @@ const POLICIES = `
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
 const core = createGovernance({
-	plugins: [cedar({ model, policies: POLICIES })],
+	plugins: [cedarPolicyPlugin({ model, policies: POLICIES })],
 	runTool: runEcho,
 });
 
@@ -125,8 +125,8 @@ describe("openapi → cedar blueprint (composed slices 1–4)", () => {
 		expect(schema).toMatch(/action "getPet".*"petId": Long/);
 		expect(schema).toMatch(/action "addPet".*"categoryId"\?: Long/);
 		expect(schema).not.toContain("weight");
-		// the rendered schema parses under cedar-wasm — cedar() construction validates it
-		expect(() => cedar({ model, policies: POLICIES })).not.toThrow();
+		// the rendered schema parses under cedar-wasm — cedarPolicyPlugin() construction validates it
+		expect(() => cedarPolicyPlugin({ model, policies: POLICIES })).not.toThrow();
 	});
 
 	it("reads run autonomously", async () => {

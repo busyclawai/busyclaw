@@ -10,7 +10,7 @@
 // send an unauthenticated request.
 
 import type { EuroclawPlugin, JsonObject, Secrets } from "@euroclaw/contracts";
-import { cedar } from "@euroclaw/policy-cedar";
+import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { createSpecRegistry, type RuntimeModel } from "@euroclaw/runtime";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";
@@ -132,7 +132,7 @@ async function registeredPetstore() {
 	});
 	const rows = await stores.registeredTools.listByOrganization("org-a");
 	const { model } = assembleOrgActions({ registeredTools: rows });
-	const policyPlugin = cedar({
+	const policyPlugin = cedarPolicyPlugin({
 		model,
 		policies: PERMIT,
 		serverForAction: serverForActionFromRegisteredTools(rows),

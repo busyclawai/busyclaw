@@ -4,9 +4,10 @@
 // enforcement can never disagree: code stamps ∪ domain verbs ∪ registered rows, facts overlay
 // merged (overlay-wins). Actions ≠ tools — a domain verb appears here with no tool row behind it.
 //
-// Engine-agnostic: this assembles the neutral AuthzModel; compiling it into a Cedar bundle (the
-// router's engineFor) is the host's concern and lives outside src (euroclaw does not depend on a
-// policy engine at runtime).
+// This assembles the neutral AuthzModel; the per-organization router that compiles it into a Cedar
+// bundle (the `createOrgPolicyRouter` engineFor) is still the host's composition. The always-on
+// governance FLOOR (see ./authz-floor) DOES compile an internal Cedar engine over the static tools —
+// Cedar is now internal to the assembly — but this per-org registered-tool router remains host-owned.
 
 import {
 	type AuthzActionInput,

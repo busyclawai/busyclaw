@@ -94,6 +94,18 @@ export type EuroclawCronTask<ClawLike = unknown> = {
 
 export type EuroclawCronFlag = "has-cron" | "no-cron" | "unknown-cron";
 
+/**
+ * A Cedar policy slice a plugin contributes as a policy SOURCE (see {@link EuroclawPlugin.policies}).
+ * Structurally the assembly's bundle-loader input — a human label, the raw Cedar text, and the merge
+ * mode. `enforce` joins the live set; `shadow` is evaluated but never applied; `off` is dropped. The
+ * raw Cedar is UNTRUSTED text: it is parsed only at engine construction, never here.
+ */
+export type PolicySourceSlice = {
+	name: string;
+	cedar: string;
+	mode: "enforce" | "shadow" | "off";
+};
+
 // Core contributes the dependencies it OWNS (claws, effects, events, secrets) plus the resolved storage
 // adapter. A plugin that owns its own tables (e.g. channels, skills) reads `adapter` and builds its OWN
 // store from it — the assembly passes it in, so core stays agnostic about what plugins exist and never
@@ -176,6 +188,13 @@ export type EuroclawPlugin<
 		providers?: readonly SecretProvider[];
 		expects?: readonly SecretDeclaration[];
 	};
+	/** Cedar policy slices this plugin contributes as a policy SOURCE. The assembly merges them UNDER
+	 *  the always-on SYSTEM_POSTURE floor into its ONE internal Cedar engine (`forbid` > `permit`, so a
+	 *  source can narrow but never punch through the floor). A source contributes policy TEXT only —
+	 *  never the engine or the schema, both of which are the assembly's. Read STATICALLY off the raw
+	 *  plugin object (like `secrets.providers`/`eventSinks`), so the engine compiles before any
+	 *  `configure` runs. `cedar({ policies })` is the canonical source; any plugin may contribute. */
+	policies?: readonly PolicySourceSlice[];
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];
 	/** Boundary before-gates this plugin installs (decide across tool/model boundaries). */
