@@ -3,10 +3,13 @@
 // (@euroclaw/authz) → rendered Cedar schema → live decisions through the governance chokepoint
 // (@euroclaw/policy-cedar), including arg-conditioned permits and the needs-approval probe.
 
-import { buildAuthzModel, modelToCedarSchema } from "@euroclaw/authz";
+import {
+	buildAuthzModel,
+	cedarPolicyPlugin,
+	modelToCedarSchema,
+} from "@euroclaw/authz";
 import type { JsonObject, ToolCall } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
-import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { toolsFromOpenApi } from "@euroclaw/runtime";
 import { describe, expect, it } from "vitest";
 

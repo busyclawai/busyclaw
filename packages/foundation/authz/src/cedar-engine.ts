@@ -26,7 +26,7 @@ import type {
 	PolicyRequest,
 } from "@euroclaw/contracts";
 import { configurationError } from "@euroclaw/contracts";
-import type { CedarEngineConfig } from "./contracts";
+import type { CedarEngineConfig } from "./cedar-types";
 
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
 

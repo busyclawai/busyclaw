@@ -1,5 +1,6 @@
 // Cedar RENDERINGS of the neutral authorization model — pure string/data generation, no
-// cedar-wasm (validation lives in @euroclaw/policy-cedar). The model is canonical; Cedar text is
+// cedar-wasm here (the eval that consumes these lives beside it in ./cedar-engine). The model is
+// canonical; Cedar text is
 // a projection of it: one action per ActionDef with typed context.args (via the shared
 // projection — render and request-filter must agree), action groups via `in [...]` membership,
 // entity types with parents and `tags String` (ABAC via hasTag/getTag), principals declared by
@@ -42,7 +43,7 @@ function renderAction(
 	return `action ${cedarQuote(action.id)}${membership} appliesTo {principal: [${principals.join(", ")}], resource: [${action.resourceType}], context: {${CONTEXT_FIELDS}${args}}};`;
 }
 
-/** Render the model as Cedar schema text (parse/validate it with @euroclaw/policy-cedar). */
+/** Render the model as Cedar schema text (the ./cedar-engine eval parses/validates it). */
 export function modelToCedarSchema(
 	model: AuthzModel,
 	options: CedarSchemaOptions = {},

@@ -1,8 +1,9 @@
-// @euroclaw/authz — the authz toolkit: the policy-plugin scaffolding, the authorization-model
-// builder, the JSON-Schema→Cedar projection, and the Cedar renderings of the model. The protocol
-// (PolicyEngine port, PARC contracts, model types) lives in @euroclaw/contracts; hot-path
-// enforcement lives in @euroclaw/core; engines in @euroclaw/policy-* (Cedar VALIDATION included —
-// the renderings here are pure string/data generation, no cedar-wasm).
+// @euroclaw/authz — the Cedar decision engine + authz toolkit: the policy-plugin scaffolding, the
+// authorization-model builder, the JSON-Schema→Cedar projection, the Cedar renderings of the model,
+// AND the cedar-wasm EVAL (engine, floor engine, request mapper, escape-hatch plugin). The protocol
+// (PolicyEngine port, PARC contracts, model types) lives in @euroclaw/contracts; hot-path enforcement
+// lives in @euroclaw/core; the `cedar()` / `betterAuthPolicy()` policy SOURCES live in
+// @euroclaw/policy-* (they contribute policy TEXT, never the engine).
 
 export type { AuthzActionInput, BuildAuthzModelOptions } from "./build";
 export { buildAuthzModel } from "./build";
@@ -12,6 +13,19 @@ export {
 	entitiesToCedarJson,
 	modelToCedarSchema,
 } from "./cedar";
+export { cedarEngine } from "./cedar-engine";
+export {
+	cedarFloorEngine,
+	cedarMapCall,
+	cedarPolicyPlugin,
+} from "./cedar-plugin";
+export type {
+	CedarContext,
+	CedarEngineConfig,
+	CedarEntitiesInput,
+	CedarMapCallConfig,
+	CedarPluginConfig,
+} from "./cedar-types";
 export type { FactsOverlayEntry } from "./overlay";
 export { actionInputsFromRegisteredTools, mergeFactsOverlay } from "./overlay";
 export type { PolicyPlugin, PolicyPluginConfig } from "./plugin";

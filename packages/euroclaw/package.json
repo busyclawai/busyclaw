@@ -30,7 +30,6 @@
 		"@euroclaw/authz": "workspace:*",
 		"@euroclaw/contracts": "workspace:*",
 		"@euroclaw/engine-sql": "workspace:*",
-		"@euroclaw/policy-cedar": "workspace:*",
 		"@euroclaw/runtime": "workspace:*",
 		"@euroclaw/secrets": "workspace:*",
 		"@euroclaw/storage-durable": "workspace:*",
@@ -41,6 +40,7 @@
 	},
 	"devDependencies": {
 		"@euroclaw/core": "workspace:*",
+		"@euroclaw/policy-cedar": "workspace:*",
 		"@euroclaw/secrets-plugin": "workspace:*",
 		"@euroclaw/skills": "workspace:*",
 		"@euroclaw/storage-core": "workspace:*",

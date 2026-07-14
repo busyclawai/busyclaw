@@ -24,9 +24,9 @@
 	},
 	"workspaces": [
 		"packages/*",
-		"packages/policy/*",
 		"packages/storage/*",
 		"packages/plugins/*",
+		"packages/plugins/policies/*",
 		"packages/engines/*"
 	]
 }

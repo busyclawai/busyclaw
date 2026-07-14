@@ -2,9 +2,9 @@ packages:
   - "packages/*"
   - "packages/foundation/*"
   - "packages/adapter/*"
-  - "packages/policy/*"
   - "packages/storage/*"
   - "packages/plugins/*"
+  - "packages/plugins/policies/*"
   - "packages/engines/*"
 
 # better-sqlite3 needs its native build to run (only this one is allowlisted) — used by the

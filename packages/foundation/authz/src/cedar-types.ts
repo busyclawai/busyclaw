@@ -1,5 +1,6 @@
-// The package's contracts — configuration and context types only; the engine impl lives in
-// ./engine, the plugin factory in ./plugin.
+// The Cedar engine's configuration and context types. The engine impl lives in ./cedar-engine, the
+// request mapper + escape-hatch plugin in ./cedar-plugin. (The `cedar()` policy-text SOURCE and its
+// CedarSourceConfig live in @euroclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
 import type { AuthzModel, PolicyRequest, ToolCall } from "@euroclaw/contracts";
@@ -43,20 +44,6 @@ export type CedarMapCallConfig = {
 	/** The egress origin for an action, from its registered binding's server — stamped as the
 	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived. */
 	serverForAction?: (actionId: string) => string | undefined;
-};
-
-/** `cedar({ policies })` — a policy SOURCE. Contributes raw Cedar TEXT that the assembly merges UNDER
- *  the always-on SYSTEM_POSTURE floor into its ONE internal engine. It provides NO engine and NO
- *  schema (both are the assembly's) — connect it only to ADD custom rules beneath the floor. */
-export type CedarSourceConfig = {
-	/** Raw Cedar policy text — one or more `permit`/`forbid` statements laid beneath the floor. */
-	policies: string;
-	/** A human label / stable slice id (audit + bundle identity). Default derived from `id`. */
-	name?: string;
-	/** Plugin id. Default "policy:cedar". */
-	id?: string;
-	/** Merge mode. `enforce` (default) joins the live set; `shadow` is evaluated but never applied. */
-	mode?: "enforce" | "shadow" | "off";
 };
 
 export type CedarPluginConfig = CedarEngineConfig & {

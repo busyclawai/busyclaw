@@ -9,8 +9,8 @@
 // so the credential the invoker placed is observable on the request. An unset credential must never
 // send an unauthenticated request.
 
+import { cedarPolicyPlugin } from "@euroclaw/authz";
 import type { EuroclawPlugin, JsonObject, Secrets } from "@euroclaw/contracts";
-import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { createSpecRegistry, type RuntimeModel } from "@euroclaw/runtime";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";

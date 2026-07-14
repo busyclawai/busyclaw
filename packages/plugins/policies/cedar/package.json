@@ -2,7 +2,7 @@
 	"name": "@euroclaw/policy-cedar",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Cedar policy engine for euroclaw: evaluates tool calls against Cedar policies (deny-by-default) with conditional needs-approval. Implements the @euroclaw/contracts PolicyEngine port.",
+	"description": "The cedar() policy SOURCE for euroclaw: contributes raw Cedar policy TEXT to the assembly's internal engine (merged under the SYSTEM_POSTURE floor). The Cedar decision engine lives in @euroclaw/authz.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,10 +23,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@cedar-policy/cedar-wasm": "4.11.1",
 		"@euroclaw/authz": "workspace:*",
-		"@euroclaw/contracts": "workspace:*",
-		"arktype": "2.2.0"
+		"@euroclaw/contracts": "workspace:*"
 	},
 	"devDependencies": {
 		"@euroclaw/core": "workspace:*"

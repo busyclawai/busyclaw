@@ -2,7 +2,7 @@
 	"name": "@euroclaw/authz",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The euroclaw authz toolkit: the policy-plugin scaffolding (engine → deny-by-default gate) and the authorization-model builder. Protocol lives in @euroclaw/contracts; engines live in @euroclaw/policy-*.",
+	"description": "The euroclaw Cedar decision engine + authz toolkit: the cedar-wasm eval (engine/floor/mapper), the policy-plugin scaffolding, and the authorization-model builder. Protocol lives in @euroclaw/contracts; policy SOURCES live in @euroclaw/policy-*.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
@@ -35,6 +35,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@cedar-policy/cedar-wasm": "4.11.1",
 		"@euroclaw/contracts": "workspace:*",
 		"@euroclaw/errors": "workspace:*",
 		"arktype": "2.2.0"

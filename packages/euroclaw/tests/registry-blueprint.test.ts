@@ -8,6 +8,8 @@ import {
 	type AuthzActionInput,
 	actionEntitiesFromModel,
 	buildAuthzModel,
+	cedarEngine,
+	cedarPolicyPlugin,
 	createOrgPolicyRouter,
 	createPolicyPlugin,
 	modelToCedarSchema,
@@ -22,7 +24,6 @@ import type {
 } from "@euroclaw/contracts";
 import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
-import { cedarEngine, cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import {
 	createSpecRegistry,
 	REGISTER_OPENAPI_SPEC_ACTION,
