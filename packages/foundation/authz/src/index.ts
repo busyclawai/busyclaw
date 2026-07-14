@@ -15,10 +15,11 @@ export type {
 } from "./api";
 export {
 	API_ACCESS_BASELINE,
+	API_ACCESS_TYPE,
 	API_ACTION_GROUP,
 	API_ACTION_TYPE,
 	API_CREATE_GROUP,
-	API_PERMISSION_RANK,
+	API_PRINCIPAL_TYPE,
 	API_RESOURCE_TYPE,
 	decideApiCall,
 } from "./api";
@@ -40,6 +41,7 @@ export {
 } from "./cedar-plugin";
 export type {
 	CedarContext,
+	CedarEngine,
 	CedarEngineConfig,
 	CedarEntitiesInput,
 	CedarMapCallConfig,

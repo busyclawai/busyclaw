@@ -22,16 +22,18 @@ import {
 } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	EntityRef,
-	PolicyEngine,
 	PolicyRequest,
+	PolicyResult,
 } from "@euroclaw/contracts";
 import { configurationError } from "@euroclaw/contracts";
-import type { CedarEngineConfig } from "./cedar-types";
+import type { CedarEngine, CedarEngineConfig } from "./cedar-types";
 
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
 
-/** A Cedar PDP as a PolicyEngine: deny-by-default, forbid-overrides, with a needs-approval probe. */
-export function cedarEngine(config: CedarEngineConfig): PolicyEngine {
+/** A Cedar PDP as a PolicyEngine: deny-by-default, forbid-overrides, with a needs-approval probe. The
+ *  `authorize` overload takes optional per-decision entities (merged UNDER the directory) — the product-
+ *  api PEP passes its per-request Principal/Resource/Access graph there. */
+export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 	const approvalFlag = config.approvalFlag ?? "confirmationUsed";
 	const policies = { staticPolicies: config.policies };
 	const validateRequest = config.validateRequest ?? config.schema !== undefined;
@@ -105,9 +107,17 @@ export function cedarEngine(config: CedarEngineConfig): PolicyEngine {
 
 	return {
 		capabilities: { reads: "identity+args", approvals: true },
-		async authorize(req) {
-			// One entities snapshot per decision — the base evaluation and the probe must agree.
-			const entities = await resolveEntities();
+		async authorize(
+			req: PolicyRequest,
+			extraEntities?: Entities,
+		): Promise<PolicyResult> {
+			// One entities snapshot per decision — the base evaluation and the probe must agree. Per-
+			// request entities (the api PEP's Principal/Resource/Access graph) merge UNDER the directory.
+			const directory = await resolveEntities();
+			const entities: Entities =
+				extraEntities !== undefined
+					? [...directory, ...extraEntities]
+					: directory;
 			const baseContext = { ...req.context, [approvalFlag]: false };
 			const first = evaluate(req, baseContext, entities);
 			if (first.error)

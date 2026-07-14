@@ -38,6 +38,7 @@ import {
 import { cedarEngine } from "./cedar-engine";
 import type {
 	CedarContext,
+	CedarEngine,
 	CedarEntitiesInput,
 	CedarMapCallConfig,
 	CedarPluginConfig,
@@ -155,7 +156,7 @@ export function cedarApiEngine(config: {
 	policies: string;
 	methods: readonly string[];
 	createMethods: readonly string[];
-}): PolicyEngine {
+}): CedarEngine {
 	return cedarEngine({
 		policies: config.policies,
 		entities: apiActionEntities({

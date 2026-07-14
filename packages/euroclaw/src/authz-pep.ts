@@ -14,6 +14,7 @@ import {
 	type ApiMembership,
 	type ApiPermissionLevel,
 	type ApiResourceShape,
+	type CedarEngine,
 	cedarApiEngine,
 	decideApiCall,
 	loadPolicyBundle,
@@ -23,7 +24,6 @@ import {
 	type ClawsStore,
 	ENDPOINTS_METADATA,
 	type EuroclawPlugin,
-	type PolicyEngine,
 	type PolicySourceSlice,
 } from "@euroclaw/contracts";
 import type { ClawApiCaller, ClawApiMethod } from "./api";
@@ -138,12 +138,30 @@ function stringField(input: unknown, key: string): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
+/** A resource shape nothing satisfies — no owner, no scope, no grants — so owner ∪ scope ∪ grant all
+ *  evaluate false and the decision DENIES. The FAIL-CLOSED result for a resource-anchored method whose
+ *  row can't be resolved. NEVER "the caller owns it." */
+const DENY_SHAPE: ApiResourceShape = { grants: [] };
+
+/** The caller's own PERSONAL scope — the honest shape for a method NOT anchored to a specific shared row
+ *  (secrets, policy slices, the caller's own runs …): the row such a method touches is keyed by the
+ *  caller, so `createdBy == caller` is the TRUTH here, not a not-found fallback. An absent principal gets
+ *  the deny shape (the actor floor already denied it upstream). */
+function personalScope(principal: string | undefined): ApiResourceShape {
+	return principal !== undefined
+		? { createdBy: principal, scope: "personal", scopeId: principal, grants: [] }
+		: DENY_SHAPE;
+}
+
 /**
- * Build the ONE resource-shape loader for the governed api — closed over the claws store. Claw/thread
- * methods load the real row (its `createdBy`/`scope`/`scopeId` → cross-user isolation); everything else
- * (and any not-yet-loaded / not-found row) presents the caller's own personal scope, so the OWNER rule
- * permits the caller and the actor floor denies an absent principal. `grants` is always empty (the
- * access_grant table is slice 5 — the generic grant POLICY already reads it, the DATA arrives later).
+ * Build the ONE resource-shape loader for the governed api — closed over the claws store. A method NOT
+ * in `CORE_API_RESOURCES` is not anchored to a specific shared row: it acts within the caller's own
+ * personal scope (`personalScope`). A resource-anchored claw/thread method MUST load the real row (its
+ * `createdBy`/`scope`/`scopeId` → cross-user isolation); an unresolvable row (no store, no id, or absent)
+ * FAILS CLOSED to `DENY_SHAPE` — it is NEVER treated as owned by the caller (the self-shape tautology the
+ * old loader fell into, which would let a stranger read/mutate a not-found resource). `grants` is always
+ * empty (the access_grant table is a later slice — the generic grant POLICY reads it, the DATA arrives
+ * later).
  */
 function resourceLoaderFor(
 	clawsStore: ClawsStore | undefined,
@@ -153,17 +171,15 @@ function resourceLoaderFor(
 	principal: string | undefined,
 ) => Promise<ApiResourceShape> {
 	return async (method, input, principal) => {
-		const self: ApiResourceShape =
-			principal !== undefined
-				? {
-						createdBy: principal,
-						scope: "personal",
-						scopeId: principal,
-						grants: [],
-					}
-				: { grants: [] };
 		const kind = CORE_API_RESOURCES[method as ClawApiMethod];
-		if (kind === undefined || clawsStore === undefined) return self;
+		// Not resource-anchored → the caller's own personal scope (NOT a specific shared resource).
+		if (kind === undefined) return personalScope(principal);
+		// No claws store configured AT ALL → a boot MISCONFIGURATION, not an access denial: there is no
+		// persisted resource to protect, and the method itself surfaces a clear `requires a ClawsStore`
+		// config error. Fall through to the caller's personal scope so that error is what the caller sees
+		// (masking it behind an authz deny would be worse). This is NOT the killed tautology — that was
+		// "a store EXISTS but the row is absent ⇒ caller owns it", handled fail-closed below.
+		if (clawsStore === undefined) return personalScope(principal);
 
 		let clawId: string | undefined;
 		if (kind === "claw:id") clawId = stringField(input, "id");
@@ -179,7 +195,7 @@ function resourceLoaderFor(
 			clawId = thread?.clawId;
 		}
 		const claw = clawId ? await clawsStore.claws.get(clawId) : undefined;
-		if (!claw) return self;
+		if (!claw) return DENY_SHAPE;
 		return {
 			createdBy: claw.createdBy,
 			scope: claw.scope,
@@ -204,7 +220,7 @@ export function buildApiPolicyEngine(input: {
 	methodIds: readonly string[];
 	createMethodIds: readonly string[];
 	plugins: readonly EuroclawPlugin[];
-}): PolicyEngine {
+}): CedarEngine {
 	const slices: PolicySourceSlice[] = input.plugins.flatMap(
 		(plugin) => plugin.policies ?? [],
 	);
@@ -247,7 +263,7 @@ export function enumerateApiMethodIds(
  */
 export function governApi(input: {
 	api: Record<string, unknown>;
-	engine: PolicyEngine;
+	engine: CedarEngine;
 	clawsStore: ClawsStore | undefined;
 	resolveMemberships?: (
 		principal: string,
@@ -283,7 +299,6 @@ export function governApi(input: {
 				engine: input.engine,
 				method,
 				level,
-				isCreate,
 				principal,
 				resource,
 				memberships,

@@ -1,7 +1,10 @@
-// slice-1 proof at the authz layer: `decideApiCall` over `cedarApiEngine` + the GENERIC `API_ACCESS_
-// BASELINE` (owner ∪ scope-member ∪ grant + create-permit). Every branch is proven GENERICALLY through
-// stubs — no org plugin, no access_grant table — so the policies are shown to read the opaque SHAPE
-// (`createdBy`/`scope`/`scopeId`/`grants`) and the caller's resolved level facts, never a kind/tier/role.
+// slice proof at the authz layer: `decideApiCall` over `cedarApiEngine` + the GENERIC `API_ACCESS_
+// BASELINE` (owner ∪ scope-member ∪ grant + create-permit), evaluated as REAL CEDAR over a per-request
+// ENTITY GRAPH — owner is entity/attr equality, scope-member and grant are leveled Cedar `in`. Every
+// branch is proven GENERICALLY through stubs — no org plugin, no access_grant table — so the policies
+// are shown to read the opaque SHAPE (`createdBy`/`scope`/`scopeId`/`grants`) and the caller's opaque
+// memberships, never a kind/tier/role, and the LEVEL ordering (`read < use < manage`) is Cedar's, not a
+// TS compare.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -12,8 +15,9 @@ import {
 	decideApiCall,
 } from "../src/index";
 
-// The api engine's live policy set: the generic baseline (owner ∪ scope ∪ grant + create-permit) —
-// the exact system floor the assembly compiles, minus plugin slices.
+// The api engine's live policy set: the generic baseline (owner ∪ scope ∪ grant + create-permit) — the
+// exact system floor the assembly compiles, minus plugin slices. `createClaw` is a create method (in the
+// `creates` action group) so the create-permit reaches it.
 const engine = cedarApiEngine({
 	policies: API_ACCESS_BASELINE,
 	methods: ["getClaw", "updateClaw", "createClaw"],
@@ -37,13 +41,11 @@ function decide(input: {
 	principal: string | undefined;
 	resource?: ApiResourceShape;
 	memberships?: readonly ApiMembership[];
-	isCreate?: boolean;
 }) {
 	return decideApiCall({
 		engine,
 		method: input.method,
 		level: input.level,
-		isCreate: input.isCreate ?? false,
 		principal: input.principal,
 		resource: input.resource ?? { grants: [] },
 		memberships: input.memberships ?? [],
@@ -61,9 +63,22 @@ describe("decideApiCall — the actor floor", () => {
 		expect(result.decision).toBe("deny");
 		expect(result.reason).toContain("actor floor");
 	});
+
+	it("a blank / whitespace principal → deny (never equals a sentinel createdBy)", async () => {
+		for (const blank of ["", "   ", "\t"]) {
+			const result = await decide({
+				method: "getClaw",
+				level: "read",
+				principal: blank,
+				resource: aliceClaw,
+			});
+			expect(result.decision).toBe("deny");
+			expect(result.reason).toContain("actor floor");
+		}
+	});
 });
 
-describe("decideApiCall — owner (LIVE)", () => {
+describe("decideApiCall — owner (LIVE, entity/attr equality)", () => {
 	it("createdBy == caller → permit at every level", async () => {
 		for (const level of ["read", "use", "manage"] as const) {
 			const result = await decide({
@@ -87,32 +102,78 @@ describe("decideApiCall — owner (LIVE)", () => {
 	});
 });
 
-describe("decideApiCall — scope-membership (generic, stubbed)", () => {
-	it("a (scope,scopeId) membership at level ≥ required → permit; below → deny", async () => {
-		// BOB holds a `use`-level membership in the resource's OWN opaque scope — proving the branch
-		// reads resource.scope/scopeId (here "team"/"team-eng"), never a hardcoded "organization".
-		const membership: ApiMembership = {
+describe("decideApiCall — fail-closed resource shape", () => {
+	it("no createdBy, no scope, no grants → deny even at the lowest level (proves the DENY_SHAPE denies)", async () => {
+		const result = await decide({
+			method: "getClaw",
+			level: "read",
+			principal: BOB,
+			resource: { grants: [] },
+		});
+		expect(result.decision).toBe("deny");
+	});
+});
+
+describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `in`)", () => {
+	it("level ordering: a use-member passes read/use but is denied manage; a manage-member passes manage", async () => {
+		// BOB holds a `use`-level membership in the resource's OWN opaque scope — proving the branch reads
+		// resource.scope/scopeId (here "team"/"team-eng"), never a hardcoded "organization", and that the
+		// level ordering is Cedar's `in`, not a TS compare.
+		const useMember: ApiMembership = {
 			scope: "team",
 			scopeId: "team-eng",
 			level: "use",
 		};
-		const permitted = await decide({
-			method: "getClaw",
-			level: "read",
-			principal: BOB,
-			resource: aliceClaw,
-			memberships: [membership],
-		});
-		expect(permitted.decision).toBe("permit");
-
-		const denied = await decide({
-			method: "updateClaw",
-			level: "manage",
-			principal: BOB,
-			resource: aliceClaw,
-			memberships: [membership],
-		});
-		expect(denied.decision).toBe("deny");
+		// use satisfies a read requirement (use in read) …
+		expect(
+			(
+				await decide({
+					method: "getClaw",
+					level: "read",
+					principal: BOB,
+					resource: aliceClaw,
+					memberships: [useMember],
+				})
+			).decision,
+		).toBe("permit");
+		// … and a use requirement (self) …
+		expect(
+			(
+				await decide({
+					method: "getClaw",
+					level: "use",
+					principal: BOB,
+					resource: aliceClaw,
+					memberships: [useMember],
+				})
+			).decision,
+		).toBe("permit");
+		// … but NOT a manage requirement (manage is a child of use — not reachable upward).
+		expect(
+			(
+				await decide({
+					method: "updateClaw",
+					level: "manage",
+					principal: BOB,
+					resource: aliceClaw,
+					memberships: [useMember],
+				})
+			).decision,
+		).toBe("deny");
+		// a manage-member satisfies the manage requirement.
+		expect(
+			(
+				await decide({
+					method: "updateClaw",
+					level: "manage",
+					principal: BOB,
+					resource: aliceClaw,
+					memberships: [
+						{ scope: "team", scopeId: "team-eng", level: "manage" },
+					],
+				})
+			).decision,
+		).toBe("permit");
 	});
 
 	it("a membership in a DIFFERENT scopeId does not match (opaque id compare)", async () => {
@@ -127,7 +188,7 @@ describe("decideApiCall — scope-membership (generic, stubbed)", () => {
 	});
 });
 
-describe("decideApiCall — grant (generic, stubbed as data)", () => {
+describe("decideApiCall — grant (generic, stubbed as data, leveled Cedar `in`)", () => {
 	it("a direct user grant at level ≥ required → permit", async () => {
 		const result = await decide({
 			method: "getClaw",
@@ -164,7 +225,7 @@ describe("decideApiCall — grant (generic, stubbed as data)", () => {
 		expect(publicGrant.decision).toBe("permit");
 	});
 
-	it("a grant below the required level → deny", async () => {
+	it("a grant below the required level → deny (Cedar level ordering, not a TS compare)", async () => {
 		const result = await decide({
 			method: "updateClaw",
 			level: "manage",
@@ -176,12 +237,11 @@ describe("decideApiCall — grant (generic, stubbed as data)", () => {
 });
 
 describe("decideApiCall — create-permit", () => {
-	it("any authenticated principal may create; absent principal still denies", async () => {
+	it("any authenticated principal may create (routed by the `creates` action group); absent still denies", async () => {
 		const created = await decide({
 			method: "createClaw",
 			level: "manage",
 			principal: BOB,
-			isCreate: true,
 			resource: { grants: [] },
 		});
 		expect(created.decision).toBe("permit");
@@ -190,7 +250,6 @@ describe("decideApiCall — create-permit", () => {
 			method: "createClaw",
 			level: "manage",
 			principal: undefined,
-			isCreate: true,
 			resource: { grants: [] },
 		});
 		expect(anon.decision).toBe("deny");

@@ -69,6 +69,40 @@ describe("app-authz PEP — owner isolation over a loaded claw", () => {
 	});
 });
 
+describe("app-authz PEP — the fail-closed loader", () => {
+	it("a resource-anchored method on a NOT-FOUND resource DENIES (the old self-shape would have permitted)", async () => {
+		const claw = makeClaw();
+		// A valid authenticated caller, but the id resolves to no row: the loader FAILS CLOSED to a shape
+		// nothing satisfies — NOT "the caller owns it". (Pre-rework, the self-shape made createdBy == the
+		// caller, so this READ would have been permitted — the cross-user hole this rework closes.)
+		await expect(
+			claw.api.getClaw({ id: "ghost" }, { principal: ALICE }),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+		// a manage-level method on a ghost likewise denies
+		await expect(
+			claw.api.updateClaw(
+				{ id: "ghost", patch: { name: "x" } },
+				{ principal: ALICE },
+			),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+	});
+
+	it("a create is permitted, yet a resource-anchored method on an unloadable resource still denies", async () => {
+		const claw = makeClaw();
+		// authorizeScope-style create — any authenticated principal may (the created row is theirs) …
+		const created = await claw.api.createClaw(
+			{ createdBy: ALICE, name: "real" },
+			{ principal: ALICE },
+		);
+		expect(created.createdBy).toBe(ALICE);
+		// … but that create does NOT make an arbitrary resource-anchored method pass: a getClaw on a
+		// DIFFERENT, non-existent id fails closed.
+		await expect(
+			claw.api.getClaw({ id: "no-such-claw" }, { principal: ALICE }),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+	});
+});
+
 describe("app-authz PEP — the create-permit", () => {
 	it("any authenticated principal may create; the created row is then theirs to read", async () => {
 		const claw = makeClaw();

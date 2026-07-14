@@ -3,10 +3,30 @@
 // CedarSourceConfig live in @euroclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
-import type { AuthzModel, PolicyRequest, ToolCall } from "@euroclaw/contracts";
+import type {
+	AuthzModel,
+	PolicyEngine,
+	PolicyRequest,
+	PolicyResult,
+	ToolCall,
+} from "@euroclaw/contracts";
 
 /** Cedar's request context: who is acting. Approval state is derived server-side. */
 export type CedarContext = { principal: string };
+
+/**
+ * A Cedar `PolicyEngine` that ALSO accepts per-DECISION entities. The base `authorize(req)` evaluates
+ * against the engine's construction-time entity directory; the product-api PEP additionally passes the
+ * request's own Principal/Resource/Access graph (owner/scope/grant are entity `in` / attribute compares,
+ * not context facts), which the engine merges under the directory for that one decision. A caller with
+ * only a `PolicyRequest` uses the base overload — `CedarEngine` is a strict widening of `PolicyEngine`.
+ */
+export type CedarEngine = PolicyEngine & {
+	authorize: (
+		req: PolicyRequest,
+		entities?: Entities,
+	) => Promise<PolicyResult>;
+};
 
 /** Entities: a static array, or a PROVIDER the engine re-reads per decision (the reload seam). */
 export type CedarEntitiesInput =
