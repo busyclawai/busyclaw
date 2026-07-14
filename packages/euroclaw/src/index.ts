@@ -8,11 +8,11 @@ import {
 	type EuroclawCronFlag,
 	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
-	type EventSink,
 	errorMessage,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
+	type Redactor,
 	type Secrets,
 } from "@euroclaw/contracts";
 import {
@@ -287,12 +287,18 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
 	}
 }
 
+/** The context fields bound PER PLUGIN (the emit door + the redaction handles) — each closes over
+ *  the plugin's id so claw-less door redactions and plugin-minted mappings attribute to that
+ *  plugin's own ("plugin", id) container, never a shared bucket. */
+type PluginBoundContext = Pick<
+	EuroclawPluginConfigureContext,
+	"events" | "redact" | "rehydrate"
+>;
+
 function configurePlugins(input: {
-	/** The shared context WITHOUT `events` — the door is per plugin, bound below. */
+	/** The shared context WITHOUT the per-plugin fields — those are bound below. */
 	context: EuroclawPluginConfigureContext;
-	/** Per-plugin emit door — bound to the plugin's id so a claw-less door redaction attributes
-	 *  its mappings to the emitting plugin's own container, never a shared bucket. */
-	events: (plugin: EuroclawPlugin) => EventSink;
+	bind: (plugin: EuroclawPlugin) => PluginBoundContext;
 	plugins: readonly EuroclawPlugin[];
 }): EuroclawPlugin[] {
 	return input.plugins.map((plugin) => {
@@ -301,10 +307,58 @@ function configurePlugins(input: {
 		// plugin's own — the runtime half can only add/replace routes/cron/api, never a static field.
 		const runtime = plugin.configure?.({
 			...input.context,
-			events: input.events(plugin),
+			...input.bind(plugin),
 		});
 		return runtime ? { ...plugin, ...runtime } : plugin;
 	});
+}
+
+const identity = async (value: unknown): Promise<unknown> => value;
+
+/**
+ * The per-plugin redaction handles (docs/plans/observability-plan.md, slice 6). `redact` tokenizes
+ * plugin-held data: without `clawId` into the plugin's own ("plugin", id) container — the same
+ * container its claw-less door events use — and with `clawId` into that claw's ("claw", clawId)
+ * container, the SAME container transcript writes use, over the SAME resolved redactor, so tokens
+ * cohere with the transcript and per-claw birth posture decides here exactly like everywhere else.
+ * `rehydrate` resolves ONLY the plugin's own container: a claw token is inert by containment
+ * (resolution requires the minting container to match — no token filtering exists or is needed),
+ * and every call against an armed redactor lands one pii.reidentification audit record when audit
+ * is configured. Unarmed (`redactor` absent: no detector/custom redactor, or posture "raw") both
+ * handles are the identity — always present, so plugin code never branches on the deployment.
+ */
+function pluginRedactionHandles(input: {
+	audit: AuditSink | undefined;
+	plugin: EuroclawPlugin;
+	redactor: Redactor | undefined;
+}): Pick<EuroclawPluginConfigureContext, "redact" | "rehydrate"> {
+	const redactor = input.redactor;
+	if (!redactor) return { redact: identity, rehydrate: identity };
+	const container = { scope: "plugin", scopeId: input.plugin.id };
+	return {
+		redact: (value, opts) =>
+			redactor.redactValue(value, {
+				...(opts?.clawId !== undefined
+					? { scope: "claw", scopeId: opts.clawId }
+					: container),
+				...(opts?.subjectIds !== undefined
+					? { subjectIds: [...opts.subjectIds] }
+					: {}),
+			}),
+		rehydrate: async (value) => {
+			const out = await redactor.rehydrateValue(value, container);
+			// Same accountability rule as the api's read-side views (api.ts auditPrivacy): a
+			// re-identifying read is evidence; payloads carry identifiers only.
+			await input.audit?.append({
+				ts: new Date().toISOString(),
+				boundary: "privacy",
+				name: "pii.reidentification",
+				status: "ok",
+				payload: container,
+			});
+			return out;
+		},
+	};
 }
 
 function assertApiContribution(input: {
@@ -548,7 +602,9 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	// lands in the claw's ("claw", clawId) container — the same container transcript writes use,
 	// over the same resolved redactor, so per-claw birth posture decides door events exactly like
 	// transcript rows. The runtime's own event kinds never pass through the door; they are
-	// redacted at their source boundaries.
+	// redacted at their source boundaries. The same armed-or-nothing redactor feeds the per-plugin
+	// redact/rehydrate handles (slice 6, pluginRedactionHandles above); their audit sink is the
+	// SAME config.audit the runtime and the product api use.
 	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
 	const configuredPlugins = configurePlugins({
 		context: {
@@ -566,13 +622,19 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			effects: effectsStore,
 			secrets,
 		},
-		events: (plugin) =>
-			pluginEventSink(
+		bind: (plugin) => ({
+			events: pluginEventSink(
 				eventFanout,
 				doorRedactor
 					? { plugin: plugin.id, redactor: doorRedactor }
 					: undefined,
 			),
+			...pluginRedactionHandles({
+				audit: config.audit,
+				plugin,
+				redactor: doorRedactor,
+			}),
+		}),
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
 	});
 	// The always-on governance FLOOR — the assembly's ONE internal Cedar engine (SYSTEM_POSTURE + every

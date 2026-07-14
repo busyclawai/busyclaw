@@ -123,6 +123,26 @@ export type EuroclawPluginConfigureContext = {
 	/** The resolved storage adapter (schema-aware, wrapped once by the assembly). A plugin that owns
 	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
 	readonly adapter?: Adapter;
+	/** Tokenize plugin-held data — the SAFE direction (a redacted value may travel anywhere; only
+	 *  rehydration is fenced). Without `clawId` the value redacts into this plugin's own
+	 *  ("plugin", id) container; with `clawId` into that claw's ("claw", clawId) container — the
+	 *  SAME container transcript writes use, over the same resolved redactor, so the same value
+	 *  wears the same token and the claw's birth posture decides (a raw-posture claw passes
+	 *  through; never a second posture path). `subjectIds` joins the mappings to the erasure
+	 *  index, so per-subject erasure reaches plugin-held rows. Unarmed deployments (no
+	 *  detector/custom redactor, or posture "raw") receive the identity function — the method is
+	 *  always present, so plugin code runs unchanged in both modes. */
+	readonly redact?: (
+		value: unknown,
+		opts?: { clawId?: string; subjectIds?: readonly string[] },
+	) => Promise<unknown>;
+	/** Resolve tokens this plugin itself minted — ONLY within its own ("plugin", id) container.
+	 *  Deliberately no `clawId` option: a claw/transcript token is INERT here by containment
+	 *  (resolution requires the minting container to match), so a plugin can never lift PII out of
+	 *  a conversation it merely observes. Every call against an armed redactor is audited
+	 *  (boundary "privacy", "pii.reidentification") when the deployment configures audit.
+	 *  Unarmed → identity. */
+	readonly rehydrate?: (value: unknown) => Promise<unknown>;
 	readonly [key: string]: unknown;
 };
 
