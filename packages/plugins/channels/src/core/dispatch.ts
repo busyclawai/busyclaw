@@ -3,7 +3,7 @@
 // EndpointContext, and supplies a persist sink for state events; the engine owns the
 // verify → parse → bind → relay → reply round-trip and never touches storage.
 
-import { errorMessage } from "@euroclaw/contracts";
+import { errorMessage, SYSTEM_ANONYMOUS } from "@euroclaw/contracts";
 import type { ClawLike } from "./claw";
 import type {
 	Channel,
@@ -31,22 +31,32 @@ export async function handleInbound(input: {
 	message: InboundMessage;
 }): Promise<void> {
 	const { claw, channel, endpoint, message } = input;
-	const binding = await claw.api.bindConversation({
-		provider: endpoint.provider,
-		endpointKey: endpoint.endpointKey,
-		externalConversationId: message.externalConversationId,
-		externalActorId: message.externalActorId,
-		claw: endpoint.claw,
-		thread: {
-			...endpoint.thread,
-			title: endpoint.thread?.title ?? message.conversationTitle,
+	// The dispatch acts for a stranger (no authenticated principal) — the app-authz caller is
+	// `system:anonymous`, the same principal a fresh binding stamps as the claw's `createdBy`, so the
+	// owner rule permits relaying into that conversation's own claw.
+	const caller = { principal: SYSTEM_ANONYMOUS };
+	const binding = await claw.api.bindConversation(
+		{
+			provider: endpoint.provider,
+			endpointKey: endpoint.endpointKey,
+			externalConversationId: message.externalConversationId,
+			externalActorId: message.externalActorId,
+			claw: endpoint.claw,
+			thread: {
+				...endpoint.thread,
+				title: endpoint.thread?.title ?? message.conversationTitle,
+			},
 		},
-	});
-	const sent = await claw.api.sendMessage({
-		clawId: binding.claw.id,
-		threadId: binding.thread.id,
-		message: message.text,
-	});
+		caller,
+	);
+	const sent = await claw.api.sendMessage(
+		{
+			clawId: binding.claw.id,
+			threadId: binding.thread.id,
+			message: message.text,
+		},
+		caller,
+	);
 	if (sent.result.status === "completed" && sent.result.text) {
 		await channel.send({
 			endpoint,

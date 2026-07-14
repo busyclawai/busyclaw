@@ -46,6 +46,10 @@ function buildClawAndClient() {
 		model: model as never,
 		plugins: [secrets([], { store: { key: SECRET_STORE_TEST_KEY } })],
 		redaction: { posture: "raw" },
+		// A TRANSPORT e2e (client ↔ adapter ↔ claw), not an authz test. The HTTP adapter does not yet
+		// resolve a caller principal (the adapter-ingress frontier), so it runs host-authorized: the
+		// in-input `principal` carries identity over the wire until that lands.
+		appAuthz: { unsafeOpen: true },
 	});
 	const handler = toRequestHandler(claw as unknown as Claw);
 	const client = createClawClient<typeof claw>({
