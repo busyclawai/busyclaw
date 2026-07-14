@@ -5,6 +5,7 @@
 // ── errors ───────────────────────────────────────────────────────────────────
 export type { EuroclawErrorCode, EuroclawErrorInput } from "@euroclaw/errors";
 export {
+	authorizationError,
 	configurationError,
 	EuroclawError,
 	errorMessage,

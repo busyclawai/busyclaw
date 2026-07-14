@@ -1,4 +1,5 @@
 export type EuroclawErrorCode =
+	| "EUROCLAW_AUTHORIZATION_DENIED"
 	| "EUROCLAW_CONFIGURATION_ERROR"
 	| "EUROCLAW_STATE_ERROR"
 	| "EUROCLAW_UNSUPPORTED_OPERATION"
@@ -76,6 +77,20 @@ export function unsupportedOperationError(
 ): EuroclawError {
 	return new EuroclawError({
 		code: "EUROCLAW_UNSUPPORTED_OPERATION",
+		message,
+		details,
+	});
+}
+
+/** The app-authz PEP's denial — a governed `claw.api` call the caller may not make (the actor floor
+ *  rejected an absent principal, or no policy permitted the action at the required level). Fail-loud,
+ *  like the tool-gate denials: a product-API caller learns they were denied, never a silent null. */
+export function authorizationError(
+	message: string,
+	details?: Record<string, unknown>,
+): EuroclawError {
+	return new EuroclawError({
+		code: "EUROCLAW_AUTHORIZATION_DENIED",
 		message,
 		details,
 	});

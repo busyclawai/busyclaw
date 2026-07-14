@@ -5,7 +5,7 @@
 // facts (runMode/confirmationUsed), never an action attribute.
 //
 // The model is plain data (host-assembled by trusted code — no boundary, no schema). Cedar schema
-// text is a RENDERING of this model owned by @euroclaw/policy-cedar; non-Cedar engines consume the
+// text is a RENDERING of this model owned by @euroclaw/authz; non-Cedar engines consume the
 // model directly and never parse Cedar.
 
 import type { JsonObject } from "../common";
@@ -14,8 +14,10 @@ import type { JsonObject } from "../common";
  *  the author's stamp. Named `access` (not `risk`) — `ToolEffectPolicy.risk` is a different axis. */
 export type ActionAccess = "read" | "write";
 
-/** Where the action came from: generated from a tool definition, or hand-authored domain verb. */
-export type ActionSource = "tool" | "domain";
+/** Where the action came from: generated from a tool definition, a hand-authored domain verb, or a
+ *  `claw.api` product-API method (the app-authz PEP surface — `ClawApi::` namespace, distinct from the
+ *  `Tool::` agent chokepoint). */
+export type ActionSource = "tool" | "domain" | "api";
 
 /** One authorizable action — facts only. `args` is the action's arg schema (JSON Schema); the
  *  Cedar projection (@euroclaw/authz `projectArgs`) renders and request-filters the policy-visible
