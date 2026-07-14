@@ -88,7 +88,14 @@ export type ClawStores = {
 
 export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	Config,
-	"database" | "effectStore" | "events" | "resolveTools" | "redactor"
+	// `recording` is assembly-owned (the claws-store transcript sink) — user sinks are observers
+	// by definition, so the field never reaches the createClaw surface.
+	| "database"
+	| "effectStore"
+	| "events"
+	| "recording"
+	| "resolveTools"
+	| "redactor"
 > & {
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
@@ -497,10 +504,18 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const resolveTools = registryStores
 		? registeredToolResolver(registryStores, secrets)
 		: undefined;
-	const eventSinks = [
-		...(clawsStore ? [createClawRuntimeEventSink(clawsStore)] : []),
-		...eventSinksFrom(config.events),
-	];
+	// The recording/observer split: the claws-store transcript sink is the ONE load-bearing
+	// recording sink (its failures fail the run); every user-configured sink is an observer —
+	// isolated in the fan-out, warned on failure. The plugin emit door rides the same pipeline.
+	const recordingSink = clawsStore
+		? createClawRuntimeEventSink(clawsStore)
+		: undefined;
+	const observerSinks = eventSinksFrom(config.events);
+	const eventFanout = {
+		recording: recordingSink,
+		observers: observerSinks,
+		warn: config.warn,
+	};
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -515,7 +530,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			adapter: adapter ? entityAdapter(adapter, models) : undefined,
 			clawsStore,
 			effects: effectsStore,
-			events: pluginEventSink(eventSinks),
+			events: pluginEventSink(eventFanout),
 			secrets,
 		},
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
@@ -525,7 +540,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		plugins: configuredPlugins,
 		...(adapter ? { database: adapter } : {}),
 		...(effectsStore ? { effectStore: effectsStore } : {}),
-		...(eventSinks.length > 0 ? { events: eventSinks } : {}),
+		...(recordingSink ? { recording: recordingSink } : {}),
 		...(resolveTools ? { resolveTools } : {}),
 		...(redaction.redactor ? { redactor: redaction.redactor } : {}),
 		...(system !== undefined ? { system } : {}),

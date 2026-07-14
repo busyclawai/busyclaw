@@ -1,8 +1,16 @@
-import { configurationError, stateError } from "@euroclaw/contracts";
+import {
+	configurationError,
+	EuroclawError,
+	stateError,
+} from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
-import type { ModelMessage, ToolSet } from "ai";
+import type { LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { generateText, isStepCount, wrapLanguageModel } from "ai";
-import type { RuntimeEventPayloadInput } from "./events";
+import type {
+	RuntimeEventError,
+	RuntimeEventPayloadInput,
+	RuntimeModelUsage,
+} from "./events";
 import { modelMiddleware } from "./model-middleware";
 import { abortIfNeeded, type RunState } from "./run-state";
 import type {
@@ -83,9 +91,94 @@ async function redact<T>(input: AiSdkLoopInput, value: T): Promise<T> {
 	return input.redactValue ? await input.redactValue(value) : value;
 }
 
+// The shared *.failed error payload. `reasonCode` is read only off a euroclaw-minted error's
+// details — the one way a governed decision (e.g. a model-boundary deny) surfaces as a throw —
+// so telemetry can tell "governed no" from "infra broke".
+function errorEventPayload(err: unknown): RuntimeEventError {
+	if (!(err instanceof Error)) return { message: String(err) };
+	const reasonCode =
+		err instanceof EuroclawError ? err.details?.reasonCode : undefined;
+	return {
+		message: err.message,
+		name: err.name,
+		reasonCode: typeof reasonCode === "string" ? reasonCode : undefined,
+	};
+}
+
+// Project the AI SDK's usage onto the event mirror: numeric fields only — the provider-raw `raw`
+// payload never enters the event stream.
+function usageFromModelResult(usage: LanguageModelUsage): RuntimeModelUsage {
+	return {
+		inputTokens: usage.inputTokens,
+		inputTokenDetails: {
+			noCacheTokens: usage.inputTokenDetails?.noCacheTokens,
+			cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens,
+			cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens,
+		},
+		outputTokens: usage.outputTokens,
+		outputTokenDetails: {
+			textTokens: usage.outputTokenDetails?.textTokens,
+			reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
+		},
+		totalTokens: usage.totalTokens,
+	};
+}
+
+// Both-absent stays absent — a sum of unreported counts is unknown, not zero.
+function addTokenCounts(
+	a: number | undefined,
+	b: number | undefined,
+): number | undefined {
+	if (a === undefined && b === undefined) return undefined;
+	return (a ?? 0) + (b ?? 0);
+}
+
+function addRuntimeModelUsage(
+	a: RuntimeModelUsage | undefined,
+	b: RuntimeModelUsage,
+): RuntimeModelUsage {
+	if (!a) return b;
+	return {
+		inputTokens: addTokenCounts(a.inputTokens, b.inputTokens),
+		inputTokenDetails: {
+			noCacheTokens: addTokenCounts(
+				a.inputTokenDetails?.noCacheTokens,
+				b.inputTokenDetails?.noCacheTokens,
+			),
+			cacheReadTokens: addTokenCounts(
+				a.inputTokenDetails?.cacheReadTokens,
+				b.inputTokenDetails?.cacheReadTokens,
+			),
+			cacheWriteTokens: addTokenCounts(
+				a.inputTokenDetails?.cacheWriteTokens,
+				b.inputTokenDetails?.cacheWriteTokens,
+			),
+		},
+		outputTokens: addTokenCounts(a.outputTokens, b.outputTokens),
+		outputTokenDetails: {
+			textTokens: addTokenCounts(
+				a.outputTokenDetails?.textTokens,
+				b.outputTokenDetails?.textTokens,
+			),
+			reasoningTokens: addTokenCounts(
+				a.outputTokenDetails?.reasoningTokens,
+				b.outputTokenDetails?.reasoningTokens,
+			),
+		},
+		totalTokens: addTokenCounts(a.totalTokens, b.totalTokens),
+	};
+}
+
+/** The loop's outcome plus the usage aggregate across ITS model calls (undefined when no model
+ *  call reported usage) — `runtime.ts` lifts it onto the terminal run event, never onto the
+ *  public `RuntimeResult`. */
+export type AiSdkLoopResult = RuntimeResult & {
+	usage: RuntimeModelUsage | undefined;
+};
+
 export async function runAiSdkLoop(
 	input: AiSdkLoopInput,
-): Promise<RuntimeResult> {
+): Promise<AiSdkLoopResult> {
 	const model = wrapLanguageModel({
 		model: input.model,
 		middleware: modelMiddleware(
@@ -99,16 +192,45 @@ export async function runAiSdkLoop(
 	const messages: ModelMessage[] = input.messages
 		? [...input.messages]
 		: [{ role: "user", content: input.prompt ?? "" }];
+	let runUsage: RuntimeModelUsage | undefined;
 
 	for (let step = input.startStep ?? 0; step < input.maxSteps; step++) {
 		abortIfNeeded(input.abortSignal);
-		const res = await generateText({
-			model,
-			tools: input.tools,
-			instructions: input.system,
-			messages,
-			stopWhen: isStepCount(1),
-			...(input.abortSignal ? { abortSignal: input.abortSignal as never } : {}),
+		const callModel = () =>
+			generateText({
+				model,
+				tools: input.tools,
+				instructions: input.system,
+				messages,
+				stopWhen: isStepCount(1),
+				...(input.abortSignal
+					? { abortSignal: input.abortSignal as never }
+					: {}),
+			});
+		const modelStartedAt = Date.now();
+		let res: Awaited<ReturnType<typeof callModel>>;
+		try {
+			res = await callModel();
+		} catch (err) {
+			// Provider errors can echo prompt content — same redaction seam as tool.failed's error.
+			const redactedError = await redact(input, errorEventPayload(err));
+			await input.emitEvent?.({
+				durationMs: Date.now() - modelStartedAt,
+				error: redactedError,
+				step,
+				type: "model.failed",
+			});
+			throw err;
+		}
+		const modelDurationMs = Date.now() - modelStartedAt;
+		const stepUsage = usageFromModelResult(res.usage);
+		runUsage = addRuntimeModelUsage(runUsage, stepUsage);
+		await input.emitEvent?.({
+			durationMs: modelDurationMs,
+			finishReason: res.finishReason,
+			step,
+			type: "model.completed",
+			usage: stepUsage,
 		});
 		abortIfNeeded(input.abortSignal);
 		messages.push(...res.response.messages);
@@ -118,6 +240,7 @@ export async function runAiSdkLoop(
 				status: "completed",
 				text: res.text,
 				steps: step + 1,
+				usage: runUsage,
 			};
 		}
 		if (res.toolCalls.length > 1) {
@@ -153,6 +276,7 @@ export async function runAiSdkLoop(
 				toolName: toolCall.toolName,
 				type: "tool.called",
 			});
+			const toolStartedAt = Date.now();
 			let result: Awaited<ReturnType<Governance["handleToolCall"]>>;
 			try {
 				result = await input.core.handleToolCall(
@@ -160,12 +284,9 @@ export async function runAiSdkLoop(
 					input.ctx,
 				);
 			} catch (err) {
-				const error =
-					err instanceof Error
-						? { name: err.name, message: err.message }
-						: { message: String(err) };
-				const redactedError = await redact(input, error);
+				const redactedError = await redact(input, errorEventPayload(err));
 				await input.emitEvent?.({
+					durationMs: Date.now() - toolStartedAt,
 					error: redactedError,
 					step,
 					toolCallId: toolCall.toolCallId,
@@ -174,6 +295,7 @@ export async function runAiSdkLoop(
 				});
 				throw err;
 			}
+			const toolDurationMs = Date.now() - toolStartedAt;
 			if (result.status === "needs-approval") {
 				if (!input.core.approvals) {
 					throw configurationError(
@@ -214,6 +336,7 @@ export async function runAiSdkLoop(
 					text: "",
 					steps: step + 1,
 					approvalIds,
+					usage: runUsage,
 				};
 			}
 			// Tool output is the transcript ingress for world data — redact ONCE; the same
@@ -228,6 +351,7 @@ export async function runAiSdkLoop(
 						};
 			if (result.status === "ok") {
 				await input.emitEvent?.({
+					durationMs: toolDurationMs,
 					...(input.state.currentEffectId !== undefined
 						? { effectId: input.state.currentEffectId }
 						: {}),
@@ -277,6 +401,7 @@ export async function runAiSdkLoop(
 				text: "",
 				steps: step + 1,
 				checkpointId,
+				usage: runUsage,
 			};
 		}
 	}

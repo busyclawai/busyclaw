@@ -221,6 +221,7 @@ describe("@euroclaw/runtime", () => {
 		expect(completedSinkFinished).toBe(true);
 		expect(events.map((event) => event.type)).toEqual([
 			"run.started",
+			"model.completed",
 			"run.completed",
 		]);
 		expect(events[0]).toMatchObject({
@@ -238,20 +239,53 @@ describe("@euroclaw/runtime", () => {
 		});
 	});
 
-	it("fails closed when a runtime event sink fails", async () => {
+	it("a throwing observer sink does not fail the run and is warned", async () => {
+		const warnings: string[] = [];
+		const seenAfter: string[] = [];
 		const runtime = createRuntime({
 			model: textOnlyModel("done"),
-			events: {
+			events: [
+				{
+					emit(event) {
+						if (event.type === "run.completed") {
+							throw new Error("observer sink unavailable");
+						}
+					},
+				},
+				{
+					emit(event) {
+						seenAfter.push(event.type);
+					},
+				},
+			],
+			warn: (message) => warnings.push(message),
+		});
+
+		const result = await runtime.run("hello");
+
+		expect(result).toMatchObject({ status: "completed", text: "done" });
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("observer event sink failed");
+		expect(warnings[0]).toContain("run.completed");
+		expect(warnings[0]).toContain("observer sink unavailable");
+		// The failure stays isolated — later observers still saw every event.
+		expect(seenAfter).toContain("run.completed");
+	});
+
+	it("fails closed when the recording sink fails", async () => {
+		const runtime = createRuntime({
+			model: textOnlyModel("done"),
+			recording: {
 				emit(event) {
 					if (event.type === "run.completed") {
-						throw new Error("event sink unavailable");
+						throw new Error("recording sink unavailable");
 					}
 				},
 			},
 		});
 
 		await expect(runtime.run("hello")).rejects.toThrow(
-			/event sink unavailable/,
+			/recording sink unavailable/,
 		);
 	});
 
@@ -345,33 +379,34 @@ describe("@euroclaw/runtime", () => {
 		expect(result.status).toBe("waiting_approval");
 		expect(events.map((event) => event.type)).toEqual([
 			"run.started",
+			"model.completed",
 			"tool.called",
 			"tool.waiting_approval",
 			"run.waiting_approval",
 		]);
-		expect(events[1]).toMatchObject({
+		expect(events[2]).toMatchObject({
 			toolCallId: "c1",
 			toolName: "send_email",
 			type: "tool.called",
 		});
-		expect(events[2]).toMatchObject({
+		expect(events[3]).toMatchObject({
 			toolCallId: "c1",
 			toolName: "send_email",
 			type: "tool.waiting_approval",
 		});
-		expect(events[3]).toMatchObject({
+		expect(events[4]).toMatchObject({
 			runId: "run-approval",
 			type: "run.waiting_approval",
 		});
-		if (events[3]?.type !== "run.waiting_approval") {
+		if (events[4]?.type !== "run.waiting_approval") {
 			throw new Error("expected waiting approval event");
 		}
-		expect(events[3].approvalIds).toHaveLength(1);
+		expect(events[4].approvalIds).toHaveLength(1);
 		expect(JSON.stringify(events)).not.toContain("alice@personal.com");
 		expect(events[0]).toMatchObject({
 			prompt: expect.stringMatching(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/),
 		});
-		expect(events[1]).toMatchObject({
+		expect(events[2]).toMatchObject({
 			args: { to: expect.stringMatching(/^\{\{pii:/) },
 		});
 		const approvals = await runtime.approvals?.list({ status: "pending" });
@@ -926,5 +961,190 @@ describe("@euroclaw/runtime", () => {
 		await makeRuntime().run("do it", undefined, { runMode: "interactive" });
 		await makeRuntime().run("do it"); // no runMode → fail-closed default
 		expect(seen).toEqual(["interactive", "autonomous"]);
+	});
+
+	it("emits model.completed once per step with usage, unified finishReason, and durationMs", async () => {
+		const events: RuntimeEvent[] = [];
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			events: { emit: (event) => events.push(event) },
+			tools: {
+				send_email: tool({
+					description: "Send an email.",
+					inputSchema: jsonSchema<{ to: string }>({
+						type: "object",
+						properties: { to: { type: "string" } },
+						required: ["to"],
+					}),
+					execute: async () => ({ sent: true }),
+				}),
+			},
+		});
+
+		await runtime.run("email the offer");
+
+		const modelEvents = events.filter(
+			(event) => event.type === "model.completed",
+		);
+		expect(modelEvents).toHaveLength(2);
+		// The fixture reports inputTokens.total=1 / outputTokens.total=1 per call; the SDK
+		// normalizes totalTokens to their sum.
+		expect(modelEvents[0]).toMatchObject({
+			finishReason: "tool-calls",
+			step: 0,
+			usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+		});
+		expect(modelEvents[1]).toMatchObject({
+			finishReason: "stop",
+			step: 1,
+			usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+		});
+		for (const event of modelEvents) {
+			if (event.type !== "model.completed") continue;
+			expect(event.durationMs).toBeGreaterThanOrEqual(0);
+		}
+	});
+
+	it("emits model.failed with a redacted error, then the model failure propagates", async () => {
+		const events: RuntimeEvent[] = [];
+		const failingModel: V2Model = {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async () => {
+				throw new Error("provider rejected prompt for alice@personal.com");
+			},
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		};
+		const runtime = createRuntime({
+			model: failingModel,
+			redactor: createMemoryRedactor(emailDetector),
+			events: { emit: (event) => events.push(event) },
+		});
+
+		await expect(runtime.run("hello")).rejects.toThrow(/provider rejected/);
+
+		const failed = events.find((event) => event.type === "model.failed");
+		if (failed?.type !== "model.failed") {
+			throw new Error("expected model.failed event");
+		}
+		expect(failed.step).toBe(0);
+		expect(failed.durationMs).toBeGreaterThanOrEqual(0);
+		expect(failed.error.name).toBe("Error");
+		expect(failed.error.message).not.toContain("alice@personal.com");
+		expect(failed.error.message).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+	});
+
+	it("stamps durationMs on tool.completed on the loop path", async () => {
+		const events: RuntimeEvent[] = [];
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			events: { emit: (event) => events.push(event) },
+			tools: {
+				send_email: tool({
+					description: "Send an email.",
+					inputSchema: jsonSchema<{ to: string }>({
+						type: "object",
+						properties: { to: { type: "string" } },
+						required: ["to"],
+					}),
+					execute: async () => ({ sent: true }),
+				}),
+			},
+		});
+
+		await runtime.run("email the offer");
+
+		const completed = events.find((event) => event.type === "tool.completed");
+		if (completed?.type !== "tool.completed") {
+			throw new Error("expected tool.completed event");
+		}
+		expect(typeof completed.durationMs).toBe("number");
+		expect(completed.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it("stamps durationMs on tool.completed on the approval-resume path", async () => {
+		const events: RuntimeEvent[] = [];
+		const db = memoryAdapter();
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			events: { emit: (event) => events.push(event) },
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async () => ({ sent: true }),
+					}),
+					{
+						gate: () => ({ decision: "needs-approval" }),
+					},
+				),
+			},
+		});
+
+		const waiting = await runtime.run("email alice@personal.com the offer");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected runtime to wait for approval");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
+		const result = await runtime.continueRun(approvalId);
+		expect(result?.status).toBe("completed");
+
+		// The only tool.completed comes from the resume path — the loop parked before executing.
+		const completed = events.find((event) => event.type === "tool.completed");
+		if (completed?.type !== "tool.completed") {
+			throw new Error("expected tool.completed event");
+		}
+		expect(typeof completed.durationMs).toBe("number");
+		expect(completed.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it("run.completed carries the field-wise usage sum across the run's model calls", async () => {
+		const events: RuntimeEvent[] = [];
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			events: { emit: (event) => events.push(event) },
+			tools: {
+				send_email: tool({
+					description: "Send an email.",
+					inputSchema: jsonSchema<{ to: string }>({
+						type: "object",
+						properties: { to: { type: "string" } },
+						required: ["to"],
+					}),
+					execute: async () => ({ sent: true }),
+				}),
+			},
+		});
+
+		await runtime.run("email the offer");
+
+		const completed = events.find((event) => event.type === "run.completed");
+		if (completed?.type !== "run.completed") {
+			throw new Error("expected run.completed event");
+		}
+		// Two model calls at 1 input / 1 output / 2 total each; unreported detail counts stay
+		// unreported (undefined), never fabricated as zero.
+		expect(completed.usage).toEqual({
+			inputTokens: 2,
+			inputTokenDetails: {},
+			outputTokens: 2,
+			outputTokenDetails: {},
+			totalTokens: 4,
+		});
 	});
 });

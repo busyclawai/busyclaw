@@ -50,8 +50,10 @@ import {
 	emitRuntimeEvent,
 	eventSinksFrom,
 	RUNTIME_RECORDING_OPTION,
+	type RuntimeEventFanout,
 	type RuntimeEventPayloadInput,
 	type RuntimeEventSink,
+	type RuntimeModelUsage,
 	type RuntimeRecordingContext,
 	runtimeRecordingContext,
 } from "./events";
@@ -112,7 +114,15 @@ export type RuntimeConfig = {
 	effectLeaseTtlMs?: number;
 	database?: Adapter;
 	environment?: RuntimeEnvironment;
+	/** Observer sinks (telemetry): awaited in order per event, but isolated — a throwing observer
+	 *  is swallowed and reported via `warn`, never failing the run. */
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
+	/** The load-bearing recording sink (at most one, assembly-internal): awaited FIRST for every
+	 *  event, and its failures PROPAGATE — a run that cannot persist its transcript
+	 *  (tool_call/tool_result/message rows) must fail. */
+	recording?: RuntimeEventSink;
+	/** Operational warning seam (observer-sink failures, tool-name collisions). Default `console.warn`. */
+	warn?: (message: string) => void;
 	plugins?: readonly EuroclawPlugin[];
 	maxSteps?: number;
 };
@@ -390,7 +400,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const maxSteps = config.maxSteps ?? 8;
 	const tools = config.tools ?? {};
-	const eventSinks = eventSinksFrom(config.events);
+	const warn = config.warn ?? ((message: string) => console.warn(message));
+	const eventFanout: RuntimeEventFanout = {
+		recording: config.recording,
+		observers: eventSinksFrom(config.events),
+		warn,
+	};
 	const adapter = config.database;
 	if (adapter && config.redactor?.durable !== true) {
 		throw configurationError(
@@ -418,7 +433,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const merged: ToolSet = { ...tools };
 		for (const [name, tool] of Object.entries(resolved)) {
 			if (name in tools) {
-				console.warn(
+				warn(
 					`euroclaw: registered tool "${name}" skipped — a code tool already owns that name`,
 				);
 				continue;
@@ -444,7 +459,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		payload: RuntimeEventPayloadInput,
 	) =>
 		emitRuntimeEvent(
-			eventSinks,
+			eventFanout,
 			createRuntimeEvent({
 				createdAt: now(),
 				id: newId("evt"),
@@ -455,15 +470,19 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		);
 
 	// One outcome-event emitter for every loop entry point (run, approval resume, checkpoint resume).
+	// `usage` is the loop's aggregate over the model calls of THIS invocation only; undefined
+	// simply flows through — the event schemas accept an unreported aggregate.
 	const emitRunOutcome = async (
 		context: { recording?: RuntimeRecordingContext; runId?: string },
 		result: RuntimeResult,
+		usage: RuntimeModelUsage | undefined,
 	): Promise<void> => {
 		if (result.status === "completed") {
 			await emitEvent(context, {
 				steps: result.steps,
 				text: result.text,
 				type: "run.completed",
+				usage,
 			});
 		} else if (result.status === "waiting_approval") {
 			await emitEvent(context, {
@@ -471,12 +490,14 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				steps: result.steps,
 				text: result.text,
 				type: "run.waiting_approval",
+				usage,
 			});
 		} else if (result.status === "yielded") {
 			await emitEvent(context, {
 				checkpointId: result.checkpointId,
 				steps: result.steps,
 				type: "run.yielded",
+				usage,
 			});
 		}
 	};
@@ -863,7 +884,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			prompt: redactedPrompt,
 			type: "run.started",
 		});
-		const result = await runAiSdkLoop({
+		// `usage` rides the loop result only as far as the terminal event — never the public result.
+		const { usage: runUsage, ...result } = await runAiSdkLoop({
 			model: config.model,
 			tools: runModelTools,
 			system: config.system,
@@ -884,7 +906,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		if (valid instanceof ark.errors) {
 			throw validationError("runtime.run result invalid", valid.summary);
 		}
-		await emitRunOutcome(emitCtx, valid);
+		await emitRunOutcome(emitCtx, valid, runUsage);
 		return valid;
 	};
 
@@ -970,7 +992,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				: approvalStore,
 			runTools,
 		);
+		const toolStartedAt = Date.now();
 		const toolResult = await core.continueRun(id, ctx);
+		const toolDurationMs = Date.now() - toolStartedAt;
 		if (!toolResult) return null;
 		if (toolResult.status === "needs-approval") {
 			throw stateError("approval resume required another approval", {
@@ -991,6 +1015,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					};
 		if (toolResult.status === "ok") {
 			await emitEvent(emitCtx, {
+				durationMs: toolDurationMs,
 				...(state.currentEffectId !== undefined
 					? { effectId: state.currentEffectId }
 					: {}),
@@ -1021,7 +1046,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		resumeState.runMode = options?.runMode ?? "autonomous";
 		resumeState.recording = effectiveRecording;
 		resumeState.runId = options?.runId;
-		const result = await runAiSdkLoop({
+		// Post-resume steps only — the terminal event's usage is honest about this invocation.
+		const { usage: runUsage, ...result } = await runAiSdkLoop({
 			model: config.model,
 			tools: runModelTools,
 			system: config.system,
@@ -1046,7 +1072,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				valid.summary,
 			);
 		}
-		await emitRunOutcome(emitCtx, valid);
+		await emitRunOutcome(emitCtx, valid, runUsage);
 		return valid;
 	};
 
@@ -1075,7 +1101,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.recording = recording;
 		state.runId = runId;
 
-		const result = await runAiSdkLoop({
+		// Post-resume steps only — the terminal event's usage is honest about this invocation.
+		const { usage: runUsage, ...result } = await runAiSdkLoop({
 			model: config.model,
 			tools: runModelTools,
 			system: config.system,
@@ -1097,7 +1124,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		if (valid instanceof ark.errors) {
 			throw validationError("runtime.resumeRun result invalid", valid.summary);
 		}
-		await emitRunOutcome(emitCtx, valid);
+		await emitRunOutcome(emitCtx, valid, runUsage);
 		return valid;
 	};
 

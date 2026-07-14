@@ -321,4 +321,90 @@ describe("createClaw send", () => {
 			}),
 		).rejects.toThrow(/requires a ClawsStore/);
 	});
+
+	it("user event sinks are observers — a throwing sink is warned, send completes, transcript persists", async () => {
+		const warnings: string[] = [];
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			events: {
+				emit() {
+					throw new Error("telemetry down");
+				},
+			},
+			model: textModel("done"),
+			redaction: { redactor },
+			warn: (message) => warnings.push(message),
+		});
+		const { agent, thread } = await createAgentThread(claw);
+
+		const sent = await claw.api.sendMessage({
+			clawId: agent.id,
+			message: "hello",
+			runId: "run-observer",
+			threadId: thread.id,
+		});
+
+		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		// The recording sink still persisted the transcript — only the observer failed.
+		const messages = await claw.api.listMessages({ threadId: thread.id });
+		expect(messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+		expect(
+			warnings.some((message) =>
+				message.includes("observer event sink failed"),
+			),
+		).toBe(true);
+		expect(warnings.some((message) => message.includes("telemetry down"))).toBe(
+			true,
+		);
+	});
+
+	it("plugin-emitted events ride the same pipeline — observers see them, a throwing observer never breaks the door", async () => {
+		const warnings: string[] = [];
+		const seen: string[] = [];
+		let doorEmit: Promise<void> | undefined;
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			events: [
+				{
+					emit() {
+						throw new Error("observer down");
+					},
+				},
+				{
+					emit(event) {
+						seen.push(event.type);
+					},
+				},
+			],
+			model: textModel("done"),
+			plugins: [
+				{
+					id: "emitter",
+					configure(ctx) {
+						doorEmit = Promise.resolve(
+							ctx.events?.emit({ type: "plugin.demo" }),
+						);
+						return undefined;
+					},
+				},
+			],
+			redaction: { redactor },
+			warn: (message) => warnings.push(message),
+		});
+
+		expect(claw.api).toBeDefined();
+		await doorEmit;
+		expect(seen).toEqual(["plugin.demo"]);
+		expect(
+			warnings.some(
+				(message) =>
+					message.includes("plugin.demo") && message.includes("observer down"),
+			),
+		).toBe(true);
+	});
 });

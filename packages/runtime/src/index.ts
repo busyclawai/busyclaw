@@ -5,9 +5,12 @@ export * from "./context";
 export type {
 	RuntimeEvent,
 	RuntimeEventBase,
+	RuntimeEventError,
+	RuntimeEventFanout,
 	RuntimeEventPayload,
 	RuntimeEventPayloadInput,
 	RuntimeEventSink,
+	RuntimeModelUsage,
 	RuntimeRecordingContext,
 } from "./events";
 export {
@@ -17,6 +20,8 @@ export {
 	RUNTIME_RECORDING_CONTEXT_KEY,
 	RUNTIME_RECORDING_OPTION,
 	runtimeEvent,
+	runtimeEventError,
+	runtimeModelUsage,
 	runtimeRecordingContext,
 } from "./events";
 export type {
