@@ -1,0 +1,34 @@
+{
+	"name": "@euroclaw/otel",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "OpenTelemetry span bridge for euroclaw's operational event stream.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/runtime": "workspace:*"
+	},
+	"peerDependencies": {
+		"@opentelemetry/api": "^1.9.0"
+	},
+	"devDependencies": {
+		"@opentelemetry/api": "1.9.1"
+	}
+}

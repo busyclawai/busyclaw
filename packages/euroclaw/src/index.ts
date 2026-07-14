@@ -614,6 +614,7 @@ export { govern } from "@euroclaw/runtime";
 export type { MessageView } from "./api";
 export type { ClawDatabase } from "./database";
 export { createClawRuntimeEventSink } from "./events";
+export { logEvents } from "./log-events";
 export type {
 	ClawRedactionHandle,
 	PerClawRedactionConfig,
