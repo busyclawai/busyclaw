@@ -17,6 +17,7 @@ import type {
 	SkillsApiOptions,
 	SkillsPluginConfig,
 } from "./contracts";
+import { SKILL_RESOURCE_KIND } from "./grants";
 import { assertSkillManifests } from "./manifest";
 import { parseActiveSkillSelection, refLabel } from "./refs";
 import { isReservedToolName } from "./reserved";
@@ -214,13 +215,12 @@ export function buildSkillsPlugin<
 		// PEP how to load a skill installation's base row, so a skill installation presents the generic
 		// `{ createdBy, scope, scopeId }` shape and is OWNER-isolated through the same generic decision as
 		// a claw — with ZERO core change, proving the registry is plugin-extensible. The loader binds its
-		// store the same way `configure` does (host store, else the adapter). NOTE (scope of slice 5): this
-		// registers the LOADER only (owner-isolation); the `skill_acl` → `access_grant` grant-data
-		// migration + retiring `hasSkillGrant` is a clean follow-up — skills' own activation/read gate
-		// still routes through skill_acl (a different, runtime TurnContext surface) until then.
+		// store the same way `configure` does (host store, else the adapter). Skills' OWN activation/read
+		// gate (a runtime TurnContext surface, distinct from this product-api decision) now reads the SAME
+		// `access_grant` rows via `resourceKind = SKILL_RESOURCE_KIND` — the bespoke `skill_acl` is retired.
 		shareable: [
 			{
-				kind: "skill",
+				kind: SKILL_RESOURCE_KIND,
 				load: (loaderContext) => {
 					const loaderStore =
 						config.store ??

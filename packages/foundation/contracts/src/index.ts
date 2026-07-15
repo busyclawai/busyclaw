@@ -35,6 +35,7 @@ export type {
 	AccessGrantPermission,
 	AccessGrantRecord,
 	AccessGrantStore,
+	GrantMembership,
 	NewAccessGrant,
 } from "./authz/grant";
 export {
@@ -44,6 +45,8 @@ export {
 	accessGrantPermissionValues,
 	accessGrantRecord,
 	accessGrantSchema,
+	grantLevelSatisfies,
+	grantReaches,
 } from "./authz/grant";
 export type {
 	ActionAccess,

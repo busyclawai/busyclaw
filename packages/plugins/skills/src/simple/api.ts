@@ -3,8 +3,8 @@ import {
 	configurationError,
 	endpoints,
 	ORGANIZATION_CONTEXT_KEY,
-	type Principal,
 	PRINCIPAL_CONTEXT_KEY,
+	type Principal,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	validationError,
@@ -576,23 +576,13 @@ export function simpleSkillsEndpoints(
 					status: "enabled",
 					version: pkg.version,
 				});
-				const grant = await resolvedStore().acl.grant({
-					installationId: installation.id,
-					permission: "activate",
-					principalId: valid.createdBy,
-					principalType: "actor",
-				});
-				const readGrant = await resolvedStore().acl.grant({
-					installationId: installation.id,
-					permission: "read",
-					principalId: valid.createdBy,
-					principalType: "actor",
-				});
+				// No self-grants: the runtime gate's OWNER-RULE (installation.createdBy === caller, under
+				// withinScope) covers the installer — there is no revoke, so the old activate+read self-
+				// grants were already exactly owner-rule. Sharing beyond the owner goes through the
+				// governed grantActivation/share flow.
 				return assertCreatePersonalSkillResult({
-					grant,
 					installation,
 					package: pkg,
-					readGrant,
 				});
 			},
 		},

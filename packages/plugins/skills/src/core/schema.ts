@@ -63,18 +63,6 @@ export const skillInstallationStatusValues = [
 	"disabled",
 	"archived",
 ] as const;
-export const skillAclPrincipalTypeValues = [
-	"actor",
-	"team",
-	"organization",
-	"public",
-] as const;
-export const skillAclPermissionValues = [
-	"read",
-	"activate",
-	"manage",
-	"share",
-] as const;
 export const skillActivationSourceValues = [
 	"user",
 	"channel",
@@ -103,12 +91,6 @@ export const skillPackageSource = type(
 );
 export const skillInstallationStatus = type(
 	"'quarantined' | 'installed' | 'trusted' | 'enabled' | 'disabled' | 'archived'",
-);
-export const skillAclPrincipalType = type(
-	"'actor' | 'team' | 'organization' | 'public'",
-);
-export const skillAclPermission = type(
-	"'read' | 'activate' | 'manage' | 'share'",
 );
 export const skillActivationSource = type(
 	"'user' | 'channel' | 'runtime' | 'cron' | 'default'",
@@ -190,27 +172,23 @@ export const skillInstallationFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
-// A grant row — the shares junction on an installation. Whose boundary the grant lives in is
-// transitive via `installationId` (the thread→claw shape); the principal (type, id) names the
-// grantee, orthogonal to tenancy.
-export const skillAclFields = {
-	id: field.string({ required: true, unique: true }),
-	installationId: field.string({
-		required: true,
-		index: true,
-		references: { model: "skill_installation", field: "id" },
-	}),
-	principalType: field.enum(skillAclPrincipalTypeValues, {
-		required: true,
-		index: true,
-	}),
-	principalId: field.string({ index: true }),
-	permission: field.enum(skillAclPermissionValues, {
-		required: true,
-		index: true,
-	}),
-	createdAt: field.string({ required: true }),
-} as const;
+// The bespoke `skill_acl` grant table is RETIRED — skill grants are now rows in the generic
+// `access_grant` table (@euroclaw/contracts, app-authz slice 5): `resourceKind="skill"`,
+// `resourceId=<installationId>`, the split `principalType`+`principalId` collapsed into the unified
+// `principalRef`, and the `activate`/`read`/`manage`/`share` permissions folded onto `use`/`read`/
+// `manage`/`manage`. Data migration for any existing `skill_acl` row (pre-alpha, expected none):
+//   INSERT INTO access_grant (id, resourceKind, resourceId, principalRef, permission, grantedBy, createdAt)
+//   SELECT <newId>, 'skill', a.installationId,
+//          CASE a.principalType WHEN 'public' THEN 'public'
+//                               WHEN 'actor' THEN a.principalId            -- already `user:<id>`
+//                               ELSE a.principalType || ':' || a.principalId  -- team:/organization:
+//          END,
+//          CASE a.permission WHEN 'activate' THEN 'use' WHEN 'share' THEN 'manage' ELSE a.permission END,
+//          i.createdBy,   -- provenance: attribute the migrated grant to the installation owner
+//          a.createdAt
+//   FROM skill_acl a JOIN skill_installation i ON i.id = a.installationId;
+// The per-owner self-grants `createPersonal` used to mint are DROPPED at the source (the owner-rule in
+// the runtime gate covers the installer), so those rows need not be migrated.
 
 // An activation is anchored by the claw/thread/run it activates for and the installation it
 // activates — both sides carry the boundary, so the row itself is tenancy-free.
@@ -300,7 +278,6 @@ export const skillInstallationEntity = entity(
 	"skill_installation",
 	skillInstallationFields,
 );
-export const skillAclEntity = entity("skill_acl", skillAclFields);
 export const skillActivationEntity = entity(
 	"skill_activation",
 	skillActivationFields,
@@ -313,7 +290,6 @@ export const skillProposalEntity = entity(
 
 export const skillPackageRecord = skillPackageEntity.record;
 export const skillInstallationRecord = skillInstallationEntity.record;
-export const skillAclRecord = skillAclEntity.record;
 export const skillActivationRecord = skillActivationEntity.record;
 export const skillReadRecord = skillReadEntity.record;
 export const skillProposalRecord = skillProposalEntity.record;
@@ -327,10 +303,6 @@ export const createSkillInstallationInputOptions = {
 	// scope/scopeId default in the store (scope="personal", scopeId=createdBy) — an installation is
 	// personal to its installer until re-shared; `createdBy` is required (someone installed it).
 	optional: ["id", "scope", "scopeId", "status"],
-} as const;
-export const createSkillAclInputOptions = {
-	omit: ["createdAt"],
-	optional: ["id"],
 } as const;
 export const createSkillActivationInputOptions = {
 	omit: ["createdAt"],
@@ -351,9 +323,6 @@ export const createSkillPackageInput = skillPackageEntity.schema(
 export const createSkillInstallationInput = skillInstallationEntity.schema(
 	createSkillInstallationInputOptions,
 );
-export const createSkillAclInput = skillAclEntity.schema(
-	createSkillAclInputOptions,
-);
 export const createSkillActivationInput = skillActivationEntity.schema(
 	createSkillActivationInputOptions,
 );
@@ -370,7 +339,6 @@ export const createSkillProposalInput = skillProposalEntity.schema(
 const skillsEntities = [
 	skillPackageEntity,
 	skillInstallationEntity,
-	skillAclEntity,
 	skillActivationEntity,
 	skillReadEntity,
 	skillProposalEntity,

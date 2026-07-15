@@ -83,6 +83,52 @@ export type AccessGrant = {
 	level: AccessGrantPermission;
 };
 
+/** A caller's membership in an OPAQUE (scope, scopeId) — the only input {@link grantReaches} needs to
+ *  decide whether a labelled `<scope>:<scopeId>` grant reaches the caller. A structural subset of
+ *  @euroclaw/authz's `ApiMembership` (which additionally carries a level), so the PEP passes its richer
+ *  memberships straight through. */
+export type GrantMembership = {
+	scope: string;
+	scopeId: string;
+};
+
+/**
+ * Does a grant's opaque `principalRef` REACH the caller? `public` reaches everyone; a direct match
+ * reaches the principal; a `team:`/`organization:` (any labelled) ref reaches a caller who holds a
+ * membership whose `<scope>:<scopeId>` equals it — so grants to groups work the moment memberships do,
+ * with no per-ref-kind code. This is the ONE matcher both the product-api PEP (@euroclaw/authz renders
+ * it into the Cedar `in` graph) and the skills runtime gate share — DEFINED here beside {@link AccessGrant}
+ * so neither reimplements it. It only decides REACH (does this grant apply to the caller); whether the
+ * reached grant's LEVEL satisfies the requirement is a separate compare ({@link grantLevelSatisfies} in a
+ * TS gate, or Cedar `in` in the PEP).
+ */
+export function grantReaches(
+	grant: AccessGrant,
+	principal: string,
+	memberships: readonly GrantMembership[],
+): boolean {
+	if (grant.principalRef === "public") return true;
+	if (grant.principalRef === principal) return true;
+	return memberships.some(
+		(m) => `${m.scope}:${m.scopeId}` === grant.principalRef,
+	);
+}
+
+/** Does a HELD level satisfy a REQUIRED one under the `read < use < manage` order (the SAME order the
+ *  PEP walks as the Cedar access-node hierarchy)? `manage` satisfies `use` and `read`; `use` satisfies
+ *  `read`; `read` satisfies only `read`. The TS-gate counterpart of the PEP's transitive `in` — a plain
+ *  `>=` over {@link accessGrantPermissionValues}, so a leveled gate (e.g. skills' runtime activate/read
+ *  check) decides "holds ≥ the required level" without reimplementing the ordering. */
+export function grantLevelSatisfies(
+	held: AccessGrantPermission,
+	required: AccessGrantPermission,
+): boolean {
+	return (
+		accessGrantPermissionValues.indexOf(held) >=
+		accessGrantPermissionValues.indexOf(required)
+	);
+}
+
 /**
  * The generic ACL store — org-blind (every id/ref is opaque). `listForResource` is the hot path the PEP
  * calls per governed call; `create`/`delete` back the share/unshare api. Rows are immutable, so there is

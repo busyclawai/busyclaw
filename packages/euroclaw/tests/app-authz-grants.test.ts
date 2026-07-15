@@ -5,6 +5,7 @@
 // thread inheritance / a plugin `shareable` kind), owner-isolation holds, and fail-closed is preserved.
 
 import type { EuroclawPlugin } from "@euroclaw/contracts";
+import { accessGrantFields } from "@euroclaw/contracts";
 import {
 	createSkillsStore,
 	skillsModels,
@@ -288,7 +289,14 @@ describe("app-authz slice 5 — skills is the first plugin consumer (loader owne
 		// the skills plugin — its registered `skill` loader presents the installation's base to the PEP.
 		const db = memoryAdapter();
 		const { redactor } = durableRedactor(db);
-		const store = createSkillsStore(entityAdapter(db, skillsModels));
+		// The skills store also reaches the CORE access_grant table (grants live there); register it on
+		// the manual test adapter alongside the plugin's own models.
+		const store = createSkillsStore(
+			entityAdapter(db, {
+				...skillsModels,
+				access_grant: { fields: accessGrantFields },
+			}),
+		);
 		const installation = await store.installations.create({
 			packageId: "pkg",
 			version: "1.0.0",

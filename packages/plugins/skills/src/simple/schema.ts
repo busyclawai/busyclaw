@@ -1,7 +1,6 @@
 import { type } from "arktype";
 import {
 	nonEmptyString,
-	skillAclRecord,
 	skillInstallationRecord,
 	skillInstallationStatus,
 	skillManifest,
@@ -64,20 +63,12 @@ export const createPersonalSkillInput = type({
 });
 
 export const createPersonalSkillResult = type({
-	grant: skillAclRecord.configure({
-		euroclaw: { doc: "The 'activate' permission grant issued to createdBy." },
-	}),
 	installation: skillInstallationRecord.configure({
 		euroclaw: {
-			doc: "Created directly with status 'enabled', bypassing the installed→trusted→enabled ladder used for governed installs.",
+			doc: "Created directly with status 'enabled', bypassing the installed→trusted→enabled ladder used for governed installs. No grant rows are minted — the runtime gate's owner-rule (installation.createdBy === caller) authorizes the installer to activate and read it.",
 		},
 	}),
 	package: skillPackageRecord,
-	readGrant: skillAclRecord.configure({
-		euroclaw: {
-			doc: "The separate 'read' permission grant — personal-create mints both activate and read for createdBy.",
-		},
-	}),
 });
 
 // Installed entries list ONE boundary at a time (exact single-scope, like the store); omit the

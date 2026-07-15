@@ -1,14 +1,14 @@
-import type { EntityRecord, EntitySchemaInput } from "@euroclaw/contracts";
 import type {
-	createSkillAclInputOptions,
+	AccessGrantStore,
+	EntityRecord,
+	EntitySchemaInput,
+} from "@euroclaw/contracts";
+import type {
 	createSkillActivationInputOptions,
 	createSkillInstallationInputOptions,
 	createSkillPackageInputOptions,
 	createSkillProposalInputOptions,
 	createSkillReadInputOptions,
-	skillAclFields,
-	skillAclPermissionValues,
-	skillAclPrincipalTypeValues,
 	skillActivationFields,
 	skillActivationSourceValues,
 	skillInstallationFields,
@@ -27,9 +27,6 @@ export type SkillManifest = typeof skillManifest.infer;
 export type SkillPackageSource = (typeof skillPackageSourceValues)[number];
 export type SkillInstallationStatus =
 	(typeof skillInstallationStatusValues)[number];
-export type SkillAclPrincipalType =
-	(typeof skillAclPrincipalTypeValues)[number];
-export type SkillAclPermission = (typeof skillAclPermissionValues)[number];
 export type SkillActivationSource =
 	(typeof skillActivationSourceValues)[number];
 export type SkillReadSource = (typeof skillReadSourceValues)[number];
@@ -40,7 +37,6 @@ export type SkillPackageRecord = EntityRecord<typeof skillPackageFields>;
 export type SkillInstallationRecord = EntityRecord<
 	typeof skillInstallationFields
 >;
-export type SkillAclRecord = EntityRecord<typeof skillAclFields>;
 export type SkillActivationRecord = EntityRecord<typeof skillActivationFields>;
 export type SkillReadRecord = EntityRecord<typeof skillReadFields>;
 export type SkillProposalRecord = EntityRecord<typeof skillProposalFields>;
@@ -52,10 +48,6 @@ export type CreateSkillPackageInput = EntitySchemaInput<
 export type CreateSkillInstallationInput = EntitySchemaInput<
 	typeof skillInstallationFields,
 	typeof createSkillInstallationInputOptions
->;
-export type CreateSkillAclInput = EntitySchemaInput<
-	typeof skillAclFields,
-	typeof createSkillAclInputOptions
 >;
 export type CreateSkillActivationInput = EntitySchemaInput<
 	typeof skillActivationFields,
@@ -111,17 +103,6 @@ export type SkillInstallationStore = {
 	) => Promise<SkillInstallationRecord | null>;
 };
 
-export type SkillAclStore = {
-	grant: (input: CreateSkillAclInput) => Promise<SkillAclRecord>;
-	get: (id: string) => Promise<SkillAclRecord | null>;
-	listForInstallation: (installationId: string) => Promise<SkillAclRecord[]>;
-	listForPrincipal: (input: {
-		permission?: SkillAclPermission;
-		principalId?: string;
-		principalType: SkillAclPrincipalType;
-	}) => Promise<SkillAclRecord[]>;
-};
-
 export type SkillActivationStore = {
 	create: (input: CreateSkillActivationInput) => Promise<SkillActivationRecord>;
 	get: (id: string) => Promise<SkillActivationRecord | null>;
@@ -154,7 +135,11 @@ export type SkillProposalStore = {
 export type SkillsStore = {
 	packages: SkillPackageStore;
 	installations: SkillInstallationStore;
-	acl: SkillAclStore;
+	// Skill grants are rows in the generic `access_grant` table (app-authz slice 5), keyed
+	// `resourceKind="skill"`, `resourceId=<installationId>` — the bespoke `skill_acl` ACL is retired.
+	// The store implements the canonical port over the SAME adapter (via `entityView`), so the plugin
+	// never imports @euroclaw/storage-durable.
+	grants: AccessGrantStore;
 	activations: SkillActivationStore;
 	reads: SkillReadStore;
 	proposals: SkillProposalStore;

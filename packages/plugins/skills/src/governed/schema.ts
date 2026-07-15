@@ -1,9 +1,7 @@
+import { accessGrantPermission, accessGrantRecord } from "@euroclaw/contracts";
 import { type } from "arktype";
 import {
 	nonEmptyString,
-	skillAclPermission,
-	skillAclPrincipalType,
-	skillAclRecord,
 	skillInstallationStatus,
 	skillPackageSource,
 	skillProposalRecord,
@@ -101,7 +99,12 @@ const grantPrincipal = type({
 export const grantActivationInput = type({
 	installationId: nes.configure({
 		euroclaw: {
-			doc: "The installation must exist; the grant always issues the 'activate' permission.",
+			doc: "The installation must exist; the grant always issues activation, stored as the access_grant 'use' level.",
+		},
+	}),
+	grantedBy: nes.configure({
+		euroclaw: {
+			doc: "Who is granting — recorded as the access_grant row's `grantedBy` (audit/provenance); branded to a Principal.",
 		},
 	}),
 }).and(grantPrincipal);
@@ -142,7 +145,7 @@ export const shareSkillInput = type({
 }).and(grantPrincipal);
 
 export const shareSkillResult = type({
-	grant: skillAclRecord,
+	grant: accessGrantRecord,
 	status: "'granted'",
 })
 	.or({
@@ -151,12 +154,12 @@ export const shareSkillResult = type({
 	})
 	.configure({
 		euroclaw: {
-			doc: "The 'granted' branch carries the ACL grant (an approver was supplied); the 'proposed' branch carries the proposal (the review path).",
+			doc: "The 'granted' branch carries the access_grant row (an approver was supplied); the 'proposed' branch carries the proposal (the review path).",
 		},
 	});
 
 // ── Substore boundary inputs ─────────────────────────────────────────────────
-// The raw substore accessors (packages/installations/acl/activations/reads/proposals) are routed
+// The raw substore accessors (packages/installations/grants/activations/reads/proposals) are routed
 // endpoints too, so their query/patch shapes get validators here. In-process they stay the plain TS
 // signatures the stores declare; over HTTP these parse the wire input. Patch shapes mirror the
 // hand-declared Status-patch types exactly — entity.updateSchema() would admit every mutable column,
@@ -164,7 +167,7 @@ export const shareSkillResult = type({
 export const skillRowLookupInput = type({
 	id: nes.configure({
 		euroclaw: {
-			doc: "Generic single-row get by primary id, reused by the packages/installations/acl/activations/reads/proposals get endpoints.",
+			doc: "Generic single-row get by primary id, reused by the packages/installations/activations/reads/proposals get endpoints.",
 		},
 	}),
 });
@@ -200,15 +203,28 @@ export const updateSkillInstallationStatusInput = type({
 		},
 	}),
 });
-export const listSkillAclForInstallationInput = type({ installationId: nes });
-export const listSkillAclForPrincipalInput = type({
-	"permission?": skillAclPermission.or("undefined"),
-	"principalId?": optionalNes,
-	principalType: skillAclPrincipalType.configure({
+// The raw generic-grant writer (the migrated `acl.grant`): writes an `access_grant` row for a skill
+// installation. The grantee is expressed as the split principal (grantPrincipal, matching the semantic
+// grant/share/proposal inputs); the handler maps it to the unified `principalRef` at write time.
+export const grantSkillInput = type({
+	installationId: nes.configure({
 		euroclaw: {
-			doc: "Required; principalId and permission are optional filters.",
+			doc: "The skill installation the grant is written against (access_grant.resourceId, resourceKind='skill').",
 		},
 	}),
+	permission: accessGrantPermission.configure({
+		euroclaw: {
+			doc: "The access_grant level to confer — read | use | manage (use = activate).",
+		},
+	}),
+	grantedBy: nes.configure({
+		euroclaw: {
+			doc: "Who is granting — recorded as access_grant.grantedBy (audit/provenance); branded to a Principal.",
+		},
+	}),
+}).and(grantPrincipal);
+export const listSkillGrantsForInstallationInput = type({
+	installationId: nes,
 });
 export const skillRunLookupInput = type({
 	runId: nes.configure({

@@ -31,6 +31,7 @@ import type {
 	PolicyRequest,
 	PolicyResult,
 } from "@euroclaw/contracts";
+import { grantReaches } from "@euroclaw/contracts";
 import type { CedarEngine } from "./cedar-types";
 
 /** An action's required permission LEVEL — the ONE non-derivable per-method fact. Ordered
@@ -139,22 +140,11 @@ export type DecideApiCallInput = {
 	memberships: readonly ApiMembership[];
 };
 
-/** Does a grant's opaque `principalRef` REACH the caller? `public` reaches everyone; a direct match
- *  reaches the principal; a `team:`/`organization:` (any labelled) ref reaches a caller who holds a
- *  membership whose `<scope>:<scopeId>` equals it — so grants to groups work the moment memberships do,
- *  with no per-ref-kind code. This is graph RENDERING (which grant becomes a principal `in` edge), NOT
- *  the decision: whether the reached grant's LEVEL satisfies the requirement is Cedar's `in`. */
-function grantReaches(
-	grant: AccessGrant,
-	principal: string,
-	memberships: readonly ApiMembership[],
-): boolean {
-	if (grant.principalRef === "public") return true;
-	if (grant.principalRef === principal) return true;
-	return memberships.some(
-		(m) => `${m.scope}:${m.scopeId}` === grant.principalRef,
-	);
-}
+// `grantReaches` — does a grant's opaque `principalRef` reach the caller (public / direct / labelled
+// membership) — is DEFINED in @euroclaw/contracts (beside `AccessGrant`), so the skills runtime gate and
+// this PEP share ONE matcher. Here it decides graph RENDERING only (which grant becomes a principal `in`
+// edge); whether the reached grant's LEVEL satisfies the requirement stays Cedar's `in`. `ApiMembership`
+// is a structural superset of the `GrantMembership` it takes, so the richer memberships pass straight in.
 
 /**
  * Render the per-request Cedar entity graph for one governed call: the caller `Principal`, the loaded

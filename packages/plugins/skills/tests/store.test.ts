@@ -1,11 +1,17 @@
-import { userPrincipal } from "@euroclaw/contracts";
+import { accessGrantFields, userPrincipal } from "@euroclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { skillsModels } from "../src/core/index";
 import { createSkillsStore } from "../src/store/store";
 
-// Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => entityAdapter(memoryAdapter(), skillsModels);
+// Stores take the schema-aware adapter the assembly provides; tests wrap manually. Skill grants live
+// in the CORE `access_grant` table, so register it alongside the plugin's own models (the assembly's
+// adapter carries it by default).
+const db = () =>
+	entityAdapter(memoryAdapter(), {
+		...skillsModels,
+		access_grant: { fields: accessGrantFields },
+	});
 
 const manifest = {
 	id: "summarize-thread",
@@ -14,7 +20,7 @@ const manifest = {
 };
 
 describe("createSkillsStore", () => {
-	it("stores packages, installations, acl, activations, reads, and proposals", async () => {
+	it("stores packages, installations, grants, activations, reads, and proposals", async () => {
 		const store = createSkillsStore(db(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
@@ -64,21 +70,36 @@ describe("createSkillsStore", () => {
 			}),
 		).toHaveLength(1);
 
-		const acl = await store.acl.grant({
-			id: "acl-1",
-			installationId: "install-1",
-			principalType: "team",
-			principalId: "team-1",
-			permission: "activate",
+		// Grants are rows in the generic access_grant table: a team activation grant is a `use`-level
+		// row whose unified principalRef labels the team. listForResource projects to { principalRef,
+		// level }; delete (unshare) removes by the natural key.
+		const grant = await store.grants.create({
+			resourceKind: "skill",
+			resourceId: "install-1",
+			principalRef: "team:team-1",
+			permission: "use",
+			grantedBy: userPrincipal("admin-1"),
 		});
-		expect(acl).toMatchObject({ permission: "activate" });
+		expect(grant).toMatchObject({
+			resourceKind: "skill",
+			resourceId: "install-1",
+			principalRef: "team:team-1",
+			permission: "use",
+			grantedBy: "user:admin-1",
+		});
+		expect(await store.grants.listForResource("skill", "install-1")).toEqual([
+			{ principalRef: "team:team-1", level: "use" },
+		]);
 		expect(
-			await store.acl.listForPrincipal({
-				permission: "activate",
-				principalId: "team-1",
-				principalType: "team",
+			await store.grants.delete({
+				resourceKind: "skill",
+				resourceId: "install-1",
+				principalRef: "team:team-1",
 			}),
-		).toMatchObject([{ id: "acl-1" }]);
+		).toBe(1);
+		expect(await store.grants.listForResource("skill", "install-1")).toEqual(
+			[],
+		);
 
 		const activation = await store.activations.create({
 			id: "activation-1",

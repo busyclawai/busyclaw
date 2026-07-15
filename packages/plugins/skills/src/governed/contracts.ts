@@ -1,12 +1,12 @@
-import type { EuroclawPlugin } from "@euroclaw/contracts";
 import type {
-	CreateSkillAclInput,
+	AccessGrant,
+	AccessGrantRecord,
+	EuroclawPlugin,
+} from "@euroclaw/contracts";
+import type {
 	CreateSkillInstallationInput,
 	CreateSkillPackageInput,
 	CreateSkillProposalInput,
-	SkillAclPermission,
-	SkillAclPrincipalType,
-	SkillAclRecord,
 	SkillActivationRecord,
 	SkillInstallationRecord,
 	SkillInstallationStatus,
@@ -23,6 +23,7 @@ import type { SimpleSkillsApi } from "../simple/contracts";
 import type {
 	enableSkillInstallationInput,
 	grantActivationInput,
+	grantSkillInput,
 	installSkillInput,
 	requestShareInput,
 	shareSkillInput,
@@ -36,6 +37,7 @@ export type TrustSkillInstallationInput =
 export type EnableSkillInstallationInput =
 	typeof enableSkillInstallationInput.infer;
 export type GrantActivationInput = typeof grantActivationInput.infer;
+export type GrantSkillInput = typeof grantSkillInput.infer;
 export type RequestShareInput = typeof requestShareInput.infer;
 export type ShareSkillInput = typeof shareSkillInput.infer;
 export type ShareSkillResult = typeof shareSkillResult.infer;
@@ -52,7 +54,7 @@ export type SkillsApi = SimpleSkillsApi & {
 	enableInstallation: (
 		input: EnableSkillInstallationInput,
 	) => Promise<SkillInstallationRecord>;
-	grantActivation: (input: GrantActivationInput) => Promise<SkillAclRecord>;
+	grantActivation: (input: GrantActivationInput) => Promise<AccessGrantRecord>;
 	requestShare: (input: RequestShareInput) => Promise<SkillProposalRecord>;
 	share: (input: ShareSkillInput) => Promise<ShareSkillResult>;
 	packages: {
@@ -85,17 +87,11 @@ export type SkillsApi = SimpleSkillsApi & {
 			patch: SkillInstallationStatusPatch;
 		}) => Promise<SkillInstallationRecord | null>;
 	};
-	acl: {
-		grant: (input: CreateSkillAclInput) => Promise<SkillAclRecord>;
-		get: (input: { id: string }) => Promise<SkillAclRecord | null>;
+	grants: {
+		grant: (input: GrantSkillInput) => Promise<AccessGrantRecord>;
 		listForInstallation: (input: {
 			installationId: string;
-		}) => Promise<SkillAclRecord[]>;
-		listForPrincipal: (input: {
-			permission?: SkillAclPermission;
-			principalId?: string;
-			principalType: SkillAclPrincipalType;
-		}) => Promise<SkillAclRecord[]>;
+		}) => Promise<AccessGrant[]>;
 	};
 	activations: {
 		get: (input: { id: string }) => Promise<SkillActivationRecord | null>;

@@ -1,18 +1,40 @@
 import {
+	type AccessGrantPermission,
+	type GrantMembership,
+	grantLevelSatisfies,
+	grantReaches,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 } from "@euroclaw/contracts";
-import type {
-	SkillAclPermission,
-	SkillInstallationRecord,
-	SkillsStore,
-} from "../core";
+import type { SkillInstallationRecord, SkillsStore } from "../core";
+
+/** The opaque `access_grant.resourceKind` label a skill installation's grants carry — the SAME string
+ *  the plugin's `shareable` loader registers, so the product-api PEP and this runtime gate read one kind. */
+export const SKILL_RESOURCE_KIND = "skill";
 
 function contextString(ctx: TurnContext, key: string): string | undefined {
 	const value = ctx[key];
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The caller's group memberships as {@link grantReaches} consumes them, from its OWN stamped facts —
+ * team and organization when present. The skills plugin stays org-blind: whoever stamped the fact
+ * resolved the membership, so a `team:`/`organization:` grant reaches the caller exactly when the
+ * matching fact is on the context (the same trust model the old split `principalType` ladder had).
+ */
+function contextMemberships(ctx: TurnContext): GrantMembership[] {
+	const memberships: GrantMembership[] = [];
+	const teamId = contextString(ctx, TEAM_CONTEXT_KEY);
+	if (teamId !== undefined)
+		memberships.push({ scope: "team", scopeId: teamId });
+	const organizationId = contextString(ctx, ORGANIZATION_CONTEXT_KEY);
+	if (organizationId !== undefined) {
+		memberships.push({ scope: "organization", scopeId: organizationId });
+	}
+	return memberships;
 }
 
 /**
@@ -41,52 +63,57 @@ export function withinScope(
 	}
 }
 
-// Grant resolution: the container gate first (the boundary the installation lives in), then the ACL
-// ladder — does the actor (or its team / organization / a public grant) hold `permission` on the
-// installation? A grant never reaches OUTSIDE the container: sharing with an actor who cannot stand
-// inside the boundary stays impossible, exactly as the old organization gate had it. Shared by
-// active-skill resolution (the gate) and the governed lifecycle API.
+// Grant resolution over the generic `access_grant` table: the container gate first (the boundary the
+// installation lives in), then the OWNER-RULE (the installer always reaches their own installation —
+// kept UNDER `withinScope`, matching the self-grant the owner used to carry within their own scope) OR
+// an `access_grant` row that both REACHES the caller (`grantReaches`: direct / team / organization /
+// public) and confers AT LEAST the required level (`read < use < manage`). A grant never reaches OUTSIDE
+// the container: sharing with a caller who cannot stand inside the boundary stays impossible, exactly as
+// the old organization gate had it. Shared by active-skill resolution (the gate) and the governed
+// lifecycle API.
 export async function hasSkillGrant(input: {
 	ctx: TurnContext;
 	installation: SkillInstallationRecord;
-	permission: SkillAclPermission;
+	level: AccessGrantPermission;
 	store: SkillsStore;
 }): Promise<boolean> {
 	if (!withinScope(input.ctx, input.installation)) return false;
-	const grants = await input.store.acl.listForInstallation(
+	const principal = contextString(input.ctx, PRINCIPAL_CONTEXT_KEY);
+	// Owner-rule: the installer reaches their own installation at every level (activate implies read).
+	if (principal !== undefined && input.installation.createdBy === principal) {
+		return true;
+	}
+	const grants = await input.store.grants.listForResource(
+		SKILL_RESOURCE_KIND,
 		input.installation.id,
 	);
-	const actorId = contextString(input.ctx, PRINCIPAL_CONTEXT_KEY);
-	const teamId = contextString(input.ctx, TEAM_CONTEXT_KEY);
-	const organizationId = contextString(input.ctx, ORGANIZATION_CONTEXT_KEY);
+	const memberships = contextMemberships(input.ctx);
+	// `principal` may be absent (a team/organization/public grant still reaches via memberships or the
+	// public ref); the empty string never equals a real, non-empty principalRef, so the direct-match
+	// branch simply can't fire without a principal fact.
 	return grants.some(
 		(grant) =>
-			grant.permission === input.permission &&
-			(grant.principalType === "public" ||
-				(grant.principalType === "actor" &&
-					actorId !== undefined &&
-					grant.principalId === actorId) ||
-				(grant.principalType === "team" &&
-					teamId !== undefined &&
-					grant.principalId === teamId) ||
-				(grant.principalType === "organization" &&
-					organizationId !== undefined &&
-					grant.principalId === organizationId)),
+			grantLevelSatisfies(grant.level, input.level) &&
+			grantReaches(grant, principal ?? "", memberships),
 	);
 }
 
+/** Can this context ACTIVATE the installation? Activation requires the `use` level (the old `activate`
+ *  permission folds onto `use`). */
 export function hasActivationGrant(input: {
 	ctx: TurnContext;
 	installation: SkillInstallationRecord;
 	store: SkillsStore;
 }): Promise<boolean> {
-	return hasSkillGrant({ ...input, permission: "activate" });
+	return hasSkillGrant({ ...input, level: "use" });
 }
 
+/** Can this context READ the installation? Reading requires the `read` level — so a `use`/`manage`
+ *  grant (or the owner) satisfies it too (activate implies read). */
 export function hasReadGrant(input: {
 	ctx: TurnContext;
 	installation: SkillInstallationRecord;
 	store: SkillsStore;
 }): Promise<boolean> {
-	return hasSkillGrant({ ...input, permission: "read" });
+	return hasSkillGrant({ ...input, level: "read" });
 }

@@ -57,13 +57,13 @@ describe("createClaw plugin APIs", () => {
 			scopeId: "team-1",
 		});
 		expect(
-			await claw.api.skills.acl.grant({
+			await claw.api.skills.grantActivation({
 				installationId: installation.id,
-				permission: "activate",
-				principalId: "team-1",
 				principalType: "team",
+				principalId: "team-1",
+				grantedBy: "user:admin-1",
 			}),
-		).toMatchObject({ permission: "activate" });
+		).toMatchObject({ permission: "use" });
 		expect(
 			await claw.api.skills.activate({
 				clawId: "claw-1",
@@ -162,11 +162,11 @@ describe("createClaw plugin APIs", () => {
 			scopeId: "organization-1",
 			status: "enabled",
 		});
-		await claw.api.skills.acl.grant({
+		await claw.api.skills.grantActivation({
 			installationId: "install-email",
-			permission: "activate",
-			principalId: "organization-1",
 			principalType: "organization",
+			principalId: "organization-1",
+			grantedBy: "user:admin-1",
 		});
 		await claw.api.skills.activate({
 			clawId: "claw-1",
@@ -193,7 +193,6 @@ describe("createClaw plugin APIs", () => {
 		for (const model of [
 			"skill_package",
 			"skill_installation",
-			"skill_acl",
 			"skill_activation",
 			"skill_read",
 			"skill_proposal",
@@ -202,7 +201,10 @@ describe("createClaw plugin APIs", () => {
 		}
 		// a persisted skills column survives the round-trip through the plugin's declaration
 		expect(tables.skill_installation?.fields.scope).toBeDefined();
-		// core tables are still intact alongside the plugin's
+		// core tables are still intact alongside the plugin's — incl. the generic access_grant ACL
+		// the skills grants now live in (retired skill_acl is gone; access_grant is a CORE table).
 		expect(tables.claw).toBeDefined();
+		expect(tables.access_grant).toBeDefined();
+		expect(tables.skill_acl).toBeUndefined();
 	});
 });
