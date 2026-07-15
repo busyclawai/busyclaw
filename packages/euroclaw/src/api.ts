@@ -30,6 +30,7 @@ import type {
 	PolicySliceRecord,
 	Principal,
 	RegisteredToolRecord,
+	ResourceBinding,
 	SecretDeclaration,
 	Secrets,
 	ThreadRecord,
@@ -321,6 +322,11 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 export type ClawApiMethod = keyof ClawApi;
 export type ClawApiHttpMethod = "GET" | "POST";
 export type ClawApiInputSchema = (input: unknown) => unknown;
+/** A method's DOMAIN input type (the caller's first arg), `undefined`-stripped so an optional-input
+ *  method (`listApprovals`) still exposes its keys. The type the co-located `resource` binding checks. */
+export type ClawApiMethodInput<Method extends ClawApiMethod> = NonNullable<
+	Parameters<ClawApi[Method]>[0]
+>;
 export type ClawApiRouteDefinition<
 	Method extends ClawApiMethod = ClawApiMethod,
 > = {
@@ -328,6 +334,11 @@ export type ClawApiRouteDefinition<
 	httpMethod: ClawApiHttpMethod;
 	path: `/${string}`;
 	inputSchema: ClawApiInputSchema;
+	/** The CO-LOCATED app-authz resource binding, type-checked against THIS method's input: `idKey`/
+	 *  `kindKey` must be keys of {@link ClawApiMethodInput} or it won't compile. Read by the PEP loader
+	 *  (`authz-pep.ts`) to resolve the resource; absent ⇒ the method acts within the caller's personal
+	 *  scope. This is where the old central `CORE_API_RESOURCES`/`DYNAMIC_KIND_METHODS` maps now live. */
+	resource?: ResourceBinding<ClawApiMethodInput<Method>>;
 };
 
 const idInput = ark({ id: "string" });
@@ -677,20 +688,92 @@ function apiHttpMethod(method: ClawApiMethod): ClawApiHttpMethod {
 
 function apiRoute<Method extends ClawApiMethod>(
 	method: Method,
+	resource?: ResourceBinding<ClawApiMethodInput<Method>>,
 ): ClawApiRouteDefinition<Method> {
 	return {
 		apiMethod: method,
 		httpMethod: apiHttpMethod(method),
 		path: apiMethodPath(method),
 		inputSchema: clawApiInputSchemas[method],
+		...(resource !== undefined ? { resource } : {}),
 	};
 }
 
-// Derives from the shared name list (NOT this package's schema-map keys), so the server route
-// table and the remote client's call table come from the one contracts source by construction.
-export const clawApiRoutes = Object.fromEntries(
-	CLAW_API_METHOD_NAMES.map((method) => [method, apiRoute(method)]),
-) as { readonly [Method in ClawApiMethod]: ClawApiRouteDefinition<Method> };
+// The per-method route table. Each method's app-authz resource binding is CO-LOCATED at its own
+// `apiRoute(...)` call and type-checked against that method's input (`idKey`/`kindKey` ∈ keyof input) —
+// the "derive from the api itself" principle. A method with no binding is not resource-anchored (the
+// PEP falls to the caller's personal scope). This is the home the old central `CORE_API_RESOURCES` +
+// `DYNAMIC_KIND_METHODS` maps moved to. `satisfies` pins the keys to `ClawApiMethod` exactly, and the
+// list assertion below pins the shared contracts name list to real api methods — together, the server
+// route table, the client's call table, and the wire-name list are provably one set.
+export const clawApiRoutes = {
+	bindConversation: apiRoute("bindConversation"),
+	createClaw: apiRoute("createClaw"),
+	// claw — the base shared agent resource (its id keys the row directly).
+	getClaw: apiRoute("getClaw", { kind: "claw", idKey: "id" }),
+	updateClaw: apiRoute("updateClaw", { kind: "claw", idKey: "id" }),
+	archiveClaw: apiRoute("archiveClaw", { kind: "claw", idKey: "id" }),
+	// thread — a method reaching a claw via one of its threads/messages anchors on that claw (its grants
+	// inherit down); a method acting on the thread row itself anchors on the thread.
+	createThread: apiRoute("createThread", { kind: "claw", idKey: "clawId" }),
+	getThread: apiRoute("getThread", { kind: "thread", idKey: "id" }),
+	listThreads: apiRoute("listThreads", { kind: "claw", idKey: "clawId" }),
+	archiveThread: apiRoute("archiveThread", { kind: "thread", idKey: "id" }),
+	appendMessage: apiRoute("appendMessage", { kind: "claw", idKey: "clawId" }),
+	getMessage: apiRoute("getMessage"),
+	listMessages: apiRoute("listMessages", { kind: "thread", idKey: "threadId" }),
+	sendMessage: apiRoute("sendMessage", { kind: "claw", idKey: "clawId" }),
+	forgetSubject: apiRoute("forgetSubject"),
+	createToolCall: apiRoute("createToolCall"),
+	getToolCall: apiRoute("getToolCall"),
+	getToolCallByProviderId: apiRoute("getToolCallByProviderId"),
+	updateToolCallStatus: apiRoute("updateToolCallStatus"),
+	createToolResult: apiRoute("createToolResult"),
+	getToolResult: apiRoute("getToolResult"),
+	listToolResults: apiRoute("listToolResults"),
+	createCheckpoint: apiRoute("createCheckpoint"),
+	getCheckpoint: apiRoute("getCheckpoint"),
+	getLatestCheckpoint: apiRoute("getLatestCheckpoint"),
+	run: apiRoute("run"),
+	continueRun: apiRoute("continueRun"),
+	grantApproval: apiRoute("grantApproval"),
+	denyApproval: apiRoute("denyApproval"),
+	getApproval: apiRoute("getApproval"),
+	listApprovals: apiRoute("listApprovals"),
+	getEffect: apiRoute("getEffect"),
+	registerOpenApiSpec: apiRoute("registerOpenApiSpec"),
+	listRegisteredTools: apiRoute("listRegisteredTools"),
+	listActions: apiRoute("listActions"),
+	putPolicySlice: apiRoute("putPolicySlice"),
+	listPolicySlices: apiRoute("listPolicySlices"),
+	deletePolicySlice: apiRoute("deletePolicySlice"),
+	// startRun/continueEngineRun mint/advance the CALLER'S OWN run (no row to load) → personal scope; the
+	// run finally isolates getRun/listRunEvents by the durable run's principal.
+	startRun: apiRoute("startRun"),
+	continueEngineRun: apiRoute("continueEngineRun"),
+	getRun: apiRoute("getRun", { kind: "run", idKey: "id" }),
+	listRunEvents: apiRoute("listRunEvents", { kind: "run", idKey: "runId" }),
+	// The generic share/unshare api — DYNAMIC kind: the target (kind, id) both come from the INPUT, so
+	// any registered kind is shareable with zero per-kind code. LEVEL manage (see CORE_API_LEVELS): the
+	// PEP requires the caller MANAGE the target before a grant is written. Unregistered kind → fail closed.
+	shareResource: apiRoute("shareResource", {
+		kindKey: "resourceKind",
+		idKey: "resourceId",
+	}),
+	unshareResource: apiRoute("unshareResource", {
+		kindKey: "resourceKind",
+		idKey: "resourceId",
+	}),
+} satisfies {
+	readonly [Method in ClawApiMethod]: ClawApiRouteDefinition<Method>;
+};
+
+// The route table's keys are `ClawApiMethod` (the `satisfies` above); this pins the shared contracts
+// name list to real api methods — the direction the old `.map(CLAW_API_METHOD_NAMES)` used to enforce.
+// Together they prove `CLAW_API_METHOD_NAMES` === `ClawApiMethod`, so a drifted wire name cannot ship.
+const _apiMethodNamesAreMethods =
+	CLAW_API_METHOD_NAMES satisfies readonly ClawApiMethod[];
+void _apiMethodNamesAreMethods;
 
 export const clawApiRouteList = Object.values(clawApiRoutes);
 

@@ -28,11 +28,17 @@ import {
 	configurationError,
 	ENDPOINTS_METADATA,
 	type EuroclawPlugin,
+	endpointRoutesOf,
+	type LooseResourceBinding,
 	type PolicySourceSlice,
 	type ShareableLoaderContext,
 	type ShareableResource,
 } from "@euroclaw/contracts";
-import type { ClawApiCaller, ClawApiMethod } from "./api";
+import {
+	type ClawApiCaller,
+	type ClawApiMethod,
+	clawApiRouteList,
+} from "./api";
 
 /**
  * The api surface with the caller context appended to every method (flat and nested). A method
@@ -121,40 +127,12 @@ export const CORE_API_CREATE_METHODS: readonly ClawApiMethod[] = [
 	"bindConversation",
 ];
 
-/** Which resource KIND a governed method acts on, and which INPUT field carries the id — the static
- *  method→(kind, id) map the loader registry (below) resolves. A method NOT here is not anchored to a
- *  specific shared row: it acts within the caller's own personal scope (`personalScope`). `kind` is an
- *  OPAQUE registry key (core registers claw/thread/run; a plugin registers its own). `run` finally
- *  isolates `getRun`/`listRunEvents` by the durable run's principal; `startRun`/`continueEngineRun` are
- *  NOT here — they mint/advance the CALLER'S OWN run, so they fall to `personalScope` (caller-owned,
- *  no row to load), permitted for any authenticated caller and denied for none. */
-type MethodResource = { kind: string; idKey: string };
-
-const CORE_API_RESOURCES: Partial<Record<ClawApiMethod, MethodResource>> = {
-	getClaw: { kind: "claw", idKey: "id" },
-	updateClaw: { kind: "claw", idKey: "id" },
-	archiveClaw: { kind: "claw", idKey: "id" },
-	getThread: { kind: "thread", idKey: "id" },
-	archiveThread: { kind: "thread", idKey: "id" },
-	listThreads: { kind: "claw", idKey: "clawId" },
-	createThread: { kind: "claw", idKey: "clawId" },
-	appendMessage: { kind: "claw", idKey: "clawId" },
-	sendMessage: { kind: "claw", idKey: "clawId" },
-	listMessages: { kind: "thread", idKey: "threadId" },
-	getRun: { kind: "run", idKey: "id" },
-	listRunEvents: { kind: "run", idKey: "runId" },
-};
-
-/** The DYNAMIC-kind methods — the generic share/unshare api, whose target (kind, id) come from the CALL
- *  INPUT (`resourceKind`/`resourceId`), not a static map. The PEP loads that resource and requires the
- *  method's LEVEL (manage) on it — so you can only (un)share what you manage — with ZERO per-kind code:
- *  ANY registered kind is shareable. An unregistered/unloadable kind fails CLOSED (deny). */
-const DYNAMIC_KIND_METHODS: Partial<
-	Record<ClawApiMethod, { kindKey: string; idKey: string }>
-> = {
-	shareResource: { kindKey: "resourceKind", idKey: "resourceId" },
-	unshareResource: { kindKey: "resourceKind", idKey: "resourceId" },
-};
+// Which resource a governed method acts on — the STATIC (kind, input[idKey]) and DYNAMIC
+// (input[kindKey], input[idKey]) bindings — is no longer a central map here. It is CO-LOCATED and
+// type-checked on each method's OWN def: core methods on their `clawApiRoutes[method].resource` (see
+// api.ts), plugin methods on their `endpoints()` def `resource` (carried into the route metadata). The
+// loader below reads those declarations via `collectResourceBindings`. A method with NO binding is not
+// resource-anchored — it acts within the caller's personal scope (`personalScope`).
 
 const CREATE_SET = new Set<string>(CORE_API_CREATE_METHODS);
 const LEVELS = CORE_API_LEVELS as Record<string, ApiPermissionLevel>;
@@ -271,25 +249,63 @@ export function buildResourceRegistry(input: {
 }
 
 /**
- * Build the ONE resource-shape loader for the governed api — over the loader registry + the grant store.
- * A method NOT anchored (not in `CORE_API_RESOURCES`, not a dynamic-kind method) acts within the caller's
- * own personal scope (`personalScope`). An anchored/dynamic method loads its base row via the registry,
- * then UNIONS its grants (`access_grant WHERE (kind, id)` ∪ any `grantParents`) into the shape the
- * generic decision reads. FAIL-CLOSED throughout: an unresolvable row (no id, absent, or — for a DYNAMIC
- * kind — an unregistered kind) → `DENY_SHAPE`, never "the caller owns it". A STATIC-mapped kind with no
- * registered loader is a deployment WITHOUT that store (no DB / no engine) — NOT an access denial: it
- * falls to `personalScope` so the method's own clear config error surfaces (masking it behind a deny is
- * worse). The grant RENDERING already exists (slice 1's entity graph); this just FEEDS it real grants.
+ * Collect the CO-LOCATED resource bindings across the whole assembled api into one lookup, keyed by the
+ * dotted method id the PEP wraps. Core flat methods carry their binding on their own route def
+ * (`clawApiRouteList`); plugin methods carry theirs on their `endpoints()` def, re-attached under
+ * `ENDPOINTS_METADATA` and read via `endpointRoutesOf` (a route `name` is relative to its namespace
+ * mount, so it prefixes). This READS the declarations each method owns — it is the plugin-extensible
+ * analog of the loader registry, not a second parallel source of truth like the old central maps.
+ */
+function collectResourceBindings(
+	api: Record<string, unknown>,
+): Map<string, LooseResourceBinding> {
+	const bindings = new Map<string, LooseResourceBinding>();
+	for (const route of clawApiRouteList) {
+		if (route.resource !== undefined) {
+			bindings.set(route.apiMethod, route.resource);
+		}
+	}
+	const visit = (ns: Record<string, unknown>, prefix: string): void => {
+		for (const route of endpointRoutesOf(ns) ?? []) {
+			if (route.resource !== undefined) {
+				const id = prefix ? `${prefix}.${route.name}` : route.name;
+				bindings.set(id, route.resource);
+			}
+		}
+		for (const [key, value] of Object.entries(ns)) {
+			if (value !== null && typeof value === "object") {
+				visit(
+					value as Record<string, unknown>,
+					prefix ? `${prefix}.${key}` : key,
+				);
+			}
+		}
+	};
+	visit(api, "");
+	return bindings;
+}
+
+/**
+ * Build the ONE resource-shape loader for the governed api — over the loader registry + the co-located
+ * `bindings` + the grant store. A method with NO binding acts within the caller's own personal scope
+ * (`personalScope`). A bound method loads its base row via the registry, then UNIONS its grants
+ * (`access_grant WHERE (kind, id)` ∪ any `grantParents`) into the shape the generic decision reads.
+ * FAIL-CLOSED throughout: an unresolvable row (no id, absent, or — for a DYNAMIC kind — an unregistered
+ * kind) → `DENY_SHAPE`, never "the caller owns it". A STATIC-kind method whose kind has no registered
+ * loader is a deployment WITHOUT that store (no DB / no engine) — NOT an access denial: it falls to
+ * `personalScope` so the method's own clear config error surfaces (masking it behind a deny is worse).
+ * The grant RENDERING already exists (slice 1's entity graph); this just FEEDS it real grants.
  */
 function resourceLoaderFor(input: {
 	registry: Map<string, ResourceLoader>;
+	bindings: Map<string, LooseResourceBinding>;
 	grantStore: AccessGrantStore | undefined;
 }): (
 	method: string,
 	methodInput: unknown,
 	principal: string | undefined,
 ) => Promise<ApiResourceShape> {
-	const { registry, grantStore } = input;
+	const { registry, bindings, grantStore } = input;
 
 	const loadShape = async (
 		kind: string,
@@ -320,25 +336,26 @@ function resourceLoaderFor(input: {
 	};
 
 	return async (method, methodInput, principal) => {
-		// Dynamic-kind methods (share/unshare): the target kind + id come from the INPUT. An unregistered
-		// kind or a missing field fails CLOSED (you can't (un)share what does not resolve).
-		const dynamic = DYNAMIC_KIND_METHODS[method as ClawApiMethod];
-		if (dynamic !== undefined) {
-			const kind = stringField(methodInput, dynamic.kindKey);
-			const id = stringField(methodInput, dynamic.idKey);
+		const binding = bindings.get(method);
+		// No binding — the method is not resource-anchored: the caller's own personal scope.
+		if (binding === undefined) return personalScope(principal);
+		// DYNAMIC-kind methods (share/unshare): the target kind + id BOTH come from the INPUT. An
+		// unregistered kind or a missing field fails CLOSED (you can't (un)share what does not resolve).
+		if (!("kind" in binding)) {
+			const kind = stringField(methodInput, binding.kindKey);
+			const id = stringField(methodInput, binding.idKey);
 			if (kind === undefined || id === undefined) return DENY_SHAPE;
 			return loadShape(kind, id);
 		}
-		// Static resource-anchored methods.
-		const anchor = CORE_API_RESOURCES[method as ClawApiMethod];
-		if (anchor === undefined) return personalScope(principal);
-		// A mapped kind with no loader = a deployment WITHOUT that store (no DB / no engine): NOT an access
-		// denial — fall to personalScope so the method's own config error surfaces (slice-1's behavior).
-		if (registry.get(anchor.kind) === undefined)
+		// STATIC-kind methods: fixed kind, id from the input. A known kind with no registered loader = a
+		// deployment WITHOUT that store (no DB / no engine): NOT an access denial — fall to personalScope
+		// so the method's own config error surfaces (slice-1's behavior).
+		if (registry.get(binding.kind) === undefined) {
 			return personalScope(principal);
-		const id = stringField(methodInput, anchor.idKey);
+		}
+		const id = stringField(methodInput, binding.idKey);
 		if (id === undefined) return DENY_SHAPE;
-		return loadShape(anchor.kind, id);
+		return loadShape(binding.kind, id);
 	};
 }
 
@@ -426,8 +443,11 @@ export function governApi(input: {
 		adapter: input.adapter,
 		plugins: input.plugins,
 	});
+	// The co-located bindings — read off each method's own def (core route defs + plugin endpoints defs).
+	const bindings = collectResourceBindings(input.api);
 	const loadResource = resourceLoaderFor({
 		registry,
+		bindings,
 		grantStore: input.grantStore,
 	});
 	const resolveMemberships = input.resolveMemberships ?? (() => []);

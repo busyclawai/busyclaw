@@ -8,6 +8,7 @@
 // the defs, call `endpoints()` once), never on built namespaces.
 
 import { configurationError } from "@euroclaw/errors";
+import type { LooseResourceBinding, ResourceBinding } from "./resource-binding";
 
 /** Routed endpoints are RPC-shaped: reads ride GET (input in the query), everything else POST. */
 export type EndpointHttpMethod = "GET" | "POST";
@@ -37,6 +38,12 @@ export type EndpointDefinition = {
 	/** Declared response schema: pins the handler's return type (see {@link ValidateEndpointOutputs})
 	 *  and documents the OpenAPI 200 `data`. Carried in metadata; never runtime-validated. */
 	output?: EndpointOutputSchema;
+	/** The co-located app-authz resource binding — the plugin-extensible analog of the base api's route
+	 *  binding. Typed LOOSELY here (any string key); {@link ValidateEndpointResources} tightens `idKey`/
+	 *  `kindKey` to this def's handler INPUT keys at the `endpoints()` call, so a wrong key won't compile.
+	 *  Carried into the {@link EndpointRoute} metadata; the PEP reads it to resolve the resource. Absent ⇒
+	 *  the method is not resource-anchored (personal scope). */
+	resource?: LooseResourceBinding;
 };
 
 /** A record of definitions, optionally grouped: a nested record is a GROUP whose key becomes a path
@@ -70,6 +77,21 @@ export type ValidateEndpointOutputs<Defs> = {
 		: ValidateEndpointOutputs<Defs[K]>;
 };
 
+/** The type-level half of `resource`: a definition that declares a resource binding must use `idKey`
+ *  (and `kindKey`) that are keys of the handler's INPUT — `endpoints()` intersects its argument with
+ *  this, so a binding pointing at a non-existent input field fails to compile at the definition. Without
+ *  `resource` the def is unconstrained (`unknown` imposes nothing). Compile-time only; the co-located
+ *  binding is READ by the app-authz PEP, never run. */
+export type ValidateEndpointResources<Defs> = {
+	[K in keyof Defs]: Defs[K] extends {
+		handler: infer Handler extends (...args: never[]) => unknown;
+	}
+		? Defs[K] extends { resource: LooseResourceBinding }
+			? { resource: ResourceBinding<Parameters<Handler>[0]> }
+			: unknown
+		: ValidateEndpointResources<Defs[K]>;
+};
+
 /** One declared route, PATH-RELATIVE to its namespace mount (the adapter prefixes the api key). */
 export type EndpointRoute = {
 	/** Dot-joined definition keys relative to the namespace root (e.g. `"set"`, `"packages.create"`). */
@@ -82,6 +104,8 @@ export type EndpointRoute = {
 	description?: string;
 	/** The declared response schema as passed — documentation + typing only, never run. */
 	output?: EndpointOutputSchema;
+	/** The co-located app-authz resource binding as declared — read by the PEP loader, never run. */
+	resource?: LooseResourceBinding;
 };
 
 /**
@@ -154,6 +178,9 @@ function buildNamespace(
 				// Carried for the OpenAPI generator only — the route handler never validates against it
 				// (outputs are trusted server code; arktype guards boundaries, not our own returns).
 				...(value.output !== undefined ? { output: value.output } : {}),
+				// The app-authz resource binding rides along so the PEP can read a plugin method's binding
+				// off the re-attached route metadata — the plugin-side of the co-located loader registry.
+				...(value.resource !== undefined ? { resource: value.resource } : {}),
 			});
 		} else {
 			namespace[name] = buildNamespace(value, [...names, name], path, routes);
@@ -163,15 +190,16 @@ function buildNamespace(
 }
 
 /**
- * Declare a plugin api namespace: `{ input, handler, method?, description?, output? }` per method,
- * nested records as groups. Returns the CALLABLE namespace (methods are the handlers,
+ * Declare a plugin api namespace: `{ input, handler, method?, description?, output?, resource? }` per
+ * method, nested records as groups. Returns the CALLABLE namespace (methods are the handlers,
  * identity-preserved) with the flattened {@link EndpointRoute} table attached non-enumerably under
  * {@link ENDPOINTS_METADATA} — read it with {@link endpointRoutesOf}. The
  * {@link ValidateEndpointOutputs} intersection pins each handler's return to its declared `output`
- * schema at compile time.
+ * schema at compile time; {@link ValidateEndpointResources} pins each declared `resource` binding's
+ * `idKey`/`kindKey` to the handler's input keys.
  */
 export function endpoints<const Defs extends EndpointDefinitions>(
-	defs: Defs & ValidateEndpointOutputs<Defs>,
+	defs: Defs & ValidateEndpointOutputs<Defs> & ValidateEndpointResources<Defs>,
 ): InferEndpoints<Defs> {
 	const routes: EndpointRoute[] = [];
 	const namespace = buildNamespace(defs, [], [], routes);

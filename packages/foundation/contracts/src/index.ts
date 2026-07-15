@@ -317,6 +317,7 @@ export type {
 	EndpointRoute,
 	InferEndpoints,
 	ValidateEndpointOutputs,
+	ValidateEndpointResources,
 } from "./governance/endpoints";
 export {
 	ENDPOINTS_METADATA,
@@ -395,6 +396,12 @@ export {
 	redactionContextFrom,
 	rehydrationContext,
 } from "./governance/redact";
+// ── governance: the co-located app-authz resource binding (base api route defs + plugin endpoints) ──
+export type {
+	LooseResourceBinding,
+	ResourceBinding,
+	ResourceInputKey,
+} from "./governance/resource-binding";
 export type {
 	NewRunCheckpoint,
 	RunCheckpointRecord,
