@@ -29,6 +29,22 @@ export {
 // @euroclaw/policy-*) ──
 export type { AuthzEntity, EntityDirectory } from "./authz/directory";
 export type { PolicyEngine, PolicyEngineCapabilities } from "./authz/engine";
+// ── the generic shareable-resource ACL (app-authz slice 5): the access_grant entity + store port ──
+export type {
+	AccessGrant,
+	AccessGrantPermission,
+	AccessGrantRecord,
+	AccessGrantStore,
+	NewAccessGrant,
+} from "./authz/grant";
+export {
+	accessGrantCreateInput,
+	accessGrantFields,
+	accessGrantPermission,
+	accessGrantPermissionValues,
+	accessGrantRecord,
+	accessGrantSchema,
+} from "./authz/grant";
 export type {
 	ActionAccess,
 	ActionDef,
@@ -327,6 +343,9 @@ export type {
 	InferReasonCodes,
 	PolicySourceSlice,
 	SecretProviderPlugin,
+	ShareableKind,
+	ShareableLoaderContext,
+	ShareableResource,
 	UnionToIntersection,
 } from "./governance/plugin";
 // ── governance: the Principal vocabulary — the one authorizable identity (the `principal` schema is

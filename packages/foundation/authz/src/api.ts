@@ -24,18 +24,22 @@
 // edges are empty until the org plugin resolves memberships and the access_grant table lands) — the
 // POLICY and the RENDERING ship now, the DATA arrives later.
 
+import type { Entities, EntityJson } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
-	Entities,
-	EntityJson,
-} from "@cedar-policy/cedar-wasm/nodejs";
-import type { PolicyRequest, PolicyResult } from "@euroclaw/contracts";
+	AccessGrant,
+	AccessGrantPermission,
+	PolicyRequest,
+	PolicyResult,
+} from "@euroclaw/contracts";
 import type { CedarEngine } from "./cedar-types";
 
 /** An action's required permission LEVEL — the ONE non-derivable per-method fact. Ordered
  *  `read < use < manage`: `read` sees, `use` runs/invokes (distinct from read/write), `manage`
  *  mutates/administers. The owner has the max level implicitly; scope-members and grantees carry a level
- *  the resource's requirement is compared against — by Cedar `in`, not a TS compare. */
-export type ApiPermissionLevel = "read" | "use" | "manage";
+ *  the resource's requirement is compared against — by Cedar `in`, not a TS compare. ALIASES the grant
+ *  level in @euroclaw/contracts (the store's `access_grant.permission`), so the store, the grant shape,
+ *  and the action-required level are ONE vocabulary with no conversion seam. */
+export type ApiPermissionLevel = AccessGrantPermission;
 
 /** The level order, ASCENDING — the ONLY place the ordering is expressed. Rendered as the Cedar access-
  *  node hierarchy `…:manage in …:use in …:read` (each level's node parents the one below), so Cedar
@@ -80,13 +84,13 @@ permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource)
 permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredGrantAccess };
 permit(principal, action in ${API_ACTION_TYPE}::"${API_CREATE_GROUP}", resource);`;
 
-/** One entry in the generic ACL (a row of the future `access_grant` table). `principalRef` is
+/** One entry in the generic ACL (a row of the `access_grant` table, projected). `principalRef` is
  *  polymorphic and OPAQUE — `user:…` | `team:…` | `organization:…` | `public`; `level` is what the
- *  resource's requirement is compared against. Carried as request DATA (empty until the table lands). */
-export type AccessGrant = {
-	principalRef: string;
-	level: ApiPermissionLevel;
-};
+ *  resource's requirement is compared against. Carried as request DATA (the store's `listForResource`
+ *  feeds it — slice 5). The type is DEFINED in @euroclaw/contracts (beside the `AccessGrantStore` port,
+ *  the layer the store lives under) and re-exported here so the store returns exactly the shape the PEP
+ *  renders — one type, no translation. */
+export type { AccessGrant };
 
 /** The caller's membership in an OPAQUE (scope, scopeId) at a level — the dormant scope-member branch's
  *  input. Empty until the org plugin resolves them; the shape is generic (never "org"). */
@@ -198,8 +202,7 @@ function buildApiEntities(input: {
 			entities.push({
 				uid: access(`${base}:${lvl}`),
 				attrs: {},
-				parents:
-					lower !== undefined ? [access(`${base}:${lower}`)] : [],
+				parents: lower !== undefined ? [access(`${base}:${lower}`)] : [],
 			});
 		}
 	}

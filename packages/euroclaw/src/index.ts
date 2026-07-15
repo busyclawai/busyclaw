@@ -27,6 +27,7 @@ import {
 import { buildSecrets, env } from "@euroclaw/secrets";
 import { entityAdapter } from "@euroclaw/storage-core";
 import {
+	createAccessGrantStore,
 	createClawsStore,
 	createEffectStore,
 	createRegistryStores,
@@ -583,6 +584,15 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const registryStores =
 		config.stores?.registry ??
 		(adapter ? createRegistryStores(adapter) : undefined);
+	// The generic shareable-resource ACL (slice 5) — product durable state, sibling of the registry
+	// stores. Takes the RAW adapter and wraps internally (like the other durable stores); feeds real
+	// grants into the product-api PEP and backs the share/unshare api. Absent on a no-database claw.
+	const grantStore = adapter ? createAccessGrantStore(adapter) : undefined;
+	// The adapter wrapped ONCE with the merged models — the entity-validating lens plugins get through
+	// `configure`. Built here so the PEP's plugin `shareable` loaders bind against the SAME adapter a
+	// plugin's `configure` builds its store from (a skills loader `entityView`s over it, just like its
+	// store does). storage-durable stores deliberately take the RAW adapter and wrap internally instead.
+	const pluginAdapter = adapter ? entityAdapter(adapter, models) : undefined;
 	// Registered tools become executable per run (see registeredToolResolver above): the invoker
 	// resolves each row's credential through the one-door reader by its `source` name.
 	const resolveTools = registryStores
@@ -632,7 +642,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			// (entityDb is theirs to use), and their constructors are public host API — the wrap-once
 			// rule exists to keep PLUGINS free of the storage implementation, not to move every wrap to
 			// the assembly.
-			adapter: adapter ? entityAdapter(adapter, models) : undefined,
+			adapter: pluginAdapter,
 			clawsStore,
 			effects: effectsStore,
 			secrets,
@@ -693,6 +703,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		cronHandler: config.cronHandler,
 		effects: effectsStore,
 		engine: engine?.engine,
+		grantStore,
 		plugins,
 		registry: registryStores,
 		runs: engine?.runs,
@@ -719,6 +730,10 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		api: mergedApi,
 		engine: apiEngine,
 		clawsStore,
+		runs: engine?.runs,
+		grantStore,
+		adapter: pluginAdapter,
+		plugins,
 		appAuthz: config.appAuthz,
 		warn,
 	}) as Claw<ResolvedConfig<Config>>["api"];

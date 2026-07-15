@@ -209,6 +209,38 @@ export function buildSkillsPlugin<
 		// The tables this plugin owns — collected by getEuroclawTables into the migration schema. The
 		// same models back the skills store, so registering the plugin is what puts skills on disk.
 		schema: skillsModels,
+		// Skills is the FIRST plugin consumer of the shareable-resource loader registry (app-authz slice
+		// 5, docs/plans/app-authz.md §6): registering `{ kind: "skill", load }` teaches the product-api
+		// PEP how to load a skill installation's base row, so a skill installation presents the generic
+		// `{ createdBy, scope, scopeId }` shape and is OWNER-isolated through the same generic decision as
+		// a claw — with ZERO core change, proving the registry is plugin-extensible. The loader binds its
+		// store the same way `configure` does (host store, else the adapter). NOTE (scope of slice 5): this
+		// registers the LOADER only (owner-isolation); the `skill_acl` → `access_grant` grant-data
+		// migration + retiring `hasSkillGrant` is a clean follow-up — skills' own activation/read gate
+		// still routes through skill_acl (a different, runtime TurnContext surface) until then.
+		shareable: [
+			{
+				kind: "skill",
+				load: (loaderContext) => {
+					const loaderStore =
+						config.store ??
+						(loaderContext.adapter
+							? createSkillsStore(loaderContext.adapter)
+							: undefined);
+					return async (id) => {
+						if (!loaderStore) return null;
+						const installation = await loaderStore.installations.get(id);
+						return installation
+							? {
+									createdBy: installation.createdBy,
+									scope: installation.scope,
+									scopeId: installation.scopeId,
+								}
+							: null;
+					};
+				},
+			},
+		],
 		// The api is the RUNTIME half — `configure` returns it, closing over the store slot it fills.
 		configure,
 		gates: config.enforceAllowedTools ? [allowedToolsGate] : [],

@@ -135,7 +135,9 @@ describe("createClaw engine", () => {
 			"registerOpenApiSpec",
 			"run",
 			"sendMessage",
+			"shareResource",
 			"startRun",
+			"unshareResource",
 			"updateClaw",
 			"updateToolCallStatus",
 		]);
@@ -204,13 +206,18 @@ describe("createClaw engine", () => {
 
 		expect(result.status).toBe("completed");
 		expect(run.id).toMatch(/^[0-9a-f]{32}$/);
-		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
+		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read AS the run's principal.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+		).resolves.toMatchObject({
 			id: run.id,
 			status: "completed",
 			principal: "user:alice",
 			team: "acme",
 		});
-		await expect(claw.api.listRunEvents({ runId: run.id })).resolves.toEqual(
+		await expect(
+			claw.api.listRunEvents({ runId: run.id }, { principal: "user:alice" }),
+		).resolves.toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ type: "run.started" }),
 				expect.objectContaining({ type: "run.completed" }),

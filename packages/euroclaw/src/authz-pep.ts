@@ -20,11 +20,17 @@ import {
 	loadPolicyBundle,
 } from "@euroclaw/authz";
 import {
+	type AccessGrantStore,
+	type Adapter,
 	authorizationError,
+	type ClawRunReadModel,
 	type ClawsStore,
+	configurationError,
 	ENDPOINTS_METADATA,
 	type EuroclawPlugin,
 	type PolicySourceSlice,
+	type ShareableLoaderContext,
+	type ShareableResource,
 } from "@euroclaw/contracts";
 import type { ClawApiCaller, ClawApiMethod } from "./api";
 
@@ -102,6 +108,10 @@ export const CORE_API_LEVELS = {
 	continueEngineRun: "use",
 	getRun: "read",
 	listRunEvents: "read",
+	// The generic share/unshare api (slice 5) — LEVEL manage, so the PEP requires the caller MANAGE the
+	// TARGET resource before a grant can be written: you can only share what you manage.
+	shareResource: "manage",
+	unshareResource: "manage",
 } satisfies Record<ClawApiMethod, ApiPermissionLevel>;
 
 /** The TRUE creates — any authenticated principal may perform them, and the created row's owner becomes
@@ -111,22 +121,39 @@ export const CORE_API_CREATE_METHODS: readonly ClawApiMethod[] = [
 	"bindConversation",
 ];
 
-/** How the PEP loads the acting resource for a core method — the MINIMAL slice-1 mapper (§6's generic
- *  loader registry is slice 5). Only claw/thread-anchored methods load the real row (cross-user
- *  isolation); every other method acts on the caller's own "personal" scope (self-shape, below). */
-type ResourceKind = "claw:id" | "claw:clawId" | "thread:id" | "thread:threadId";
+/** Which resource KIND a governed method acts on, and which INPUT field carries the id — the static
+ *  method→(kind, id) map the loader registry (below) resolves. A method NOT here is not anchored to a
+ *  specific shared row: it acts within the caller's own personal scope (`personalScope`). `kind` is an
+ *  OPAQUE registry key (core registers claw/thread/run; a plugin registers its own). `run` finally
+ *  isolates `getRun`/`listRunEvents` by the durable run's principal; `startRun`/`continueEngineRun` are
+ *  NOT here — they mint/advance the CALLER'S OWN run, so they fall to `personalScope` (caller-owned,
+ *  no row to load), permitted for any authenticated caller and denied for none. */
+type MethodResource = { kind: string; idKey: string };
 
-const CORE_API_RESOURCES: Partial<Record<ClawApiMethod, ResourceKind>> = {
-	getClaw: "claw:id",
-	updateClaw: "claw:id",
-	archiveClaw: "claw:id",
-	getThread: "thread:id",
-	archiveThread: "thread:id",
-	listThreads: "claw:clawId",
-	createThread: "claw:clawId",
-	appendMessage: "claw:clawId",
-	sendMessage: "claw:clawId",
-	listMessages: "thread:threadId",
+const CORE_API_RESOURCES: Partial<Record<ClawApiMethod, MethodResource>> = {
+	getClaw: { kind: "claw", idKey: "id" },
+	updateClaw: { kind: "claw", idKey: "id" },
+	archiveClaw: { kind: "claw", idKey: "id" },
+	getThread: { kind: "thread", idKey: "id" },
+	archiveThread: { kind: "thread", idKey: "id" },
+	listThreads: { kind: "claw", idKey: "clawId" },
+	createThread: { kind: "claw", idKey: "clawId" },
+	appendMessage: { kind: "claw", idKey: "clawId" },
+	sendMessage: { kind: "claw", idKey: "clawId" },
+	listMessages: { kind: "thread", idKey: "threadId" },
+	getRun: { kind: "run", idKey: "id" },
+	listRunEvents: { kind: "run", idKey: "runId" },
+};
+
+/** The DYNAMIC-kind methods — the generic share/unshare api, whose target (kind, id) come from the CALL
+ *  INPUT (`resourceKind`/`resourceId`), not a static map. The PEP loads that resource and requires the
+ *  method's LEVEL (manage) on it — so you can only (un)share what you manage — with ZERO per-kind code:
+ *  ANY registered kind is shareable. An unregistered/unloadable kind fails CLOSED (deny). */
+const DYNAMIC_KIND_METHODS: Partial<
+	Record<ClawApiMethod, { kindKey: string; idKey: string }>
+> = {
+	shareResource: { kindKey: "resourceKind", idKey: "resourceId" },
+	unshareResource: { kindKey: "resourceKind", idKey: "resourceId" },
 };
 
 const CREATE_SET = new Set<string>(CORE_API_CREATE_METHODS);
@@ -149,59 +176,169 @@ const DENY_SHAPE: ApiResourceShape = { grants: [] };
  *  the deny shape (the actor floor already denied it upstream). */
 function personalScope(principal: string | undefined): ApiResourceShape {
 	return principal !== undefined
-		? { createdBy: principal, scope: "personal", scopeId: principal, grants: [] }
+		? {
+				createdBy: principal,
+				scope: "personal",
+				scopeId: principal,
+				grants: [],
+			}
 		: DENY_SHAPE;
 }
 
+/** What a per-kind loader resolves — the plugin-facing opaque {@link ShareableResource} base, plus the
+ *  CORE-only `grantParents`: additional (kind, id) whose grants are UNIONED into this resource's (the
+ *  folder/file inheritance a thread has over its claw). Plugin loaders return the plain
+ *  `ShareableResource` (no parents); the union is otherwise the resource's OWN (kind, id) only. */
+type ResolvedResource = ShareableResource & {
+	grantParents?: readonly { kind: string; id: string }[];
+};
+type ResourceLoader = (id: string) => Promise<ResolvedResource | null>;
+
 /**
- * Build the ONE resource-shape loader for the governed api — closed over the claws store. A method NOT
- * in `CORE_API_RESOURCES` is not anchored to a specific shared row: it acts within the caller's own
- * personal scope (`personalScope`). A resource-anchored claw/thread method MUST load the real row (its
- * `createdBy`/`scope`/`scopeId` → cross-user isolation); an unresolvable row (no store, no id, or absent)
- * FAILS CLOSED to `DENY_SHAPE` — it is NEVER treated as owned by the caller (the self-shape tautology the
- * old loader fell into, which would let a stranger read/mutate a not-found resource). `grants` is always
- * empty (the access_grant table is a later slice — the generic grant POLICY reads it, the DATA arrives
- * later).
+ * Build the ONE loader registry the PEP consults — CORE loaders (claw/thread/run, closed over the
+ * assembled stores) MERGED with every plugin's `shareable` loaders (store-bound now via the wrapped
+ * adapter). A `Map<kind, (id) => base>`: the ONLY per-kind bit (§6). A plugin registering a kind that a
+ * core loader or another plugin already owns fails LOUD at boot — a kind is never silently shadowed.
  */
-function resourceLoaderFor(
-	clawsStore: ClawsStore | undefined,
-): (
+export function buildResourceRegistry(input: {
+	clawsStore: ClawsStore | undefined;
+	runs: ClawRunReadModel | undefined;
+	adapter: Adapter | undefined;
+	plugins: readonly EuroclawPlugin[];
+}): Map<string, ResourceLoader> {
+	const registry = new Map<string, ResourceLoader>();
+	const { clawsStore, runs } = input;
+
+	if (clawsStore !== undefined) {
+		// claw — the base shared agent resource: its own createdBy/scope/scopeId.
+		registry.set("claw", async (id) => {
+			const claw = await clawsStore.claws.get(id);
+			return claw
+				? {
+						createdBy: claw.createdBy,
+						scope: claw.scope,
+						scopeId: claw.scopeId,
+					}
+				: null;
+		});
+		// thread — no own owner/scope: resolve clawId → the claw's base, and INHERIT the claw's grants
+		// (∪ the thread's own, added by the PEP via `grantParents`). Share a claw → its threads come along.
+		registry.set("thread", async (id) => {
+			const thread = await clawsStore.threads.get(id);
+			if (!thread) return null;
+			const claw = await clawsStore.claws.get(thread.clawId);
+			if (!claw) return null;
+			return {
+				createdBy: claw.createdBy,
+				scope: claw.scope,
+				scopeId: claw.scopeId,
+				grantParents: [{ kind: "claw", id: thread.clawId }],
+			};
+		});
+	}
+	if (runs !== undefined) {
+		// run — createdBy is the durable run's principal (scope personal to that principal). An absent
+		// run OR an absent/blank run principal → null (DENY): a principal-less run has no owner to isolate.
+		registry.set("run", async (id) => {
+			const run = await runs.get(id);
+			if (!run) return null;
+			const principal = run.principal;
+			if (principal === undefined || principal.trim() === "") return null;
+			return { createdBy: principal, scope: "personal", scopeId: principal };
+		});
+	}
+
+	// PLUGIN loaders — store-bound against the SAME entity-validating adapter `configure` gets, so a
+	// plugin builds its store the same way in both places. Read STATICALLY off the raw plugin object.
+	const loaderContext: ShareableLoaderContext = { adapter: input.adapter };
+	for (const plugin of input.plugins) {
+		for (const shareable of plugin.shareable ?? []) {
+			if (registry.has(shareable.kind)) {
+				throw configurationError(
+					`a shareable kind is already registered: ${shareable.kind}`,
+					{
+						kind: shareable.kind,
+						plugin: plugin.id,
+						reason:
+							"two loaders claim the same resource kind; kinds must be unique (a plugin cannot shadow a core or another plugin's kind)",
+					},
+				);
+			}
+			registry.set(shareable.kind, shareable.load(loaderContext));
+		}
+	}
+	return registry;
+}
+
+/**
+ * Build the ONE resource-shape loader for the governed api — over the loader registry + the grant store.
+ * A method NOT anchored (not in `CORE_API_RESOURCES`, not a dynamic-kind method) acts within the caller's
+ * own personal scope (`personalScope`). An anchored/dynamic method loads its base row via the registry,
+ * then UNIONS its grants (`access_grant WHERE (kind, id)` ∪ any `grantParents`) into the shape the
+ * generic decision reads. FAIL-CLOSED throughout: an unresolvable row (no id, absent, or — for a DYNAMIC
+ * kind — an unregistered kind) → `DENY_SHAPE`, never "the caller owns it". A STATIC-mapped kind with no
+ * registered loader is a deployment WITHOUT that store (no DB / no engine) — NOT an access denial: it
+ * falls to `personalScope` so the method's own clear config error surfaces (masking it behind a deny is
+ * worse). The grant RENDERING already exists (slice 1's entity graph); this just FEEDS it real grants.
+ */
+function resourceLoaderFor(input: {
+	registry: Map<string, ResourceLoader>;
+	grantStore: AccessGrantStore | undefined;
+}): (
 	method: string,
-	input: unknown,
+	methodInput: unknown,
 	principal: string | undefined,
 ) => Promise<ApiResourceShape> {
-	return async (method, input, principal) => {
-		const kind = CORE_API_RESOURCES[method as ClawApiMethod];
-		// Not resource-anchored → the caller's own personal scope (NOT a specific shared resource).
-		if (kind === undefined) return personalScope(principal);
-		// No claws store configured AT ALL → a boot MISCONFIGURATION, not an access denial: there is no
-		// persisted resource to protect, and the method itself surfaces a clear `requires a ClawsStore`
-		// config error. Fall through to the caller's personal scope so that error is what the caller sees
-		// (masking it behind an authz deny would be worse). This is NOT the killed tautology — that was
-		// "a store EXISTS but the row is absent ⇒ caller owns it", handled fail-closed below.
-		if (clawsStore === undefined) return personalScope(principal);
+	const { registry, grantStore } = input;
 
-		let clawId: string | undefined;
-		if (kind === "claw:id") clawId = stringField(input, "id");
-		else if (kind === "claw:clawId") clawId = stringField(input, "clawId");
-		else {
-			const threadId =
-				kind === "thread:id"
-					? stringField(input, "id")
-					: stringField(input, "threadId");
-			const thread = threadId
-				? await clawsStore.threads.get(threadId)
-				: undefined;
-			clawId = thread?.clawId;
-		}
-		const claw = clawId ? await clawsStore.claws.get(clawId) : undefined;
-		if (!claw) return DENY_SHAPE;
+	const loadShape = async (
+		kind: string,
+		id: string,
+	): Promise<ApiResourceShape> => {
+		const loader = registry.get(kind);
+		if (loader === undefined) return DENY_SHAPE;
+		const base = await loader(id);
+		if (base === null) return DENY_SHAPE;
+		// Grants are DATA: the resource's OWN (kind, id) grants ∪ any inherited parents'. Empty when no
+		// grant store is configured (grant enforcement needs a DB; owner/scope still decide without it).
+		const grantKeys = [{ kind, id }, ...(base.grantParents ?? [])];
+		const grants = grantStore
+			? (
+					await Promise.all(
+						grantKeys.map((key) =>
+							grantStore.listForResource(key.kind, key.id),
+						),
+					)
+				).flat()
+			: [];
 		return {
-			createdBy: claw.createdBy,
-			scope: claw.scope,
-			scopeId: claw.scopeId,
-			grants: [],
+			createdBy: base.createdBy,
+			scope: base.scope,
+			scopeId: base.scopeId,
+			grants,
 		};
+	};
+
+	return async (method, methodInput, principal) => {
+		// Dynamic-kind methods (share/unshare): the target kind + id come from the INPUT. An unregistered
+		// kind or a missing field fails CLOSED (you can't (un)share what does not resolve).
+		const dynamic = DYNAMIC_KIND_METHODS[method as ClawApiMethod];
+		if (dynamic !== undefined) {
+			const kind = stringField(methodInput, dynamic.kindKey);
+			const id = stringField(methodInput, dynamic.idKey);
+			if (kind === undefined || id === undefined) return DENY_SHAPE;
+			return loadShape(kind, id);
+		}
+		// Static resource-anchored methods.
+		const anchor = CORE_API_RESOURCES[method as ClawApiMethod];
+		if (anchor === undefined) return personalScope(principal);
+		// A mapped kind with no loader = a deployment WITHOUT that store (no DB / no engine): NOT an access
+		// denial — fall to personalScope so the method's own config error surfaces (slice-1's behavior).
+		if (registry.get(anchor.kind) === undefined)
+			return personalScope(principal);
+		const id = stringField(methodInput, anchor.idKey);
+		if (id === undefined) return DENY_SHAPE;
+		return loadShape(anchor.kind, id);
 	};
 }
 
@@ -265,13 +402,34 @@ export function governApi(input: {
 	api: Record<string, unknown>;
 	engine: CedarEngine;
 	clawsStore: ClawsStore | undefined;
+	/** The durable run read model (from the engine) — feeds the `run` core loader (owner-isolation by
+	 *  the run's principal). `undefined` when no engine is configured; getRun/listRunEvents then fall to
+	 *  the method's own "requires a run read model" config error (via personalScope), not an authz deny. */
+	runs: ClawRunReadModel | undefined;
+	/** The generic ACL store — feeds real grants into the decision (slice 5). `undefined` → grants are
+	 *  `[]` (owner/scope still decide). */
+	grantStore: AccessGrantStore | undefined;
+	/** The entity-validating adapter (the one `configure` gets) — store-binds every plugin `shareable`
+	 *  loader. `undefined` on a no-database claw. */
+	adapter: Adapter | undefined;
+	/** The full plugin list — its `shareable` kinds merge into the loader registry (plugin-extensible). */
+	plugins: readonly EuroclawPlugin[];
 	resolveMemberships?: (
 		principal: string,
 	) => readonly ApiMembership[] | Promise<readonly ApiMembership[]>;
 	appAuthz: AppAuthzConfig | undefined;
 	warn: (message: string) => void;
 }): Record<string, unknown> {
-	const loadResource = resourceLoaderFor(input.clawsStore);
+	const registry = buildResourceRegistry({
+		clawsStore: input.clawsStore,
+		runs: input.runs,
+		adapter: input.adapter,
+		plugins: input.plugins,
+	});
+	const loadResource = resourceLoaderFor({
+		registry,
+		grantStore: input.grantStore,
+	});
 	const resolveMemberships = input.resolveMemberships ?? (() => []);
 	const unsafeOpen = input.appAuthz?.unsafeOpen === true;
 	const shadow = input.appAuthz?.posture === "shadow";

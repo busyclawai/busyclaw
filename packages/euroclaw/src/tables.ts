@@ -8,6 +8,7 @@
 // once — so a plugin's extra columns are migrated AND validated from one declaration. Nothing here —
 // and nothing in storage-durable — imports a plugin; registration is declarative.
 import {
+	accessGrantFields,
 	approvalFields,
 	authzChangeFields,
 	checkpointFields,
@@ -58,6 +59,8 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	// Slice 6b: customer policy slices + the append-only authz change log (its count keys the router).
 	policy_slice: policySliceFields,
 	authz_change: authzChangeFields,
+	// Slice 5: the generic shareable-resource ACL — one table for every kind (claw/thread/skill/…).
+	access_grant: accessGrantFields,
 };
 
 /**

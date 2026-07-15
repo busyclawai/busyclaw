@@ -1,4 +1,7 @@
 import type {
+	AccessGrantPermission,
+	AccessGrantRecord,
+	AccessGrantStore,
 	AppendMessageInput,
 	ApprovalRecord,
 	ApprovalStatus,
@@ -36,6 +39,7 @@ import type {
 	UpdateClawInput,
 } from "@euroclaw/contracts";
 import {
+	accessGrantPermission,
 	appendMessageInput,
 	approvalStatus,
 	asPrincipal,
@@ -152,6 +156,8 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly effects?: EffectStore;
 	readonly engine?: ClawEngineHandle;
 	readonly runs?: ClawRunReadModel;
+	/** The generic shareable-resource ACL store — backs the share/unshare api (slice 5). */
+	readonly grantStore?: AccessGrantStore;
 	readonly plugins?: readonly EuroclawPlugin[];
 	readonly registry?: RegistryStores;
 	/** The one-door reader (the full provider chain) — exposed so hosts and plugin api namespaces
@@ -292,6 +298,23 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	) => Promise<EngineRunHandle>;
 	getRun: (input: { id: string }) => Promise<EngineRunRecord | null>;
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
+
+	// The generic share/unshare api (slice 5) — write/revoke an access_grant on ANY shareable resource.
+	// LEVEL manage: the PEP requires the caller MANAGE the target (resourceKind, resourceId) first, so you
+	// can only share what you manage. `grantedBy` is the accountable grantor (coerced via asPrincipal),
+	// the same attribution convention as putPolicySlice.updatedBy / registerOpenApiSpec.registeredBy.
+	shareResource: (input: {
+		resourceKind: string;
+		resourceId: string;
+		principalRef: string;
+		permission: AccessGrantPermission;
+		grantedBy: string;
+	}) => Promise<AccessGrantRecord>;
+	unshareResource: (input: {
+		resourceKind: string;
+		resourceId: string;
+		principalRef: string;
+	}) => Promise<number>;
 };
 
 /** The FLAT api methods — the ones the method→route machinery maps. */
@@ -492,6 +515,38 @@ const continueEngineRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"run?": engineRunMetadataOrUndefined,
 });
+const shareResourceInput = ark({
+	resourceKind: ark("string").configure({
+		euroclaw: {
+			doc: "The OPAQUE kind label of the resource being shared (`claw`/`thread`/`skill`/…); the PEP loads it via the loader registry and requires the caller MANAGE it before the grant is written.",
+		},
+	}),
+	resourceId: "string",
+	principalRef: ark("string").configure({
+		euroclaw: {
+			doc: "The polymorphic grantee — `user:<id>` | `team:<id>` | `organization:<id>` | `public`. Opaque; `user:`/`public` grants are LIVE, `team:`/`organization:` land as data but stay dormant until memberships resolve.",
+		},
+	}),
+	permission: accessGrantPermission.configure({
+		euroclaw: {
+			doc: "The level conferred (`read` < `use` < `manage`); `share` folds into `manage`.",
+		},
+	}),
+	grantedBy: ark("string").configure({
+		euroclaw: {
+			doc: "The accountable grantor identity, coerced via `asPrincipal` before it is recorded — the audit stamp, same convention as putPolicySlice.updatedBy.",
+		},
+	}),
+});
+const unshareResourceInput = ark({
+	resourceKind: "string",
+	resourceId: "string",
+	principalRef: ark("string").configure({
+		euroclaw: {
+			doc: "The grantee whose grants on (resourceKind, resourceId) are revoked — removes EVERY level that principalRef held on the resource.",
+		},
+	}),
+});
 const registerOpenApiSpecInput = ark({
 	document: jsonObject.configure({
 		euroclaw: {
@@ -596,7 +651,9 @@ export const clawApiInputSchemas = {
 	registerOpenApiSpec: registerOpenApiSpecInput,
 	run: runInput,
 	sendMessage: sendMessageInput,
+	shareResource: shareResourceInput,
 	startRun: startRunInput,
+	unshareResource: unshareResourceInput,
 	updateClaw: ark({ id: "string", patch: updateClawPatchInput }),
 	updateToolCallStatus: ark({ id: "string", patch: toolCallStatusPatchInput }),
 	// Keyed by the SHARED name list (contracts), which closes the drift triangle at compile time:
@@ -698,6 +755,17 @@ function requireRegistry(registry: RegistryStores | undefined): RegistryStores {
 		});
 	}
 	return registry;
+}
+
+function requireGrantStore(
+	grantStore: AccessGrantStore | undefined,
+): AccessGrantStore {
+	if (!grantStore) {
+		throw configurationError("claw.api requires the access-grant store", {
+			reason: "pass database to createClaw",
+		});
+	}
+	return grantStore;
 }
 
 /** Reject a caller-supplied reserved (`euroclaw__`) context key — identity/authz facts are euroclaw's
@@ -1050,6 +1118,29 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 		getRun: ({ id }) => requireRuns(context.runs).get(id),
 		listRunEvents: ({ runId }) => requireRuns(context.runs).events(runId),
+
+		// The PEP has already required the caller MANAGE (resourceKind, resourceId) — so a write here is a
+		// share the caller is entitled to make. The store is org-blind; principalRef stays opaque.
+		shareResource: ({
+			resourceKind,
+			resourceId,
+			principalRef,
+			permission,
+			grantedBy,
+		}) =>
+			requireGrantStore(context.grantStore).create({
+				resourceKind,
+				resourceId,
+				principalRef,
+				permission,
+				grantedBy: asPrincipal(grantedBy),
+			}),
+		unshareResource: ({ resourceKind, resourceId, principalRef }) =>
+			requireGrantStore(context.grantStore).delete({
+				resourceKind,
+				resourceId,
+				principalRef,
+			}),
 	} satisfies ClawApi;
 
 	// The claws store is typed against the base claw contract, but at runtime it persists and returns

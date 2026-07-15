@@ -51,7 +51,9 @@ export const CLAW_API_METHOD_NAMES = [
 	"registerOpenApiSpec",
 	"run",
 	"sendMessage",
+	"shareResource",
 	"startRun",
+	"unshareResource",
 	"updateClaw",
 	"updateToolCallStatus",
 ] as const;
