@@ -67,6 +67,73 @@ import { modelFacingTools, registerToolGates, toolGovernance } from "./tools";
 
 export type RuntimeModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 
+/** One entry in a routing pool: a model directly, or a descriptor carrying tags, a default flag, and
+ *  an opt-out of PII redaction (for a local/trusted model that may receive raw values). */
+export type ModelPoolEntry =
+	| RuntimeModel
+	| {
+			readonly model: RuntimeModel;
+			readonly tags?: readonly string[];
+			readonly default?: boolean;
+			/**
+			 * When true, runs that select this model SKIP PII redaction entirely — the model receives
+			 * raw values, and (the flip side) nothing is tokenized, so durable state for those runs is
+			 * unredacted and therefore NOT per-subject erasable. Intended for a local/on-prem model
+			 * where third-party egress is not a concern. A no-op when the runtime has no redactor.
+			 */
+			readonly noPiiRedaction?: boolean;
+	  };
+
+/** A named pool of models for task-based routing — keys are the selectable names. */
+export type ModelPool = Record<string, ModelPoolEntry>;
+
+/**
+ * The model names selectable at run() for a given config: the pool's literal keys, or `never` for a
+ * single-`model` config (so `run({ model })` isn't offered at all — you can't over-specify). The
+ * `<const Config>` capture at createRuntime/createClaw is what makes these keys literal.
+ */
+export type ModelName<Config> = Config extends { models: infer Pool }
+	? Extract<keyof Pool, string>
+	: never;
+
+type IsUnion<T, U = T> = [T] extends [never]
+	? false
+	: T extends U
+		? [U] extends [T]
+			? false
+			: true
+		: false;
+
+type HasDefaultModel<Config> = Config extends { models: infer Pool }
+	? true extends {
+			[K in keyof Pool]: Pool[K] extends { default: true } ? true : false;
+		}[keyof Pool]
+		? true
+		: false
+	: false;
+
+/**
+ * The `model` shape for a config's run inputs: absent (`never`) for a single-`model` config;
+ * REQUIRED when the pool has ≥2 entries and no `default` (the caller must ask); optional when a
+ * `default` exists or the pool has one entry. Applied at the user-facing api boundary — the internal
+ * {@link RunOptionsFor} keeps `model` optional so generic plumbing stays assignable.
+ */
+export type ModelSelection<Config> = [ModelName<Config>] extends [never]
+	? { model?: never }
+	: HasDefaultModel<Config> extends true
+		? { model?: ModelName<Config> }
+		: IsUnion<ModelName<Config>> extends true
+			? { model: ModelName<Config> }
+			: { model?: ModelName<Config> };
+
+/** True when a run MUST name a `model`: the pool has ≥2 entries and no `default`. Lets the api make
+ *  `options`/`model` a required input in exactly that case. */
+export type RequiresExplicitModel<Config> = [ModelName<Config>] extends [never]
+	? false
+	: HasDefaultModel<Config> extends true
+		? false
+		: IsUnion<ModelName<Config>>;
+
 export type RuntimeAbortSignal = { readonly aborted: boolean };
 export type RuntimeRunOptions = {
 	abortSignal?: RuntimeAbortSignal;
@@ -86,6 +153,16 @@ export type RuntimeRunOptions = {
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
 };
 
+/**
+ * run() options for a given config: the base options plus `model` — the name of a pool entry to run
+ * this turn, narrowed to THIS config's literal pool keys (`never` for a single-`model` config, so
+ * the option can't be passed at all). `model` lives ONLY here, not on the base, so a plain
+ * `RuntimeRunOptions` (the internal plumbing passes these around) stays assignable.
+ */
+export type RunOptionsFor<Config> = RuntimeRunOptions & {
+	model?: ModelName<Config>;
+};
+
 export type RuntimeEnvironment = {
 	now?: () => string;
 	newId?: (prefix: string) => string;
@@ -96,7 +173,12 @@ export function defaultRuntimeNewId(prefix: string): string {
 }
 
 export type RuntimeConfig = {
-	model: RuntimeModel;
+	/** The single model — the shorthand most runtimes use. Mutually exclusive with `models`; exactly
+	 *  one of the two must be present (enforced at construction, and at compile time by createClaw). */
+	model?: RuntimeModel;
+	/** A named pool of models for task-based routing, selected per run via `run(…, { model })`. One
+	 *  entry is the default (`default: true`, or the sole entry). Mutually exclusive with `model`. */
+	models?: ModelPool;
 	tools?: ToolSet;
 	/** Resolve extra tools for THIS run (an organization's registered tools) from the resolved turn
 	 *  context, merged over the static `tools` ONCE per run. Code tools win name collisions — a
@@ -179,18 +261,18 @@ export type Runtime<Config extends RuntimeConfig = RuntimeConfig> = {
 	run: (
 		prompt: string,
 		ctx?: RunContext<Config>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	) => Promise<RuntimeResult>;
 	continueRun: (
 		id: string,
 		ctx?: RunContext<Config>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	) => Promise<RuntimeResult | null>;
 	/** Resume a yielded run from its checkpoint (consume-once). Null when absent/consumed. */
 	resumeRun: (
 		checkpointId: string,
 		ctx?: RunContext<Config>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	) => Promise<RuntimeResult | null>;
 	readonly audit?: AuditSink;
 	readonly approvals?: ApprovalStore;
@@ -395,9 +477,118 @@ export function recordingFromRuntimeApprovalMetadata(
 	return valid.recording;
 }
 
+/** A model chosen for a run, plus whether it opted out of PII redaction. */
+export type SelectedModel = {
+	readonly model: RuntimeModel;
+	readonly rawPii: boolean;
+};
+
+type ResolvedModelEntry = SelectedModel & {
+	readonly name: string;
+	readonly isDefault: boolean;
+};
+
+/** Split a pool entry into its model + default/raw flags. A bare language model carries
+ *  `specificationVersion` (the AI SDK's version discriminator); the descriptor form does not. */
+function poolEntryModel(entry: ModelPoolEntry): {
+	model: RuntimeModel;
+	isDefault: boolean;
+	rawPii: boolean;
+} {
+	if ("specificationVersion" in entry) {
+		return { model: entry, isDefault: false, rawPii: false };
+	}
+	return {
+		model: entry.model,
+		isDefault: entry.default === true,
+		rawPii: entry.noPiiRedaction === true,
+	};
+}
+
+/**
+ * Resolve the config's model policy into a per-run selector, validating ONCE at construction:
+ * `model` and `models` are mutually exclusive and exactly one is required; a pool needs a single
+ * default (marked `default: true`, or the sole entry). The returned selector maps a run's chosen
+ * name to its model, or the default when unpinned — fail-closed on an unknown name.
+ */
+function createModelSelector(
+	config: RuntimeConfig,
+): (name: string | undefined) => SelectedModel {
+	const pool = config.models;
+	const single = config.model;
+	if (pool !== undefined) {
+		if (single !== undefined) {
+			throw configurationError(
+				"`model` and `models` are mutually exclusive — use the single-model shorthand or the pool, not both",
+			);
+		}
+		const entries: ResolvedModelEntry[] = Object.entries(pool).map(
+			([name, entry]) => {
+				const { model, isDefault, rawPii } = poolEntryModel(entry);
+				return { name, model, isDefault, rawPii };
+			},
+		);
+		if (entries.length === 0) {
+			throw configurationError(
+				"`models` pool is empty — provide at least one model",
+			);
+		}
+		const flagged = entries.filter((entry) => entry.isDefault);
+		if (flagged.length > 1) {
+			throw configurationError(
+				"more than one model marked `default: true` — mark exactly one",
+				{ models: flagged.map((entry) => entry.name) },
+			);
+		}
+		// A pool with no default is VALID — it just means selection is mandatory (the caller must
+		// "ask"). Enforced at compile time for the api surfaces; here it's the run-time backstop.
+		const defaultEntry =
+			flagged[0] ?? (entries.length === 1 ? entries[0] : undefined);
+		const byName = new Map<string, SelectedModel>(
+			entries.map((entry) => [
+				entry.name,
+				{ model: entry.model, rawPii: entry.rawPii },
+			]),
+		);
+		return (name) => {
+			if (name === undefined) {
+				if (defaultEntry === undefined) {
+					throw configurationError(
+						"no model selected and the `models` pool has no default — pass `{ model }` or mark one entry `default: true`",
+						{ models: entries.map((entry) => entry.name) },
+					);
+				}
+				return { model: defaultEntry.model, rawPii: defaultEntry.rawPii };
+			}
+			const selected = byName.get(name);
+			if (selected === undefined) {
+				throw configurationError(`unknown model "${name}"`, {
+					available: [...byName.keys()],
+				});
+			}
+			return selected;
+		};
+	}
+	if (single !== undefined) {
+		const resolved: SelectedModel = { model: single, rawPii: false };
+		return (name) => {
+			if (name !== undefined) {
+				throw configurationError(
+					`model "${name}" was selected but no \`models\` pool is configured`,
+				);
+			}
+			return resolved;
+		};
+	}
+	throw configurationError(
+		"no model configured — provide `model` or a non-empty `models` pool",
+	);
+}
+
 export function createRuntime<const Config extends RuntimeConfig>(
 	config: Config,
 ): Runtime<Config> {
+	const selectModel = createModelSelector(config);
 	const now = config.environment?.now ?? (() => new Date().toISOString());
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const maxSteps = config.maxSteps ?? 8;
@@ -539,19 +730,20 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				}
 			: undefined;
 
-	// The one redaction seam runtime hands the loop: ingress (prompt, tool outputs) + events.
+	// The one redaction seam runtime hands the loop: ingress (prompt, tool outputs) + events. The
+	// `redactor` is per-run — a model that opted out of redaction (noPiiRedaction) runs with `undefined`.
 	const redactValue = async <T>(
 		value: T,
 		ctx: Record<string, unknown>,
+		redactor: Redactor | undefined = config.redactor,
 	): Promise<T> =>
-		config.redactor
-			? config.redactor.redactValue(value, redactionContextFrom(ctx))
-			: value;
+		redactor ? redactor.redactValue(value, redactionContextFrom(ctx)) : value;
 
 	const createRunCore = (
 		state: RunState,
 		approvalStoreOverride = approvalStore,
 		runTools: ToolSet = tools,
+		redactor: Redactor | undefined = config.redactor,
 	) => {
 		const resolveGovernanceContext = async (
 			ctx: Record<string, unknown>,
@@ -569,7 +761,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			return resolved;
 		};
 		const core = createGovernance({
-			redactor: config.redactor,
+			redactor,
 			audit: config.audit,
 			approvalStore: approvalStoreOverride,
 			approvalMetadata: () => {
@@ -637,7 +829,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				const effectPolicy = stamp?.effect;
 				const outputMode = effectOutputMode(effectPolicy);
 				if (!effectStore) return execute(state.abortSignal);
-				if (outputMode === "redacted" && !config.redactor) {
+				if (outputMode === "redacted" && !redactor) {
 					throw configurationError(
 						"redacted effect output requires a redactor",
 						{ toolName: call.name },
@@ -717,8 +909,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						outputMode === "none"
 							? undefined
 							: toJsonValue(
-									outputMode === "redacted" && config.redactor
-										? await config.redactor.redactValue(
+									outputMode === "redacted" && redactor
+										? await redactor.redactValue(
 												output,
 												redactionContextFrom(_ctx),
 											)
@@ -741,7 +933,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 							leaseToken: claim.leaseToken,
 							error: await redactedErrorPayload({
 								err,
-								redactor: config.redactor,
+								redactor,
 								ctx: _ctx,
 							}),
 							now: now(),
@@ -768,7 +960,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const getNestedCore = (): Governance => {
 			if (nested) return nested;
 			const built = createGovernance({
-				redactor: config.redactor,
+				redactor,
 				audit: config.audit,
 				plugins: config.plugins,
 				resolveContext: resolveGovernanceContext,
@@ -793,11 +985,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					// subagent), so the real leaf-tool output must be re-redacted before it crosses back.
 					// Keyed on the resolved nested context so re-redaction stays within the run's subject
 					// scope. No-op without a redactor.
-					return config.redactor
-						? config.redactor.redactValue(
-								output,
-								redactionContextFrom(nestedCtx),
-							)
+					return redactor
+						? redactor.redactValue(output, redactionContextFrom(nestedCtx))
 						: output;
 				},
 				now,
@@ -864,7 +1053,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const run = async (
 		prompt: string,
 		ctx?: Record<string, unknown>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	): Promise<RuntimeResult> => {
 		const state = createRunState();
 		state.runInstanceId = newId("runstate");
@@ -878,9 +1067,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const emitCtx = { recording, runId: options?.runId };
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const selected = selectModel(options?.model);
 		const core = createRunCore(state, approvalStore, runTools);
-		// Ingress: the prompt is redacted ONCE — the run.started event and the transcript share
-		// the same placeholder text (the loop never re-redacts what it receives).
+		// Ingress redaction ALWAYS runs — durable state (transcript, mappings, subjects) stays
+		// tokenized even for a noPiiRedaction model. Raw only happens at the model boundary (rawPii
+		// below): the loop rehydrates the prompt for that model and re-redacts its output.
 		const redactedPrompt = String(await redactValue(prompt, resolvedCtx));
 		await emitEvent(emitCtx, {
 			prompt: redactedPrompt,
@@ -888,7 +1079,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		});
 		// `usage` rides the loop result only as far as the terminal event — never the public result.
 		const { usage: runUsage, ...result } = await runAiSdkLoop({
-			model: config.model,
+			model: selected.model,
+			rawPii: selected.rawPii,
 			tools: runModelTools,
 			system: config.system,
 			prompt: redactedPrompt,
@@ -915,7 +1107,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const continueRun = async (
 		id: string,
 		ctx?: Record<string, unknown>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	): Promise<RuntimeResult | null> => {
 		abortIfNeeded(options?.abortSignal);
 		assertYieldable(options);
@@ -968,6 +1160,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			return null;
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const selected = selectModel(options?.model);
 
 		const state = createRunState();
 		state.runInstanceId = `approval:${id}`;
@@ -1050,7 +1243,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		resumeState.runId = options?.runId;
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.
 		const { usage: runUsage, ...result } = await runAiSdkLoop({
-			model: config.model,
+			model: selected.model,
+			rawPii: selected.rawPii,
 			tools: runModelTools,
 			system: config.system,
 			messages,
@@ -1081,7 +1275,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const resumeRun = async (
 		checkpointId: string,
 		ctx?: Record<string, unknown>,
-		options?: RuntimeRunOptions,
+		options?: RunOptionsFor<Config>,
 	): Promise<RuntimeResult | null> => {
 		abortIfNeeded(options?.abortSignal);
 		if (!runCheckpointStore) return null;
@@ -1095,6 +1289,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const emitCtx = { recording, runId };
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const selected = selectModel(options?.model);
 
 		const state = createRunState();
 		state.runInstanceId = `checkpoint:${checkpointId}`;
@@ -1105,7 +1300,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.
 		const { usage: runUsage, ...result } = await runAiSdkLoop({
-			model: config.model,
+			model: selected.model,
+			rawPii: selected.rawPii,
 			tools: runModelTools,
 			system: config.system,
 			messages: checkpoint.messages,

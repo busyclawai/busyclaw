@@ -8,6 +8,7 @@ import {
 	type PiiKind,
 	type PiiMapping,
 	type PiiMappingStore,
+	type PiiSpan,
 	piiMapping,
 	piiSpans,
 	type RedactionContext,
@@ -110,11 +111,8 @@ export type StoredRedactorOptions = {
 	warn?: (message: string) => void;
 };
 
-function cleanSpans(
-	spans: ReturnType<Detector>,
-	textLength: number,
-): ReturnType<Detector> {
-	const out: ReturnType<Detector> = [];
+function cleanSpans(spans: PiiSpan[], textLength: number): PiiSpan[] {
+	const out: PiiSpan[] = [];
 	let lastEnd = 0;
 	for (const span of [...spans].sort(
 		(a, b) => a.start - b.start || b.end - a.end,
@@ -177,7 +175,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		text: string,
 		ctx?: RedactionContext,
 	): Promise<string> => {
-		const detected = piiSpans(detect(text));
+		const detected = piiSpans(await detect(text));
 		if (detected instanceof type.errors) {
 			throw validationError(
 				"detector returned invalid PII spans",
@@ -332,8 +330,12 @@ export function createInertRedactor(): Redactor {
 	};
 }
 
-/** Union of detectors: run all, concatenate spans. Overlaps are resolved by the redactor's span
- *  cleaning — earliest start wins, ties go to the longer span. */
+/** Union of detectors: run all (concurrently), concatenate spans. Sync and async detectors mix
+ *  freely — the result is a `Promise` whenever any member is async. Overlaps are resolved by the
+ *  redactor's span cleaning — earliest start wins, ties go to the longer span. */
 export function composeDetectors(...detectors: readonly Detector[]): Detector {
-	return (text) => detectors.flatMap((detect) => detect(text));
+	return async (text) => {
+		const results = await Promise.all(detectors.map((detect) => detect(text)));
+		return results.flat();
+	};
 }

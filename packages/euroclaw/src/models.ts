@@ -1,6 +1,7 @@
 // Model extension — the better-auth `additionalFields` analog. A default model is a field map
-// (`clawFields`, …); the host adds fields via `createClaw({ models: { claw: { additionalFields } } })`
-// and plugins via `plugin.schema.claw.fields`. This module folds those into the merged field map per
+// (`clawFields`, …); the host adds fields via `createClaw({ schema: { claw: { additionalFields } } })`
+// and plugins via `plugin.schema.claw.fields` (host and plugin extend columns through the same
+// `schema` word). This module folds those into the merged field map per
 // model (default < plugin < host) and re-derives the record + create-input types from it — the same
 // literal drives the runtime schema/validators (assembly) and these inferred types, so they can't
 // drift. Runtime persistence of the merged columns is wired in the assembly + stores.
@@ -14,9 +15,9 @@ import type {
 } from "@euroclaw/contracts";
 import type { clawRedactionFields } from "./redaction";
 
-/** Extra fields the host declares for model `M` via `createClaw({ models: { <M>: { additionalFields } } })`. */
+/** Extra fields the host declares for model `M` via `createClaw({ schema: { <M>: { additionalFields } } })`. */
 export type HostModelFields<Config, M extends string> = Config extends {
-	models: infer Models;
+	schema: infer Models;
 }
 	? Models extends Record<M, { additionalFields: infer F }>
 		? F extends Record<string, EntityField>
@@ -70,10 +71,11 @@ export type CreateClawInputOf<Config> = EntitySchemaInput<
 
 /**
  * Host-facing config for extending default models with extra columns — the `additionalFields` analog
- * of better-auth's `user.additionalFields`. Declared on `createClaw({ models })`; the fields become
- * real persisted, queryable columns surfaced on the record (see {@link HostModelFields}).
+ * of better-auth's `user.additionalFields`. Declared on `createClaw({ schema })` (named to mirror the
+ * plugin surface `plugin.schema.claw.fields`, and to free the top-level `models` for LLMs); the
+ * fields become real persisted, queryable columns surfaced on the record (see {@link HostModelFields}).
  */
-export type ClawModelsConfig = {
+export type ClawSchemaConfig = {
 	readonly claw?: { readonly additionalFields: Record<string, EntityField> };
 };
 

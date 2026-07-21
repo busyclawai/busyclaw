@@ -60,12 +60,15 @@ import {
 } from "@euroclaw/contracts";
 import {
 	createSpecRegistry,
+	type ModelName,
+	type ModelSelection,
 	REGISTER_OPENAPI_SPEC_ACTION,
+	type RequiresExplicitModel,
 	type RunContext,
+	type RunOptionsFor,
 	type Runtime,
 	type RuntimeConfig,
 	type RuntimeResult,
-	type RuntimeRunOptions,
 	recordingFromRuntimeApprovalMetadata,
 	runtimeRunOptionsWithRecording,
 	type SpecRegistrationReport,
@@ -87,7 +90,8 @@ export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	ctx?: RunContext<Config>;
 	runId?: string;
 	view?: MessageView;
-};
+} /** `model` names the pool entry that answers this message — REQUIRED when the pool has ≥2 entries
+ *  and no default, optional when a default exists, and absent for a single-`model` claw. */ & ModelSelection<Config>;
 
 export type ClawSendResult = {
 	result: RuntimeResult;
@@ -219,15 +223,19 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		runId: string;
 	}) => Promise<CheckpointRecord | null>;
 
-	run: (input: {
-		prompt: string;
-		ctx?: RunContext<Config>;
-		options?: RuntimeRunOptions;
-	}) => Promise<RuntimeResult>;
+	run: (
+		input: {
+			prompt: string;
+			ctx?: RunContext<Config>;
+		} & // default — the compile-time "you must ask" — otherwise optional. // `options` (carrying `model`) is REQUIRED exactly when the pool has ≥2 entries and no
+		(RequiresExplicitModel<Config> extends true
+			? { options: RunOptionsFor<Config> & { model: ModelName<Config> } }
+			: { options?: RunOptionsFor<Config> }),
+	) => Promise<RuntimeResult>;
 	continueRun: (input: {
 		approvalId: string;
 		ctx?: RunContext<Config>;
-		options?: RuntimeRunOptions;
+		options?: RunOptionsFor<Config>;
 	}) => Promise<RuntimeResult | null>;
 
 	grantApproval: (input: {
@@ -327,7 +335,12 @@ const runtimeAbortSignalInput = ark({
 const runtimeRunOptionsInput = ark({
 	"abortSignal?": runtimeAbortSignalInput.or("undefined").configure({
 		euroclaw: {
-			doc: "The only run option accepted over the wire — the schema drops `runMode`/recording, which are set server-side.",
+			doc: "A run option accepted over the wire; the schema drops `runMode`/recording, which are set server-side.",
+		},
+	}),
+	"model?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Which model from the `models` pool runs this turn (by name); omit → the pool default. An unknown name fails closed. The TYPE narrows this to the config's pool keys for in-process callers; over the wire it is a validated string.",
 		},
 	}),
 });
@@ -415,6 +428,11 @@ const sendMessageInput = ark({
 	"view?": ark("'redacted' | 'original' | undefined").configure({
 		euroclaw: {
 			doc: "Like `listMessages`, `'original'` re-identifies only the returned result object and is audited; a no-op without redaction.",
+		},
+	}),
+	"model?": ark("string | undefined").configure({
+		euroclaw: {
+			doc: "Which model from the `models` pool answers this message (by name); omit → the pool default. TYPE-narrowed to the config's pool keys for in-process callers.",
 		},
 	}),
 });
@@ -910,16 +928,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			const result = await context.runtime.run(
 				args.message,
 				args.ctx as never,
-				// A conversational message is a human at the other end → interactive.
-				runtimeRunOptionsWithRecording(
-					{ runMode: "interactive" },
-					{
-						clawId: args.clawId,
-						runId,
-						threadId: args.threadId,
-						userMessageId: userMessage.id,
-					},
-				),
+				// A conversational message is a human at the other end → interactive. The chosen model
+				// (if any) rides alongside the server-set recording/runMode options.
+				{
+					...runtimeRunOptionsWithRecording(
+						{ runMode: "interactive" },
+						{
+							clawId: args.clawId,
+							runId,
+							threadId: args.threadId,
+							userMessageId: userMessage.id,
+						},
+					),
+					model: args.model,
+				},
 			);
 			const response = { result, userMessage };
 			if (args.view !== "original" || context.redaction === undefined) {

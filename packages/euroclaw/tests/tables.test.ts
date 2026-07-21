@@ -22,7 +22,7 @@ describe("getEuroclawTables", () => {
 
 	it("extends a core table with the host's additionalFields", () => {
 		const tables = getEuroclawTables({
-			models: {
+			schema: {
 				claw: {
 					additionalFields: { priority: field.number({ required: true }) },
 				},
@@ -80,7 +80,7 @@ describe("getEuroclawTables", () => {
 			schema: { claw: { fields: { priority: field.string() } } },
 		} satisfies EuroclawPlugin;
 		const tables = getEuroclawTables({
-			models: {
+			schema: {
 				claw: {
 					additionalFields: { priority: field.number({ required: true }) },
 				},

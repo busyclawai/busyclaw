@@ -7,7 +7,7 @@ import { describe, test } from "vitest";
 import { type Channel, channels } from "../src/index";
 import { telegram } from "../src/telegram/index";
 
-declare const model: RuntimeConfig["model"];
+declare const model: NonNullable<RuntimeConfig["model"]>;
 
 // A second provider for the mixed-registry case (channels() rejects duplicate providers at runtime).
 // Webhook-only with an explicit `$poll: false`, so it never contributes the cron requirement.

@@ -43,8 +43,9 @@ import {
 import { buildFloorPolicyPlugin } from "./authz-floor";
 import { type ClawDatabase, resolveDatabase } from "./database";
 import { createClawRuntimeEventSink } from "./events";
-import type { ClawModelsConfig, RequireNoCoreColumnCollision } from "./models";
+import type { ClawSchemaConfig, RequireNoCoreColumnCollision } from "./models";
 import {
+	normalizeRedactionConfig,
 	REDACTION_SYSTEM_FRAGMENT,
 	type RedactionConfig,
 	resolveRedaction,
@@ -106,9 +107,12 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 		EuroclawCronFlag
 	>;
 	events?: RuntimeEventSink | readonly RuntimeEventSink[];
-	models?: ClawModelsConfig;
-	/** Redaction POLICY — posture, detector, dedup key. The assembly builds the mechanism from the
-	 *  same `database` as every other store; `createRuntime.redactor` stays the mechanism port. */
+	/** Entity-column extension per DB model — the `additionalFields` analog, mirroring
+	 *  `plugin.schema.claw.fields`. (Not LLMs — see `model`/`models`.) */
+	schema?: ClawSchemaConfig;
+	/** Redaction POLICY — a `Detector[]` (strict over those detectors), or the object form for
+	 *  posture, dedup key, and `raw`/`per-claw`. The assembly builds the mechanism from the same
+	 *  `database` as every other store; `createRuntime.redactor` stays the mechanism port. */
 	redaction?: RedactionConfig;
 	stores?: ClawStores;
 };
@@ -383,11 +387,37 @@ function registeredToolResolver(
 	};
 }
 
+/**
+ * `createClaw` constraint: a claw needs exactly one model source. Resolves to `unknown` (no-op) when
+ * `model` is present, or `models` is a non-empty pool; otherwise to an error-shaped type whose keys
+ * name the problem in the compile error. Mirrors {@link RequireNoCoreColumnCollision}. The runtime
+ * `createModelSelector` backstops JS / `as any` callers.
+ */
+export type RequireModelOrModels<Config> = Config extends { model: object }
+	? Config extends { models: object }
+		? {
+				readonly "ERROR: `model` and `models` are mutually exclusive": never;
+				readonly "FIX: use the single-model `model`, or the `models` pool — not both": never;
+			}
+		: unknown
+	: Config extends { models: infer Pool }
+		? [keyof Pool] extends [never]
+			? {
+					readonly "ERROR: the `models` pool is empty": never;
+					readonly "FIX: add at least one named model, e.g. models: { fast: … }": never;
+				}
+			: unknown
+		: {
+				readonly "ERROR: createClaw needs a model": never;
+				readonly "FIX: pass `model` (single) or a non-empty `models` pool": never;
+			};
+
 export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	config: Config &
 		RequireCronHandler<Config> &
 		RequireUniquePluginRoutePaths<Config> &
 		RequireNoCoreColumnCollision<Config> &
+		RequireModelOrModels<Config> &
 		RequireDatabaseForPlugins<Config>,
 ): Claw<ResolvedConfig<Config>> {
 	const adapter = config.database
@@ -457,17 +487,18 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	// MODEL map (fields per model) also drives the entity-validating adapter handed to plugins below —
 	// migration and persistence share one source.
 	const models = getEuroclawModels({
-		models: config.models,
+		schema: config.schema,
 		plugins: pluginList,
 		redaction: config.redaction,
 	});
 	const modelFields = collectModelFields(
 		pluginList,
-		config.models,
+		config.schema,
 		config.redaction,
 	);
 	const clawAdditionalFields = modelFields.claw;
-	const perClawRedaction = config.redaction?.posture === "per-claw";
+	const perClawRedaction =
+		normalizeRedactionConfig(config.redaction)?.posture === "per-claw";
 	const resolvedClawsStore =
 		config.stores?.claws ??
 		(adapter

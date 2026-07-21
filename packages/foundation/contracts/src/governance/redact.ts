@@ -139,8 +139,9 @@ export function redactionContextFrom(
 		: out;
 }
 
-/** Finds PII spans in a string. Swap in a model/Presidio detector later. */
-export type Detector = (text: string) => PiiSpan[];
+/** Finds PII spans in a string. Sync for pattern detectors (regex/schema); a `Promise` for
+ *  network-backed ones (a Presidio analyzer, an NER model). The redactor awaits either. */
+export type Detector = (text: string) => PiiSpan[] | Promise<PiiSpan[]>;
 
 /** Redact/rehydrate any value (deep). The governance talks only to this shape. */
 export type Redactor = {

@@ -13,6 +13,7 @@ import type {
 import { configurationError, field } from "@euroclaw/contracts";
 import {
 	type ContainerPosture,
+	composeDetectors,
 	createInertRedactor,
 	createMemoryPiiMappingStore,
 	createRoutingRedactor,
@@ -31,12 +32,14 @@ export const clawRedactionFields = {
 export type StrictRedactionConfig = {
 	/** Every container redacted. The default arm. */
 	posture?: "strict";
-	/** What counts as PII. Omit → armed-but-silent (mechanism on, nothing detected). */
-	detector?: Detector;
+	/** What counts as PII: the detectors to run, unioned (regex + Presidio + your own). Omit or
+	 *  empty → armed-but-silent (mechanism on, nothing detected). Overlaps across detectors are
+	 *  resolved centrally (earliest start wins, ties to the longer span) — no `composeDetectors`. */
+	detectors?: readonly Detector[];
 	/** Dedup key — deterministic placeholders per (value, kind, container). Loss/rotation only
 	 *  resets dedup, never rehydration. */
 	indexKey?: string;
-	/** Full-custom escape hatch (tests, exotic stores); mutually exclusive with detector/indexKey. */
+	/** Full-custom escape hatch (tests, exotic stores); mutually exclusive with detectors/indexKey. */
 	redactor?: Redactor;
 };
 
@@ -52,9 +55,30 @@ export type PerClawRedactionConfig = Omit<StrictRedactionConfig, "posture"> & {
 export type RawRedactionConfig = { posture: "raw" };
 
 export type RedactionConfig =
+	/** Bare shorthand: `redaction: [regexDetector, presidioDetector({ url })]` — strict posture over
+	 *  exactly these detectors. Reach for the object form when you need `indexKey`, `raw`, or
+	 *  `per-claw`. */
+	| readonly Detector[]
 	| StrictRedactionConfig
 	| PerClawRedactionConfig
 	| RawRedactionConfig;
+
+type ObjectRedactionConfig =
+	| StrictRedactionConfig
+	| PerClawRedactionConfig
+	| RawRedactionConfig;
+
+/** Fold the bare-`Detector[]` shorthand into its object form, so every reader (resolver, table
+ *  collection, per-claw check) sees one shape. */
+export function normalizeRedactionConfig(
+	config: RedactionConfig | undefined,
+): ObjectRedactionConfig | undefined {
+	if (config === undefined) return undefined;
+	if (Array.isArray(config)) return { posture: "strict", detectors: config };
+	// Array.isArray does not narrow a `readonly Detector[]` out of the union (its guard is `any[]`),
+	// so the array case is already handled above — this is the object form.
+	return config as ObjectRedactionConfig;
+}
 
 /** The placeholder contract, appended to the system prompt whenever redaction is armed — the model
  *  must know the tokens are stable, opaque, and to be passed to tools verbatim. */
@@ -126,7 +150,7 @@ export function resolveRedaction(input: {
 	clawsStore: ClawsStore | undefined;
 	warn: (message: string) => void;
 }): ResolvedRedaction {
-	const cfg = input.config;
+	const cfg = normalizeRedactionConfig(input.config);
 	if (cfg === undefined) return { armed: false, perClaw: false };
 
 	if (cfg.posture === "raw") {
@@ -156,12 +180,15 @@ export function resolveRedaction(input: {
 		};
 	}
 
-	if (
-		cfg.redactor &&
-		(cfg.detector !== undefined || cfg.indexKey !== undefined)
-	) {
+	// Union the configured detectors into one; overlaps resolve centrally in the redactor.
+	const detectors = cfg.detectors;
+	const detector =
+		detectors !== undefined && detectors.length > 0
+			? composeDetectors(...detectors)
+			: undefined;
+	if (cfg.redactor && (detector !== undefined || cfg.indexKey !== undefined)) {
 		throw configurationError(
-			"redaction.redactor is mutually exclusive with detector/indexKey",
+			"redaction.redactor is mutually exclusive with detectors/indexKey",
 			{ reason: "a custom redactor owns its own detection and dedup" },
 		);
 	}
@@ -181,7 +208,7 @@ export function resolveRedaction(input: {
 			: createMemoryPiiMappingStore();
 		strict = createStoredRedactor({
 			mappings,
-			...(cfg.detector !== undefined ? { detector: cfg.detector } : {}),
+			...(detector !== undefined ? { detector } : {}),
 			...(cfg.indexKey !== undefined ? { indexKey: cfg.indexKey } : {}),
 			warn: input.warn,
 		});
@@ -189,7 +216,7 @@ export function resolveRedaction(input: {
 			await mappings.deleteForSubject(subjectId);
 		};
 	}
-	const armed = cfg.redactor !== undefined || cfg.detector !== undefined;
+	const armed = cfg.redactor !== undefined || detector !== undefined;
 	// The handle rides the FINAL resolved redactor (routing included), so its `redact`/`original`
 	// honor per-claw posture exactly like the runtime does.
 	const handleOver = (redactor: Redactor): ClawRedactionHandle => ({

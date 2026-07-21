@@ -5,21 +5,33 @@ import type { LanguageModelMiddleware } from "ai";
 import type { RunState } from "./run-state";
 import type { RuntimeModel } from "./runtime";
 
-/** AI SDK middleware for the model boundary: redact prompt before provider egress, then run core model boundary. */
+/**
+ * AI SDK middleware for the model boundary: redact the prompt before provider egress, then run the
+ * core model boundary. When `rawPii` (the selected model opted out of redaction — a local/trusted
+ * model), the boundary TRANSLATES instead: it rehydrates the prompt so the model sees real values,
+ * and re-redacts the model's output so everything the loop persists stays tokenized. Durable state
+ * is never raw — only the model, in-flight, is.
+ */
 export function modelMiddleware(
 	core: Governance,
 	model: RuntimeModel,
 	ctx: Record<string, unknown> | undefined,
 	resolvedCtx: Record<string, unknown>,
 	state: RunState,
+	rawPii: boolean,
 ): LanguageModelMiddleware {
 	return {
 		transformParams: async ({ params }) => ({
 			...params,
-			prompt: await core.redactor.redactValue(
-				params.prompt,
-				redactionContextFrom(resolvedCtx),
-			),
+			prompt: rawPii
+				? await core.redactor.rehydrateValue(
+						params.prompt,
+						redactionContextFrom(resolvedCtx),
+					)
+				: await core.redactor.redactValue(
+						params.prompt,
+						redactionContextFrom(resolvedCtx),
+					),
 		}),
 		wrapGenerate: async ({ doGenerate, params }) => {
 			state.currentModelRunner = doGenerate;
@@ -75,8 +87,20 @@ export function modelMiddleware(
 					},
 					ctx,
 				);
-				if (result.status === "ok")
-					return result.output as Awaited<ReturnType<typeof doGenerate>>;
+				if (result.status === "ok") {
+					const output = result.output as Awaited<
+						ReturnType<typeof doGenerate>
+					>;
+					// A rawPii model saw raw values and may have emitted raw PII — re-redact its output
+					// so what the loop persists (assistant text, tool-call args) stays tokenized, and
+					// any new value gets its own placeholder + subject.
+					return rawPii
+						? await core.redactor.redactValue(
+								output,
+								redactionContextFrom(resolvedCtx),
+							)
+						: output;
+				}
 				throw stateError("model boundary gate denied model call", {
 					status: result.status,
 					gateId: result.gateId,

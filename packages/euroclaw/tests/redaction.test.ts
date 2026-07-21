@@ -1,6 +1,6 @@
 // The createClaw `redaction` config group: posture resolution, the boot decision, per-claw
 // routing, birth-immutability, and the schema injection. See docs/plans/redaction-dx-plan.md.
-import type { ClawsStore } from "@euroclaw/contracts";
+import type { ClawsStore, Detector, PiiSpan } from "@euroclaw/contracts";
 import { field } from "@euroclaw/contracts";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import type { wrapLanguageModel } from "ai";
@@ -79,13 +79,45 @@ describe("createClaw redaction group", () => {
 		const claw = createClaw({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
-			redaction: { detector: emailDetector, indexKey: "test-key" },
+			redaction: { detectors: [emailDetector], indexKey: "test-key" },
 		});
 		const result = await claw.$context.runtime.run("email a@b.com the offer");
 		expect(result.status).toBe("completed");
 		expect(received.prompt).not.toContain("a@b.com");
 		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
 		expect(received.prompt).toContain("privacy placeholders");
+	});
+
+	it("bare Detector[] shorthand unions detectors — strict over all of them", async () => {
+		const received = { prompt: "" };
+		// A second, trivial detector, unioned with the email one by the array — no composeDetectors().
+		const wordDetector: Detector = (text) => {
+			const spans: PiiSpan[] = [];
+			for (const match of text.matchAll(/SECRET/g)) {
+				const start = match.index ?? 0;
+				spans.push({
+					start,
+					end: start + "SECRET".length,
+					value: "SECRET",
+					kind: "secret",
+					source: "regex",
+				});
+			}
+			return spans;
+		};
+		const claw = createClaw({
+			database: memoryAdapter(),
+			model: promptCaptureModel(received),
+			redaction: [emailDetector, wordDetector],
+		});
+		const result = await claw.$context.runtime.run(
+			"email a@b.com re SECRET plan",
+		);
+		expect(result.status).toBe("completed");
+		expect(received.prompt).not.toContain("a@b.com");
+		expect(received.prompt).not.toContain("SECRET");
+		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(received.prompt).toMatch(/\{\{pii:secret:[a-z0-9]+\}\}/);
 	});
 
 	it("armed-but-silent (no detector): no placeholder contract in the system prompt", async () => {
@@ -111,7 +143,7 @@ describe("createClaw redaction group", () => {
 						redactValue: async (value) => value,
 						rehydrateValue: async (value) => value,
 					},
-					detector: emailDetector,
+					detectors: [emailDetector],
 				},
 			}),
 		).toThrow(/mutually exclusive/);
@@ -140,7 +172,7 @@ describe("per-claw posture routing", () => {
 			config: {
 				posture: "per-claw",
 				default: "strict",
-				detector: emailDetector,
+				detectors: [emailDetector],
 				indexKey: "test-key",
 			},
 			adapter: undefined,
@@ -180,7 +212,7 @@ describe("per-claw posture routing", () => {
 		const resolved = resolveRedaction({
 			config: {
 				posture: "per-claw",
-				detector: emailDetector,
+				detectors: [emailDetector],
 				indexKey: "test-key",
 			},
 			adapter: undefined,
@@ -199,7 +231,7 @@ describe("per-claw posture routing", () => {
 	it('requires a database ("per-claw" without a claws store fails loud)', () => {
 		expect(() =>
 			resolveRedaction({
-				config: { posture: "per-claw", detector: emailDetector },
+				config: { posture: "per-claw", detectors: [emailDetector] },
 				adapter: undefined,
 				clawsStore: undefined,
 				warn: () => {},
@@ -234,7 +266,7 @@ describe("governed read path (view + forgetSubject)", () => {
 			database: db,
 			model: textModel("noted"),
 			audit,
-			redaction: { detector: emailDetector, indexKey: "test-key" },
+			redaction: { detectors: [emailDetector], indexKey: "test-key" },
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
@@ -374,7 +406,7 @@ describe("per-claw schema injection", () => {
 	it("rejects a host redeclaring the redaction column", () => {
 		expect(() =>
 			getEuroclawTables({
-				models: {
+				schema: {
 					claw: { additionalFields: { redaction: field.string({}) } },
 				},
 				redaction: { posture: "per-claw" },

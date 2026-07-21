@@ -10,7 +10,7 @@ describe("createClaw model extension", () => {
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },
-			models: {
+			schema: {
 				claw: {
 					additionalFields: {
 						priority: field.number({ required: true }),

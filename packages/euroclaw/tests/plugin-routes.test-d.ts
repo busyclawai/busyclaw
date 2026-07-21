@@ -4,7 +4,7 @@ import type { EuroclawPlugin } from "@euroclaw/contracts";
 import { describe, test } from "vitest";
 import { createClaw, type RuntimeConfig } from "../src/index";
 
-declare const model: RuntimeConfig["model"];
+declare const model: NonNullable<RuntimeConfig["model"]>;
 
 describe("createClaw plugin route paths", () => {
 	test("distinct route paths are accepted; duplicate literal paths are rejected", () => {

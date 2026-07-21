@@ -32,8 +32,12 @@ import {
 } from "@euroclaw/contracts";
 import type { EntityModelMap, SchemaDeclaration } from "@euroclaw/storage-core";
 import { teamInviteEntity, teamMemberEntity } from "@euroclaw/storage-durable";
-import type { ClawModelsConfig } from "./models";
-import { clawRedactionFields, type RedactionConfig } from "./redaction";
+import type { ClawSchemaConfig } from "./models";
+import {
+	clawRedactionFields,
+	normalizeRedactionConfig,
+	type RedactionConfig,
+} from "./redaction";
 
 /** The models euroclaw's own durable stores own — the base every plugin/host field merges onto. */
 const CORE_MODELS: Record<string, Record<string, EntityField>> = {
@@ -62,12 +66,12 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 
 /**
  * The extra fields contributed to each model — every plugin's `schema[model].fields`, then the host's
- * `models[model].additionalFields` (default < plugin < host, last wins). Keyed by model name; a runtime
+ * `schema[model].additionalFields` (default < plugin < host, last wins). Keyed by model name; a runtime
  * store reads its own slice from here (e.g. the claw store takes `["claw"]`).
  */
 export function collectModelFields(
 	plugins: readonly EuroclawPlugin[],
-	models: ClawModelsConfig | undefined,
+	schema: ClawSchemaConfig | undefined,
 	redaction?: RedactionConfig,
 ): Record<string, Record<string, EntityField>> {
 	const byModel: Record<string, Record<string, EntityField>> = {};
@@ -76,12 +80,12 @@ export function collectModelFields(
 			byModel[model] = { ...byModel[model], ...decl.fields };
 		}
 	}
-	for (const [model, decl] of Object.entries(models ?? {})) {
+	for (const [model, decl] of Object.entries(schema ?? {})) {
 		byModel[model] = { ...byModel[model], ...decl.additionalFields };
 	}
 	// Per-claw posture rides an assembly-owned claw column — folded here so migrations (this same
 	// collection feeds the generate CLI) and the entity-validating adapter see one declaration.
-	if (redaction?.posture === "per-claw") {
+	if (normalizeRedactionConfig(redaction)?.posture === "per-claw") {
 		const claw = byModel["claw"] ?? {};
 		if ("redaction" in claw) {
 			throw configurationError(
@@ -103,12 +107,12 @@ export function collectModelFields(
  */
 export function getEuroclawModels(config: {
 	plugins?: readonly EuroclawPlugin[];
-	models?: ClawModelsConfig;
+	schema?: ClawSchemaConfig;
 	redaction?: RedactionConfig;
 }): EntityModelMap {
 	const extra = collectModelFields(
 		config.plugins ?? [],
-		config.models,
+		config.schema,
 		config.redaction,
 	);
 	const merged: Record<string, Record<string, EntityField>> = {
@@ -143,7 +147,7 @@ export function getEuroclawModels(config: {
  */
 export function getEuroclawTables(config: {
 	plugins?: readonly EuroclawPlugin[];
-	models?: ClawModelsConfig;
+	schema?: ClawSchemaConfig;
 	redaction?: RedactionConfig;
 }): SchemaDeclaration {
 	const tables: SchemaDeclaration = {};

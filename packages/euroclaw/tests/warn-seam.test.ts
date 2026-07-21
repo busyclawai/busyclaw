@@ -19,7 +19,8 @@ describe("createClaw warn seam", () => {
 			database: memoryAdapter(),
 			model: textModel("ok"),
 			// A durable mapping store without indexKey — the keyless-durable warning fires at boot.
-			redaction: { detector: emailDetector },
+			// (Bare-array shorthand: strict posture over these detectors, no indexKey.)
+			redaction: [emailDetector],
 			warn: (message) => warnings.push(message),
 		});
 		expect(

@@ -5,7 +5,7 @@ import { type SqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
 import { describe, test } from "vitest";
 import { createClaw, type RuntimeConfig } from "../src/index";
 
-declare const model: RuntimeConfig["model"];
+declare const model: NonNullable<RuntimeConfig["model"]>;
 declare const store: SqlEngineStore;
 
 describe("createClaw cronHandler requirement", () => {

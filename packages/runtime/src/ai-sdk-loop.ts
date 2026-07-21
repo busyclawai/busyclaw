@@ -21,6 +21,9 @@ import type {
 
 export type AiSdkLoopInput = {
 	model: RuntimeModel;
+	/** The selected model opted out of PII redaction: the model boundary rehydrates the prompt for
+	 *  it and re-redacts its output, so durable state stays tokenized. Default false. */
+	rawPii?: boolean;
 	tools: ToolSet;
 	system?: string;
 	/** Arrives ALREADY redacted (the caller redacts at ingress) — the loop never re-redacts it. */
@@ -187,6 +190,7 @@ export async function runAiSdkLoop(
 			input.ctx,
 			input.resolvedCtx,
 			input.state,
+			input.rawPii ?? false,
 		),
 	});
 	const messages: ModelMessage[] = input.messages

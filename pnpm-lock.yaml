@@ -205,6 +205,19 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
 
+  packages/foundation/detectors:
+    dependencies:
+      '@euroclaw/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@euroclaw/core':
+        specifier: workspace:*
+        version: link:../core
+      arktype:
+        specifier: 2.2.0
+        version: 2.2.0
+
   packages/foundation/egress:
     dependencies:
       '@euroclaw/contracts':

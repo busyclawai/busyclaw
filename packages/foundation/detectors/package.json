@@ -1,0 +1,46 @@
+{
+	"name": "@euroclaw/detectors",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "PII detectors for euroclaw's redaction port, one subpath per detector. `@euroclaw/detectors/regex`: a deterministic email/phone/card/id/ip/url detector. `@euroclaw/detectors/presidio`: the Microsoft Presidio analyzer behind the same port. Feather-light: contracts only (Presidio adds global fetch).",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"directory": "packages/foundation/detectors"
+	},
+	"bugs": {
+		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		"./regex": {
+			"types": "./dist/regex/index.d.ts",
+			"import": "./dist/regex/index.js"
+		},
+		"./presidio": {
+			"types": "./dist/presidio/index.d.ts",
+			"import": "./dist/presidio/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/contracts": "workspace:*"
+	},
+	"devDependencies": {
+		"@euroclaw/core": "workspace:*",
+		"arktype": "2.2.0"
+	}
+}

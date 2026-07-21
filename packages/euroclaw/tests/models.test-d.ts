@@ -3,7 +3,11 @@
 // create-input types, the base config stays unchanged, undeclared fields never appear, and a schema
 // that redefines a core column is rejected at `createClaw` — the compile-time mirror of the
 // getEuroclawTables runtime guard.
-import { type EuroclawPlugin, field, type Principal } from "@euroclaw/contracts";
+import {
+	type EuroclawPlugin,
+	field,
+	type Principal,
+} from "@euroclaw/contracts";
 import { describe, expectTypeOf, test } from "vitest";
 import { createClaw } from "../src/index";
 import type { ClawRecordOf, CreateClawInputOf } from "../src/models";
@@ -19,7 +23,7 @@ declare function makeClaw<const Config>(config: Config): {
 describe("model extension — derived types", () => {
 	test("host additionalFields land on the record and the create input", () => {
 		const a = makeClaw({
-			models: { claw: { additionalFields: { priority: field.number() } } },
+			schema: { claw: { additionalFields: { priority: field.number() } } },
 			plugins: [],
 		});
 		type ClawA = NonNullable<ReturnType<typeof a.getClaw>>;
@@ -56,7 +60,7 @@ describe("model extension — derived types", () => {
 	test("the real createClaw api surface is config-shaped end to end", () => {
 		const realClaw = createClaw({
 			model: textModel("done"),
-			models: {
+			schema: {
 				claw: {
 					additionalFields: { priority: field.number({ required: true }) },
 				},
@@ -87,7 +91,7 @@ describe("model extension — core-column collision guard", () => {
 		// @ts-expect-error — host additionalFields may not redefine the core `status` column
 		createClaw({
 			model: textModel("done"),
-			models: { claw: { additionalFields: { status: field.number() } } },
+			schema: { claw: { additionalFields: { status: field.number() } } },
 			plugins: [],
 		});
 	});

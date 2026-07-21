@@ -9,7 +9,7 @@ import { describe, test } from "vitest";
 import { channels } from "../src/index";
 import { telegram } from "../src/telegram/index";
 
-declare const model: RuntimeConfig["model"];
+declare const model: NonNullable<RuntimeConfig["model"]>;
 
 describe("createClaw channels registrations database requirement", () => {
 	test("registrations enabled without a database is a compile error", () => {

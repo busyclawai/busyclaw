@@ -25,7 +25,13 @@ export {
 	runtimeRecordingContext,
 } from "./events";
 export type {
+	ModelName,
+	ModelPool,
+	ModelPoolEntry,
+	ModelSelection,
+	RequiresExplicitModel,
 	RunContext,
+	RunOptionsFor,
 	Runtime,
 	RuntimeAbortSignal,
 	RuntimeApprovalMetadata,
