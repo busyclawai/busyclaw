@@ -365,7 +365,8 @@ export const WORD_BY_PREFIX4: ReadonlyMap<string, string> = new Map(
 
 
 /** Name-like words for the `name` kind (given names + surnames), same recovery-safe
- *  properties as WORDLIST — so a `name` token reads like a person yet snaps back cleanly. */
+ *  properties as WORDLIST, and screened against a profanity blocklist so a `name` token
+ *  reads like a person yet never renders an offensive one. */
 export const NAME_WORDLIST: readonly string[] = [
 	"aaberg", "aalst", "aarika", "abagael", "abbate", "abbey",
 	"abdul", "abelard", "abernon", "abisha", "aborn", "abroms",
@@ -567,10 +568,10 @@ export const NAME_WORDLIST: readonly string[] = [
 	"lewellen", "licastro", "liebman", "lienhard", "ligetti", "limber",
 	"limemann", "linnea", "linsk", "lipfert", "lipkin", "liponis",
 	"livesay", "livvi", "lizabeth", "lloyd", "lochner", "lodmilla",
-	"lodovico", "loesceke", "loferski", "loginov", "lolita", "lontson",
-	"loredana", "lorsung", "lorusso", "lothair", "louanna", "lourdes",
-	"lovich", "lowrance", "lozano", "lubba", "lucais", "lucchesi",
-	"lucrece", "ludeman", "ludlew", "luigi", "lukey", "lupien",
+	"lodovico", "loesceke", "loferski", "loginov", "lontson", "lopes",
+	"lorsung", "lorusso", "loseff", "louanna", "lounge", "lovich",
+	"lowrance", "loydie", "lubba", "lubeck", "lucchesi", "luckett",
+	"ludeman", "ludlew", "luebke", "lukey", "lulita", "lupien",
 	"lurleen", "lustick", "luthanen", "luttrell", "luzader", "lyall",
 	"lyckman", "lyford", "lynch", "lyris", "lysander", "macario",
 	"macegan", "macfadyn", "macilroy", "mackay", "macmahon", "macnair",
