@@ -113,7 +113,7 @@ describe("runtime yield & resume", () => {
 			},
 		});
 
-		const first = await runtime.run("email alice@personal.com", undefined, {
+		const first = await runtime.generate("email alice@personal.com", undefined, {
 			deadlineAt: iso(50_000),
 			runId: "run-1",
 		});
@@ -186,7 +186,7 @@ describe("runtime yield & resume", () => {
 			},
 		});
 
-		const first = await runtime.run("go", undefined, {
+		const first = await runtime.generate("go", undefined, {
 			deadlineAt: iso(50_000),
 		});
 		if (first.status !== "yielded") throw new Error("expected yield");
@@ -204,7 +204,7 @@ describe("runtime yield & resume", () => {
 	it("fails fast when a deadline is set without a checkpoint store", async () => {
 		const runtime = createRuntime({ model: multiStepModel(0) });
 		await expect(
-			runtime.run("hello", undefined, { deadlineAt: iso(0) }),
+			runtime.generate("hello", undefined, { deadlineAt: iso(0) }),
 		).rejects.toThrow(/run checkpoint store/);
 		expect(await runtime.resumeRun("missing")).toBeNull();
 	});
@@ -239,7 +239,7 @@ describe("runtime yield & resume", () => {
 		});
 
 		await expect(
-			runtime.run("go", undefined, { deadlineAt: iso(50_000) }),
+			runtime.generate("go", undefined, { deadlineAt: iso(50_000) }),
 		).rejects.toThrow(/maxSteps/);
 	});
 });

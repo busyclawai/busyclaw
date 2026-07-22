@@ -13,7 +13,7 @@ describe("model routing — type safety", () => {
 				smart: { model: textModel("smart"), default: true },
 			},
 		});
-		const run = claw.$context.runtime.run;
+		const run = claw.$context.runtime.generate;
 		type Opts = NonNullable<Parameters<typeof run>[2]>;
 		expectTypeOf<Opts["model"]>().toEqualTypeOf<"fast" | "smart" | undefined>();
 
@@ -31,9 +31,9 @@ describe("model routing — type safety", () => {
 				smart: { model: textModel("smart"), default: true },
 			},
 		});
-		claw.api.run({ prompt: "hi", options: { model: "fast" } }); // ok
+		claw.api.generate({ prompt: "hi", options: { model: "fast" } }); // ok
 		// @ts-expect-error — "typo" is not a name in the pool
-		claw.api.run({ prompt: "hi", options: { model: "typo" } });
+		claw.api.generate({ prompt: "hi", options: { model: "typo" } });
 
 		claw.api.sendMessage({
 			clawId: "c",
@@ -54,9 +54,9 @@ describe("model routing — type safety", () => {
 		const claw = createClaw({
 			models: { fast: textModel("fast"), smart: textModel("smart") }, // no default
 		});
-		claw.api.run({ prompt: "hi", options: { model: "fast" } }); // ok
+		claw.api.generate({ prompt: "hi", options: { model: "fast" } }); // ok
 		// @ts-expect-error — options carrying `model` is required when the pool has no default
-		claw.api.run({ prompt: "hi" });
+		claw.api.generate({ prompt: "hi" });
 
 		claw.api.sendMessage({
 			clawId: "c",
@@ -75,13 +75,13 @@ describe("model routing — type safety", () => {
 				smart: { model: textModel("smart"), default: true },
 			},
 		});
-		claw.api.run({ prompt: "hi" }); // ok — falls to default
+		claw.api.generate({ prompt: "hi" }); // ok — falls to default
 		claw.api.sendMessage({ clawId: "c", threadId: "t", message: "hi" }); // ok
 	});
 
 	test("a single `model` offers no run-level model option", () => {
 		const claw = createClaw({ model: textModel("solo") });
-		const run = claw.$context.runtime.run;
+		const run = claw.$context.runtime.generate;
 		type Opts = NonNullable<Parameters<typeof run>[2]>;
 		// model?: never → the only inhabitant is `undefined`
 		expectTypeOf<Opts["model"]>().toEqualTypeOf<undefined>();

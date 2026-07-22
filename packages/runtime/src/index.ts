@@ -39,6 +39,7 @@ export type {
 	RuntimeEnvironment,
 	RuntimeModel,
 	RuntimeRunOptions,
+	RuntimeStream,
 	RuntimeYieldMetadata,
 } from "./runtime";
 export {

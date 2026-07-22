@@ -180,7 +180,10 @@ describe("@euroclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const run = await store.createRun({ principal: "user:alice", team: "acme" });
+		const run = await store.createRun({
+			principal: "user:alice",
+			team: "acme",
+		});
 
 		await store.appendEvent({
 			runId: run.id,
@@ -371,7 +374,7 @@ describe("@euroclaw/engine-sql", () => {
 			resolveAbort = resolve;
 		});
 		const runtime: Runtime = {
-			run: async (_prompt, _ctx, options) => {
+			generate: async (_prompt, _ctx, options) => {
 				const timers = globalThis as typeof globalThis & {
 					setTimeout: (fn: () => void, ms: number) => unknown;
 				};
@@ -483,7 +486,7 @@ describe("@euroclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		const runtime: Runtime = {
-			run: async () => ({ status: "wat", text: "", steps: 1 }) as never,
+			generate: async () => ({ status: "wat", text: "", steps: 1 }) as never,
 			continueRun: async () => null,
 		};
 		const worker = createSqlEngineWorker({
@@ -504,7 +507,7 @@ describe("@euroclaw/engine-sql", () => {
 		expect(result.status).toBe("failed");
 		expect(await store.getRun(run.id)).toMatchObject({ status: "failed" });
 		expect((await store.getTask(task.id))?.lastError).toContain(
-			"runtime.run result invalid",
+			"runtime.generate result invalid",
 		);
 	});
 
@@ -513,7 +516,7 @@ describe("@euroclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		const runtime: Runtime = {
-			run: async () => ({
+			generate: async () => ({
 				status: "waiting_approval",
 				text: "",
 				steps: 1,
@@ -556,7 +559,7 @@ describe("@euroclaw/engine-sql", () => {
 		});
 		let resumed = "";
 		const runtime: Runtime = {
-			run: async () => ({ status: "completed", text: "", steps: 1 }),
+			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async (id) => {
 				resumed = id;
 				return { status: "completed", text: "sent", steps: 2 };
@@ -635,7 +638,7 @@ describe("@euroclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:05:00.000Z",
 		});
 		const runtime: Runtime = {
-			run: async () => ({ status: "completed", text: "done", steps: 1 }),
+			generate: async () => ({ status: "completed", text: "done", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async () => null,
 		};
@@ -670,7 +673,7 @@ describe("@euroclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		const runtime: Runtime = {
-			run: async () => ({
+			generate: async () => ({
 				status: "yielded",
 				text: "",
 				steps: 1,
@@ -721,7 +724,7 @@ describe("@euroclaw/engine-sql", () => {
 		});
 		let resumedFrom = "";
 		const runtime: Runtime = {
-			run: async () => ({ status: "completed", text: "", steps: 1 }),
+			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async (checkpointId) => {
 				resumedFrom = checkpointId;
@@ -756,7 +759,7 @@ describe("@euroclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		const runtime: Runtime = {
-			run: async () => ({ status: "completed", text: "", steps: 1 }),
+			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async () => null,
 		};

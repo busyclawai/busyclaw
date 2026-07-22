@@ -18,7 +18,7 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.run({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -52,7 +52,7 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.run({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -90,7 +90,7 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.run({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -163,7 +163,7 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.run({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}

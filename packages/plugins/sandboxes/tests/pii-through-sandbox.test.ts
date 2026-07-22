@@ -160,7 +160,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			},
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		expect(captured).toBe("alice@personal.com");
@@ -186,7 +186,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			},
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		expect(JSON.stringify(runtime.audit?.entries() ?? [])).not.toContain(
@@ -210,7 +210,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			tools: { run_code: runCodeTool({ sandbox: rec.sandbox }) },
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		const decoded = hexDecode(String(rec.last()?.result ?? ""));
@@ -245,7 +245,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			},
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		// The leaf edge rehydrated the real value.
@@ -278,7 +278,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			},
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		expect(rec.last()?.result).toBe("stable");
@@ -298,7 +298,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			tools: { run_code: runCodeTool({ sandbox: rec.sandbox }) },
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		const logs = JSON.stringify(rec.last()?.logs ?? []);

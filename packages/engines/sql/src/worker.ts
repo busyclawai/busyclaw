@@ -146,8 +146,8 @@ async function runTask(
 		const payload = runtimeRunPayload(claim.task.payload);
 		return {
 			result: runtimeResult(
-				await runtime.run(payload.prompt, payload.ctx, options),
-				"runtime.run result",
+				await runtime.generate(payload.prompt, payload.ctx, options),
+				"runtime.generate result",
 			),
 			ctx: payload.ctx,
 		};

@@ -30,7 +30,7 @@ describe("createClaw boundary gates", () => {
 			],
 		});
 
-		await expect(claw.api.run({ prompt: "hello" })).rejects.toThrow(
+		await expect(claw.api.generate({ prompt: "hello" })).rejects.toThrow(
 			/model boundary gate denied model call/,
 		);
 		expect(providerRan).toBe(false);
@@ -65,7 +65,7 @@ describe("createClaw boundary gates", () => {
 		});
 
 		await expect(
-			claw.api.run({ prompt: "email alice@personal.com" }),
+			claw.api.generate({ prompt: "email alice@personal.com" }),
 		).resolves.toMatchObject({
 			status: "completed",
 			text: "done",

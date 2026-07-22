@@ -86,7 +86,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 			resolveTools: (ctx) =>
 				ctx[ORGANIZATION_CONTEXT_KEY] === "org-a" ? registered : {},
 		});
-		const result = await runtime.run("go", { org: "org-a" });
+		const result = await runtime.generate("go", { org: "org-a" });
 		expect(result.status).toBe("completed");
 		expect(ran).toEqual(["registered"]);
 		expect(offered.names).toContain("reg_tool");
@@ -105,7 +105,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 			resolveTools: (ctx) =>
 				ctx[ORGANIZATION_CONTEXT_KEY] === "org-a" ? registered : {},
 		});
-		await runtime.run("go", { org: "org-b" });
+		await runtime.generate("go", { org: "org-b" });
 		expect(offered.names).toContain("code_tool");
 		expect(offered.names).not.toContain("reg_tool"); // org-b sees only code tools
 	});
@@ -123,7 +123,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 			}),
 			warn: (message) => warnings.push(message),
 		});
-		await runtime.run("go", { org: "org-a" });
+		await runtime.generate("go", { org: "org-a" });
 		expect(ran).toEqual(["code"]); // the code tool ran; the registered one was skipped
 		expect(
 			warnings.some((message) =>

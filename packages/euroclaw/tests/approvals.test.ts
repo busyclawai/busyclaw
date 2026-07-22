@@ -25,7 +25,7 @@ describe("createClaw approvals", () => {
 			},
 		});
 
-		const waiting = await claw.api.run({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
 		expect(waiting.status).toBe("waiting_approval");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");

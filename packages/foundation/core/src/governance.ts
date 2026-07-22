@@ -99,6 +99,15 @@ export type Governance<Config extends GovernanceConfig = GovernanceConfig> = {
 		ctx?: Context<Config>,
 	) => Promise<HandleResult>;
 	/**
+	 * Gate a model call WITHOUT running it — the streaming counterpart to handleModelCall's
+	 * gate+run bundle. Redacts the prompt, runs the model-boundary before-gates, and returns their
+	 * outcome (`ok` when permitted). The caller (a streaming loop) then streams the model itself.
+	 */
+	checkModelBoundary: (
+		call: ModelCall,
+		ctx?: Context<Config>,
+	) => Promise<HandleResult>;
+	/**
 	 * Continue an approved tool call: atomically consume the approval (single-use) and re-run the
 	 * stored call, bypassing the gate that demanded approval. Every other gate + audit still fire.
 	 * Returns the governed result, or `null` if the approval isn't consumable (absent / not granted /
@@ -446,6 +455,24 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				};
 				await runAfterGates(boundaryCall, ctx, final);
 			}
+		},
+
+		async checkModelBoundary(rawCall, ctxInput) {
+			const valid = modelCall(rawCall);
+			if (valid instanceof type.errors) {
+				throw validationError("invalid model call", valid.summary);
+			}
+			const ctx = await resolveCtx(ctxInput);
+			const call: ModelCall = redactionOn
+				? await redactor.redactValue(valid, redactionContextFrom(ctx))
+				: valid;
+			const boundaryOutcome = await runBoundaryBeforeGates(
+				modelBoundaryCall(call),
+				ctx,
+				{ allowApproval: false },
+			);
+			// Permitted → ok (the caller streams the model); otherwise the gate's deny/needs-approval.
+			return boundaryOutcome ?? { status: "ok", output: undefined };
 		},
 
 		async handleToolCall(rawCall, ctxInput) {

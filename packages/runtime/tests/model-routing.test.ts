@@ -96,18 +96,18 @@ describe("model routing", () => {
 				},
 			},
 		});
-		expect(await rt.run("hi", undefined, { model: "fast" })).toMatchObject({
+		expect(await rt.generate("hi", undefined, { model: "fast" })).toMatchObject({
 			text: "fast",
 		});
-		expect(await rt.run("hi", undefined, { model: "smart" })).toMatchObject({
+		expect(await rt.generate("hi", undefined, { model: "smart" })).toMatchObject({
 			text: "smart",
 		});
-		expect(await rt.run("hi")).toMatchObject({ text: "smart" }); // default
+		expect(await rt.generate("hi")).toMatchObject({ text: "smart" }); // default
 	});
 
 	it("a sole-entry pool is the default with no flag", async () => {
 		const rt = createRuntime({ models: { only: taggedModel("only") } });
-		expect(await rt.run("hi")).toMatchObject({ text: "only" });
+		expect(await rt.generate("hi")).toMatchObject({ text: "only" });
 	});
 
 	it("mixes bare-model and descriptor entries", async () => {
@@ -117,14 +117,14 @@ describe("model routing", () => {
 				full: { model: taggedModel("full"), default: true },
 			},
 		});
-		expect(await rt.run("hi", undefined, { model: "bare" })).toMatchObject({
+		expect(await rt.generate("hi", undefined, { model: "bare" })).toMatchObject({
 			text: "bare",
 		});
 	});
 
 	it("the single-`model` shorthand still works unchanged", async () => {
 		const rt = createRuntime({ model: taggedModel("solo") });
-		expect(await rt.run("hi")).toMatchObject({ text: "solo" });
+		expect(await rt.generate("hi")).toMatchObject({ text: "solo" });
 	});
 
 	describe("noPiiRedaction (raw to the model, tokenized at rest)", () => {
@@ -139,11 +139,11 @@ describe("model routing", () => {
 				},
 			});
 
-			await rt.run("email a@b.com", undefined, { model: "cloud" });
+			await rt.generate("email a@b.com", undefined, { model: "cloud" });
 			expect(cloudSink.prompt).not.toContain("a@b.com");
 			expect(cloudSink.prompt).toMatch(/\{\{pii:email:/);
 
-			await rt.run("email a@b.com", undefined, { model: "local" });
+			await rt.generate("email a@b.com", undefined, { model: "local" });
 			expect(localSink.prompt).toContain("a@b.com"); // the local model sees raw
 			expect(localSink.prompt).not.toMatch(/\{\{pii:email:/);
 		});
@@ -161,7 +161,7 @@ describe("model routing", () => {
 					},
 				},
 			});
-			await rt.run("email a@b.com");
+			await rt.generate("email a@b.com");
 			// The model saw raw, but the persisted transcript (run.started) is tokenized — so the
 			// value still lives in the mapping and can be erased later.
 			const started = JSON.stringify(
@@ -191,11 +191,11 @@ describe("model routing", () => {
 				models: { a: taggedModel("a"), b: taggedModel("b") },
 			});
 			// Construction succeeds; picking a model works…
-			expect(await rt.run("hi", undefined, { model: "a" })).toMatchObject({
+			expect(await rt.generate("hi", undefined, { model: "a" })).toMatchObject({
 				text: "a",
 			});
 			// …but an unpinned run fails closed (the run-time backstop for the compile-time rule).
-			await expect(rt.run("hi")).rejects.toThrow(/no default/);
+			await expect(rt.generate("hi")).rejects.toThrow(/no default/);
 		});
 
 		it("rejects more than one default", () => {
@@ -218,14 +218,14 @@ describe("model routing", () => {
 		it("rejects an unknown model name", async () => {
 			const rt = createRuntime({ models: { a: taggedModel("a") } });
 			await expect(
-				rt.run("hi", undefined, { model: "nope" } as never),
+				rt.generate("hi", undefined, { model: "nope" } as never),
 			).rejects.toThrow(/unknown model/);
 		});
 
 		it("rejects a run-level model when only a single `model` is configured", async () => {
 			const rt = createRuntime({ model: taggedModel("solo") });
 			await expect(
-				rt.run("hi", undefined, { model: "solo" } as never),
+				rt.generate("hi", undefined, { model: "solo" } as never),
 			).rejects.toThrow(/no `models` pool/);
 		});
 	});

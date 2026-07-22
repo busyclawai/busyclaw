@@ -5,7 +5,7 @@ import {
 } from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
 import type { LanguageModelUsage, ModelMessage, ToolSet } from "ai";
-import { generateText, isStepCount, wrapLanguageModel } from "ai";
+import { generateText, isStepCount, streamText, wrapLanguageModel } from "ai";
 import type {
 	RuntimeEventError,
 	RuntimeEventPayloadInput,
@@ -51,6 +51,14 @@ export type AiSdkLoopInput = {
 	 *  event payloads. Everything downstream — model prompt, events, checkpoints, approvals —
 	 *  reads the same placeholder text. */
 	redactValue?: <T>(value: T) => Promise<T>;
+	/** Stream the model instead of generating it whole — each step uses `streamText` and pushes
+	 *  rehydrated text deltas to `onDelta` as they arrive. The transcript still persists placeholders. */
+	streaming?: boolean;
+	/** Called with each rehydrated text delta while `streaming`. */
+	onDelta?: (text: string) => void;
+	/** placeholder → original, for turning streamed deltas into the reader-facing text. Identity when
+	 *  there is no redactor. Buffered so a `{{pii:…}}` token split across deltas is never mangled. */
+	rehydrateValue?: (text: string) => Promise<string>;
 };
 
 export function toolResultMessage(
@@ -179,6 +187,61 @@ export type AiSdkLoopResult = RuntimeResult & {
 	usage: RuntimeModelUsage | undefined;
 };
 
+/**
+ * The model-loop VENDOR seam. The runtime is loop-agnostic: it assembles a loop-neutral input
+ * (model, tools, the governance core, run state, the redaction seam, event emitter) and hands it to
+ * a vendor that knows how to actually drive the LLM. `streaming` declares whether this vendor can
+ * stream — the runtime refuses a streaming run against one that can't. `ai-sdk-loop` is the default.
+ */
+export type ModelLoopVendor = {
+	readonly streaming: boolean;
+	generate: (input: AiSdkLoopInput) => Promise<AiSdkLoopResult>;
+	/** Present iff `streaming`. Same contract as generate, but it pushes rehydrated text deltas to
+	 *  `input.onDelta` while it runs, and resolves to the final result. */
+	stream?: (input: AiSdkLoopInput) => Promise<AiSdkLoopResult>;
+};
+
+/** The default vendor — drives the model through the AI SDK, generate or stream. */
+export const aiSdkLoop: ModelLoopVendor = {
+	streaming: true,
+	generate: (input) => runAiSdkLoop(input),
+	stream: (input) => runAiSdkLoop({ ...input, streaming: true }),
+};
+
+/**
+ * Turns streamed placeholder text into reader-facing text without mangling a `{{pii:…}}` token that
+ * straddles two deltas: it holds back everything from the last UNCLOSED `{{` and rehydrates+emits
+ * the rest, releasing the tail on flush.
+ */
+function createStreamRehydrator(
+	rehydrate?: (text: string) => Promise<string>,
+): {
+	push: (delta: string) => Promise<string>;
+	flush: () => Promise<string>;
+} {
+	let buffer = "";
+	const emit = async (text: string): Promise<string> =>
+		text === "" ? "" : rehydrate ? await rehydrate(text) : text;
+	return {
+		push: async (delta) => {
+			buffer += delta;
+			const lastOpen = buffer.lastIndexOf("{{");
+			const safeEnd =
+				lastOpen === -1 || buffer.indexOf("}}", lastOpen) !== -1
+					? buffer.length
+					: lastOpen;
+			const ready = buffer.slice(0, safeEnd);
+			buffer = buffer.slice(safeEnd);
+			return emit(ready);
+		},
+		flush: async () => {
+			const rest = buffer;
+			buffer = "";
+			return emit(rest);
+		},
+	};
+}
+
 export async function runAiSdkLoop(
 	input: AiSdkLoopInput,
 ): Promise<AiSdkLoopResult> {
@@ -200,17 +263,35 @@ export async function runAiSdkLoop(
 
 	for (let step = input.startStep ?? 0; step < input.maxSteps; step++) {
 		abortIfNeeded(input.abortSignal);
-		const callModel = () =>
-			generateText({
-				model,
-				tools: input.tools,
-				instructions: input.system,
-				messages,
-				stopWhen: isStepCount(1),
-				...(input.abortSignal
-					? { abortSignal: input.abortSignal as never }
-					: {}),
-			});
+		const callParams = {
+			model,
+			tools: input.tools,
+			instructions: input.system,
+			messages,
+			stopWhen: isStepCount(1),
+			...(input.abortSignal ? { abortSignal: input.abortSignal as never } : {}),
+		};
+		// Streaming and non-streaming converge on the same normalized result (usage / finishReason /
+		// response.messages / toolCalls / text) — so the whole tool-governance loop below is shared.
+		// Streaming additionally pushes rehydrated text deltas to `onDelta` as the model produces them.
+		const callModel = async () => {
+			if (!input.streaming) return generateText(callParams);
+			const streamed = streamText(callParams);
+			const rehydrator = createStreamRehydrator(input.rehydrateValue);
+			for await (const delta of streamed.textStream) {
+				const shown = await rehydrator.push(delta);
+				if (shown !== "") input.onDelta?.(shown);
+			}
+			const tail = await rehydrator.flush();
+			if (tail !== "") input.onDelta?.(tail);
+			return {
+				usage: await streamed.usage,
+				finishReason: await streamed.finishReason,
+				response: await streamed.response,
+				toolCalls: await streamed.toolCalls,
+				text: await streamed.text,
+			};
+		};
 		const modelStartedAt = Date.now();
 		let res: Awaited<ReturnType<typeof callModel>>;
 		try {

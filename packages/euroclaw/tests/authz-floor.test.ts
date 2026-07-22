@@ -85,7 +85,7 @@ describe("createClaw authz floor (slice 0)", () => {
 			model: toolCallModel("readDoc"),
 			tools: { readDoc: classedTool("read", () => (readRan = true)) },
 		});
-		const readResult = await readClaw.api.run({ prompt: "read", ctx: runCtx });
+		const readResult = await readClaw.api.generate({ prompt: "read", ctx: runCtx });
 		expect(readResult.status).toBe("completed");
 		expect(readRan).toBe(true);
 
@@ -99,7 +99,7 @@ describe("createClaw authz floor (slice 0)", () => {
 			model: toolCallModel("writeDoc"),
 			tools: { writeDoc: classedTool("write", () => (writeRan = true)) },
 		});
-		const writeResult = await writeClaw.api.run({ prompt: "write", ctx: runCtx });
+		const writeResult = await writeClaw.api.generate({ prompt: "write", ctx: runCtx });
 		expect(writeResult.status).toBe("waiting_approval");
 		expect(writeRan).toBe(false);
 	});
@@ -120,7 +120,7 @@ describe("createClaw authz floor (slice 0)", () => {
 				}),
 			],
 		});
-		const forbidResult = await forbidClaw.api.run({ prompt: "read", ctx: runCtx });
+		const forbidResult = await forbidClaw.api.generate({ prompt: "read", ctx: runCtx });
 		expect(forbidResult.status).toBe("completed");
 		expect(readRan).toBe(false);
 
@@ -139,7 +139,7 @@ describe("createClaw authz floor (slice 0)", () => {
 				}),
 			],
 		});
-		const permitResult = await permitClaw.api.run({
+		const permitResult = await permitClaw.api.generate({
 			prompt: "write",
 			ctx: runCtx,
 		});

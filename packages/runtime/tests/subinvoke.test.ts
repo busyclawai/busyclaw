@@ -150,7 +150,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nested).toMatchObject({
@@ -183,7 +183,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nestedToolSaw).toBe("alice@personal.com");
@@ -233,7 +233,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(claimedIds).toHaveLength(1);
@@ -273,7 +273,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nested).toMatchObject({
@@ -311,7 +311,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(results[0]).toMatchObject({ status: "ok", output: { v: "a" } });
@@ -342,7 +342,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nested).toMatchObject({
@@ -368,7 +368,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(sawSubInvokeKey).toBe(false);
@@ -394,7 +394,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nested).toMatchObject({
@@ -429,7 +429,7 @@ describe("@euroclaw/runtime subInvoke", () => {
 			}),
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(nested).toMatchObject({

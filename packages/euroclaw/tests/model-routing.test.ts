@@ -15,19 +15,19 @@ describe("createClaw model routing (api.run)", () => {
 
 	it("runs the named model; unpinned falls to the default", async () => {
 		expect(
-			await claw.api.run({ prompt: "hi", options: { model: "fast" } }),
+			await claw.api.generate({ prompt: "hi", options: { model: "fast" } }),
 		).toMatchObject({ text: "fast" });
 		expect(
-			await claw.api.run({ prompt: "hi", options: { model: "smart" } }),
+			await claw.api.generate({ prompt: "hi", options: { model: "smart" } }),
 		).toMatchObject({ text: "smart" });
-		expect(await claw.api.run({ prompt: "hi" })).toMatchObject({
+		expect(await claw.api.generate({ prompt: "hi" })).toMatchObject({
 			text: "smart",
 		});
 	});
 
 	it("fails closed on an unknown model name over the wire (past the types)", async () => {
 		await expect(
-			claw.api.run({
+			claw.api.generate({
 				prompt: "hi",
 				options: { model: "nope" } as never,
 			}),

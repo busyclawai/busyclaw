@@ -111,7 +111,7 @@ export const ORGANIZATION_CONTEXT_KEY = "euroclaw__organizationId";
 // container implies its tenant — redaction stays org-blind (no organizationId anywhere in pii).
 export const SCOPE_CONTEXT_KEY = "euroclaw__scope";
 export const SCOPE_ID_CONTEXT_KEY = "euroclaw__scopeId";
-// How the run started — stamped by the runtime from mechanical fact (sendMessage/api.run =
+// How the run started — stamped by the runtime from mechanical fact (sendMessage/api.generate =
 // interactive; engine/scheduled runs = autonomous), never claimed by a caller. Policies read it
 // to attenuate borrowed authority: an autonomous run has no human present to confirm.
 export const RUN_MODE_CONTEXT_KEY = "euroclaw__runMode";

@@ -79,7 +79,7 @@ describe("@euroclaw/sandboxes run_code end-to-end", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		const names = (runtime.audit?.entries() ?? []).map((e) => e.name);
@@ -106,7 +106,7 @@ describe("@euroclaw/sandboxes run_code end-to-end", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		const entries = runtime.audit?.entries() ?? [];

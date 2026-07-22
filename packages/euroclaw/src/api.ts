@@ -69,6 +69,7 @@ import {
 	type Runtime,
 	type RuntimeConfig,
 	type RuntimeResult,
+	type RuntimeStream,
 	recordingFromRuntimeApprovalMetadata,
 	runtimeRunOptionsWithRecording,
 	type SpecRegistrationReport,
@@ -223,15 +224,26 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		runId: string;
 	}) => Promise<CheckpointRecord | null>;
 
-	run: (
+	// `options` (carrying `model`) is REQUIRED exactly when the pool has ≥2 entries and no default —
+	// the compile-time "you must ask" — otherwise optional.
+	generate: (
 		input: {
 			prompt: string;
 			ctx?: RunContext<Config>;
-		} & // default — the compile-time "you must ask" — otherwise optional. // `options` (carrying `model`) is REQUIRED exactly when the pool has ≥2 entries and no
-		(RequiresExplicitModel<Config> extends true
+		} & (RequiresExplicitModel<Config> extends true
 			? { options: RunOptionsFor<Config> & { model: ModelName<Config> } }
 			: { options?: RunOptionsFor<Config> }),
 	) => Promise<RuntimeResult>;
+	/** Streaming counterpart of `generate` — same input, returns a `{ textStream, result }`. In-process
+	 *  only (streaming has no HTTP route). Requires a streaming loop vendor. */
+	stream: (
+		input: {
+			prompt: string;
+			ctx?: RunContext<Config>;
+		} & (RequiresExplicitModel<Config> extends true
+			? { options: RunOptionsFor<Config> & { model: ModelName<Config> } }
+			: { options?: RunOptionsFor<Config> }),
+	) => RuntimeStream;
 	continueRun: (input: {
 		approvalId: string;
 		ctx?: RunContext<Config>;
@@ -296,8 +308,10 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
 };
 
-/** The FLAT api methods — the ones the method→route machinery maps. */
-export type ClawApiMethod = keyof ClawApi;
+/** The FLAT, ROUTABLE api methods — the ones the method→route machinery maps. `stream` is excluded:
+ *  its `{ textStream, result }` return isn't serializable, so it's an in-process method with no HTTP
+ *  route (streaming would need SSE, a separate transport). */
+export type ClawApiMethod = Exclude<keyof ClawApi, "stream">;
 export type ClawApiHttpMethod = "GET" | "POST";
 export type ClawApiInputSchema = (input: unknown) => unknown;
 export type ClawApiRouteDefinition<
@@ -443,7 +457,7 @@ const forgetSubjectInput = ark({
 		},
 	}),
 });
-const runInput = ark({
+const generateInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"options?": runtimeRunOptionsOrUndefined,
 	prompt: ark("string").configure({
@@ -606,7 +620,7 @@ export const clawApiInputSchemas = {
 	listToolResults: runToolCallInput,
 	putPolicySlice: putPolicySliceInput,
 	registerOpenApiSpec: registerOpenApiSpecInput,
-	run: runInput,
+	generate: generateInput,
 	sendMessage: sendMessageInput,
 	startRun: startRunInput,
 	updateClaw: ark({ id: "string", patch: updateClawPatchInput }),
@@ -925,7 +939,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				threadId: args.threadId,
 				visibility: "user",
 			});
-			const result = await context.runtime.run(
+			const result = await context.runtime.generate(
 				args.message,
 				args.ctx as never,
 				// A conversational message is a human at the other end → interactive. The chosen model
@@ -978,9 +992,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getCheckpoint: ({ id }) => store().checkpoints.get(id),
 		getLatestCheckpoint: ({ runId }) => store().checkpoints.latestForRun(runId),
 
-		run: ({ prompt, ctx, options }) => {
+		generate: ({ prompt, ctx, options }) => {
 			assertNoReservedContext(ctx);
-			return context.runtime.run(prompt, ctx as never, options);
+			return context.runtime.generate(prompt, ctx as never, options);
+		},
+		stream: ({ prompt, ctx, options }) => {
+			assertNoReservedContext(ctx);
+			return context.runtime.stream(prompt, ctx as never, options);
 		},
 		async continueRun({ approvalId, ctx, options }) {
 			assertNoReservedContext(ctx);

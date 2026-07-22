@@ -161,7 +161,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const result = await runtime.run("email alice@personal.com the offer");
+		const result = await runtime.generate("email alice@personal.com the offer");
 
 		expect(result.status).toBe("completed");
 		expect(result.text).toBe("done");
@@ -184,7 +184,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.run("hello")).rejects.toThrow(/audit unavailable/);
+		await expect(runtime.generate("hello")).rejects.toThrow(/audit unavailable/);
 	});
 
 	it("emits typed run lifecycle events and awaits sinks", async () => {
@@ -207,7 +207,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const result = await runtime.run(
+		const result = await runtime.generate(
 			"hello",
 			undefined,
 			runtimeRunOptionsWithRecording(undefined, {
@@ -261,7 +261,7 @@ describe("@euroclaw/runtime", () => {
 			warn: (message) => warnings.push(message),
 		});
 
-		const result = await runtime.run("hello");
+		const result = await runtime.generate("hello");
 
 		expect(result).toMatchObject({ status: "completed", text: "done" });
 		expect(warnings).toHaveLength(1);
@@ -284,7 +284,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.run("hello")).rejects.toThrow(
+		await expect(runtime.generate("hello")).rejects.toThrow(
 			/recording sink unavailable/,
 		);
 	});
@@ -316,7 +316,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.run("email alice@personal.com")).rejects.toThrow(
+		await expect(runtime.generate("email alice@personal.com")).rejects.toThrow(
 			/cannot email alice@personal.com/,
 		);
 		expect(JSON.stringify(events)).not.toContain("alice@personal.com");
@@ -331,7 +331,7 @@ describe("@euroclaw/runtime", () => {
 		const result = await createRuntime({
 			model: textOnlyModel("done"),
 			events: { emit: (event) => events.push(event) },
-		}).run("hello", { euroclaw__recording: { clawId: "claw-1" } });
+		}).generate("hello", { euroclaw__recording: { clawId: "claw-1" } });
 
 		expect(result.status).toBe("completed");
 		expect(events.every((event) => event.recording === undefined)).toBe(true);
@@ -366,7 +366,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const result = await runtime.run(
+		const result = await runtime.generate(
 			"email alice@personal.com",
 			undefined,
 			runtimeRunOptionsWithRecording(undefined, {
@@ -453,7 +453,7 @@ describe("@euroclaw/runtime", () => {
 			],
 		});
 
-		await expect(runtime.run("hello")).rejects.toThrow(
+		await expect(runtime.generate("hello")).rejects.toThrow(
 			/model boundary approval waits are unsupported/,
 		);
 		expect(providerRan).toBe(false);
@@ -492,7 +492,7 @@ describe("@euroclaw/runtime", () => {
 			redactor: createMemoryRedactor(emailDetector),
 		});
 
-		const result = await runtime.run("email alice@personal.com");
+		const result = await runtime.generate("email alice@personal.com");
 
 		expect(result.text).toMatch(/final \{\{pii:[a-z]+:[a-z0-9]+\}\}/);
 		expect(result.text).not.toContain("alice@personal.com");
@@ -550,7 +550,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.run("do both")).rejects.toThrow(/one tool call/);
+		await expect(runtime.generate("do both")).rejects.toThrow(/one tool call/);
 	});
 
 	it("persists needs-approval calls and resumes the approved tool once", async () => {
@@ -589,7 +589,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		expect(waiting.status).toBe("waiting_approval");
 		if (waiting.status !== "waiting_approval") {
 			throw new Error("expected runtime to wait for approval");
@@ -668,7 +668,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -748,7 +748,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -789,7 +789,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -826,7 +826,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.run("email alice@personal.com")).rejects.toThrow(
+		await expect(runtime.generate("email alice@personal.com")).rejects.toThrow(
 			/redacted effect output requires a redactor/,
 		);
 		expect(toolRuns).toBe(0);
@@ -860,7 +860,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -907,7 +907,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -958,8 +958,8 @@ describe("@euroclaw/runtime", () => {
 					}),
 				},
 			});
-		await makeRuntime().run("do it", undefined, { runMode: "interactive" });
-		await makeRuntime().run("do it"); // no runMode → fail-closed default
+		await makeRuntime().generate("do it", undefined, { runMode: "interactive" });
+		await makeRuntime().generate("do it"); // no runMode → fail-closed default
 		expect(seen).toEqual(["interactive", "autonomous"]);
 	});
 
@@ -981,7 +981,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await runtime.run("email the offer");
+		await runtime.generate("email the offer");
 
 		const modelEvents = events.filter(
 			(event) => event.type === "model.completed",
@@ -1025,7 +1025,7 @@ describe("@euroclaw/runtime", () => {
 			events: { emit: (event) => events.push(event) },
 		});
 
-		await expect(runtime.run("hello")).rejects.toThrow(/provider rejected/);
+		await expect(runtime.generate("hello")).rejects.toThrow(/provider rejected/);
 
 		const failed = events.find((event) => event.type === "model.failed");
 		if (failed?.type !== "model.failed") {
@@ -1056,7 +1056,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await runtime.run("email the offer");
+		await runtime.generate("email the offer");
 
 		const completed = events.find((event) => event.type === "tool.completed");
 		if (completed?.type !== "tool.completed") {
@@ -1095,7 +1095,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.run("email alice@personal.com the offer");
+		const waiting = await runtime.generate("email alice@personal.com the offer");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -1131,7 +1131,7 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await runtime.run("email the offer");
+		await runtime.generate("email the offer");
 
 		const completed = events.find((event) => event.type === "run.completed");
 		if (completed?.type !== "run.completed") {

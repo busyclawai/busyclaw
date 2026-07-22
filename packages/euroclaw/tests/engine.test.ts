@@ -11,7 +11,7 @@ import {
 } from "./fixtures";
 
 type FakeEngineRuntime = {
-	run: (prompt: string) => Promise<unknown>;
+	generate: (prompt: string) => Promise<unknown>;
 	continueRun: (id: string) => Promise<unknown>;
 };
 
@@ -48,7 +48,7 @@ function fakeWorkflowEngine(
 						if (!job) return null;
 						events.push(`work:${job.type}:${job.id}`);
 						return job.type === "run"
-							? runtime.run(job.prompt)
+							? runtime.generate(job.prompt)
 							: runtime.continueRun(job.approvalId);
 					},
 				},
@@ -110,6 +110,7 @@ describe("createClaw engine", () => {
 			"deletePolicySlice",
 			"denyApproval",
 			"forgetSubject",
+			"generate",
 			"getApproval",
 			"getCheckpoint",
 			"getClaw",
@@ -132,9 +133,9 @@ describe("createClaw engine", () => {
 			"listToolResults",
 			"putPolicySlice",
 			"registerOpenApiSpec",
-			"run",
 			"sendMessage",
 			"startRun",
+			"stream",
 			"updateClaw",
 			"updateToolCallStatus",
 		]);

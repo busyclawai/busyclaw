@@ -33,7 +33,11 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { ModelMessage, ToolSet, wrapLanguageModel } from "ai";
 import { type as ark } from "arktype";
-import { runAiSdkLoop, toolResultMessage } from "./ai-sdk-loop";
+import {
+	aiSdkLoop,
+	type ModelLoopVendor,
+	toolResultMessage,
+} from "./ai-sdk-loop";
 import {
 	createToolCatalog,
 	type ToolCatalog,
@@ -179,6 +183,9 @@ export type RuntimeConfig = {
 	/** A named pool of models for task-based routing, selected per run via `run(…, { model })`. One
 	 *  entry is the default (`default: true`, or the sole entry). Mutually exclusive with `model`. */
 	models?: ModelPool;
+	/** The model-loop vendor — how the LLM is driven. Default: the AI SDK's `generateText` loop.
+	 *  Swap for a different SDK or a streaming-capable vendor. */
+	loop?: ModelLoopVendor;
 	tools?: ToolSet;
 	/** Resolve extra tools for THIS run (an organization's registered tools) from the resolved turn
 	 *  context, merged over the static `tools` ONCE per run. Code tools win name collisions — a
@@ -258,11 +265,18 @@ export type RuntimeResult = typeof RuntimeResult.infer;
 export type RunContext<Config extends RuntimeConfig> = InferContext<Config>;
 
 export type Runtime<Config extends RuntimeConfig = RuntimeConfig> = {
-	run: (
+	generate: (
 		prompt: string,
 		ctx?: RunContext<Config>,
 		options?: RunOptionsFor<Config>,
 	) => Promise<RuntimeResult>;
+	/** Stream the model's text to the reader while the run happens — deltas are rehydrated
+	 *  (reader-facing), the transcript still persists placeholders. Requires a streaming loop vendor. */
+	stream: (
+		prompt: string,
+		ctx?: RunContext<Config>,
+		options?: RunOptionsFor<Config>,
+	) => RuntimeStream;
 	continueRun: (
 		id: string,
 		ctx?: RunContext<Config>,
@@ -585,10 +599,56 @@ function createModelSelector(
 	);
 }
 
+/** The streamed result of `runtime.stream`: an async-iterable of reader-facing text deltas plus a
+ *  promise of the final governed result (resolves when the run completes). */
+export type RuntimeStream = {
+	readonly textStream: AsyncIterable<string>;
+	readonly result: Promise<RuntimeResult>;
+};
+
+/** A minimal push→async-iterate queue backing `RuntimeStream.textStream`. */
+function createDeltaQueue(): {
+	push: (value: string) => void;
+	close: () => void;
+	iterable: AsyncIterable<string>;
+} {
+	const buffer: string[] = [];
+	let wake: (() => void) | undefined;
+	let closed = false;
+	return {
+		push: (value) => {
+			buffer.push(value);
+			wake?.();
+			wake = undefined;
+		},
+		close: () => {
+			closed = true;
+			wake?.();
+			wake = undefined;
+		},
+		iterable: {
+			async *[Symbol.asyncIterator]() {
+				while (true) {
+					const next = buffer.shift();
+					if (next !== undefined) {
+						yield next;
+						continue;
+					}
+					if (closed) return;
+					await new Promise<void>((resolve) => {
+						wake = resolve;
+					});
+				}
+			},
+		},
+	};
+}
+
 export function createRuntime<const Config extends RuntimeConfig>(
 	config: Config,
 ): Runtime<Config> {
 	const selectModel = createModelSelector(config);
+	const loop = config.loop ?? aiSdkLoop;
 	const now = config.environment?.now ?? (() => new Date().toISOString());
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const maxSteps = config.maxSteps ?? 8;
@@ -1050,10 +1110,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 	};
 
-	const run = async (
+	// Shared body for generate + stream. `onDelta` present → drive the streaming vendor, pushing
+	// rehydrated (reader-facing) deltas as the model produces them; absent → generate whole.
+	const invoke = async (
 		prompt: string,
-		ctx?: Record<string, unknown>,
-		options?: RunOptionsFor<Config>,
+		ctx: Record<string, unknown> | undefined,
+		options: RunOptionsFor<Config> | undefined,
+		onDelta?: (text: string) => void,
 	): Promise<RuntimeResult> => {
 		const state = createRunState();
 		state.runInstanceId = newId("runstate");
@@ -1068,6 +1131,20 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
+		if (onDelta !== undefined) {
+			if (!loop.stream) {
+				throw configurationError(
+					"the configured model-loop vendor does not support streaming",
+				);
+			}
+			// Streaming a rawPii model would emit raw deltas that can't yet be re-redacted for durable
+			// state — refuse rather than silently persist raw.
+			if (selected.rawPii) {
+				throw configurationError(
+					"streaming is not supported for a noPiiRedaction model yet",
+				);
+			}
+		}
 		const core = createRunCore(state, approvalStore, runTools);
 		// Ingress redaction ALWAYS runs — durable state (transcript, mappings, subjects) stays
 		// tokenized even for a noPiiRedaction model. Raw only happens at the model boundary (rawPii
@@ -1077,8 +1154,19 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			prompt: redactedPrompt,
 			type: "run.started",
 		});
+		// placeholder → reader-facing text for streamed deltas; identity when there is no redactor.
+		// Unused by generate (it never streams), so it's harmless to pass either way.
+		const rehydrate = (text: string): Promise<string> => {
+			if (config.redactor === undefined) return Promise.resolve(text);
+			return config.redactor.rehydrateValue(
+				text,
+				redactionContextFrom(resolvedCtx),
+			);
+		};
+		const driver =
+			onDelta !== undefined && loop.stream ? loop.stream : loop.generate;
 		// `usage` rides the loop result only as far as the terminal event — never the public result.
-		const { usage: runUsage, ...result } = await runAiSdkLoop({
+		const { usage: runUsage, ...result } = await driver({
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: runModelTools,
@@ -1095,13 +1183,33 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
 			redactValue: (value) => redactValue(value, resolvedCtx),
+			onDelta,
+			rehydrateValue: rehydrate,
 		});
 		const valid = RuntimeResult(result);
 		if (valid instanceof ark.errors) {
-			throw validationError("runtime.run result invalid", valid.summary);
+			throw validationError("runtime.generate result invalid", valid.summary);
 		}
 		await emitRunOutcome(emitCtx, valid, runUsage);
 		return valid;
+	};
+
+	const generate = (
+		prompt: string,
+		ctx?: Record<string, unknown>,
+		options?: RunOptionsFor<Config>,
+	): Promise<RuntimeResult> => invoke(prompt, ctx, options);
+
+	const stream = (
+		prompt: string,
+		ctx?: Record<string, unknown>,
+		options?: RunOptionsFor<Config>,
+	): RuntimeStream => {
+		const queue = createDeltaQueue();
+		const result = invoke(prompt, ctx, options, (text) =>
+			queue.push(text),
+		).finally(() => queue.close());
+		return { textStream: queue.iterable, result };
 	};
 
 	const continueRun = async (
@@ -1242,7 +1350,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		resumeState.recording = effectiveRecording;
 		resumeState.runId = options?.runId;
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.
-		const { usage: runUsage, ...result } = await runAiSdkLoop({
+		const { usage: runUsage, ...result } = await loop.generate({
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: runModelTools,
@@ -1299,7 +1407,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runId = runId;
 
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.
-		const { usage: runUsage, ...result } = await runAiSdkLoop({
+		const { usage: runUsage, ...result } = await loop.generate({
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: runModelTools,
@@ -1332,7 +1440,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		catalog,
 		continueRun,
 		effects: effectStore,
+		generate,
 		resumeRun,
-		run,
+		stream,
 	};
 }

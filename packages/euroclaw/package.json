@@ -40,6 +40,7 @@
 		"kysely": "0.29.2"
 	},
 	"devDependencies": {
+		"@ai-sdk/azure": "4.0.18",
 		"@euroclaw/core": "workspace:*",
 		"@euroclaw/secrets-plugin": "workspace:*",
 		"@euroclaw/skills": "workspace:*",

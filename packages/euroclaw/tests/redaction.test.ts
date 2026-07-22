@@ -68,7 +68,7 @@ describe("createClaw redaction group", () => {
 			warnings.filter((message) => message.includes('posture "raw"')),
 		).toHaveLength(1);
 
-		const result = await claw.$context.runtime.run("email a@b.com the offer");
+		const result = await claw.$context.runtime.generate("email a@b.com the offer");
 		expect(result.status).toBe("completed");
 		expect(received.prompt).toContain("a@b.com"); // raw by declaration
 		expect(received.prompt).not.toContain("privacy placeholders");
@@ -81,7 +81,7 @@ describe("createClaw redaction group", () => {
 			model: promptCaptureModel(received),
 			redaction: { detectors: [emailDetector], indexKey: "test-key" },
 		});
-		const result = await claw.$context.runtime.run("email a@b.com the offer");
+		const result = await claw.$context.runtime.generate("email a@b.com the offer");
 		expect(result.status).toBe("completed");
 		expect(received.prompt).not.toContain("a@b.com");
 		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
@@ -110,7 +110,7 @@ describe("createClaw redaction group", () => {
 			model: promptCaptureModel(received),
 			redaction: [emailDetector, wordDetector],
 		});
-		const result = await claw.$context.runtime.run(
+		const result = await claw.$context.runtime.generate(
 			"email a@b.com re SECRET plan",
 		);
 		expect(result.status).toBe("completed");
@@ -127,7 +127,7 @@ describe("createClaw redaction group", () => {
 			model: promptCaptureModel(received),
 			redaction: {},
 		});
-		await claw.$context.runtime.run("email a@b.com the offer");
+		await claw.$context.runtime.generate("email a@b.com the offer");
 		expect(received.prompt).toContain("a@b.com"); // nothing detected
 		expect(received.prompt).not.toContain("privacy placeholders");
 	});

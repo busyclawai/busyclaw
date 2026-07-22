@@ -111,7 +111,7 @@ describe("redact-at-ingress coherence", () => {
 		});
 
 		// The SAME address arrives via the user prompt AND the tool output.
-		const result = await runtime.run("email bob@x.com the offer");
+		const result = await runtime.generate("email bob@x.com the offer");
 		expect(result.status).toBe("completed");
 
 		const eventsJson = JSON.stringify(events);
@@ -177,7 +177,7 @@ describe("redact-at-ingress coherence", () => {
 			tools: { lookup_contact: lookupTool("nothing found") },
 		});
 
-		await runtime.run("hello");
+		await runtime.generate("hello");
 		const secondPrompt = received.prompts[1] ?? "";
 		expect(secondPrompt).not.toContain("leak@raw.com");
 		expect(secondPrompt).toMatch(TOKEN);
@@ -200,7 +200,7 @@ describe("redact-at-ingress coherence", () => {
 		});
 
 		// Deadline already past → the loop parks a checkpoint at the first resumable point.
-		const yielded = await runtime.run("email bob@x.com the offer", undefined, {
+		const yielded = await runtime.generate("email bob@x.com the offer", undefined, {
 			deadlineAt: new Date(0).toISOString(),
 		});
 		expect(yielded.status).toBe("yielded");

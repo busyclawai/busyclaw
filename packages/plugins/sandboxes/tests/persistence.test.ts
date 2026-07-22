@@ -116,7 +116,7 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 				run_code: runCodeTool({ sandbox: quickjs(), store, volumeRef: ref }),
 			},
 		});
-		expect((await run1.run("write it")).status).toBe("completed");
+		expect((await run1.generate("write it")).status).toBe("completed");
 
 		const rec2 = recordingSandbox();
 		const run2 = createRuntime({
@@ -130,7 +130,7 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 				}),
 			},
 		});
-		expect((await run2.run("read it")).status).toBe("completed");
+		expect((await run2.generate("read it")).status).toBe("completed");
 		expect(rec2.last()?.result).toBe("PERSISTED");
 	}, 30000);
 
@@ -150,7 +150,7 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 				}),
 			},
 		});
-		expect((await runA.run("write a")).status).toBe("completed");
+		expect((await runA.generate("write a")).status).toBe("completed");
 
 		const recB = recordingSandbox();
 		const runB = createRuntime({
@@ -164,7 +164,7 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 				}),
 			},
 		});
-		expect((await runB.run("read b")).status).toBe("completed");
+		expect((await runB.generate("read b")).status).toBe("completed");
 		expect(recB.last()?.result).toBe("absent");
 	}, 30000);
 
@@ -177,7 +177,7 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 			audit: createMemoryAudit(),
 			tools: { run_code: runCodeTool({ sandbox: rec.sandbox }) },
 		});
-		expect((await runtime.run("write with no store")).status).toBe("completed");
+		expect((await runtime.generate("write with no store")).status).toBe("completed");
 		// The write threw inside the guest (file access disabled) → an error VALUE, no result.
 		expect(rec.last()?.error).toBeDefined();
 		expect(rec.last()?.result).toBeNull();

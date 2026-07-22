@@ -189,7 +189,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
-		const result = await runtime.run("get pet 7", runCtx);
+		const result = await runtime.generate("get pet 7", runCtx);
 		expect(result.status).toBe("completed");
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.url).toBe("https://petstore.example/v1/pets/7");
@@ -210,7 +210,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fetchThatMustNotRun,
 		});
-		const result = await runtime.run("get pet 7", runCtx);
+		const result = await runtime.generate("get pet 7", runCtx);
 		// The run completes: the gate denied the tool, the model saw the denial, no HTTP occurred.
 		expect(result.status).toBe("completed");
 	});
@@ -243,7 +243,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
-		await runtime.run("get a weird pet", runCtx);
+		await runtime.generate("get a weird pet", runCtx);
 		expect(calls[0]?.url).toBe(
 			"https://petstore.example/v1/pets/..%2F..%2Fevil.com%2Fx",
 		);

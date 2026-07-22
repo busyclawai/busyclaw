@@ -6,7 +6,7 @@
 // identity, roles, or org mapping — you forward the headers and it asks "can this user do X?".
 //
 // At request time you pass better-auth's own thing — the request `headers`:
-//   claw.run(prompt, { headers })
+//   claw.generate(prompt, { headers })
 //
 // The `auth` param is typed structurally (just `api.hasPermission`), so a real auth WITH the
 // organization plugin satisfies it, an auth WITHOUT it fails to compile, and a test stub needs no DB.

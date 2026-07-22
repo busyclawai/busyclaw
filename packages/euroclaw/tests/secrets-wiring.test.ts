@@ -175,7 +175,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
 
-		const result = await claw.$context.runtime.run("get pet 7", runCtx);
+		const result = await claw.$context.runtime.generate("get pet 7", runCtx);
 		expect(result.status).toBe("completed");
 		expect(calls).toHaveLength(1);
 		expect(apiKeyHeaderOf(calls[0])).toBe("env-secret-key");
@@ -198,7 +198,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 		// The invoker refuses loud (configurationError) BEFORE egress/fetch — an actionable
 		// configure-your-credential error, never a silent unauthenticated request.
 		await expect(
-			claw.$context.runtime.run("get pet 7", runCtx),
+			claw.$context.runtime.generate("get pet 7", runCtx),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			details: { source: "petstore" },

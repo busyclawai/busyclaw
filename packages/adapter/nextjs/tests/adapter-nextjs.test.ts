@@ -6,7 +6,7 @@ describe("@euroclaw/adapter-nextjs", () => {
 	it("returns Next.js route handlers around the core request handler", async () => {
 		const claw = {
 			api: {
-				run: async ({ prompt }: { prompt: string }) => ({
+				generate: async ({ prompt }: { prompt: string }) => ({
 					status: "completed",
 					steps: 1,
 					text: prompt,
@@ -16,7 +16,7 @@ describe("@euroclaw/adapter-nextjs", () => {
 
 		const handlers = toNextJsHandler(claw);
 		const response = await handlers.POST(
-			new Request("https://app.test/api/euroclaw/run", {
+			new Request("https://app.test/api/euroclaw/generate", {
 				body: JSON.stringify({ prompt: "hello" }),
 				method: "POST",
 			}),

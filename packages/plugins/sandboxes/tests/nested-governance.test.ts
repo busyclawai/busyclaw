@@ -177,7 +177,7 @@ describe("@euroclaw/sandboxes nested governance", () => {
 			tools: { run_code: runCodeTool({ sandbox: rec.sandbox }) },
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		// The guest observed the nested run_code resolve to a denied value with the recursion code.
@@ -207,7 +207,7 @@ describe("@euroclaw/sandboxes nested governance", () => {
 			},
 		});
 
-		const result = await runtime.run("do it");
+		const result = await runtime.generate("do it");
 
 		expect(result.status).toBe("completed");
 		expect(rec.last()?.result).toBe(NESTED_APPROVAL_UNSUPPORTED);
