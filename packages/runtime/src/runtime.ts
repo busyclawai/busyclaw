@@ -8,6 +8,7 @@ import type {
 	JsonValue,
 	Redactor,
 	RunMode,
+	TextDeltaStream,
 	ToolEffectPolicy,
 } from "@euroclaw/contracts";
 import {
@@ -599,10 +600,9 @@ function createModelSelector(
 	);
 }
 
-/** The streamed result of `runtime.stream`: an async-iterable of reader-facing text deltas plus a
- *  promise of the final governed result (resolves when the run completes). */
-export type RuntimeStream = {
-	readonly textStream: AsyncIterable<string>;
+/** The streamed result of `runtime.stream`: the shared `TextDeltaStream` protocol shape with a
+ *  concrete `result` — a promise of the final governed result (resolves when the run completes). */
+export type RuntimeStream = TextDeltaStream & {
 	readonly result: Promise<RuntimeResult>;
 };
 

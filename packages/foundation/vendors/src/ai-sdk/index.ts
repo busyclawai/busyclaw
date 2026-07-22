@@ -166,3 +166,5 @@ export type {
 	ToolGovernance,
 } from "@euroclaw/contracts";
 export { govern, hasToJsonSchema, isStandardSchema } from "@euroclaw/contracts";
+export type { TextDeltaStream } from "@euroclaw/contracts";
+export { toTextStreamResponse, toUIMessageStreamResponse } from "./stream";

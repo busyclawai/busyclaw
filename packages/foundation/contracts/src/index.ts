@@ -149,6 +149,8 @@ export {
 // ── primitives: json + the entity schema DSL ─────────────────────────────────
 export type { JsonObject, JsonPrimitive, JsonValue } from "./common";
 export { jsonObject, jsonValue } from "./common";
+// ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
+export type { TextDeltaStream } from "./stream";
 // ── cross-cutting ports: effects, events, per-tool governance ────────────────
 export type {
 	EffectClaim,
