@@ -64,7 +64,7 @@ function scriptedModel(received: { prompt: string }): V2Model {
 			};
 			if (step++ === 0) {
 				const token =
-					promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
+					promptText.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0] ?? "NOTOKEN";
 				return {
 					content: [
 						{
@@ -166,7 +166,7 @@ describe("@euroclaw/runtime", () => {
 		expect(result.status).toBe("completed");
 		expect(result.text).toBe("done");
 		expect(received.prompt).not.toContain("alice@personal.com");
-		expect(received.prompt).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(received.prompt).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 		expect(toolSaw).toBe("alice@personal.com");
 		expect(JSON.stringify(runtime.audit?.entries() ?? [])).not.toContain(
 			"alice@personal.com",
@@ -404,7 +404,7 @@ describe("@euroclaw/runtime", () => {
 		expect(events[4].approvalIds).toHaveLength(1);
 		expect(JSON.stringify(events)).not.toContain("alice@personal.com");
 		expect(events[0]).toMatchObject({
-			prompt: expect.stringMatching(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/),
+			prompt: expect.stringMatching(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/),
 		});
 		expect(events[2]).toMatchObject({
 			args: { to: expect.stringMatching(/^\{\{pii:/) },
@@ -469,7 +469,7 @@ describe("@euroclaw/runtime", () => {
 				doGenerate: async (options) => {
 					const promptText = JSON.stringify(options.prompt);
 					const token =
-						promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
+						promptText.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0] ?? "NOTOKEN";
 					return {
 						content: [{ type: "text", text: `final ${token}` }],
 						finishReason: { unified: "stop", raw: undefined },
@@ -494,7 +494,7 @@ describe("@euroclaw/runtime", () => {
 
 		const result = await runtime.generate("email alice@personal.com");
 
-		expect(result.text).toMatch(/final \{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(result.text).toMatch(/final \{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 		expect(result.text).not.toContain("alice@personal.com");
 	});
 
@@ -800,7 +800,7 @@ describe("@euroclaw/runtime", () => {
 		const effect = await runtime.effects?.get(`approval:${approvalId}:tool:c1`);
 		expect(effect?.output).toMatchObject({ sent: true });
 		expect(JSON.stringify(effect?.output)).toMatch(
-			/\{\{pii:[a-z]+:[a-z0-9]+\}\}/,
+			/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/,
 		);
 		expect(JSON.stringify(effect?.output)).not.toContain("alice@personal.com");
 	});
@@ -1035,7 +1035,7 @@ describe("@euroclaw/runtime", () => {
 		expect(failed.durationMs).toBeGreaterThanOrEqual(0);
 		expect(failed.error.name).toBe("Error");
 		expect(failed.error.message).not.toContain("alice@personal.com");
-		expect(failed.error.message).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(failed.error.message).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 	});
 
 	it("stamps durationMs on tool.completed on the loop path", async () => {

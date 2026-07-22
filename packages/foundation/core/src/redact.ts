@@ -6,6 +6,7 @@
 import {
 	type Detector,
 	type PiiKind,
+	piiKindValues,
 	type PiiMapping,
 	type PiiMappingStore,
 	type PiiSpan,
@@ -22,10 +23,48 @@ import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
+import {
+	NAME_BY_PREFIX4,
+	NAME_SET,
+	NAME_WORDLIST,
+	WORD_BY_PREFIX4,
+	WORD_SET,
+	WORDLIST,
+} from "./wordlist";
 
-// Kind-typed tokens (`{{pii:email:a1b2…}}`) so the model can reason over what a placeholder IS;
-// the kindless first-generation form stays matched so pre-existing tokens still rehydrate.
-const PLACEHOLDER = /\{\{pii:(?:[a-z]+:)?[a-z0-9]+\}\}/g;
+// Kind-typed tokens (`{{pii:email:robin-oak-river}}`) so the model can reason over what a placeholder
+// IS. The identity is a hyphen-joined BIP-39 word code — far easier for a (cheap) model to copy
+// faithfully than random hex, and snap-back recoverable when it doesn't (see `recover` below). The
+// `[a-z0-9-]+` identity class also still matches the legacy hex form so pre-existing tokens rehydrate.
+const PLACEHOLDER = /\{\{pii:(?:[a-z]+:)?[a-z0-9-]+\}\}/g;
+
+/** A per-kind placeholder alphabet: which word list a kind's tokens are drawn from and repaired
+ *  against, plus how many words a fresh code carries. The `name` kind uses a name-styled book so its
+ *  tokens read like a person (better model coreference); every other kind uses the generic book. */
+type Codebook = {
+	list: readonly string[];
+	set: ReadonlySet<string>;
+	prefix: ReadonlyMap<string, string>;
+	/** Word slots in a fresh code. Generic 4 = 44 bits; name 3 = 33 bits — both ample WITHIN a
+	 *  container (identity is container-scoped, not global) with the mint-time collision check. */
+	words: number;
+};
+const GENERIC_BOOK: Codebook = {
+	list: WORDLIST,
+	set: WORD_SET,
+	prefix: WORD_BY_PREFIX4,
+	words: 4,
+};
+const NAME_BOOK: Codebook = {
+	list: NAME_WORDLIST,
+	set: NAME_SET,
+	prefix: NAME_BY_PREFIX4,
+	words: 3,
+};
+
+function codebookFor(kind: PiiKind): Codebook {
+	return kind === "name" ? NAME_BOOK : GENERIC_BOOK;
+}
 
 /**
  * The neutral default: detects nothing, so redaction is a no-op until you opt in.
@@ -34,16 +73,131 @@ const PLACEHOLDER = /\{\{pii:(?:[a-z]+:)?[a-z0-9]+\}\}/g;
  */
 export const noopDetector: Detector = () => [];
 
-function newPlaceholder(kind: PiiKind): string {
-	return `{{pii:${kind}:${bytesToHex(randomBytes(16))}}}`;
+/** A random hyphen-joined code from `book` (its `words` slots, plus `extra` for collision escalation).
+ *  Each index masks the low bits of two random bytes; the list length is a power of two, so the mask
+ *  is bias-free (no modulo). */
+function wordCode(book: Codebook, extra: number): string {
+	const mask = book.list.length - 1;
+	const count = book.words + extra;
+	const bytes = randomBytes(count * 2);
+	const words: string[] = [];
+	for (let i = 0; i < count; i++) {
+		const hi = bytes[i * 2] ?? 0;
+		const lo = bytes[i * 2 + 1] ?? 0;
+		words.push(book.list[((hi << 8) | lo) & mask] ?? book.list[0] ?? "");
+	}
+	return words.join("-");
+}
+
+function formatPlaceholder(kind: PiiKind, code: string): string {
+	return `{{pii:${kind}:${code}}}`;
+}
+
+// ── recovery: snap a model-mangled placeholder back to a real one ─────────────────────────────────
+// Words are a natural error-correcting code — prefix-unique in 4 letters and edit-separated — so a
+// mangled word snaps to its dictionary word, and a mangled placeholder to its mapping. Fail-safe by
+// construction: a repair is used only when it RESOLVES in-container AND is unambiguous, so recovery
+// can never invent a value or cross to another subject's.
+
+const WORD_MAX_EDITS = 2;
+const RECOVER_MAX_CANDIDATES = 24;
+// Catches dropped/extra braces, spaced or `_`/`-` separators, and stray case; the identity class
+// excludes braces so a frame can never swallow a neighbouring token, and is length-bounded to boot.
+const LOOSE_PLACEHOLDER =
+	/\{{1,2}\s*pii\s*[\s:_-]\s*([a-z]+)\s*[\s:_-]\s*([a-z0-9][a-z0-9 _-]{0,80}?)\s*\}{1,2}/gi;
+
+/** Levenshtein over short strings (dictionary words ≤ 8 chars, kinds ≤ 7). Two rolling rows. */
+function editDistance(a: string, b: string): number {
+	const n = b.length;
+	let prev: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+	let curr: number[] = new Array<number>(n + 1).fill(0);
+	for (let i = 1; i <= a.length; i++) {
+		curr[0] = i;
+		for (let j = 1; j <= n; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+			curr[j] = Math.min(
+				(prev[j] ?? 0) + 1,
+				(curr[j - 1] ?? 0) + 1,
+				(prev[j - 1] ?? 0) + cost,
+			);
+		}
+		[prev, curr] = [curr, prev];
+	}
+	return prev[n] ?? 0;
+}
+
+/** Snap one possibly-mangled word to its dictionary word(s) within tolerance, against the kind's own
+ *  `book`. The first-4-letters prefix is unique by construction, so a word whose prefix survived
+ *  resolves with zero ambiguity; otherwise the nearest word(s) by edit distance — a tie returns
+ *  several, which the caller refuses. */
+function repairWord(raw: string, book: Codebook): string[] {
+	const w = raw.toLowerCase();
+	if (book.set.has(w)) return [w];
+	const byPrefix = book.prefix.get(w.slice(0, 4));
+	if (byPrefix !== undefined && editDistance(w, byPrefix) <= WORD_MAX_EDITS) {
+		return [byPrefix];
+	}
+	let best = WORD_MAX_EDITS + 1;
+	let matches: string[] = [];
+	for (const word of book.list) {
+		const d = editDistance(w, word);
+		if (d < best) {
+			best = d;
+			matches = [word];
+		} else if (d === best) {
+			matches.push(word);
+		}
+	}
+	return best <= WORD_MAX_EDITS ? matches : [];
+}
+
+/** Snap a mangled kind to the nearest PiiKind. Conservative (≤ 1 edit, no ties) — a wrong kind can
+ *  only fail to resolve, never mis-resolve, so tightness just means fewer recoveries, never wrong ones. */
+function repairKind(raw: string): PiiKind | undefined {
+	const k = raw.toLowerCase();
+	let best = 2;
+	let match: PiiKind | undefined;
+	for (const kind of piiKindValues) {
+		const d = editDistance(k, kind);
+		if (d < best) {
+			best = d;
+			match = kind;
+		} else if (d === best) {
+			match = undefined; // tie → ambiguous kind, refuse
+		}
+	}
+	return match;
+}
+
+/** The bounded cartesian product of per-slot candidate words → candidate codes. Returns null if the
+ *  ambiguity explodes past the cap (treated as a refusal — too many ways to read the token). */
+function candidateCodes(perSlot: readonly string[][]): string[] | null {
+	let combos: string[][] = [[]];
+	for (const slot of perSlot) {
+		const next: string[][] = [];
+		for (const combo of combos) {
+			for (const word of slot) {
+				next.push([...combo, word]);
+				if (next.length > RECOVER_MAX_CANDIDATES) return null;
+			}
+		}
+		combos = next;
+	}
+	return combos.map((words) => words.join("-"));
 }
 
 export function createMemoryPiiMappingStore(): PiiMappingStore {
-	// placeholder → mapping (the placeholder is a unique 128-bit token). Rehydration additionally
-	// requires the CONTAINER (scope, scopeId) to match — a placeholder that travels into another
-	// container is inert. Subjects are a separate index for erasure only.
-	const byPlaceholder = new Map<string, PiiMapping>();
-	const subjectToPlaceholders = new Map<string, Set<string>>();
+	// (scope, scopeId, placeholder) → mapping. The placeholder is unique only WITHIN its container
+	// (word-code tokens are lower-entropy than the old 128-bit hex), so the container is part of the
+	// key — a namesake token in another container is a DIFFERENT mapping, never a collision that
+	// clobbers. Subjects are a separate index for erasure only.
+	const byKey = new Map<string, PiiMapping>();
+	const subjectToKeys = new Map<string, Set<string>>();
+	const containerKey = (
+		scope: string | undefined,
+		scopeId: string | undefined,
+		placeholder: string,
+	): string => JSON.stringify([scope ?? null, scopeId ?? null, placeholder]);
 	const sameContainer = (
 		mapping: PiiMapping,
 		ctx?: RehydrationContext,
@@ -56,24 +210,26 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			if (valid instanceof type.errors) {
 				throw validationError("invalid PII mapping", valid.summary);
 			}
-			byPlaceholder.set(valid.placeholder, valid);
+			const key = containerKey(valid.scope, valid.scopeId, valid.placeholder);
+			byKey.set(key, valid);
 			for (const subjectId of subjectIds ?? []) {
-				let set = subjectToPlaceholders.get(subjectId);
+				let set = subjectToKeys.get(subjectId);
 				if (set === undefined) {
 					set = new Set<string>();
-					subjectToPlaceholders.set(subjectId, set);
+					subjectToKeys.set(subjectId, set);
 				}
-				set.add(valid.placeholder);
+				set.add(key);
 			}
 		},
 		resolve(placeholder, ctx) {
-			const mapping = byPlaceholder.get(placeholder);
-			return mapping !== undefined && sameContainer(mapping, ctx)
-				? mapping.original
-				: null;
+			// The container is baked into the key, so a foreign placeholder simply misses.
+			const mapping = byKey.get(
+				containerKey(ctx?.scope, ctx?.scopeId, placeholder),
+			);
+			return mapping?.original ?? null;
 		},
 		findByHash(originalHash, ctx) {
-			for (const mapping of byPlaceholder.values()) {
+			for (const mapping of byKey.values()) {
 				if (
 					mapping.originalHash === originalHash &&
 					sameContainer(mapping, ctx)
@@ -84,14 +240,14 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			return null;
 		},
 		deleteForSubject(subjectId) {
-			const placeholders = subjectToPlaceholders.get(subjectId);
-			if (placeholders === undefined) return;
-			for (const placeholder of placeholders) byPlaceholder.delete(placeholder);
+			const keys = subjectToKeys.get(subjectId);
+			if (keys === undefined) return;
+			for (const key of keys) byKey.delete(key);
 			// The value is gone — drop it from every other subject's index too.
-			for (const set of subjectToPlaceholders.values()) {
-				for (const placeholder of placeholders) set.delete(placeholder);
+			for (const set of subjectToKeys.values()) {
+				for (const key of keys) set.delete(key);
 			}
-			subjectToPlaceholders.delete(subjectId);
+			subjectToKeys.delete(subjectId);
 		},
 	};
 }
@@ -107,8 +263,20 @@ export type StoredRedactorOptions = {
 	 * merely resets dedup. Omit → every occurrence mints fresh (a durable store warns once).
 	 */
 	indexKey?: string;
-	/** Where the keyless-durable warning goes (core has no console). Omit → silent. */
+	/** Where the keyless-durable warning goes (core has no console). Omit → silent. Also carries
+	 *  recovery telemetry: each fuzzy recovery and each refused-as-ambiguous placeholder warns here. */
 	warn?: (message: string) => void;
+	/**
+	 * On rehydrate, snap a MANGLED placeholder back to its mapping when a (cheap) model corrupted the
+	 * token — a typo'd word, dropped braces, spaced separators. Fail-safe: a repaired code is used only
+	 * when it RESOLVES in the same container, and only when the repair is unambiguous (all resolving
+	 * candidates yield the SAME value — never a guess that could cross to another subject). Runs only on
+	 * an exact-miss, so exact rehydration is byte-identical whether on or off. Default ON — a mangled
+	 * token that stays mangled is broken output, not safety, and recovery adds no leak class exact
+	 * matching doesn't already have. Set `false` for strict deployments where only exact tokens may ever
+	 * rehydrate.
+	 */
+	recover?: boolean;
 };
 
 function cleanSpans(spans: PiiSpan[], textLength: number): PiiSpan[] {
@@ -171,6 +339,22 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 						),
 					);
 
+	// Mint a fresh placeholder whose word-code is unique WITHIN the container. At 44 bits over a
+	// container's hundreds–thousands of tokens a collision is astronomically unlikely, so the loop
+	// almost never turns; adding a word after several attempts is a hard backstop, not an expected path.
+	const mintPlaceholder = async (
+		kind: PiiKind,
+		ctx?: RedactionContext,
+	): Promise<string> => {
+		const book = codebookFor(kind);
+		for (let attempt = 0; attempt < 24; attempt++) {
+			const placeholder = formatPlaceholder(kind, wordCode(book, attempt >> 3));
+			if ((await mappings.resolve(placeholder, ctx)) === null) return placeholder;
+		}
+		// Unreachable in practice; escalate hard rather than risk a within-container collision.
+		return formatPlaceholder(kind, wordCode(book, 4));
+	};
+
 	const redactText = async (
 		text: string,
 		ctx?: RedactionContext,
@@ -203,7 +387,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 					await mappings.save(existing, ctx.subjectIds);
 				}
 			} else {
-				placeholder = newPlaceholder(span.kind);
+				placeholder = await mintPlaceholder(span.kind, ctx);
 				await mappings.save(
 					{
 						placeholder,
@@ -223,18 +407,91 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		return out + text.slice(last);
 	};
 
+	const recover = options.recover !== false;
+
+	// Snap a mangled frame back to its mapping. Fast path first: the kind + words exactly as written
+	// (pure structural damage — braces/spacing/case — with no word corruption) may already resolve.
+	// Otherwise repair each word to its dictionary word(s), enumerate the (bounded) candidate codes,
+	// resolve each in-container, and accept ONLY if every hit is the SAME value. Two distinct values →
+	// the repair could cross a subject boundary → refuse. Returns null when nothing safely recovers.
+	const recoverFrame = async (
+		kindRaw: string,
+		identityRaw: string,
+		ctx?: RehydrationContext,
+	): Promise<string | null> => {
+		const words = identityRaw
+			.toLowerCase()
+			.split(/[\s_-]+/)
+			.filter((word) => word.length > 0);
+		if (words.length === 0) return null;
+		const kindLower = kindRaw.toLowerCase();
+		if ((piiKindValues as readonly string[]).includes(kindLower)) {
+			const asIs = await mappings.resolve(
+				formatPlaceholder(kindLower as PiiKind, words.join("-")),
+				ctx,
+			);
+			if (asIs !== null) return asIs;
+		}
+		const kind = repairKind(kindRaw);
+		if (kind === undefined) return null;
+		const book = codebookFor(kind);
+		const perSlot = words.map((word) => repairWord(word, book));
+		if (perSlot.some((candidates) => candidates.length === 0)) return null;
+		const codes = candidateCodes(perSlot);
+		if (codes === null) return null; // ambiguity exploded → refuse
+		const values = new Set<string>();
+		let recovered: string | null = null;
+		for (const code of codes) {
+			const original = await mappings.resolve(
+				formatPlaceholder(kind, code),
+				ctx,
+			);
+			if (original !== null) {
+				values.add(original);
+				recovered = original;
+			}
+		}
+		if (values.size === 1) {
+			options.warn?.("recovered a mangled PII placeholder on rehydrate");
+			return recovered;
+		}
+		if (values.size > 1) {
+			options.warn?.(
+				"refused an ambiguous PII placeholder recovery — repairs resolved to multiple values",
+			);
+		}
+		return null;
+	};
+
 	const rehydrateText = async (
 		text: string,
 		ctx?: RehydrationContext,
 	): Promise<string> => {
 		let out = "";
 		let last = 0;
-		for (const match of text.matchAll(PLACEHOLDER)) {
-			const placeholder = match[0];
+		if (!recover) {
+			// Exact only — byte-identical to the pre-recovery behaviour.
+			for (const match of text.matchAll(PLACEHOLDER)) {
+				const placeholder = match[0];
+				const start = match.index ?? 0;
+				out += text.slice(last, start);
+				out += (await mappings.resolve(placeholder, ctx)) ?? placeholder;
+				last = start + placeholder.length;
+			}
+			return out + text.slice(last);
+		}
+		// A loose scan catches healthy AND structurally-damaged frames. A healthy token resolves on
+		// the exact check with no repair cost; anything that neither resolves nor safely repairs is
+		// left byte-for-byte as-is (recovery never degrades the exact-match outcome).
+		for (const match of text.matchAll(LOOSE_PLACEHOLDER)) {
+			const whole = match[0];
+			const kindRaw = match[1] ?? "";
+			const identityRaw = match[2] ?? "";
 			const start = match.index ?? 0;
 			out += text.slice(last, start);
-			out += (await mappings.resolve(placeholder, ctx)) ?? placeholder;
-			last = start + placeholder.length;
+			const exact = await mappings.resolve(whole, ctx);
+			out += exact ?? (await recoverFrame(kindRaw, identityRaw, ctx)) ?? whole;
+			last = start + whole.length;
 		}
 		return out + text.slice(last);
 	};

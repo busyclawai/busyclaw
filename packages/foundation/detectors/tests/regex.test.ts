@@ -129,8 +129,8 @@ describe("end-to-end through the real redactor", () => {
 		);
 		expect(redacted).not.toContain("dana@example.com");
 		expect(redacted).not.toContain("+49 30 901820");
-		expect(redacted).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
-		expect(redacted).toMatch(/\{\{pii:phone:[a-z0-9]+\}\}/);
+		expect(redacted).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
+		expect(redacted).toMatch(/\{\{pii:phone:[a-z0-9-]+\}\}/);
 
 		const back = await redactor.rehydrateValue(redacted, ctx);
 		expect(back).toBe("mail dana@example.com or call +49 30 901820");

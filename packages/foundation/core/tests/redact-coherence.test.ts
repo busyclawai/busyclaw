@@ -27,8 +27,8 @@ const emailDetector: Detector = (text) => {
 	return spans;
 };
 
-const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
-const TOKENS = /\{\{pii:email:[a-z0-9]+\}\}/g;
+const TOKEN = /\{\{pii:email:[a-z0-9-]+\}\}/;
+const TOKENS = /\{\{pii:email:[a-z0-9-]+\}\}/g;
 
 function tokensOf(text: string): string[] {
 	return [...text.matchAll(TOKENS)].map((match) => match[0]);
@@ -65,7 +65,7 @@ describe("deterministic placeholders (indexKey)", () => {
 			indexKey: "test-key",
 		});
 		const out = await redactor.redactValue("email a@b.com", ctx);
-		expect(out).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(out).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 	});
 
 	it("cross-container: different tokens, and a traveling token is inert", async () => {
@@ -222,6 +222,6 @@ describe("composeDetectors", () => {
 			scopeId: "a",
 		});
 		// The email span (earlier start) wins the overlap; exactly one token, no residue.
-		expect(out).toMatch(/^email \{\{pii:email:[a-z0-9]+\}\} now$/);
+		expect(out).toMatch(/^email \{\{pii:email:[a-z0-9-]+\}\} now$/);
 	});
 });

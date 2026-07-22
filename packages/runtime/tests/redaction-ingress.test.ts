@@ -31,8 +31,8 @@ const emailDetector: Detector = (text) => {
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
-const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
-const TOKENS = /\{\{pii:email:[a-z0-9]+\}\}/g;
+const TOKEN = /\{\{pii:email:[a-z0-9-]+\}\}/;
+const TOKENS = /\{\{pii:email:[a-z0-9-]+\}\}/g;
 
 const usage = {
 	inputTokens: {

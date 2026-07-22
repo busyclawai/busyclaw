@@ -59,6 +59,48 @@ describe("createPiiMappingStore.findByHash", () => {
 	});
 });
 
+describe("createPiiMappingStore container-scoped erasure", () => {
+	it("erases a subject in its OWN container, sparing a same-code token elsewhere", async () => {
+		// Word-code placeholders are unique only within a container, so two containers can carry the
+		// SAME token for different values. Erasure must delete the right one, never the namesake.
+		const store = createPiiMappingStore(memoryAdapter());
+		const shared = "{{pii:name:river-eager}}";
+		await store.save(
+			{
+				placeholder: shared,
+				original: "Zoe",
+				originalHash: "hz",
+				kind: "name",
+				scope: "claw",
+				scopeId: "a",
+				createdAt: at,
+			},
+			["s1"],
+		);
+		await store.save(
+			{
+				placeholder: shared,
+				original: "Yan",
+				originalHash: "hy",
+				kind: "name",
+				scope: "claw",
+				scopeId: "b",
+				createdAt: at,
+			},
+			["s2"],
+		);
+
+		await store.deleteForSubject("s1");
+
+		expect(await store.resolve(shared, { scope: "claw", scopeId: "a" })).toBeNull();
+		expect(await store.resolve(shared, { scope: "claw", scopeId: "b" })).toBe("Yan");
+		// The spared container keeps its dedup row and junction link too.
+		expect(
+			(await store.findByHash("hy", { scope: "claw", scopeId: "b" }))?.original,
+		).toBe("Yan");
+	});
+});
+
 describe("createPiiMappingStore subject junction", () => {
 	it("dedups (placeholder, subject) links on re-save", async () => {
 		const db = memoryAdapter();

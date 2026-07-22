@@ -63,7 +63,7 @@ function runCodeModel(makeCode: (token: string) => string): V2Model {
 			};
 			if (step++ === 0) {
 				const token =
-					promptText.match(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/)?.[0] ?? "NOTOKEN";
+					promptText.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0] ?? "NOTOKEN";
 				return {
 					content: [
 						{
@@ -215,7 +215,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 		expect(result.status).toBe("completed");
 		const decoded = hexDecode(String(rec.last()?.result ?? ""));
 		expect(decoded).not.toContain("alice@personal.com");
-		expect(decoded).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(decoded).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 	}, 30000);
 
 	// BLIND-P3 (Channel B) — a nested tool's OUTPUT is re-redacted before it crosses back to the
@@ -253,7 +253,7 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 		// The guest only ever saw a placeholder in the returned output.
 		const decoded = hexDecode(String(rec.last()?.result ?? ""));
 		expect(decoded).not.toContain("alice@personal.com");
-		expect(decoded).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(decoded).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 	}, 30000);
 
 	// BLIND-P3-stable — re-redaction is STABLE, not random per call: the same entity comes back as
@@ -303,6 +303,6 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 		expect(result.status).toBe("completed");
 		const logs = JSON.stringify(rec.last()?.logs ?? []);
 		expect(logs).not.toContain("alice@personal.com");
-		expect(logs).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(logs).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 	}, 30000);
 });

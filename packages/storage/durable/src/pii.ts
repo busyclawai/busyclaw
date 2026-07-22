@@ -15,6 +15,7 @@ export type PiiMappingStoreOptions = {
 };
 
 type MappingWhere = EntityWhere<typeof piiMappingFields>;
+type SubjectWhere = EntityWhere<typeof piiSubjectFields>;
 
 /** The exact-row predicate for an upsert: the placeholder plus its container. */
 function mappingWhere(mapping: PiiMapping): MappingWhere[] {
@@ -26,6 +27,25 @@ function mappingWhere(mapping: PiiMapping): MappingWhere[] {
 	}
 	if (mapping.scopeId !== undefined) {
 		where.push({ field: "scopeId", value: mapping.scopeId, connector: "AND" });
+	}
+	return where;
+}
+
+/** A junction predicate scoped to one container — the placeholder is unique only within it, so
+ *  erasure must never reach a namesake mapping in another container. */
+function subjectContainerWhere(row: {
+	placeholder: string;
+	scope?: string;
+	scopeId?: string;
+}): SubjectWhere[] {
+	const where: SubjectWhere[] = [
+		{ field: "placeholder", value: row.placeholder },
+	];
+	if (row.scope !== undefined) {
+		where.push({ field: "scope", value: row.scope, connector: "AND" });
+	}
+	if (row.scopeId !== undefined) {
+		where.push({ field: "scopeId", value: row.scopeId, connector: "AND" });
 	}
 	return where;
 }
@@ -78,18 +98,24 @@ export function createPiiMappingStore(
 			}
 			for (const subjectId of subjectIds ?? []) {
 				// The junction is a set, not a log — re-linking an existing (placeholder, subject)
-				// pair (deterministic placeholders re-save on reuse) must not duplicate rows.
+				// pair (deterministic placeholders re-save on reuse) must not duplicate rows. Scoped to
+				// the container, since the placeholder is unique only within it.
 				const linked = await db.findMany({
 					model: "pii_subject",
 					where: [
-						{ field: "placeholder", value: mapping.placeholder },
+						...subjectContainerWhere(mapping),
 						{ field: "subjectId", value: subjectId, connector: "AND" },
 					],
 				});
 				if (linked.length > 0) continue;
 				await db.create({
 					model: "pii_subject",
-					data: { placeholder: mapping.placeholder, subjectId },
+					data: {
+						placeholder: mapping.placeholder,
+						subjectId,
+						scope: mapping.scope,
+						scopeId: mapping.scopeId,
+					},
 				});
 			}
 		},
@@ -112,21 +138,43 @@ export function createPiiMappingStore(
 		},
 
 		async deleteForSubject(subjectId: string) {
-			// Find every mapping this subject appears on (multi-subject safe), then erase the value —
-			// the placeholder becomes permanently un-rehydratable — and all of that value's subject rows.
+			// Find every (placeholder, container) this subject appears on (multi-subject safe), then
+			// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
+			// value's subject rows, scoped to its OWN container so a namesake elsewhere is untouched.
 			const subjectRows = await db.findMany({
 				model: "pii_subject",
 				where: [{ field: "subjectId", value: subjectId }],
 			});
-			const placeholders = new Set(subjectRows.map((row) => row.placeholder));
-			for (const placeholder of placeholders) {
-				await db.deleteMany({
-					model: "pii_mapping",
-					where: [{ field: "placeholder", value: placeholder }],
-				});
+			const seen = new Set<string>();
+			for (const row of subjectRows) {
+				const key = JSON.stringify([
+					row.placeholder,
+					row.scope ?? null,
+					row.scopeId ?? null,
+				]);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				const mappingErase: MappingWhere[] = [
+					{ field: "placeholder", value: row.placeholder },
+				];
+				if (row.scope !== undefined) {
+					mappingErase.push({
+						field: "scope",
+						value: row.scope,
+						connector: "AND",
+					});
+				}
+				if (row.scopeId !== undefined) {
+					mappingErase.push({
+						field: "scopeId",
+						value: row.scopeId,
+						connector: "AND",
+					});
+				}
+				await db.deleteMany({ model: "pii_mapping", where: mappingErase });
 				await db.deleteMany({
 					model: "pii_subject",
-					where: [{ field: "placeholder", value: placeholder }],
+					where: subjectContainerWhere(row),
 				});
 			}
 		},

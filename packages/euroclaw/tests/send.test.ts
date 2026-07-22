@@ -87,7 +87,7 @@ describe("createClaw send", () => {
 			{
 				// The product transcript is tokenized at rest too — same rule as the tool args below.
 				content: {
-					text: expect.stringMatching(/^email \{\{pii:email:[a-z0-9]+\}\}$/),
+					text: expect.stringMatching(/^email \{\{pii:email:[a-z0-9-]+\}\}$/),
 				},
 				role: "user",
 				sequence: 1,

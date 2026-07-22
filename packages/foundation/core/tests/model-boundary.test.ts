@@ -43,7 +43,7 @@ describe("euroclaw governance — the model boundary (handleModelCall)", () => {
 
 		expect(r).toEqual({ status: "ok", output: { text: "ok" } });
 		// the model provider received placeholders, never the raw address
-		expect(modelSaw).toMatch(/\{\{pii:[a-z]+:[a-z0-9]+\}\}/);
+		expect(modelSaw).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 		expect(modelSaw).not.toContain("alice@personal.com");
 	});
 

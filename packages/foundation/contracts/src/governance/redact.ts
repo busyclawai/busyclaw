@@ -13,7 +13,7 @@ import {
 	type TurnContext,
 } from "./boundary";
 
-const piiKindValues = [
+export const piiKindValues = [
 	"email",
 	"phone",
 	"name",
@@ -75,10 +75,15 @@ export const piiMappingSchema = piiMappingEntity.storage;
 
 // The subject junction — a single PII value can be about SEVERAL data-subjects (a shared address).
 // Subject is the ERASURE axis (right-to-be-forgotten), decoupled from containment: many-to-many, and
-// NOT part of the rehydration key. Linked to a mapping by its unique `placeholder`.
+// NOT part of the rehydration key. Carries the mapping's container `(scope, scopeId)` because the
+// placeholder is only unique WITHIN a container (word-code tokens are lower-entropy than the old
+// 128-bit hex), so erasure must delete the mapping in the RIGHT container — never a namesake token in
+// another one.
 export const piiSubjectFields = {
 	placeholder: field.string({ required: true, index: true }),
 	subjectId: field.string({ required: true, index: true }),
+	scope: field.string({ index: true }),
+	scopeId: field.string({ index: true }),
 } as const;
 
 export const piiSubjectEntity = entity("pii_subject", piiSubjectFields);

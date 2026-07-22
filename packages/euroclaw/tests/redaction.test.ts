@@ -84,7 +84,7 @@ describe("createClaw redaction group", () => {
 		const result = await claw.$context.runtime.generate("email a@b.com the offer");
 		expect(result.status).toBe("completed");
 		expect(received.prompt).not.toContain("a@b.com");
-		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 		expect(received.prompt).toContain("privacy placeholders");
 	});
 
@@ -116,8 +116,8 @@ describe("createClaw redaction group", () => {
 		expect(result.status).toBe("completed");
 		expect(received.prompt).not.toContain("a@b.com");
 		expect(received.prompt).not.toContain("SECRET");
-		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
-		expect(received.prompt).toMatch(/\{\{pii:secret:[a-z0-9]+\}\}/);
+		expect(received.prompt).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
+		expect(received.prompt).toMatch(/\{\{pii:secret:[a-z0-9-]+\}\}/);
 	});
 
 	it("armed-but-silent (no detector): no placeholder contract in the system prompt", async () => {
@@ -192,19 +192,19 @@ describe("per-claw posture routing", () => {
 			scope: "claw",
 			scopeId: "s1",
 		});
-		expect(strict).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(strict).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 
 		// No redaction field on the row and unknown rows → the declared default.
 		const bare = await redactor.redactValue("email a@b.com", {
 			scope: "claw",
 			scopeId: "bare",
 		});
-		expect(bare).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(bare).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 		const unknown = await redactor.redactValue("email a@b.com", {
 			scope: "claw",
 			scopeId: "ghost",
 		});
-		expect(unknown).toMatch(/\{\{pii:email:[a-z0-9]+\}\}/);
+		expect(unknown).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 	});
 
 	it("caches a row's posture forever (birth-immutable)", async () => {
@@ -255,7 +255,7 @@ describe("per-claw posture routing", () => {
 });
 
 describe("governed read path (view + forgetSubject)", () => {
-	const TOKEN = /\{\{pii:email:[a-z0-9]+\}\}/;
+	const TOKEN = /\{\{pii:email:[a-z0-9-]+\}\}/;
 
 	async function chatClaw() {
 		const { createMemoryAudit } = await import("@euroclaw/core");

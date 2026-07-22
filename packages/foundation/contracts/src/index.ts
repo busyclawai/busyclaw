@@ -359,6 +359,7 @@ export type {
 } from "./governance/redact";
 export {
 	piiKind,
+	piiKindValues,
 	piiMapping,
 	piiMappingEntity,
 	piiMappingFields,

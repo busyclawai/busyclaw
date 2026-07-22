@@ -39,6 +39,11 @@ export type StrictRedactionConfig = {
 	/** Dedup key — deterministic placeholders per (value, kind, container). Loss/rotation only
 	 *  resets dedup, never rehydration. */
 	indexKey?: string;
+	/** Recover MANGLED placeholders on rehydrate — snap a token a (cheap) model corrupted back to its
+	 *  mapping, when the repair resolves in-container and is unambiguous. Default ON (opt out with
+	 *  `false` for strict exact-only deployments); exact rehydration is byte-identical either way.
+	 *  See `StoredRedactorOptions.recover`. */
+	recover?: boolean;
 	/** Full-custom escape hatch (tests, exotic stores); mutually exclusive with detectors/indexKey. */
 	redactor?: Redactor;
 };
@@ -210,6 +215,7 @@ export function resolveRedaction(input: {
 			mappings,
 			...(detector !== undefined ? { detector } : {}),
 			...(cfg.indexKey !== undefined ? { indexKey: cfg.indexKey } : {}),
+			...(cfg.recover !== undefined ? { recover: cfg.recover } : {}),
 			warn: input.warn,
 		});
 		forgetSubject = async (subjectId) => {
