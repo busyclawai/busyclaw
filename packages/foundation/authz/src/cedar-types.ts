@@ -3,6 +3,7 @@
 // CedarSourceConfig live in @euroclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
+import type { PolicyAnnotationKind } from "@euroclaw/contracts";
 import type { NamedPolicies } from "./policy-bundle";
 import type {
 	AuthzModel,
@@ -47,6 +48,10 @@ export type CedarEngineConfig = {
 	 *  decision's determining-policy trail reports and the audit persists, so it stays legible instead of
 	 *  a positional `policy3`. Plain text is still accepted — Cedar then assigns its own positional ids. */
 	policies: string | NamedPolicies;
+	/** Policy ANNOTATION keys to surface on decisions — the allowlist plugins declare via
+	 *  `plugin.policyAnnotations`. A declared key found on a DETERMINING policy rides out on
+	 *  `PolicyResult.annotations`; anything undeclared is inert. Only meaningful for a NAMED set. */
+	annotations?: readonly PolicyAnnotationKind[];
 	/** Cedar schema text. Optional; when set, requests are validated against it. */
 	schema?: string;
 	/** Known entities — principals (with attrs/tags/groups) and resources: the synced directory.

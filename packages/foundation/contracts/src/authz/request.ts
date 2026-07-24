@@ -37,7 +37,11 @@ export const policyResult = type({
 	decision: "'permit' | 'deny' | 'needs-approval'",
 	"reason?": "string | undefined",
 	"policies?": type("string").array().or("undefined"),
+	/** The DECLARED annotations of the determining policies (`@escalate("team:x")` → `{escalate}`),
+	 *  filtered to the keys plugins declared. Opaque here — the declaring plugin owns the meaning. */
+	"annotations?": type({ "[string]": "string" }).or("undefined"),
 });
 
-/** What an engine returns. `policies` is the determining-policy trail (for the audit). */
+/** What an engine returns. `policies` is the determining-policy trail (for the audit); `annotations`
+ *  carries the declared policy metadata a plugin routes on. */
 export type PolicyResult = typeof policyResult.infer;

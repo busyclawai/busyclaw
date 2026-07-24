@@ -84,17 +84,23 @@ export function buildFloorPolicyPlugin(input: {
 		(plugin) => plugin.policies ?? [],
 	);
 	const bundle = loadPolicyBundle({ system: SYSTEM_POSTURE, slices });
+	// Policy-ANNOTATION keys plugins declare (`@escalate("team:x")` → `{ key: "escalate" }`). Collected
+	// the same way as `policies`/`shareable`: statically off the raw plugin, before any configure runs.
+	// The keys stay OPAQUE here — a declared key's value rides the decision out for the plugin to act on.
+	const annotations = input.plugins.flatMap(
+		(plugin) => plugin.policyAnnotations ?? [],
+	);
 
 	// 3. The ONE internal engine over the merged live set (+ a shadow candidate ONLY when a source
 	//    contributed a shadow slice — a real second evaluation that never changes the live decision).
-	const live = cedarFloorEngine({ policies: bundle.live, model });
+	const live = cedarFloorEngine({ policies: bundle.live, model, annotations });
 	const warn = input.warn ?? ((message: string) => console.warn(message));
 	const shadowPolicies = bundle.shadow;
 	const engine: PolicyEngine = shadowPolicies
 		? createShadowPolicyEngine({
 				live,
 				candidate: () =>
-					cedarFloorEngine({ policies: shadowPolicies, model }),
+					cedarFloorEngine({ policies: shadowPolicies, model, annotations }),
 				observe: (divergence) =>
 					warn(
 						`euroclaw authz shadow divergence on ${divergence.request.action.id}: live=${divergence.live} candidate=${divergence.candidate}`,

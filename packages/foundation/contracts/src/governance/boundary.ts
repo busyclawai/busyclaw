@@ -56,12 +56,29 @@ export type BoundaryCall = ToolBoundaryCall | ModelBoundaryCall;
  * `$REASON_CODES`; governance fills the human `reason` from the catalog when the gate gives a
  * reason code but no reason. `reason` is optional here; governance guarantees it on the way out.
  */
+/**
+ * The DECLARED policy annotations that decided this call — `key → value`, read off the determining
+ * policies (`@escalate("team:accessibility")` → `{ escalate: "team:accessibility" }`). The keys are
+ * OPAQUE to governance: a plugin declares which it consumes ({@link PolicyAnnotationKind}) and owns
+ * what the value means, exactly as `shareable` kinds are opaque labels with plugin-owned loaders. An
+ * after-gate is where a plugin acts on them (route an escalation, feed its own queue) — governance
+ * only carries the fact.
+ */
+export const policyAnnotations = type({ "[string]": "string" });
+export type PolicyAnnotations = typeof policyAnnotations.infer;
+
 export const gateDecision = type({ decision: "'permit'" })
-	.or({ decision: "'deny'", "reason?": "string", "reasonCode?": "string" })
+	.or({
+		decision: "'deny'",
+		"reason?": "string",
+		"reasonCode?": "string",
+		"annotations?": policyAnnotations,
+	})
 	.or({
 		decision: "'needs-approval'",
 		"reason?": "string",
 		"reasonCode?": "string",
+		"annotations?": policyAnnotations,
 	});
 export type GateDecision = typeof gateDecision.infer;
 
@@ -73,12 +90,14 @@ export const handleResult = type({ status: "'ok'", output: "unknown" })
 		gateId: "string",
 		reason: "string",
 		"reasonCode?": "string",
+		"annotations?": policyAnnotations,
 	})
 	.or({
 		status: "'needs-approval'",
 		gateId: "string",
 		reason: "string",
 		"reasonCode?": "string",
+		"annotations?": policyAnnotations,
 	});
 export type HandleResult = typeof handleResult.infer;
 

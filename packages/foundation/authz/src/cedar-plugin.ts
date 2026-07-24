@@ -20,6 +20,7 @@
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	AuthzModel,
+	PolicyAnnotationKind,
 	PolicyEngine,
 	PolicyRequest,
 	ToolCall,
@@ -149,10 +150,13 @@ export function cedarMapCall(
 export function cedarFloorEngine(config: {
 	policies: string | NamedPolicies;
 	model: AuthzModel;
+	/** Declared policy-annotation keys (plugin.policyAnnotations) to surface on decisions. */
+	annotations?: readonly PolicyAnnotationKind[];
 }): PolicyEngine {
 	return cedarEngine({
 		policies: config.policies,
 		entities: actionEntitiesFromModel(config.model) as Entities,
+		...(config.annotations ? { annotations: config.annotations } : {}),
 	});
 }
 

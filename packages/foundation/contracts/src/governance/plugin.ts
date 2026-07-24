@@ -151,6 +151,22 @@ export type ShareableKind = {
 	) => (id: string) => Promise<ShareableResource | null>;
 };
 
+/**
+ * A Cedar policy ANNOTATION key a plugin consumes — the annotation analog of {@link ShareableKind}:
+ * the key is an OPAQUE label governance never interprets, and the plugin owns what the value means.
+ * `@escalate("team:accessibility")` on a policy → `{ key: "escalate" }` here → the value reaches the
+ * decision's `annotations` when that policy is one of the determining ones.
+ *
+ * Declaring is an ALLOWLIST, not documentation: only declared keys leave the engine. Policy text is
+ * author-written and ends up in a hash-chained compliance log, so what may flow there is bounded, and
+ * an annotation nobody declared is inert rather than silently carried. `parse` is the usual
+ * boundary validator for the raw value (throw to reject) — omit it to take the string as-is.
+ */
+export type PolicyAnnotationKind = {
+	key: string;
+	parse?: (raw: string) => string;
+};
+
 // Core contributes the dependencies it OWNS (claws, effects, events, secrets) plus the resolved storage
 // adapter. A plugin that owns its own tables (e.g. channels, skills) reads `adapter` and builds its OWN
 // store from it — the assembly passes it in, so core stays agnostic about what plugins exist and never
@@ -267,6 +283,13 @@ export type EuroclawPlugin<
 	 *  scopeId }` shape to the decision and its `access_grant` rows are enforced — with ZERO new policy.
 	 *  Skills is the first consumer (its `skill` installation kind). */
 	shareable?: readonly ShareableKind[];
+	/** Cedar policy ANNOTATION keys this plugin consumes — each a `{ key, parse? }` the assembly merges
+	 *  into the one allowlist the policy engine reads. A declared key's value on the DETERMINING policies
+	 *  rides the decision out (`GateDecision`/`HandleResult.annotations`), where an after-gate acts on it.
+	 *  Read STATICALLY off the raw plugin object (like `policies`/`shareable`), so the engine knows the
+	 *  allowlist before any `configure` runs. The keys are OPAQUE to governance — a plugin owns what its
+	 *  annotation MEANS, the same way it owns what a `shareable` kind means. */
+	policyAnnotations?: readonly PolicyAnnotationKind[];
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];
 	/** Boundary before-gates this plugin installs (decide across tool/model boundaries). */

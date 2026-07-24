@@ -94,15 +94,22 @@ function decide(result: PolicyResult): GateDecision {
 	const trail = result.policies?.length
 		? ` [${result.policies.join(", ")}]`
 		: "";
+	// The determining policies' DECLARED annotations ride the decision out, so an after-gate can act on
+	// them (route an escalation, feed a plugin's own queue). Omitted when there are none.
+	const annotations = result.annotations
+		? { annotations: result.annotations }
+		: {};
 	if (result.decision === "permit") return { decision: "permit" };
 	if (result.decision === "needs-approval") {
 		return {
 			decision: "needs-approval",
 			reason: (result.reason ?? "approval required") + trail,
+			...annotations,
 		};
 	}
 	return {
 		decision: "deny",
 		reason: (result.reason ?? "no policy permits this action") + trail,
+		...annotations,
 	};
 }

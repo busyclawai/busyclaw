@@ -282,6 +282,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
+					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
 				};
 			}
 			if (verdict.decision === "needs-approval") {
@@ -296,6 +297,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
+					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
 				};
 			}
 		}
@@ -338,6 +340,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 						gateId: gate.id,
 						reason: resolveReason(verdict),
 						reasonCode: verdict.reasonCode,
+						...(verdict.annotations ? { annotations: verdict.annotations } : {}),
 					};
 					return outcome;
 				}
@@ -349,6 +352,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 						gateId: gate.id,
 						reason: resolveReason(verdict),
 						reasonCode: verdict.reasonCode,
+						...(verdict.annotations ? { annotations: verdict.annotations } : {}),
 					};
 					return outcome;
 				}

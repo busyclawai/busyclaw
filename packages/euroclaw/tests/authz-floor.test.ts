@@ -4,6 +4,7 @@
 // permit; a source `permit` cannot punch through the floor's forbid). No `cedar()` is connected for
 // the engine here — the engine is the assembly's; `cedar()` only contributes policy TEXT.
 
+import type { EuroclawPlugin } from "@euroclaw/contracts";
 import { createMemoryAudit } from "@euroclaw/core";
 import { cedar } from "@euroclaw/policy-cedar";
 import { runtimeRunOptionsWithCaller } from "@euroclaw/runtime";
@@ -242,5 +243,97 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 			claw.$context.runtime.generate("read", {}),
 		).rejects.toThrow(/no stamped principal/);
 		expect(readRan).toBe(false);
+	});
+});
+
+// The plugin-extensible policy-ANNOTATION seam: a plugin declares which Cedar annotation keys it
+// consumes (the annotation analog of a `shareable` kind — the key is opaque to governance, the plugin
+// owns the meaning), and a declared key on a DETERMINING policy rides the decision out to an
+// after-gate. That is how an escalation gets routed without Cedar needing a third decision type.
+describe("policy annotations — declared by plugins, carried on the decision", () => {
+	const escalationPlugin = (seen: string[]): EuroclawPlugin => ({
+		id: "escalation",
+		// The declaration IS the allowlist: only these keys leave the engine.
+		policyAnnotations: [{ key: "escalate" }],
+		policies: [
+			{
+				name: "escalate:accessibility-team",
+				mode: "enforce",
+				cedar: `@escalate("team:accessibility")
+permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
+			},
+		],
+		afterGates: [
+			{
+				id: "escalation-router",
+				matcher: () => true,
+				handler: (_call, _ctx, outcome) => {
+					// The plugin acts on its OWN annotation — here just recording where it would route.
+					if ("annotations" in outcome && outcome.annotations?.escalate) {
+						seen.push(outcome.annotations.escalate);
+					}
+				},
+			},
+		],
+	});
+
+	it("a declared annotation on the deciding policy reaches the after-gate", async () => {
+		const routed: string[] = [];
+		const { db, redactor } = durableRedactor();
+		let ran = false;
+		const claw = owned({
+			database: db,
+			model: toolCallModel("write_doc"),
+			redaction: { redactor },
+			plugins: [escalationPlugin(routed)],
+			tools: {
+				write_doc: govern(
+					tool({
+						description: "write",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => {
+							ran = true;
+							return { ok: true };
+						},
+					}),
+					{ access: "write" },
+				),
+			},
+		});
+
+		// An autonomous write parks (the floor forbids unconfirmed autonomous writes; the slice would
+		// permit it once confirmed) — so the slice is a DETERMINING policy and its @escalate rides out.
+		const result = await claw.api.generate({ prompt: "write" });
+		expect(result.status).toBe("waiting_approval");
+		expect(ran).toBe(false);
+		expect(routed).toContain("team:accessibility");
+	});
+
+	it("an UNDECLARED annotation is inert — the allowlist bounds what enters the log", async () => {
+		const routed: string[] = [];
+		const { db, redactor } = durableRedactor();
+		const plugin = escalationPlugin(routed);
+		const claw = owned({
+			database: db,
+			model: toolCallModel("write_doc"),
+			redaction: { redactor },
+			// Same policy, but the plugin declares NOTHING — so `escalate` never leaves the engine.
+			plugins: [{ ...plugin, policyAnnotations: [] }],
+			tools: {
+				write_doc: govern(
+					tool({
+						description: "write",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => ({ ok: true }),
+					}),
+					{ access: "write" },
+				),
+			},
+		});
+
+		expect((await claw.api.generate({ prompt: "write" })).status).toBe(
+			"waiting_approval",
+		);
+		expect(routed).toEqual([]);
 	});
 });

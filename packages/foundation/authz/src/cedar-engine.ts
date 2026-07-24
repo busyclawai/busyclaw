@@ -20,9 +20,11 @@ import {
 	checkParseSchema,
 	isAuthorized,
 	policySetTextToParts,
+	policyToJson,
 } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	EntityRef,
+	PolicyAnnotationKind,
 	PolicyRequest,
 	PolicyResult,
 } from "@euroclaw/contracts";
@@ -75,6 +77,34 @@ function namedPolicySet(
 	return out;
 }
 
+/**
+ * Index each policy's DECLARED annotations by policy id, so a decision can report the metadata of the
+ * rules that actually decided it. Annotations are read structurally (`policyToJson`), never by a regex
+ * over source, and filtered to the keys plugins DECLARED: policy text is author-written and rides into
+ * a hash-chained compliance log, so what may flow there is bounded, and an undeclared annotation is
+ * inert rather than silently carried. `parse` is the declaring plugin's boundary validator.
+ */
+function annotationIndex(
+	policies: Record<string, string>,
+	declared: readonly PolicyAnnotationKind[],
+): Map<string, Record<string, string>> {
+	const index = new Map<string, Record<string, string>>();
+	if (declared.length === 0) return index;
+	const byKey = new Map(declared.map((d) => [d.key, d]));
+	for (const [id, text] of Object.entries(policies)) {
+		const json = policyToJson(text);
+		if (json.type !== "success") continue;
+		const found: Record<string, string> = {};
+		for (const [key, raw] of Object.entries(json.json.annotations ?? {})) {
+			const declaration = byKey.get(key);
+			if (declaration === undefined || typeof raw !== "string") continue;
+			found[key] = declaration.parse ? declaration.parse(raw) : raw;
+		}
+		if (Object.keys(found).length > 0) index.set(id, found);
+	}
+	return index;
+}
+
 /** A Cedar PDP as a PolicyEngine: deny-by-default, forbid-overrides, with a needs-approval probe. The
  *  `authorize` overload takes optional per-decision entities (merged UNDER the directory) — the product-
  *  api PEP passes its per-request Principal/Resource/Access graph there. */
@@ -85,12 +115,17 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 	// Hand Cedar a NAMED set (id → policy) so `diagnostics.reason` — the trail that reaches the audit —
 	// names the rule that fired. Plain TEXT is still accepted (a one-off engine, a test): Cedar then
 	// assigns its own positional ids, the pre-naming behaviour. See {@link namedPolicySet}.
-	const policies = {
-		staticPolicies:
-			typeof config.policies === "string"
-				? config.policies
-				: namedPolicySet(config.policies),
-	};
+	const staticPolicies =
+		typeof config.policies === "string"
+			? config.policies
+			: namedPolicySet(config.policies);
+	const policies = { staticPolicies };
+	// Declared policy annotations, indexed by policy id at CONSTRUCTION (parsed once, not per decision).
+	// Only meaningful for a named set — plain text has no stable ids to index by.
+	const annotations =
+		typeof staticPolicies === "string"
+			? new Map<string, Record<string, string>>()
+			: annotationIndex(staticPolicies, config.annotations ?? []);
 	// Fail LOUD at construction for a broken policy set / schema — a config bug, not a runtime deny.
 	const parsedPolicies = checkParsePolicySet(policies);
 	if (parsedPolicies.type === "failure") {
@@ -110,6 +145,21 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 	const resolveEntities = async (): Promise<Entities> => {
 		if (typeof config.entities === "function") return config.entities();
 		return config.entities ?? [];
+	};
+
+	// The declared annotations of the policies that DECIDED, merged. Omitted entirely when there are
+	// none, so a decision never carries an empty bag. (A key on two determining policies: last wins —
+	// they are metadata about a decision already made, not part of it.)
+	const annotationsOf = (
+		determining: readonly string[],
+	): { annotations?: Record<string, string> } => {
+		if (annotations.size === 0) return {};
+		const merged: Record<string, string> = {};
+		for (const id of determining) {
+			const found = annotations.get(id);
+			if (found !== undefined) Object.assign(merged, found);
+		}
+		return Object.keys(merged).length > 0 ? { annotations: merged } : {};
 	};
 
 	// One Cedar evaluation. Never throws: a request that can't be evaluated is fail-CLOSED (deny),
@@ -175,7 +225,12 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 			const first = evaluate(req, baseContext, entities);
 			if (first.error)
 				return { decision: "deny", reason: `cedar error: ${first.error}` };
-			if (first.allow) return { decision: "permit", policies: first.policies };
+			if (first.allow)
+				return {
+					decision: "permit",
+					policies: first.policies,
+					...annotationsOf(first.policies),
+				};
 
 			// Probe: would confirmation unblock it? If yes, it's needs-approval, not a hard deny.
 			const probed = evaluate(
@@ -188,9 +243,16 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 					decision: "needs-approval",
 					reason: "confirmation required",
 					policies: probed.policies,
+					// The PROBE's determining policies — the rules that would permit once confirmed. Their
+					// annotations are what an escalation routes on ("this needs @escalate("team:x")").
+					...annotationsOf(probed.policies),
 				};
 			}
-			return { decision: "deny", policies: first.policies };
+			return {
+				decision: "deny",
+				policies: first.policies,
+				...annotationsOf(first.policies),
+			};
 		},
 	};
 }
