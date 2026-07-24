@@ -590,4 +590,58 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			claw.api.secrets.list({}, { principal: "user:alice" }),
 		).resolves.toMatchObject([{ name: "E2E" }]);
 	});
+
+	it("fail-closes a governed api call when no caller is resolved (audit #1)", async () => {
+		// A REAL governed claw — the PEP is default-on; NO `unsafeOpen`, so it ENFORCES. (The fixture
+		// above uses `unsafeOpen` to stay a transport test; this one is the opposite: the authz proof.)
+		const model = {
+			doStream: async () => {
+				throw new Error("model not used");
+			},
+		};
+		const claw = createClaw({
+			database: memoryAdapter(),
+			model: model as never,
+			redaction: { posture: "raw" },
+		}) as unknown as Claw;
+		const createClawRequest = (handler: ReturnType<typeof toRequestHandler>) =>
+			handler(
+				new Request("https://app.test/api/euroclaw/create-claw", {
+					body: JSON.stringify({ name: "c" }),
+					method: "POST",
+				}),
+			);
+
+		// Mounted with NO resolveCaller — an unauthenticated request carries no principal (identity never
+		// rides the body: stamped-fields), so the actor floor DENIES before the method's body runs. This
+		// is the audit-#1 scenario inverted: the once-open surface now fail-closes with a proper 403, not
+		// a masked 500. The deny is structural — `governApi` only calls the method on a `permit`, so no
+		// claw row can be created here.
+		const denied = await createClawRequest(toRequestHandler(claw));
+		expect(denied.status).toBe(403);
+		await expect(denied.json()).resolves.toMatchObject({
+			error: { code: "EUROCLAW_AUTHORIZATION_DENIED" },
+			ok: false,
+		});
+
+		// A resolveCaller that returns `undefined` (an unauthenticated request) is identical to absent.
+		const unauthorized = await createClawRequest(
+			toRequestHandler(claw, { resolveCaller: () => undefined }),
+		);
+		expect(unauthorized.status).toBe(403);
+
+		// Mounted WITH a resolveCaller that yields the verified principal — the same request is now
+		// authorized, and the owner is stamped FROM the caller (never the body). resolveCaller is the
+		// load-bearing over-the-wire identity seam.
+		const created = await createClawRequest(
+			toRequestHandler(claw, {
+				resolveCaller: () => ({ principal: "user:alice" }),
+			}),
+		);
+		expect(created.status).toBe(200);
+		await expect(created.json()).resolves.toMatchObject({
+			data: { createdBy: "user:alice" },
+			ok: true,
+		});
+	});
 });

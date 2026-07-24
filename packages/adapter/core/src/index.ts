@@ -40,13 +40,27 @@ export type ClawRequestHandlerOptions = {
 	/** Opt-in `GET /openapi.json` serving the generated document — absent ⇒ no route. `true` for
 	 *  default info; `{ enabled: true, info }` to title/version the document. */
 	openApi?: true | { enabled: true; info?: ClawOpenApiOptions };
-	/** The identity seam: resolve the authenticated caller from the request (the host extracts the
-	 *  principal from its session/token), threaded to every governed api method and plugin endpoint
-	 *  handler as their out-of-band 2nd argument — the over-the-wire analog of the in-process
-	 *  `{ principal }`. This is the ONLY over-the-wire identity path: request BODIES never carry a
-	 *  who/where field (docs/plans/stamped-fields.md). Absent ⇒ no caller is threaded (governed methods
-	 *  then rely on the actor floor / their own fail-closed owner check). Returning `undefined` is the
-	 *  same as an unauthenticated request. */
+	/** The identity seam: resolve the authenticated caller from the request — the host extracts the
+	 *  principal from a SERVER-VERIFIED session/token, NEVER a client-supplied header or body. Threaded
+	 *  to every governed api method + plugin endpoint handler as their out-of-band 2nd argument: the
+	 *  over-the-wire analog of the in-process `{ principal }` (in-process callers pass that directly;
+	 *  this is only the HTTP boundary's producer of the same value). It is the ONLY over-the-wire
+	 *  identity path — request BODIES never carry a who/where field; those are server-stamped from the
+	 *  caller (docs/plans/stamped-fields.md).
+	 *
+	 *  FAIL-CLOSED: absent, or returning `undefined` (an unauthenticated request), means no principal —
+	 *  so the actor floor DENIES every governed core api call with a 403 (a plugin endpoint falls to its
+	 *  own fail-closed owner check). A misconfigured mount is thus safe: it denies, it never exposes.
+	 *  Wiring this seam is what makes the HTTP surface both usable and authorized (audit #1/#3).
+	 *
+	 *  @example
+	 *  toRequestHandler(claw, {
+	 *    resolveCaller: async (request) => {
+	 *      const session = await auth.verify(request.headers); // your server-side session check
+	 *      return session ? { principal: `user:${session.userId}` } : undefined;
+	 *    },
+	 *  });
+	 */
 	resolveCaller?: (
 		request: Request,
 	) => ClawApiCaller | undefined | Promise<ClawApiCaller | undefined>;
@@ -68,6 +82,10 @@ function statusForError(error: unknown): number {
 	if (error instanceof EuroclawError) {
 		if (error.code === "EUROCLAW_VALIDATION_FAILED") return 400;
 		if (error.code === "EUROCLAW_UNSUPPORTED_OPERATION") return 400;
+		// An app-authz denial (the actor floor / owner∪scope∪grant PEP throws this) is a Forbidden —
+		// NOT a masked 500. Without this a fail-closed governed call reads as a server error on the wire
+		// (tripping error alarms / client retries) instead of the deliberate deny it is.
+		if (error.code === "EUROCLAW_AUTHORIZATION_DENIED") return 403;
 	}
 	if (error instanceof SyntaxError) return 400;
 	return 500;
