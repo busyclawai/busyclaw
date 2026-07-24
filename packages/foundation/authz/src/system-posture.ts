@@ -1,3 +1,5 @@
+import type { NamedPolicies } from "./policy-bundle";
+
 // The code-owned system posture — slice 6b. The seeded Cedar text ALWAYS present in `live` (merged
 // UNDER every customer slice by loadPolicyBundle): customers narrow or extend it with their own
 // slices but can never remove it — forbid overrides permit, so the floor is sealed. Keep it small;
@@ -16,15 +18,12 @@
 // absent optional access (even under a `has` guard, verified 4.11.1) → an erroring forbid is SILENTLY
 // SKIPPED. With runMode guaranteed present, an unknown/autonomous mode reads as "must confirm"
 // (fail-closed) and only a known-interactive run relaxes.
-// Each policy carries an `@id` so the determining-policy trail (and the compliance audit that persists
-// it) NAMES the floor rule that decided, instead of a positional `policy0` that shifts as soon as a
-// customer slice is added above it. Annotations are metadata — never evaluated — so the posture's
-// semantics are untouched.
-export const SYSTEM_POSTURE = `@id("floor:reads-run")
-permit(principal, action in Action::"reads", resource);
-
-@id("floor:writes-need-confirmation")
-permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };
-
-@id("floor:unconfirmed-autonomous-write-forbidden")
-forbid(principal, action in Action::"writes", resource) unless { context.confirmationUsed || context.runMode == "interactive" };`;
+// A NAMED set (rule name → cedar), not one blob: the name is what the determining-policy trail reports
+// and the compliance audit persists, so the floor's rules stay legible there instead of a positional
+// `policy0` that shifts as soon as a customer slice is added. The names live in THIS structure — never
+// as metadata inside the policy source.
+export const SYSTEM_POSTURE: NamedPolicies = {
+	"floor:reads-run": `permit(principal, action in Action::"reads", resource);`,
+	"floor:writes-need-confirmation": `permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
+	"floor:unconfirmed-autonomous-write-forbidden": `forbid(principal, action in Action::"writes", resource) unless { context.confirmationUsed || context.runMode == "interactive" };`,
+};

@@ -1,22 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { authzBundleKey, loadPolicyBundle } from "../src/index";
 
-const SYSTEM = `permit(principal, action in Action::"reads", resource);`;
+// The bundle is a NAMED set (name → cedar text): a slice is identified by the name it is MANAGED by,
+// which is what reaches the determining-policy trail and the compliance audit.
+const SYSTEM = {
+	"floor:reads": `permit(principal, action in Action::"reads", resource);`,
+};
 
 describe("loadPolicyBundle", () => {
-	it("enforce slices merge into live; no shadow slice ⇒ shadow undefined", () => {
+	it("enforce slices merge into live under their own name; no shadow slice ⇒ shadow undefined", () => {
 		const bundle = loadPolicyBundle({
 			system: SYSTEM,
 			slices: [{ name: "a", cedar: "ENFORCE_A", mode: "enforce" }],
 		});
-		expect(bundle.live).toContain(SYSTEM);
-		expect(bundle.live).toContain("ENFORCE_A");
+		expect(bundle.live).toEqual({ ...SYSTEM, a: "ENFORCE_A" });
 		expect(bundle.shadow).toBeUndefined(); // no candidate ⇒ the host skips the second engine
 	});
 
 	it("no slices ⇒ live is exactly the system posture", () => {
 		const bundle = loadPolicyBundle({ system: SYSTEM, slices: [] });
-		expect(bundle.live).toBe(SYSTEM);
+		expect(bundle.live).toEqual(SYSTEM);
 		expect(bundle.shadow).toBeUndefined();
 	});
 
@@ -28,10 +31,13 @@ describe("loadPolicyBundle", () => {
 				{ name: "shd", cedar: "SHADOW_S", mode: "shadow" },
 			],
 		});
-		expect(bundle.live).toContain("ENFORCE_E");
-		expect(bundle.live).not.toContain("SHADOW_S"); // shadow is a candidate, never live
-		expect(bundle.shadow).toContain("ENFORCE_E"); // candidate = live …
-		expect(bundle.shadow).toContain("SHADOW_S"); // … plus the shadow slice
+		expect(bundle.live).toEqual({ ...SYSTEM, enf: "ENFORCE_E" });
+		expect(bundle.live.shd).toBeUndefined(); // shadow is a candidate, never live
+		expect(bundle.shadow).toEqual({
+			...SYSTEM,
+			enf: "ENFORCE_E", // candidate = live …
+			shd: "SHADOW_S", // … plus the shadow slice
+		});
 	});
 
 	it("off slices are dropped from both live and the candidate", () => {
@@ -39,8 +45,7 @@ describe("loadPolicyBundle", () => {
 			system: SYSTEM,
 			slices: [{ name: "off1", cedar: "OFF_O", mode: "off" }],
 		});
-		expect(bundle.live).toBe(SYSTEM);
-		expect(bundle.live).not.toContain("OFF_O");
+		expect(bundle.live).toEqual(SYSTEM);
 		expect(bundle.shadow).toBeUndefined();
 	});
 
@@ -52,9 +57,29 @@ describe("loadPolicyBundle", () => {
 				{ name: "shd", cedar: "SHADOW_S", mode: "shadow" },
 			],
 		});
-		expect(bundle.live).toBe(SYSTEM); // both off and shadow are excluded from live
-		expect(bundle.shadow).toContain("SHADOW_S");
-		expect(bundle.shadow).not.toContain("OFF_O");
+		expect(bundle.live).toEqual(SYSTEM); // both off and shadow are excluded from live
+		expect(bundle.shadow).toEqual({ ...SYSTEM, shd: "SHADOW_S" });
+	});
+
+	it("a slice may NOT reuse a floor rule's name — a keyed merge would REPLACE the seal", () => {
+		expect(() =>
+			loadPolicyBundle({
+				system: SYSTEM,
+				slices: [{ name: "floor:reads", cedar: "OVERRIDE", mode: "enforce" }],
+			}),
+		).toThrow(/duplicate policy slice name: floor:reads/);
+	});
+
+	it("two slices may not share a name — they'd be indistinguishable in the audit", () => {
+		expect(() =>
+			loadPolicyBundle({
+				system: SYSTEM,
+				slices: [
+					{ name: "dup", cedar: "A", mode: "enforce" },
+					{ name: "dup", cedar: "B", mode: "shadow" },
+				],
+			}),
+		).toThrow(/duplicate policy slice name: dup/);
 	});
 });
 

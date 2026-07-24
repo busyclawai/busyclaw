@@ -1,6 +1,7 @@
 // The code-owned system posture (@euroclaw/authz) compiled through the reference Cedar engine — the
-// posture is a plain string in authz (no cedar dep there); this is where it meets cedar-wasm. Proves
-// it parses at construction and yields reads-run / writes-confirm / autonomous-floor decisions.
+// posture is a NAMED set of plain text in authz (no cedar dep there); this is where it meets
+// cedar-wasm. Proves it parses at construction, yields reads-run / writes-confirm / autonomous-floor
+// decisions, and that a decision's determining-policy trail reports the rule's NAME.
 
 import {
 	type AuthzActionInput,
@@ -17,12 +18,18 @@ const model = buildAuthzModel([
 	{ id: "writeDoc", source: "tool", governance: { access: "write" } },
 ] satisfies AuthzActionInput[]);
 
-function engine(policies: string) {
+function engine(policies: string | Readonly<Record<string, string>>) {
 	return cedarEngine({
 		policies,
 		entities: actionEntitiesFromModel(model) as never,
 	});
 }
+
+/** The floor plus a named customer slice — the shape `loadPolicyBundle` produces. */
+const withSlice = (name: string, cedar: string) => ({
+	...SYSTEM_POSTURE,
+	[name]: cedar,
+});
 
 const req = (
 	action: string,
@@ -56,7 +63,10 @@ describe("SYSTEM_POSTURE through cedar", () => {
 		// A customer slice permits writes outright, laid over the sealed posture. runMode is stamped
 		// on every real request (runtime + mapCall guarantee it is present, default autonomous), so the
 		// floor conditions on it directly: interactive relaxes, autonomous/unknown stays gated.
-		const withPermit = `${SYSTEM_POSTURE}\npermit(principal, action in Action::"writes", resource);`;
+		const withPermit = withSlice(
+			"customer:allow-writes",
+			`permit(principal, action in Action::"writes", resource);`,
+		);
 		const e = engine(withPermit);
 		// interactive: a human is present → the customer permit applies → the write runs.
 		expect(
@@ -86,7 +96,10 @@ describe("named policies — the determining-policy trail names the RULE", () =>
 
 	it("a HARD deny names the forbid that blocked it", async () => {
 		const e = engine(
-			`${SYSTEM_POSTURE}\n@id("deny:tool-blocked") forbid(principal, action == Action::"readDoc", resource);`,
+			withSlice(
+				"deny:tool-blocked",
+				`forbid(principal, action == Action::"readDoc", resource);`,
+			),
 		);
 		// Confirmation cannot unblock a forbid, so this stays a deny — and the trail names the rule.
 		const denied = await e.authorize(req("readDoc"));
@@ -94,25 +107,38 @@ describe("named policies — the determining-policy trail names the RULE", () =>
 		expect(denied.policies).toContain("deny:tool-blocked");
 	});
 
-	it("an @id on a customer slice reaches the trail — the escalation/audit channel", async () => {
-		const slice = `@id("escalate:accessibility-team")
-permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`;
-		const e = engine(`${SYSTEM_POSTURE}\n${slice}`);
-		// The probe flips this to needs-approval, and the trail carries the slice's OWN name — which is
-		// what lets the app route the approval to a queue without inventing a second decision channel.
+	it("a slice's own NAME reaches the trail — the escalation/audit channel", async () => {
+		const e = engine(
+			withSlice(
+				"escalate:accessibility-team",
+				`permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
+			),
+		);
+		// The probe flips this to needs-approval and the trail carries the slice's own name — nothing had
+		// to be annotated. That is what lets the app route the approval to a queue without inventing a
+		// second decision channel (Cedar itself can only ever answer allow/deny).
 		const parked = await e.authorize(req("writeDoc", { runMode: "autonomous" }));
 		expect(parked.decision).toBe("needs-approval");
 		expect(parked.policies).toContain("escalate:accessibility-team");
 	});
 
-	it("un-annotated policies keep cedar's positional id (no regression)", async () => {
-		const e = engine(`permit(principal, action in Action::"reads", resource);`);
-		expect((await e.authorize(req("readDoc"))).policies).toEqual(["policy0"]);
+	it("a slice holding SEVERAL policies is split into <name>#<i>", async () => {
+		const e = engine(
+			withSlice(
+				"customer:pair",
+				`forbid(principal, action == Action::"readDoc", resource);
+permit(principal, action in Action::"writes", resource);`,
+			),
+		);
+		// cedar-wasm takes one policy per id, so the pair is indexed under the slice's name — still the
+		// managed handle, and stable as long as the slice's own contents don't move.
+		const denied = await e.authorize(req("readDoc"));
+		expect(denied.decision).toBe("deny");
+		expect(denied.policies).toContain("customer:pair#0");
 	});
 
-	it("a duplicate @id fails LOUD at construction", () => {
-		const dupe = `@id("same") permit(principal, action in Action::"reads", resource);
-@id("same") permit(principal, action in Action::"writes", resource);`;
-		expect(() => engine(dupe)).toThrow(/duplicate Cedar policy id: same/);
+	it("plain policy TEXT still works — cedar assigns its own positional ids", async () => {
+		const e = engine(`permit(principal, action in Action::"reads", resource);`);
+		expect((await e.authorize(req("readDoc"))).policies).toEqual(["policy0"]);
 	});
 });

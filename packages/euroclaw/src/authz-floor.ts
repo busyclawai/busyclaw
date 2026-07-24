@@ -89,11 +89,12 @@ export function buildFloorPolicyPlugin(input: {
 	//    contributed a shadow slice — a real second evaluation that never changes the live decision).
 	const live = cedarFloorEngine({ policies: bundle.live, model });
 	const warn = input.warn ?? ((message: string) => console.warn(message));
-	const engine: PolicyEngine = bundle.shadow
+	const shadowPolicies = bundle.shadow;
+	const engine: PolicyEngine = shadowPolicies
 		? createShadowPolicyEngine({
 				live,
 				candidate: () =>
-					cedarFloorEngine({ policies: bundle.shadow as string, model }),
+					cedarFloorEngine({ policies: shadowPolicies, model }),
 				observe: (divergence) =>
 					warn(
 						`euroclaw authz shadow divergence on ${divergence.request.action.id}: live=${divergence.live} candidate=${divergence.candidate}`,

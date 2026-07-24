@@ -46,6 +46,7 @@ import type {
 	CedarPluginConfig,
 } from "./cedar-types";
 import { createPolicyPlugin, type PolicyPlugin } from "./plugin";
+import type { NamedPolicies } from "./policy-bundle";
 import { type ArgsProjection, projectArgs } from "./projection";
 
 type ModelIndexEntry = {
@@ -146,7 +147,7 @@ export function cedarMapCall(
  * into — the cedar-wasm entity cast stays localized here, in the package that owns Cedar.
  */
 export function cedarFloorEngine(config: {
-	policies: string;
+	policies: string | NamedPolicies;
 	model: AuthzModel;
 }): PolicyEngine {
 	return cedarEngine({
@@ -164,7 +165,7 @@ export function cedarFloorEngine(config: {
  * `API_ACCESS_BASELINE`. So this engine only ever sees `ClawApi::` policies + entities.
  */
 export function cedarApiEngine(config: {
-	policies: string;
+	policies: string | NamedPolicies;
 	methods: readonly string[];
 	createMethods: readonly string[];
 }): CedarEngine {

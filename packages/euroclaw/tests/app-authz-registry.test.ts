@@ -166,7 +166,7 @@ describe("app-authz slice 5 — a team grant is dormant without memberships", ()
 		// the decision flipped, yet the compiled bundle never moved
 		expect(
 			loadPolicyBundle({ system: API_ACCESS_BASELINE, slices: [] }).live,
-		).toBe(bundleBefore);
+		).toEqual(bundleBefore);
 
 		// DELETE (unshare) → flips back; bundle STILL unchanged
 		rows.delete("claw:claw-1");
@@ -175,6 +175,6 @@ describe("app-authz slice 5 — a team grant is dormant without memberships", ()
 		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
 		expect(
 			loadPolicyBundle({ system: API_ACCESS_BASELINE, slices: [] }).live,
-		).toBe(bundleBefore);
+		).toEqual(bundleBefore);
 	});
 });

@@ -51,7 +51,11 @@ export type { FactsOverlayEntry } from "./overlay";
 export { actionInputsFromRegisteredTools, mergeFactsOverlay } from "./overlay";
 export type { PolicyPlugin, PolicyPluginConfig } from "./plugin";
 export { createPolicyPlugin } from "./plugin";
-export type { PolicyBundle, PolicySliceLike } from "./policy-bundle";
+export type {
+	NamedPolicies,
+	PolicyBundle,
+	PolicySliceLike,
+} from "./policy-bundle";
 export { authzBundleKey, loadPolicyBundle } from "./policy-bundle";
 export type { ArgsProjection, ProjectedShape } from "./projection";
 export { projectArgs, renderCedarType } from "./projection";

@@ -3,6 +3,7 @@
 // CedarSourceConfig live in @euroclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
+import type { NamedPolicies } from "./policy-bundle";
 import type {
 	AuthzModel,
 	PolicyEngine,
@@ -42,8 +43,10 @@ export type CedarEntitiesInput =
 	| (() => Entities | Promise<Entities>);
 
 export type CedarEngineConfig = {
-	/** Cedar policy text — one or more `permit`/`forbid` statements (the org's policy slice). */
-	policies: string;
+	/** The policy set. Prefer a NAMED set (`loadPolicyBundle`'s `name → cedar text`): the name is what a
+	 *  decision's determining-policy trail reports and the audit persists, so it stays legible instead of
+	 *  a positional `policy3`. Plain text is still accepted — Cedar then assigns its own positional ids. */
+	policies: string | NamedPolicies;
 	/** Cedar schema text. Optional; when set, requests are validated against it. */
 	schema?: string;
 	/** Known entities — principals (with attrs/tags/groups) and resources: the synced directory.

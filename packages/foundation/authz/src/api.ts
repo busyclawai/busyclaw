@@ -33,6 +33,7 @@ import type {
 } from "@euroclaw/contracts";
 import { grantReaches } from "@euroclaw/contracts";
 import type { CedarEngine } from "./cedar-types";
+import type { NamedPolicies } from "./policy-bundle";
 
 /** An action's required permission LEVEL — the ONE non-derivable per-method fact. Ordered
  *  `read < use < manage`: `read` sees, `use` runs/invokes (distinct from read/write), `manage`
@@ -80,19 +81,14 @@ export const API_CREATE_GROUP = "creates";
  *   - grant is present-but-dormant (`principal in resource.requiredGrantAccess`; grants are empty until
  *     the access_grant table lands) — the POLICY ships now, the DATA later.
  */
-// `@id` per rule so a permit is legible in the determining-policy trail: an api decision's audit says
-// WHICH of the three access routes (owner / scope / grant) let the call through, not `policy1`.
-export const API_ACCESS_BASELINE = `@id("api:owner")
-permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { resource.createdBy == principal };
-
-@id("api:scope-member")
-permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredScopeAccess };
-
-@id("api:grant")
-permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredGrantAccess };
-
-@id("api:create")
-permit(principal, action in ${API_ACTION_TYPE}::"${API_CREATE_GROUP}", resource);`;
+// A NAMED set, one entry per access route, so an api decision's audit says WHICH route let the call
+// through (owner / scope / grant / create) rather than a positional `policy1`.
+export const API_ACCESS_BASELINE: NamedPolicies = {
+	"api:owner": `permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { resource.createdBy == principal };`,
+	"api:scope-member": `permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredScopeAccess };`,
+	"api:grant": `permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredGrantAccess };`,
+	"api:create": `permit(principal, action in ${API_ACTION_TYPE}::"${API_CREATE_GROUP}", resource);`,
+};
 
 /** One entry in the generic ACL (a row of the `access_grant` table, projected). `principalRef` is
  *  polymorphic and OPAQUE — `user:…` | `team:…` | `organization:…` | `public`; `level` is what the

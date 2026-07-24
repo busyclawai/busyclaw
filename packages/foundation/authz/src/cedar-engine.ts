@@ -20,7 +20,6 @@ import {
 	checkParseSchema,
 	isAuthorized,
 	policySetTextToParts,
-	policyToJson,
 } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	EntityRef,
@@ -33,42 +32,47 @@ import type { CedarEngine, CedarEngineConfig } from "./cedar-types";
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
 
 /**
- * NAME every policy in a policy-set text, so a decision's determining-policy trail — `PolicyResult.
- * policies`, which the compliance audit persists — reports WHICH RULE fired instead of a positional
- * `policy3`. A policy's `@id("…")` annotation is its name (the Cedar-native convention, also what
- * Verified Permissions uses), read STRUCTURALLY via `policyToJson`, never by a regex over source.
+ * Turn a NAMED policy set (name → cedar text, as `loadPolicyBundle` produces) into the id → policy map
+ * cedar-wasm takes, so a decision's determining-policy trail — `PolicyResult.policies`, which the
+ * compliance audit persists — reports WHICH RULE fired instead of a positional `policy3` that shifts
+ * whenever a slice is added above it.
  *
- * Un-annotated policies keep Cedar's own positional `policy<i>` id, so an unnamed set behaves exactly
- * as before. Those positional ids SHIFT whenever a policy is added or reordered anywhere in the bundle
- * — which is why anything a compliance trail or an escalation route depends on should carry an `@id`.
- * A duplicate id is a config bug (two rules would be indistinguishable in the trail): fail LOUD.
+ * The names come from euroclaw's OWN structure — a stored slice's `name`, a floor rule's key — never
+ * from metadata inside the Cedar source, so nothing has to be annotated for the trail to be legible
+ * and the id in the audit is the same handle the policy is managed by. cedar-wasm takes exactly ONE
+ * policy per id, so a name whose text holds several policies is split into `<name>#<i>`; a
+ * single-policy name is used verbatim.
  */
-function namedPolicySet(text: string): Record<string, string> {
-	const parts = policySetTextToParts(text);
-	if (parts.type === "failure") {
-		throw configurationError(
-			`invalid Cedar policy set: ${parts.errors.map((e) => e.message).join("; ")}`,
-		);
-	}
-	const named: Record<string, string> = {};
-	parts.policies.forEach((policy, index) => {
-		const json = policyToJson(policy);
-		const annotated =
-			json.type === "success" ? json.json.annotations?.id : undefined;
-		const id =
-			annotated !== undefined && annotated.trim() !== ""
-				? annotated
-				: `policy${index}`;
-		if (named[id] !== undefined) {
+function namedPolicySet(
+	named: Readonly<Record<string, string>>,
+): Record<string, string> {
+	const out: Record<string, string> = {};
+	const claim = (id: string, policy: string): void => {
+		if (out[id] !== undefined) {
 			throw configurationError(`duplicate Cedar policy id: ${id}`, {
 				policyId: id,
 				reason:
-					"two policies carry the same @id — the determining-policy trail could not tell them apart",
+					"two policies resolved to the same id — the determining-policy trail could not tell them apart",
 			});
 		}
-		named[id] = policy;
-	});
-	return named;
+		out[id] = policy;
+	};
+	for (const [name, text] of Object.entries(named)) {
+		const parts = policySetTextToParts(text);
+		if (parts.type === "failure") {
+			throw configurationError(
+				`invalid Cedar policy set in "${name}": ${parts.errors.map((e) => e.message).join("; ")}`,
+			);
+		}
+		const policies = parts.policies;
+		const single = policies[0];
+		if (policies.length === 1 && single !== undefined) {
+			claim(name, single);
+			continue;
+		}
+		policies.forEach((policy, index) => claim(`${name}#${index}`, policy));
+	}
+	return out;
 }
 
 /** A Cedar PDP as a PolicyEngine: deny-by-default, forbid-overrides, with a needs-approval probe. The
@@ -78,18 +82,22 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 	const approvalFlag = config.approvalFlag ?? "confirmationUsed";
 	const validateRequest = config.validateRequest ?? config.schema !== undefined;
 
+	// Hand Cedar a NAMED set (id → policy) so `diagnostics.reason` — the trail that reaches the audit —
+	// names the rule that fired. Plain TEXT is still accepted (a one-off engine, a test): Cedar then
+	// assigns its own positional ids, the pre-naming behaviour. See {@link namedPolicySet}.
+	const policies = {
+		staticPolicies:
+			typeof config.policies === "string"
+				? config.policies
+				: namedPolicySet(config.policies),
+	};
 	// Fail LOUD at construction for a broken policy set / schema — a config bug, not a runtime deny.
-	// Validate the TEXT first, so a syntax error still reports Cedar's own canonical message (and
-	// templates, which the static set rejects, are refused here) before the set is split for naming.
-	const parsedPolicies = checkParsePolicySet({ staticPolicies: config.policies });
+	const parsedPolicies = checkParsePolicySet(policies);
 	if (parsedPolicies.type === "failure") {
 		throw configurationError(
 			`invalid Cedar policy set: ${parsedPolicies.errors.map((e) => e.message).join("; ")}`,
 		);
 	}
-	// Hand Cedar a NAMED set (id → policy) rather than one blob, so `diagnostics.reason` — the trail
-	// that reaches the audit — names the rule that fired. See {@link namedPolicySet}.
-	const policies = { staticPolicies: namedPolicySet(config.policies) };
 	if (config.schema !== undefined) {
 		const parsedSchema = checkParseSchema(config.schema);
 		if (parsedSchema.type === "failure") {
