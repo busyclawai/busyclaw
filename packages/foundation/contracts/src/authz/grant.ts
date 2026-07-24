@@ -27,6 +27,38 @@ export type AccessGrantPermission =
 /** The permission-level arktype — the boundary validator the share api parses caller input through. */
 export const accessGrantPermission = type("'read' | 'use' | 'manage'");
 
+/**
+ * The BOUNDARY validator for a grantee ref — `public`, or a tagged `<authority>:<id>`.
+ *
+ * The tag is the AUTHORITY that issued the id (`user:` for a principal euroclaw itself names;
+ * `betterauth:` / `workday:` / … for a scope some source defines) — never a taxonomy, see the
+ * AMENDMENT in docs/plans/org-tenancy-refactor.md. The authority stays OPAQUE: this checks the SHAPE
+ * only, so a new source needs no change here and `grantReaches` keeps comparing plain strings.
+ *
+ * Why validate, when an unmatched ref already fails closed? Because it fails closed SILENTLY: an
+ * untagged `engineering` — exactly the mistake an authority-tagged model invites — is accepted today,
+ * stored, and then reaches nobody. A grant row that looks right and grants nothing, with no error at
+ * the boundary it entered. This makes it a rejected call instead. It deliberately does NOT catch a
+ * well-formed ref to a group that does not exist (`workday:typo`): that needs the source itself, and
+ * is the org plugin's `exists`.
+ */
+export const accessGrantPrincipalRef = type("string").narrow((value, ctx) => {
+	if (value === "public") return true;
+	const colon = value.indexOf(":");
+	if (colon === -1) {
+		return ctx.reject(
+			"`public`, or a tagged `<authority>:<id>` grantee (e.g. `user:alice`) — no colon found",
+		);
+	}
+	if (colon === 0) {
+		return ctx.reject("a grantee with a non-empty authority before the colon");
+	}
+	if (colon === value.length - 1) {
+		return ctx.reject("a grantee with a non-empty id after the colon");
+	}
+	return true;
+});
+
 // ── access_grant — one immutable row per (resourceKind, resourceId, principalRef, permission) ────────
 
 export const accessGrantFields = {

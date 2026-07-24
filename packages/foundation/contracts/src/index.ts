@@ -42,6 +42,7 @@ export {
 	accessGrantCreateInput,
 	accessGrantFields,
 	accessGrantPermission,
+	accessGrantPrincipalRef,
 	accessGrantPermissionValues,
 	accessGrantRecord,
 	accessGrantSchema,

@@ -42,6 +42,7 @@ import type {
 } from "@euroclaw/contracts";
 import {
 	accessGrantPermission,
+	accessGrantPrincipalRef,
 	appendMessageInput,
 	approvalStatus,
 	authorizationError,
@@ -561,9 +562,9 @@ const shareResourceInput = ark({
 		},
 	}),
 	resourceId: "string",
-	principalRef: ark("string").configure({
+	principalRef: accessGrantPrincipalRef.configure({
 		euroclaw: {
-			doc: "The polymorphic grantee — `user:<id>` | `team:<id>` | `organization:<id>` | `public`. Opaque; `user:`/`public` grants are LIVE, `team:`/`organization:` land as data but stay dormant until scopes resolve.",
+			doc: "The grantee — `public`, or a tagged `<authority>:<id>` (`user:<id>` for a principal; `betterauth:<orgId>` / `workday:<deptId>` / … for a scope some source defines). The authority is OPAQUE; `user:`/`public` grants are LIVE, scope grants land as data but stay dormant until scopes resolve. An untagged ref is REJECTED here rather than stored as a grant that silently reaches nobody.",
 		},
 	}),
 	permission: accessGrantPermission.configure({
@@ -577,9 +578,9 @@ const shareResourceInput = ark({
 const unshareResourceInput = ark({
 	resourceKind: "string",
 	resourceId: "string",
-	principalRef: ark("string").configure({
+	principalRef: accessGrantPrincipalRef.configure({
 		euroclaw: {
-			doc: "The grantee whose grants on (resourceKind, resourceId) are revoked — removes EVERY level that principalRef held on the resource.",
+			doc: "The grantee whose grants on (resourceKind, resourceId) are revoked — removes EVERY level that principalRef held on the resource. Same tagged `<authority>:<id>` | `public` shape the share side takes.",
 		},
 	}),
 });

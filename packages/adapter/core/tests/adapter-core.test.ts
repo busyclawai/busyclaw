@@ -689,4 +689,39 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			ok: true,
 		});
 	});
+
+	it("rejects a malformed grantee ref at the wire boundary (400, not a silent dead grant)", async () => {
+		// An untagged ref would otherwise be stored and then reach nobody — fail-closed, but invisibly.
+		// The route parses input BEFORE the method runs, so this is a 400 regardless of authorization.
+		const model = {
+			doStream: async () => {
+				throw new Error("model not used");
+			},
+		};
+		const claw = createClaw({
+			database: memoryAdapter(),
+			model: model as never,
+			redaction: { posture: "raw" },
+		}) as unknown as Claw;
+		const handler = toRequestHandler(claw, {
+			resolveCaller: () => ({ principal: "user:alice" }),
+		});
+
+		const bad = await handler(
+			new Request("https://app.test/api/euroclaw/share-resource", {
+				body: JSON.stringify({
+					resourceKind: "claw",
+					resourceId: "c1",
+					principalRef: "engineering",
+					permission: "read",
+				}),
+				method: "POST",
+			}),
+		);
+		expect(bad.status).toBe(400);
+		await expect(bad.json()).resolves.toMatchObject({
+			error: { code: "EUROCLAW_VALIDATION_FAILED" },
+			ok: false,
+		});
+	});
 });
