@@ -262,9 +262,11 @@ export type {
 } from "./governance/audit";
 export {
 	anchorProof,
+	auditActorKind,
 	auditEntry,
 	auditHead,
 	auditInput,
+	auditSupervision,
 } from "./governance/audit";
 // ── governance: the boundary, plugin contract, reason codes, and gate ports ──
 export type {
@@ -287,6 +289,7 @@ export type {
 	TurnContext,
 } from "./governance/boundary";
 export {
+	APPROVED_BY_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	gateDecision,
 	handleResult,

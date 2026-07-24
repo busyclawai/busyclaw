@@ -7,6 +7,7 @@ import { jsonObject } from "../common";
 import { principal } from "./principal";
 
 const OptionalString = type("string | undefined");
+const OptionalRunMode = type("'interactive' | 'autonomous' | undefined");
 
 const AuditInputShape = {
 	ts: "string",
@@ -25,6 +26,18 @@ const AuditInputShape = {
 	 *  well-formed principal (the same narrow behind `field.principal`) — an untagged value can't enter
 	 *  the log. It stays a plain `string` in the inferred record (the narrow doesn't brand). */
 	"principal?": principal.or("undefined"),
+	/** The claw that produced this action, when it came from a claw run — the ACTOR-KIND fact. Present ⇒
+	 *  agent-produced; absent ⇒ human/direct. `principal` answers *on whose authority* (borrowed); this
+	 *  answers *which agent physically acted*. Stamped spoof-proof by the runtime (`euroclaw__clawId`). */
+	"clawId?": OptionalString,
+	/** How the run was triggered — `interactive` (a human present to confirm) | `autonomous` (none), or
+	 *  absent for a non-run entry (a direct privacy event). The supervision axis of the actor-kind; stamped
+	 *  from mechanical fact (`euroclaw__runMode`). The schema accepts the read fact whether set or not. */
+	"runMode?": OptionalRunMode,
+	/** The approver, on an action executed after a `needs-approval` was granted — the run's principal is
+	 *  the borrowed authority (*who it acted as*), this is *who approved it*. Stamped forge-proof by the
+	 *  runtime from the ApprovalRecord's `decidedBy` on resume (`euroclaw__approvedBy`). */
+	"decidedBy?": principal.or("undefined"),
 	/** The REDACTED details (tool args, or { messages }) — tokens only, never raw PII. */
 	payload: jsonObject,
 } as const;
@@ -39,6 +52,36 @@ export const auditEntry = type({
 	hash: "string",
 });
 export type AuditEntry = typeof auditEntry.infer;
+
+/**
+ * The actor-kind of an audit entry — DERIVED, not stored (persist-raw-derive): the log records the raw
+ * facts (`runMode`/`clawId`/`decidedBy`) and this reads them, so the chain stays honest (facts, never an
+ * interpretation baked in at write time). `agent` iff a RUN produced the action: a run ALWAYS stamps
+ * `runMode`, so its presence is the reliable "an agent loop did this" signal (`clawId` only refines WHICH
+ * claw, and is absent for a claw-less ad-hoc run). `human` for a direct operator action with no run (e.g.
+ * a privacy event from a `forgetSubject` api call). The claw is never its own principal — this
+ * distinguishes agent-vs-human WITHOUT an `agent:` principal kind (docs/plans/approvals-authz.md).
+ */
+export function auditActorKind(entry: { runMode?: string }): "agent" | "human" {
+	return entry.runMode !== undefined ? "agent" : "human";
+}
+
+/**
+ * The supervision state of an agent-produced entry — DERIVED. `approved` when a human granted a parked
+ * `needs-approval` (a `decidedBy` is present) — that WINS over `runMode`, since the action ran only
+ * because a human confirmed it; otherwise the run's `runMode` (`interactive` = a human was present,
+ * `autonomous` = none). `undefined` for a human/direct entry with no run mode. So "claw drafted
+ * (autonomous), recruiter approved" reads as `agent` + `approved` + `decidedBy`.
+ */
+export function auditSupervision(entry: {
+	runMode?: "interactive" | "autonomous";
+	decidedBy?: string;
+}): "interactive" | "autonomous" | "approved" | undefined {
+	if (entry.decidedBy !== undefined && entry.decidedBy.trim() !== "") {
+		return "approved";
+	}
+	return entry.runMode;
+}
 
 export type AuditSink = {
 	append: (input: AuditInput) => AuditEntry | Promise<AuditEntry>;

@@ -44,6 +44,7 @@ import {
 	accessGrantPermission,
 	appendMessageInput,
 	approvalStatus,
+	authorizationError,
 	bindConversationInput,
 	bindConversationResult,
 	CLAW_API_METHOD_NAMES,
@@ -56,6 +57,7 @@ import {
 	createToolResultInput,
 	endpointHttpMethod,
 	jsonObject,
+	parsePrincipal,
 	RESERVED_CONTEXT_PREFIX,
 	SYSTEM_ANONYMOUS,
 	stateError,
@@ -753,6 +755,11 @@ export const clawApiRoutes = {
 	getLatestCheckpoint: apiRoute("getLatestCheckpoint"),
 	generate: apiRoute("generate"),
 	continueRun: apiRoute("continueRun"),
+	// approval — NOT resource-anchored: needs-approval exists for AUTONOMOUS runs (no human present), so an
+	// engine/system-initiated approval has no user-owner to anchor on, and requiring the approver to be the
+	// requester would make those unapprovable. The built-in gate is the user-principal floor (a human may
+	// decide, a machine may not — src/api.ts userApprover); WHICH human (owner-only / manager / SoD) is
+	// opt-in policy (docs/plans/approvals-authz.md), deferred to the policy-slice router.
 	grantApproval: apiRoute("grantApproval"),
 	denyApproval: apiRoute("denyApproval"),
 	getApproval: apiRoute("getApproval"),
@@ -837,6 +844,23 @@ function requireRuns(runs: ClawRunReadModel | undefined): ClawRunReadModel {
 		});
 	}
 	return runs;
+}
+
+/**
+ * The approver floor: only a real `user:` principal may DECIDE an approval, never a `system:` one. The PEP
+ * already gated WHO may approve (the approval's owner ∪ a manage grant, via the `approval` resource); this
+ * floors WHAT KIND — a machine may not approve the very action approval exists to put a human in front of
+ * (a system principal that owned the approval would otherwise self-approve). Absent principal can't reach
+ * here (the actor floor denied first); the check is belt-and-suspenders for the unsafeOpen path too.
+ */
+function userApprover(caller: ClawApiCaller | undefined): Principal {
+	const principal = caller?.principal;
+	if (principal === undefined || parsePrincipal(principal).kind !== "user") {
+		throw authorizationError("only a user principal may decide an approval", {
+			approver: principal ?? null,
+		});
+	}
+	return principal;
 }
 
 function requireEffects(effects: EffectStore | undefined): EffectStore {
@@ -1207,14 +1231,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// (docs/plans/stamped-fields.md, #6) — a forged approver identity is impossible. The runtime store's
 		// grant/deny write it as the decision stamp.
 		grantApproval: ({ approvalId }, caller?: ClawApiCaller) =>
-			context.runtime.approvals?.grant(
-				approvalId,
-				caller?.principal ?? SYSTEM_ANONYMOUS,
-			) ?? Promise.resolve(null),
+			context.runtime.approvals?.grant(approvalId, userApprover(caller)) ??
+			Promise.resolve(null),
 		denyApproval: ({ approvalId, reason }, caller?: ClawApiCaller) =>
 			context.runtime.approvals?.deny(
 				approvalId,
-				caller?.principal ?? SYSTEM_ANONYMOUS,
+				userApprover(caller),
 				reason,
 			) ?? Promise.resolve(null),
 		getApproval: ({ id }) =>

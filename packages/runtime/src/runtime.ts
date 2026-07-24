@@ -13,6 +13,7 @@ import type {
 } from "@euroclaw/contracts";
 import {
 	type Adapter,
+	APPROVED_BY_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
@@ -850,6 +851,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			if (state.callerPrincipal !== undefined) {
 				resolved[PRINCIPAL_CONTEXT_KEY] = state.callerPrincipal;
 			}
+			// The approver of a resumed `needs-approval` (forge-proof: from the persisted, PEP-gated
+			// ApprovalRecord's `decidedBy`, set on the resume path — never caller/model). Seeded HERE (the
+			// trusted step, post-strip) so the replayed action's audit records WHO approved it.
+			if (state.approvedBy !== undefined) {
+				resolved[APPROVED_BY_CONTEXT_KEY] = state.approvedBy;
+			}
 			// Runtime-stamped, spoof-proof facts (the caller's euroclaw__ keys were already stripped).
 			resolved[RUN_MODE_CONTEXT_KEY] = state.runMode;
 			if (state.recording) {
@@ -1317,6 +1324,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
 		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
+		// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
+		state.approvedBy = record.decidedBy;
 		state.recording = effectiveRecording;
 		state.runId = options?.runId;
 		state.currentToolCallId = checkpoint.toolCallId;

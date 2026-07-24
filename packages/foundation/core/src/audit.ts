@@ -11,11 +11,14 @@ import {
 	type AuditHead,
 	type AuditSink,
 	anchorProof,
+	APPROVED_BY_CONTEXT_KEY,
 	auditInput,
 	type BoundaryCall,
 	type JsonObject,
 	type JsonValue,
 	PRINCIPAL_CONTEXT_KEY,
+	type StampedFacts,
+	stampedFacts,
 } from "@euroclaw/contracts";
 import { validationError } from "@euroclaw/errors";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -187,6 +190,15 @@ export function auditGate(sink: AuditSink, now: () => string): AfterGate {
 		id: "audit",
 		matcher: () => true,
 		handler: async (call, ctx, outcome) => {
+			// The actor-kind facts (clawId + runMode), read through the ONE typed contracts reader — never
+			// a raw typeof-probe of the reserved namespace. They are runtime-seeded and spoof-proof, so a
+			// malformed stamp is a host bug; unlike the cedar DECISION gate (which fails loud), this
+			// after-gate degrades to no actor-kind rather than throw — a robust audit records what it can.
+			const stamped = stampedFacts(ctx);
+			const facts: StampedFacts = stamped instanceof type.errors ? {} : stamped;
+			// `approvedBy` (the resumed approval's decider) isn't a policy fact — a plain reserved read
+			// beside `principal`, the audit's other lone principal.
+			const approvedBy = ctx[APPROVED_BY_CONTEXT_KEY];
 			await sink.append({
 				ts: now(),
 				boundary: call.boundary,
@@ -199,6 +211,11 @@ export function auditGate(sink: AuditSink, now: () => string): AfterGate {
 					typeof ctx[PRINCIPAL_CONTEXT_KEY] === "string"
 						? ctx[PRINCIPAL_CONTEXT_KEY]
 						: undefined,
+				// The actor-kind facts — passed as read (a non-run entry has no runMode/clawId, only a
+				// resumed-approval action carries an approver); the `auditInput` schema accepts the absent case.
+				clawId: facts.clawId,
+				runMode: facts.runMode,
+				decidedBy: typeof approvedBy === "string" ? approvedBy : undefined,
 				payload: auditPayload(call), // REDACTED payload — no PII in the log
 			});
 		},

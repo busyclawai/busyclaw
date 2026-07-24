@@ -115,6 +115,10 @@ export const SCOPE_ID_CONTEXT_KEY = "euroclaw__scopeId";
 // interactive; engine/scheduled runs = autonomous), never claimed by a caller. Policies read it
 // to attenuate borrowed authority: an autonomous run has no human present to confirm.
 export const RUN_MODE_CONTEXT_KEY = "euroclaw__runMode";
+// The approver of an action executed after a granted `needs-approval` — seeded by the runtime on resume
+// from the ApprovalRecord's `decidedBy` (forge-proof, post-strip, only the trusted step sets it; never
+// caller-claimed). The audit records it as `decidedBy` so the compliance chain shows who approved.
+export const APPROVED_BY_CONTEXT_KEY = "euroclaw__approvedBy";
 
 /** The value vocabulary for `RUN_MODE_CONTEXT_KEY`. */
 export type RunMode = "interactive" | "autonomous";

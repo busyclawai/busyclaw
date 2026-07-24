@@ -30,6 +30,11 @@ export type RunState = {
 	 *  (the caller wins over the `identity` resolver, which is the caller-LESS fallback). Absent for
 	 *  autonomous runs (cron/engine resume) — identity resolver / a system principal covers those. */
 	callerPrincipal?: string;
+	/** The approver of a granted `needs-approval` this run is resuming — the ApprovalRecord's `decidedBy`
+	 *  (forge-proof: read from the persisted, PEP-gated approval, never the model/caller). When present the
+	 *  trusted context assembly seeds it as `euroclaw__approvedBy`, so the replayed action's audit records
+	 *  WHO approved it (beside the borrowed `principal`). Absent for a normal (non-resume) run. */
+	approvedBy?: string;
 	currentModelRunner?: () => unknown | Promise<unknown>;
 	recording?: RuntimeRecordingContext;
 	abortSignal?: RuntimeAbortSignal;
