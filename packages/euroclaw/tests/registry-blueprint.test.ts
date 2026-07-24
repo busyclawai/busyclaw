@@ -126,6 +126,14 @@ function compileBundle(model: AuthzModel, policies: string): PolicyEngine {
 }
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
+// The trusted seed the runtime does from the authenticated caller — mirrored by promoting the test's
+// unprefixed `principal` to the stamped `euroclaw__principal` the DEFAULT mapper now reads (audit #7).
+const seedPrincipal = (
+	ctx: Record<string, unknown>,
+): Record<string, unknown> =>
+	typeof ctx.principal === "string"
+		? { ...ctx, euroclaw__principal: ctx.principal }
+		: ctx;
 
 describe("registry blueprint (composed slice 5)", () => {
 	async function setup() {
@@ -302,7 +310,11 @@ describe("the registration verb is itself governed", () => {
 					)
 				: runEcho(call);
 		const coreWith = (policies: string) =>
-			createGovernance({ plugins: [cedarPolicyPlugin({ model, policies })], runTool });
+			createGovernance({
+				plugins: [cedarPolicyPlugin({ model, policies })],
+				resolveContext: seedPrincipal,
+				runTool,
+			});
 		return { stores, coreWith };
 	}
 

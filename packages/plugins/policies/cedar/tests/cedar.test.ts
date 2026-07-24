@@ -9,8 +9,24 @@ import { describe, expect, it } from "vitest";
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
 
+// The trusted seed the runtime does from the authenticated caller — mirrored here by promoting the
+// test's convenient unprefixed `principal` to the stamped `euroclaw__principal` the mapper now reads
+// (audit #7: the mapper NEVER reads the unprefixed key). Runs after createGovernance's stripReserved,
+// exactly like the runtime's resolveGovernanceContext seed and the `euroclaw__role`/`organizationId`
+// stamps below.
+const seedPrincipal = (
+	ctx: Record<string, unknown>,
+): Record<string, unknown> =>
+	typeof ctx.principal === "string"
+		? { ...ctx, euroclaw__principal: ctx.principal }
+		: ctx;
+
 const coreWith = (config: Parameters<typeof cedar>[0]) =>
-	createGovernance({ plugins: [cedarPolicyPlugin(config)], runTool: runEcho });
+	createGovernance({
+		plugins: [cedarPolicyPlugin(config)],
+		resolveContext: seedPrincipal,
+		runTool: runEcho,
+	});
 
 describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 	it("permit: a tool with a matching permit policy runs", async () => {
@@ -82,6 +98,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		];
 		const core = createGovernance({
 			plugins: [cedarPolicyPlugin({ policies, entities })],
+			resolveContext: seedPrincipal,
 			runTool: runEcho,
 		});
 
@@ -124,7 +141,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		const asRole = (role: string) =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],
-				resolveContext: (ctx) => ({ ...ctx, euroclaw__role: role }),
+				resolveContext: (ctx) => ({ ...seedPrincipal(ctx), euroclaw__role: role }),
 				runTool: runEcho,
 			});
 
@@ -149,7 +166,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 				plugins: [cedarPolicyPlugin({ policies })],
 				// resolveContext stamps euroclaw__organizationId exactly as the claw's organization resolver would.
 				resolveContext: (ctx) => ({
-					...ctx,
+					...seedPrincipal(ctx),
 					euroclaw__organizationId: organizationId,
 				}),
 				runTool: runEcho,
@@ -170,6 +187,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		// A caller cannot forge the org: euroclaw__ keys are stripped before the trusted stamp.
 		const unstamped = createGovernance({
 			plugins: [cedarPolicyPlugin({ policies })],
+			resolveContext: seedPrincipal,
 			runTool: runEcho,
 		});
 		const forged = await unstamped.handleToolCall(
@@ -243,6 +261,7 @@ describe("model-driven cedar — slice 3", () => {
 					policies: `permit(principal, action == Action::"refund", resource) when { context.args.amount <= 500 };`,
 				}),
 			],
+			resolveContext: seedPrincipal,
 			runTool: runEcho,
 		});
 
@@ -275,6 +294,7 @@ describe("model-driven cedar — slice 3", () => {
 					`,
 				}),
 			],
+			resolveContext: seedPrincipal,
 			runTool: runEcho,
 		});
 

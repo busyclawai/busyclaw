@@ -16,6 +16,7 @@ import {
 	type EgressLookup,
 	normalizeOrigin,
 	type RuntimeModel,
+	runtimeRunOptionsWithCaller,
 } from "@euroclaw/runtime";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";
@@ -173,7 +174,11 @@ async function setup(options: {
 }
 
 const PERMIT = `permit(principal, action == Action::"petstore.getPet", resource);`;
-const runCtx = { org: "org-a", principal: "alice" };
+const runCtx = { org: "org-a" };
+// The authenticated caller seeds the run's principal (`euroclaw__principal`) via the forge-proof
+// runtime option — exactly how the api handler threads it. The mapper reads this stamp, never a ctx
+// field (audit #7), so the principal lives here, not on `runCtx`.
+const asAlice = runtimeRunOptionsWithCaller(undefined, "alice");
 
 describe("invoker blueprint (composed slice 6a)", () => {
 	it("registers apiKey petstore, dispatches getPet, and shapes the authed request", async () => {
@@ -189,7 +194,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
-		const result = await runtime.generate("get pet 7", runCtx);
+		const result = await runtime.generate("get pet 7", runCtx, asAlice);
 		expect(result.status).toBe("completed");
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.url).toBe("https://petstore.example/v1/pets/7");
@@ -210,7 +215,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fetchThatMustNotRun,
 		});
-		const result = await runtime.generate("get pet 7", runCtx);
+		const result = await runtime.generate("get pet 7", runCtx, asAlice);
 		// The run completes: the gate denied the tool, the model saw the denial, no HTTP occurred.
 		expect(result.status).toBe("completed");
 	});
@@ -243,7 +248,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			secrets: anySecret("secret-key"),
 			fetch: fn,
 		});
-		await runtime.generate("get a weird pet", runCtx);
+		await runtime.generate("get a weird pet", runCtx, asAlice);
 		expect(calls[0]?.url).toBe(
 			"https://petstore.example/v1/pets/..%2F..%2Fevil.com%2Fx",
 		);

@@ -25,7 +25,9 @@ import type {
 	ToolCall,
 } from "@euroclaw/contracts";
 import {
+	authorizationError,
 	configurationError,
+	PRINCIPAL_CONTEXT_KEY,
 	stampedFacts,
 	validationError,
 } from "@euroclaw/contracts";
@@ -65,8 +67,10 @@ function indexModel(model: AuthzModel): Map<string, ModelIndexEntry> {
 
 /**
  * The default request mapper: turn a governed tool call + the request context into a PARC request.
- *   principal = `${principalType}::"${ctx.principal}"`, action = `Action::"<tool>"`,
+ *   principal = `${principalType}::"${stamped euroclaw__principal}"`, action = `Action::"<tool>"`,
  *   resource  = `${resourceType}::"<tool>"`, context = `{ args, <approvalFlag>:false, <facts>, … }`.
+ * The principal is the ONE stamped identity (never the caller-controllable unprefixed `ctx.principal` —
+ * audit #7); absent → fail closed (deny).
  * With `model`, `context.args` carries only the PROJECTED subset for the matched action and the
  * resource type comes from the model. Exported so the assembly's internal floor engine and
  * `cedarPolicyPlugin` share ONE mapping — request validation and reality never disagree.
@@ -82,11 +86,18 @@ export function cedarMapCall(
 	const modelIndex = config.model ? indexModel(config.model) : undefined;
 
 	return (call: ToolCall, ctx: CedarContext): PolicyRequest => {
-		if (typeof ctx.principal !== "string") {
-			throw validationError(
-				"cedar context invalid",
-				"principal must be a string",
-			);
+		// The PARC principal is the ONE stamped identity — `euroclaw__principal`, written ONLY by the
+		// trusted context assembly (the caller seed / the identity resolver) AFTER the caller's own
+		// `euroclaw__` keys were stripped. NEVER the caller-controllable unprefixed `ctx.principal`
+		// (audit #7: reading that let a forged principal drive the Cedar decision while audit/store
+		// recorded the stamped one). Absent → the run carries no authenticated identity: FAIL CLOSED
+		// (deny — a thrown authz error refuses the call), never authorize a modeled action for nobody.
+		const principal = ctx[PRINCIPAL_CONTEXT_KEY];
+		if (typeof principal !== "string" || principal.length === 0) {
+			throw authorizationError("tool floor denies: no stamped principal", {
+				reason:
+					"the run has no authenticated identity (euroclaw__principal is unset) — fail closed",
+			});
 		}
 		// The runtime-stamped facts (role/team from membership, clawId/runMode/organizationId from the
 		// runtime — spoof-proof: caller euroclaw__ keys are stripped upstream), read through the ONE
@@ -108,7 +119,7 @@ export function cedarMapCall(
 		// forge context.server, and a tool cannot target a server it did not declare.
 		const server = config.serverForAction?.(call.name);
 		return {
-			principal: { type: principalType, id: ctx.principal },
+			principal: { type: principalType, id: principal },
 			action: { type: "Action", id: call.name },
 			resource: {
 				type: indexed?.resourceType ?? resourceType,

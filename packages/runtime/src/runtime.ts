@@ -16,6 +16,7 @@ import {
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
+	PRINCIPAL_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
@@ -140,6 +141,19 @@ export type RequiresExplicitModel<Config> = [ModelName<Config>] extends [never]
 		: IsUnion<ModelName<Config>>;
 
 export type RuntimeAbortSignal = { readonly aborted: boolean };
+
+/**
+ * The authenticated caller's principal, threaded server-side into a run so the trusted context
+ * assembly can SEED it as `euroclaw__principal`. A `unique symbol` key (like {@link
+ * RUNTIME_RECORDING_OPTION}) so it is forge-proof: a JSON/wire `options` object can never carry it —
+ * only trusted host code that imports the symbol (the api handlers, via {@link
+ * runtimeRunOptionsWithCaller}) sets it. NEVER a plain field a caller could smuggle through the
+ * `generate`/`stream` options pass-through.
+ */
+export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
+	"euroclaw.runtime.caller",
+);
+
 export type RuntimeRunOptions = {
 	abortSignal?: RuntimeAbortSignal;
 	/** Durable run identity (engine run id) — scopes effect ids and events across attempts/slices. */
@@ -156,6 +170,9 @@ export type RuntimeRunOptions = {
 	 *  unattended run can't silently satisfy a write policy that a human presence would gate. */
 	runMode?: RunMode;
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
+	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
+	 *  key, forge-proof). Seeded as `euroclaw__principal` by the trusted context assembly. */
+	readonly [RUNTIME_CALLER_OPTION]?: string;
 };
 
 /**
@@ -303,6 +320,21 @@ export function runtimeRunOptionsWithRecording(
 	recording: RuntimeRecordingContext,
 ): RuntimeRunOptions {
 	return { ...(options ?? {}), [RUNTIME_RECORDING_OPTION]: recording };
+}
+
+/**
+ * Attach the authenticated caller principal to a run's options via the forge-proof {@link
+ * RUNTIME_CALLER_OPTION} symbol — the ONE way the entry point (an api handler, a trusted host call)
+ * threads "who initiated this run" into the runtime so the trusted assembly seeds `euroclaw__principal`.
+ * ALWAYS overrides any inbound value (so a caller-supplied `options` can never smuggle a principal
+ * through the `generate`/`stream` pass-through); `undefined` clears it, leaving the run caller-less
+ * (the `identity` resolver / a system principal then covers it).
+ */
+export function runtimeRunOptionsWithCaller(
+	options: RuntimeRunOptions | undefined,
+	principal: string | undefined,
+): RuntimeRunOptions {
+	return { ...(options ?? {}), [RUNTIME_CALLER_OPTION]: principal };
 }
 
 function stripReserved(ctx: Record<string, unknown>): Record<string, unknown> {
@@ -809,6 +841,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			ctx: Record<string, unknown>,
 		): Promise<Record<string, unknown>> => {
 			const resolved = resolveContext ? await resolveContext(ctx) : ctx;
+			// The authenticated caller SEEDS the one canonical principal. Done HERE — the trusted step,
+			// after `stripReserved` cleared any caller-forged `euroclaw__` keys — so the seed can't be
+			// spoofed. The caller IS the run's initiator, so it WINS over the `identity` resolver (which
+			// `resolveContext` may have stamped): the resolver is the caller-LESS fallback (cron/engine
+			// resume → a system principal). Absent caller AND absent resolver → no stamp → the tool floor
+			// fails closed on a modeled action (cedarMapCall denies).
+			if (state.callerPrincipal !== undefined) {
+				resolved[PRINCIPAL_CONTEXT_KEY] = state.callerPrincipal;
+			}
 			// Runtime-stamped, spoof-proof facts (the caller's euroclaw__ keys were already stripped).
 			resolved[RUN_MODE_CONTEXT_KEY] = state.runMode;
 			if (state.recording) {
@@ -1122,6 +1163,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = newId("runstate");
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
+		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
 		abortIfNeeded(options?.abortSignal);
 		assertYieldable(options);
 		const recording = options?.[RUNTIME_RECORDING_OPTION];
@@ -1274,6 +1316,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = `approval:${id}`;
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
+		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
 		state.recording = effectiveRecording;
 		state.runId = options?.runId;
 		state.currentToolCallId = checkpoint.toolCallId;
@@ -1403,6 +1446,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = `checkpoint:${checkpointId}`;
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
+		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
 		state.recording = recording;
 		state.runId = runId;
 

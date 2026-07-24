@@ -24,8 +24,11 @@ export type CedarSourceConfig = {
  * assembly's. Connect it only to ADD custom rules beneath the floor — a `forbid` narrows, a `permit`
  * widens, and neither can remove the floor's un-removable forbids.
  *
- * The `$InferContext` still surfaces (and requires) a `principal` on `run(prompt, ctx)`: the source's
- * policies reference the principal, and the internal engine's mapper reads it.
+ * The `$InferContext` folds an OPEN turn context onto `run(prompt, ctx)` — it does NOT require the
+ * caller to supply a `principal`. The acting identity is the ONE stamped `euroclaw__principal`, seeded
+ * by the trusted context assembly from the authenticated caller (never a caller-typed ctx field — that
+ * was audit #7). The source's policies reference the principal; the internal engine's mapper reads it
+ * from the stamp.
  */
 export function cedar(config: CedarSourceConfig): PolicyPlugin<CedarContext> {
 	const id = config.id ?? "policy:cedar";

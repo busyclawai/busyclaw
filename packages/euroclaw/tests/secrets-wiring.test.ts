@@ -11,7 +11,11 @@
 
 import { cedarPolicyPlugin } from "@euroclaw/authz";
 import type { EuroclawPlugin, JsonObject, Secrets } from "@euroclaw/contracts";
-import { createSpecRegistry, type RuntimeModel } from "@euroclaw/runtime";
+import {
+	createSpecRegistry,
+	type RuntimeModel,
+	runtimeRunOptionsWithCaller,
+} from "@euroclaw/runtime";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,7 +119,10 @@ function fakeFetch(response: () => Response): {
 }
 
 const PERMIT = `permit(principal, action == Action::"petstore.getPet", resource);`;
-const runCtx = { org: "org-a", principal: "alice" };
+const runCtx = { org: "org-a" };
+// The authenticated caller seeds the run's principal (`euroclaw__principal`) via the forge-proof
+// runtime option (as the api handler does); the mapper reads the stamp, never a ctx field (audit #7).
+const asAlice = runtimeRunOptionsWithCaller(undefined, "alice");
 
 /** Register the petstore spec and build the cedar plugin over its rows. The registry stores are
  *  handed to createClaw via `stores` (not `database`) — resolveTools needs them, but the runtime
@@ -175,7 +182,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
 
-		const result = await claw.$context.runtime.generate("get pet 7", runCtx);
+		const result = await claw.$context.runtime.generate("get pet 7", runCtx, asAlice);
 		expect(result.status).toBe("completed");
 		expect(calls).toHaveLength(1);
 		expect(apiKeyHeaderOf(calls[0])).toBe("env-secret-key");
@@ -198,7 +205,7 @@ describe("secrets assembly wiring (createClaw)", () => {
 		// The invoker refuses loud (configurationError) BEFORE egress/fetch — an actionable
 		// configure-your-credential error, never a silent unauthenticated request.
 		await expect(
-			claw.$context.runtime.generate("get pet 7", runCtx),
+			claw.$context.runtime.generate("get pet 7", runCtx, asAlice),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			details: { source: "petstore" },

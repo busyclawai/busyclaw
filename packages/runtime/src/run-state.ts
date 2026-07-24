@@ -24,6 +24,12 @@ export type RunState = {
 	 *  (spoof-proof: the runtime sets it from the ENTRY POINT, never the model/caller). Defaults to
 	 *  "autonomous" (fail-closed: an unattended run must not silently pass write policies). */
 	runMode: RunMode;
+	/** The authenticated caller that initiated this run (the api `{ principal }`, threaded from the
+	 *  ENTRY POINT via {@link runtimeRunOptionsWithCaller} — never the model/ctx). When present the
+	 *  trusted context assembly SEEDS it as `euroclaw__principal`, so the run's principal IS the caller
+	 *  (the caller wins over the `identity` resolver, which is the caller-LESS fallback). Absent for
+	 *  autonomous runs (cron/engine resume) — identity resolver / a system principal covers those. */
+	callerPrincipal?: string;
 	currentModelRunner?: () => unknown | Promise<unknown>;
 	recording?: RuntimeRecordingContext;
 	abortSignal?: RuntimeAbortSignal;

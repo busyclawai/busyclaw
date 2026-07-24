@@ -9,10 +9,18 @@ import type {
 	PolicyRequest,
 	PolicyResult,
 	ToolCall,
+	TurnContext,
 } from "@euroclaw/contracts";
 
-/** Cedar's request context: who is acting. Approval state is derived server-side. */
-export type CedarContext = { principal: string };
+/**
+ * Cedar's request context — the resolved per-call turn context bag. The mapper reads the acting
+ * identity from the ONE stamped `euroclaw__principal` (via `PRINCIPAL_CONTEXT_KEY`) and the spoof-proof
+ * facts (role/team/runMode/…) the trusted assembly stamped; approval state is derived server-side.
+ * NOT `{ principal: string }` any more (audit #7): the caller never supplies the principal on `run`'s
+ * ctx — it is SEEDED from the authenticated caller in the trusted step — so the `$InferContext` fold
+ * this feeds must not force an unprefixed `principal` onto `run(prompt, ctx)`.
+ */
+export type CedarContext = TurnContext;
 
 /**
  * A Cedar `PolicyEngine` that ALSO accepts per-DECISION entities. The base `authorize(req)` evaluates
@@ -53,7 +61,7 @@ export type CedarMapCallConfig = {
 	/** The authorization model — switches the mapper to project `context.args` to the action's
 	 *  declared subset and read the resource type from the model. Absent → full args, default types. */
 	model?: AuthzModel;
-	/** Entity type for the mapped principal (from `ctx.principal`). Default "User". */
+	/** Entity type for the mapped principal (from the stamped `euroclaw__principal`). Default "User". */
 	principalType?: string;
 	/** Entity type for the mapped resource (the tool). Default "Tool". */
 	resourceType?: string;
@@ -80,7 +88,7 @@ export type CedarPluginConfig = CedarEngineConfig & {
 	serverForAction?: (actionId: string) => string | undefined;
 	/** Which calls Cedar governs. Default: every call (the allowlist). */
 	matcher?: (call: ToolCall, ctx: CedarContext) => boolean;
-	/** Entity type for the default-mapped principal (from `ctx.principal`). Default "User". */
+	/** Entity type for the default-mapped principal (from the stamped `euroclaw__principal`). Default "User". */
 	principalType?: string;
 	/** Entity type for the default-mapped resource (the tool itself). Default "Tool". */
 	resourceType?: string;

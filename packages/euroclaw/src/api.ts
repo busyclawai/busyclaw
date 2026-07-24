@@ -76,6 +76,7 @@ import {
 	type RuntimeResult,
 	type RuntimeStream,
 	recordingFromRuntimeApprovalMetadata,
+	runtimeRunOptionsWithCaller,
 	runtimeRunOptionsWithRecording,
 	type SpecRegistrationReport,
 } from "@euroclaw/runtime";
@@ -1079,7 +1080,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return revealed;
 		},
 
-		async sendMessage(args) {
+		async sendMessage(args, caller?: ClawApiCaller) {
 			assertNoReservedContext(args.ctx);
 			const clawsStore = store();
 			const runId = args.runId ?? newId("run");
@@ -1103,16 +1104,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				args.message,
 				args.ctx as never,
 				// A conversational message is a human at the other end → interactive. The chosen model
-				// (if any) rides alongside the server-set recording/runMode options.
+				// (if any) rides alongside the server-set recording/runMode options. The authenticated
+				// caller seeds the run's principal (`euroclaw__principal`) — the run IS the caller.
 				{
-					...runtimeRunOptionsWithRecording(
-						{ runMode: "interactive" },
-						{
-							clawId: args.clawId,
-							runId,
-							threadId: args.threadId,
-							userMessageId: userMessage.id,
-						},
+					...runtimeRunOptionsWithCaller(
+						runtimeRunOptionsWithRecording(
+							{ runMode: "interactive" },
+							{
+								clawId: args.clawId,
+								runId,
+								threadId: args.threadId,
+								userMessageId: userMessage.id,
+							},
+						),
+						caller?.principal,
 					),
 					model: args.model,
 				},
@@ -1153,27 +1158,37 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getLatestCheckpoint: ({ runId }) => store().checkpoints.latestForRun(runId),
 
 		// `as never` bridges the base-`satisfies ClawApi` ctx type to the runtime's generic
-		// `RunContext<Config>` — the same bridge `sendMessage` uses. The run's principal is the runtime's
-		// resolveContext concern; the PEP already decided the caller may make this call (see authz-pep).
-		generate: ({ prompt, ctx, options }) => {
+		// `RunContext<Config>` — the same bridge `sendMessage` uses. The authenticated caller seeds the
+		// run's principal (`euroclaw__principal`, via the forge-proof caller option); the PEP already
+		// decided the caller may make this call (see authz-pep).
+		generate: ({ prompt, ctx, options }, caller?: ClawApiCaller) => {
 			assertNoReservedContext(ctx);
-			return context.runtime.generate(prompt, ctx as never, options);
+			return context.runtime.generate(
+				prompt,
+				ctx as never,
+				runtimeRunOptionsWithCaller(options, caller?.principal) as never,
+			);
 		},
-		stream: ({ prompt, ctx, options }) => {
+		stream: ({ prompt, ctx, options }, caller?: ClawApiCaller) => {
 			assertNoReservedContext(ctx);
-			return context.runtime.stream(prompt, ctx as never, options);
+			return context.runtime.stream(
+				prompt,
+				ctx as never,
+				runtimeRunOptionsWithCaller(options, caller?.principal) as never,
+			);
 		},
-		async continueRun({ approvalId, ctx, options }) {
+		async continueRun({ approvalId, ctx, options }, caller?: ClawApiCaller) {
 			assertNoReservedContext(ctx);
 			const approval = await context.runtime.approvals?.get(approvalId);
 			const recording = approval
 				? recordingFromRuntimeApprovalMetadata(approval.metadata)
 				: undefined;
-			// A human just granted the approval → interactive (a caller may override explicitly).
-			const continueOptions = {
-				...options,
-				runMode: options?.runMode ?? "interactive",
-			} as const;
+			// A human just granted the approval → interactive (a caller may override explicitly). The
+			// authenticated caller seeds the resumed run's principal (`euroclaw__principal`).
+			const continueOptions = runtimeRunOptionsWithCaller(
+				{ ...options, runMode: options?.runMode ?? "interactive" },
+				caller?.principal,
+			);
 			if (!recording) {
 				return context.runtime.continueRun(
 					approvalId,

@@ -48,6 +48,7 @@ export {
 	defaultRuntimeNewId,
 	parseRuntimeApprovalMetadata,
 	parseRuntimeYieldMetadata,
+	RUNTIME_CALLER_OPTION,
 	RuntimeCompletedResult,
 	RuntimeDeniedResult,
 	RuntimeResult,
@@ -55,6 +56,7 @@ export {
 	RuntimeYieldedResult,
 	recordingFromRuntimeApprovalMetadata,
 	runtimeApprovalMetadata,
+	runtimeRunOptionsWithCaller,
 	runtimeRunOptionsWithRecording,
 	runtimeYieldMetadata,
 } from "./runtime";

@@ -100,8 +100,18 @@ const POLICIES = `
 `;
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
+// The trusted seed the runtime does from the authenticated caller — mirrored here by promoting the
+// test's unprefixed `principal` to the stamped `euroclaw__principal` the mapper now reads (audit #7:
+// the mapper NEVER reads the unprefixed key). Runs after createGovernance's stripReserved.
+const seedPrincipal = (
+	ctx: Record<string, unknown>,
+): Record<string, unknown> =>
+	typeof ctx.principal === "string"
+		? { ...ctx, euroclaw__principal: ctx.principal }
+		: ctx;
 const core = createGovernance({
 	plugins: [cedarPolicyPlugin({ model, policies: POLICIES })],
+	resolveContext: seedPrincipal,
 	runTool: runEcho,
 });
 
