@@ -6,11 +6,6 @@
 
 import type { EuroclawPlugin } from "@euroclaw/contracts";
 import { accessGrantFields } from "@euroclaw/contracts";
-import {
-	createSkillsStore,
-	skillsModels,
-	skillsPlugin,
-} from "@euroclaw/skills";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
@@ -283,59 +278,75 @@ describe("app-authz slice 5 — a plugin's shareable kind is governed with ZERO 
 	});
 });
 
-describe("app-authz slice 5 — skills is the first plugin consumer (loader owner-isolation)", () => {
-	it("a skill installation is owner-isolated through the registered `skill` loader", async () => {
-		// Seed an installation owned by ALICE on a shared adapter, then build a claw over the SAME db with
-		// the skills plugin — its registered `skill` loader presents the installation's base to the PEP.
+describe("app-authz slice 5 — a PLUGIN-registered shareable kind is owner-isolated", () => {
+	// The plugin-extensible loader registry: a plugin declares a `shareable` kind + a loader that
+	// presents the row's opaque base shape, and the generic PEP enforces owner-isolation on it with
+	// ZERO core change and zero new policy. Proven against an inline fixture (an in-memory owner map)
+	// rather than a real plugin, so the registry's regression coverage can't rot with whatever plugin
+	// happens to exist — this previously rode on the skills plugin, deleted with the package.
+	const OWNER_OF: Record<string, string> = { "doc-1": ALICE };
+	const docsPlugin: EuroclawPlugin = {
+		id: "docs",
+		shareable: [
+			{
+				kind: "doc",
+				load: () => async (id: string) => {
+					const owner = OWNER_OF[id];
+					// An unresolvable row returns null → the PEP FAILS CLOSED (never "the caller owns it").
+					return owner === undefined
+						? null
+						: { createdBy: owner, scope: "personal", scopeId: owner };
+				},
+			},
+		],
+	};
+
+	it("the owner may share it; a non-owner is denied", async () => {
 		const db = memoryAdapter();
 		const { redactor } = durableRedactor(db);
-		// The skills store also reaches the CORE access_grant table (grants live there); register it on
-		// the manual test adapter alongside the plugin's own models.
-		const store = createSkillsStore(
-			entityAdapter(db, {
-				...skillsModels,
-				access_grant: { fields: accessGrantFields },
-			}),
-		);
-		const installation = await store.installations.create({
-			packageId: "pkg",
-			version: "1.0.0",
-			digest: "d1",
-			createdBy: ALICE,
-			status: "installed",
-		});
 		const claw = createClaw({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },
-			plugins: [skillsPlugin({ skills: [] })],
+			plugins: [docsPlugin],
 		});
 
-		// alice installed it → owner → may share it
+		// alice owns doc-1 (per the plugin's loader) → may share it
 		await expect(
 			claw.api.shareResource(
 				{
-					resourceKind: "skill",
-					resourceId: installation.id,
+					resourceKind: "doc",
+					resourceId: "doc-1",
 					principalRef: BOB,
 					permission: "read",
-					grantedBy: ALICE,
 				},
 				{ principal: ALICE },
 			),
-		).resolves.toMatchObject({ resourceKind: "skill" });
+		).resolves.toMatchObject({ resourceKind: "doc" });
 
-		// bob is not the installer → denied (owner-isolation via the plugin loader, zero core change)
+		// bob is not the owner → denied (owner-isolation via the plugin loader, zero core change)
 		await expect(
 			claw.api.shareResource(
 				{
-					resourceKind: "skill",
-					resourceId: installation.id,
+					resourceKind: "doc",
+					resourceId: "doc-1",
 					principalRef: CAROL,
 					permission: "read",
-					grantedBy: BOB,
 				},
 				{ principal: BOB },
+			),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+
+		// an UNREGISTERED kind fails closed even for a would-be owner
+		await expect(
+			claw.api.shareResource(
+				{
+					resourceKind: "nope",
+					resourceId: "doc-1",
+					principalRef: BOB,
+					permission: "read",
+				},
+				{ principal: ALICE },
 			),
 		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
 	});
