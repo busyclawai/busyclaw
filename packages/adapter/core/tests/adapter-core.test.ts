@@ -644,4 +644,49 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			ok: true,
 		});
 	});
+
+	it("governs a plugin endpoint over HTTP — one door, not a raw bypass", async () => {
+		// A real governed claw with a plugin `endpoints()` namespace (secrets.*), NO `unsafeOpen`. Before
+		// the fix the HTTP route carried the RAW handler and bypassed the PEP; now governApi points the
+		// route table at the GOVERNED method, so a plugin endpoint fail-closes exactly like a core one.
+		const model = {
+			doStream: async () => {
+				throw new Error("model not used");
+			},
+		};
+		const claw = createClaw({
+			database: memoryAdapter(),
+			model: model as never,
+			redaction: { posture: "raw" },
+			plugins: [secrets([], { store: { key: SECRET_STORE_TEST_KEY } })],
+		}) as unknown as Claw;
+		const setSecret = (handler: ReturnType<typeof toRequestHandler>) =>
+			handler(
+				new Request("https://app.test/api/euroclaw/secrets/set", {
+					body: JSON.stringify({ name: "E2E", value: "v" }),
+					method: "POST",
+				}),
+			);
+
+		// No caller → the actor floor denies the plugin endpoint (403); the secretStore never runs.
+		const denied = await setSecret(toRequestHandler(claw));
+		expect(denied.status).toBe(403);
+		await expect(denied.json()).resolves.toMatchObject({
+			error: { code: "EUROCLAW_AUTHORIZATION_DENIED" },
+			ok: false,
+		});
+
+		// A verified principal → the PEP permits (personal-scope owner) and the write lands. Same door,
+		// same governed method the in-process `claw.api.secrets.set({...}, { principal })` call takes.
+		const set = await setSecret(
+			toRequestHandler(claw, {
+				resolveCaller: () => ({ principal: "user:alice" }),
+			}),
+		);
+		expect(set.status).toBe(200);
+		await expect(set.json()).resolves.toMatchObject({
+			data: { name: "E2E", kind: "value" },
+			ok: true,
+		});
+	});
 });

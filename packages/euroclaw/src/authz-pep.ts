@@ -27,6 +27,7 @@ import {
 	type ClawsStore,
 	configurationError,
 	ENDPOINTS_METADATA,
+	type EndpointRoute,
 	type EuroclawPlugin,
 	endpointRoutesOf,
 	type LooseResourceBinding,
@@ -491,6 +492,14 @@ export function governApi(input: {
 		};
 	};
 
+	// ORIGINAL plugin-endpoint handler → its wrapped (governed) form, keyed by function IDENTITY.
+	// `endpoints()` makes a namespace method and its route-table entry the SAME function object
+	// (contracts/governance/endpoints.ts: `namespace[name] = value.handler` and the route carries that
+	// same `value.handler`), so a route's raw handler is exactly the fn we wrap below. Rebuilding the
+	// re-attached table through this map points the HTTP ingress at the GOVERNED method — one door, no
+	// raw bypass. Shared across the whole recursion, so a nested route resolves regardless of depth.
+	const governedByOriginal = new Map<unknown, unknown>();
+
 	const wrapNamespace = (
 		ns: Record<string, unknown>,
 		prefix: string,
@@ -499,7 +508,9 @@ export function governApi(input: {
 		for (const [key, value] of Object.entries(ns)) {
 			const id = prefix ? `${prefix}.${key}` : key;
 			if (typeof value === "function") {
-				out[key] = wrapMethod(id, value as (...args: unknown[]) => unknown);
+				const wrapped = wrapMethod(id, value as (...args: unknown[]) => unknown);
+				governedByOriginal.set(value, wrapped);
+				out[key] = wrapped;
 			} else if (value !== null && typeof value === "object") {
 				out[key] = wrapNamespace(value as Record<string, unknown>, id);
 			} else {
@@ -507,15 +518,21 @@ export function governApi(input: {
 			}
 		}
 		// An `endpoints()` namespace parks its route table under a non-enumerable symbol that
-		// `Object.entries` skips — re-attach it so the wrapped namespace stays HTTP-routable. The
-		// carried route handlers are the RAW (unwrapped) ones by design: the HTTP adapter is a distinct
-		// ingress that resolves its own caller (the adapter-ingress frontier); the wrapper governs the
-		// IN-PROCESS `claw.api` surface.
-		const routes = (ns as { [ENDPOINTS_METADATA]?: unknown })[
+		// `Object.entries` skips — re-attach it so the wrapped namespace stays HTTP-routable. Each
+		// route's handler is remapped to its GOVERNED twin (same fn identity the namespace now exposes),
+		// so the HTTP ingress dispatches THROUGH the PEP — identical to the in-process call. A handler
+		// with no wrapped twin (shouldn't happen) falls back to the original, never silently dropped.
+		const routes = (ns as { [ENDPOINTS_METADATA]?: readonly EndpointRoute[] })[
 			ENDPOINTS_METADATA
 		];
 		if (routes !== undefined) {
-			Object.defineProperty(out, ENDPOINTS_METADATA, { value: routes });
+			const governedRoutes = routes.map((route) => {
+				const governed = governedByOriginal.get(route.handler);
+				return governed !== undefined
+					? { ...route, handler: governed as EndpointRoute["handler"] }
+					: route;
+			});
+			Object.defineProperty(out, ENDPOINTS_METADATA, { value: governedRoutes });
 		}
 		return out;
 	};
