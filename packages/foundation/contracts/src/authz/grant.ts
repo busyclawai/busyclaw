@@ -83,11 +83,11 @@ export type AccessGrant = {
 	level: AccessGrantPermission;
 };
 
-/** A caller's membership in an OPAQUE (scope, scopeId) — the only input {@link grantReaches} needs to
+/** A scope the caller BELONGS TO — an opaque (scope, scopeId) — the only input {@link grantReaches} needs to
  *  decide whether a labelled `<scope>:<scopeId>` grant reaches the caller. A structural subset of
- *  @euroclaw/authz's `ApiMembership` (which additionally carries a level), so the PEP passes its richer
- *  memberships straight through. */
-export type GrantMembership = {
+ *  @euroclaw/authz's `PrincipalScope` (which additionally carries a level), so the PEP passes its richer
+ *  scopes straight through. */
+export type GrantScope = {
 	scope: string;
 	scopeId: string;
 };
@@ -95,7 +95,7 @@ export type GrantMembership = {
 /**
  * Does a grant's opaque `principalRef` REACH the caller? `public` reaches everyone; a direct match
  * reaches the principal; a `team:`/`organization:` (any labelled) ref reaches a caller who holds a
- * membership whose `<scope>:<scopeId>` equals it — so grants to groups work the moment memberships do,
+ * held scope whose `<scope>:<scopeId>` equals it — so grants to groups work the moment scopes do,
  * with no per-ref-kind code. This is the ONE matcher both the product-api PEP (@euroclaw/authz renders
  * it into the Cedar `in` graph) and the skills runtime gate share — DEFINED here beside {@link AccessGrant}
  * so neither reimplements it. It only decides REACH (does this grant apply to the caller); whether the
@@ -105,11 +105,11 @@ export type GrantMembership = {
 export function grantReaches(
 	grant: AccessGrant,
 	principal: string,
-	memberships: readonly GrantMembership[],
+	scopes: readonly GrantScope[],
 ): boolean {
 	if (grant.principalRef === "public") return true;
 	if (grant.principalRef === principal) return true;
-	return memberships.some(
+	return scopes.some(
 		(m) => `${m.scope}:${m.scopeId}` === grant.principalRef,
 	);
 }

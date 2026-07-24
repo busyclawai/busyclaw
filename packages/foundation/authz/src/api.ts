@@ -6,7 +6,7 @@
 //
 // THE ACCESS MODEL IS GENERIC — no tiers, no roles, no org. The PEP never learns "admin" vs
 // "self-service" or what "organization" means; it checks a GENERIC ACL over an OPAQUE resource SHAPE
-// (`{ createdBy, scope, scopeId, grants }`) and the caller's OPAQUE membership facts, evaluated as REAL
+// (`{ createdBy, scope, scopeId, grants }`) and the caller's OPAQUE held-scope facts, evaluated as REAL
 // CEDAR over a per-request ENTITY GRAPH — NOT integer context facts:
 //
 //   owner        — `resource.createdBy == principal`            (entity/attr equality, LIVE)
@@ -14,14 +14,14 @@
 //   grant        — `principal in resource.requiredGrantAccess`  (leveled `in`, dormant)
 //
 // The LEVEL ordering (`read < use < manage`) is CEDAR'S, expressed as an access-node hierarchy
-// `…:manage in …:use in …:read`: the caller is `in` the node its membership/grant grants, the resource's
+// `…:manage in …:use in …:read`: the caller is `in` the node its scope/grant grants, the resource's
 // `requiredXAccess` attribute points at the node for the action's required level, and being `in` a higher
 // node is transitively being `in` every lower one — so a `use` member satisfies a `read` requirement but
 // NOT a `manage` one, decided entirely by Cedar `in`, never a TS `>=`. The euroclaw side only RENDERS the
-// graph (which membership/grant maps to which node — kind-blind, opaque labels); every DECISION is
+// graph (which held scope/grant maps to which node — kind-blind, opaque labels); every DECISION is
 // Cedar's. `scope`/`scopeId`/`principalRef` are opaque; the three permits live in `API_ACCESS_BASELINE`
 // (the un-removable api floor). Owner is LIVE; scope-member and grant are present-but-dormant (their `in`
-// edges are empty until the org plugin resolves memberships and the access_grant table lands) — the
+// edges are empty until the org plugin resolves scopes and the access_grant table lands) — the
 // POLICY and the RENDERING ship now, the DATA arrives later.
 
 import type { Entities, EntityJson } from "@cedar-policy/cedar-wasm/nodejs";
@@ -77,7 +77,7 @@ export const API_CREATE_GROUP = "creates";
  * plugin slice can widen but a `forbid` still overrides, the same seal the tool floor has).
  *   - owner is LIVE (`resource.createdBy == principal`);
  *   - scope-member is present-but-dormant (`principal in resource.requiredScopeAccess`; the caller's
- *     membership `in` edges are empty until the org plugin resolves them);
+ *     held-scope `in` edges are empty until the org plugin resolves them);
  *   - grant is present-but-dormant (`principal in resource.requiredGrantAccess`; grants are empty until
  *     the access_grant table lands) — the POLICY ships now, the DATA later.
  */
@@ -98,9 +98,9 @@ export const API_ACCESS_BASELINE: NamedPolicies = {
  *  renders — one type, no translation. */
 export type { AccessGrant };
 
-/** The caller's membership in an OPAQUE (scope, scopeId) at a level — the dormant scope-member branch's
+/** A scope the caller BELONGS TO — an opaque (scope, scopeId) at a level — the dormant scope-member branch's
  *  input. Empty until the org plugin resolves them; the shape is generic (never "org"). */
-export type ApiMembership = {
+export type PrincipalScope = {
 	scope: string;
 	scopeId: string;
 	level: ApiPermissionLevel;
@@ -114,7 +114,7 @@ export type ApiResourceShape = {
 	 *  an unresolvable resource — then the owner rule cannot match (rendered as a sentinel owner). */
 	createdBy?: string;
 	/** The access boundary label (opaque) and its opaque id — the scope-member branch renders the
-	 *  caller's memberships and the resource's requirement against these. */
+	 *  caller's scopes and the resource's requirement against these. */
 	scope?: string;
 	scopeId?: string;
 	/** Explicit grants on this resource (the generic ACL rows). `[]` until the access_grant table lands. */
@@ -140,22 +140,22 @@ export type DecideApiCallInput = {
 	principal: string | undefined;
 	/** The loaded resource shape (opaque). For a create / no-resource method: `{ grants: [] }`. */
 	resource: ApiResourceShape;
-	/** The caller's memberships (opaque, empty until the org plugin resolves them) — the scope-member
+	/** The caller's scopes (opaque, empty until the org plugin resolves them) — the scope-member
 	 *  branch's `in` edges. */
-	memberships: readonly ApiMembership[];
+	scopes: readonly PrincipalScope[];
 };
 
 // `grantReaches` — does a grant's opaque `principalRef` reach the caller (public / direct / labelled
-// membership) — is DEFINED in @euroclaw/contracts (beside `AccessGrant`), so the skills runtime gate and
+// held scope) — is DEFINED in @euroclaw/contracts (beside `AccessGrant`), so the skills runtime gate and
 // this PEP share ONE matcher. Here it decides graph RENDERING only (which grant becomes a principal `in`
-// edge); whether the reached grant's LEVEL satisfies the requirement stays Cedar's `in`. `ApiMembership`
-// is a structural superset of the `GrantMembership` it takes, so the richer memberships pass straight in.
+// edge); whether the reached grant's LEVEL satisfies the requirement stays Cedar's `in`. `PrincipalScope`
+// is a structural superset of the `GrantScope` it takes, so the richer scopes pass straight in.
 
 /**
  * Render the per-request Cedar entity graph for one governed call: the caller `Principal`, the loaded
  * `Resource` (its owner + the two requirement pointers, all in ATTRIBUTES), and the leveled `Access`
  * chains the owner/scope/grant `in` compares walk. Every DECISION is left to Cedar — this only decides
- * which node each opaque membership/grant maps to (kind-blind). This is the api sibling of quickhr's
+ * which node each opaque scope/grant maps to (kind-blind). This is the api sibling of quickhr's
  * `loadEntitySlice` (resolve rows into entities/attrs at load), specialized to the generic access model.
  */
 function buildApiEntities(input: {
@@ -163,9 +163,9 @@ function buildApiEntities(input: {
 	principal: string;
 	level: ApiPermissionLevel;
 	resource: ApiResourceShape;
-	memberships: readonly ApiMembership[];
+	scopes: readonly PrincipalScope[];
 }): EntityJson[] {
-	const { method, principal, level, resource, memberships } = input;
+	const { method, principal, level, resource, scopes } = input;
 
 	const access = (id: string): { type: string; id: string } => ({
 		type: API_ACCESS_TYPE,
@@ -180,12 +180,12 @@ function buildApiEntities(input: {
 	const grantBase = `grant:${method}`;
 
 	// Every access base whose leveled chain must exist so `in` resolves transitively: the resource's own
-	// scope (the scope requirement), the grant key (the grant requirement), and each membership's scope.
+	// scope (the scope requirement), the grant key (the grant requirement), and each held scope.
 	const bases = new Set<string>([grantBase]);
 	if (resource.scope !== undefined && resource.scopeId !== undefined) {
 		bases.add(scopeBaseOf(resource.scope, resource.scopeId));
 	}
-	for (const m of memberships) bases.add(scopeBaseOf(m.scope, m.scopeId));
+	for (const m of scopes) bases.add(scopeBaseOf(m.scope, m.scopeId));
 
 	const entities: EntityJson[] = [];
 	// The leveled chain per base: `<base>:manage in <base>:use in <base>:read` — each level's node parents
@@ -202,18 +202,18 @@ function buildApiEntities(input: {
 		}
 	}
 
-	// The caller's `in` edges — RENDERED from its opaque memberships + the grants that reach it (the kind-
-	// blind, euroclaw-resolved side). NO level compare here: each membership makes the caller `in` its own
+	// The caller's `in` edges — RENDERED from its opaque scopes + the grants that reach it (the kind-
+	// blind, euroclaw-resolved side). NO level compare here: each held scope makes the caller `in` its own
 	// `<scope>:<scopeId>:<level>` node; each reaching grant makes it `in` the resource's
 	// `grant:<method>:<level>` node. The chain then decides whether that satisfies the required level.
 	const principalParents: Array<{ type: string; id: string }> = [];
-	for (const m of memberships) {
+	for (const m of scopes) {
 		principalParents.push(
 			access(`${scopeBaseOf(m.scope, m.scopeId)}:${m.level}`),
 		);
 	}
 	for (const g of resource.grants) {
-		if (grantReaches(g, principal, memberships)) {
+		if (grantReaches(g, principal, scopes)) {
 			principalParents.push(access(`${grantBase}:${g.level}`));
 		}
 	}
@@ -254,7 +254,7 @@ function buildApiEntities(input: {
 /**
  * Decide a governed `claw.api` call against the product-api Cedar engine — the api-side analog of the
  * floor's tool gate. The actor floor runs FIRST (absent/blank principal → deny, never reaching Cedar);
- * then the opaque shape + the caller's memberships become a per-request `ClawApi::` entity graph the
+ * then the opaque shape + the caller's scopes become a per-request `ClawApi::` entity graph the
  * generic baseline (owner ∪ scope ∪ grant, or the create-permit) decides. Returns the engine's
  * `PolicyResult` (the PEP maps a non-permit to a typed authorization error).
  */
@@ -277,7 +277,7 @@ export async function decideApiCall(
 		principal,
 		level: input.level,
 		resource: input.resource,
-		memberships: input.memberships,
+		scopes: input.scopes,
 	});
 	const request: PolicyRequest = {
 		principal: { type: API_PRINCIPAL_TYPE, id: principal },

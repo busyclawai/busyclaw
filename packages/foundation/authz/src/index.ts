@@ -8,7 +8,7 @@
 export type {
 	AccessGrant,
 	ApiCaller,
-	ApiMembership,
+	PrincipalScope,
 	ApiPermissionLevel,
 	ApiResourceShape,
 	DecideApiCallInput,

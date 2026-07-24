@@ -1,6 +1,6 @@
 import {
 	type AccessGrantPermission,
-	type GrantMembership,
+	type GrantScope,
 	grantLevelSatisfies,
 	grantReaches,
 	ORGANIZATION_CONTEXT_KEY,
@@ -20,21 +20,21 @@ function contextString(ctx: TurnContext, key: string): string | undefined {
 }
 
 /**
- * The caller's group memberships as {@link grantReaches} consumes them, from its OWN stamped facts —
+ * The caller's group scopes as {@link grantReaches} consumes them, from its OWN stamped facts —
  * team and organization when present. The skills plugin stays org-blind: whoever stamped the fact
  * resolved the membership, so a `team:`/`organization:` grant reaches the caller exactly when the
  * matching fact is on the context (the same trust model the old split `principalType` ladder had).
  */
-function contextMemberships(ctx: TurnContext): GrantMembership[] {
-	const memberships: GrantMembership[] = [];
+function contextScopes(ctx: TurnContext): GrantScope[] {
+	const scopes: GrantScope[] = [];
 	const teamId = contextString(ctx, TEAM_CONTEXT_KEY);
 	if (teamId !== undefined)
-		memberships.push({ scope: "team", scopeId: teamId });
+		scopes.push({ scope: "team", scopeId: teamId });
 	const organizationId = contextString(ctx, ORGANIZATION_CONTEXT_KEY);
 	if (organizationId !== undefined) {
-		memberships.push({ scope: "organization", scopeId: organizationId });
+		scopes.push({ scope: "organization", scopeId: organizationId });
 	}
-	return memberships;
+	return scopes;
 }
 
 /**
@@ -87,14 +87,14 @@ export async function hasSkillGrant(input: {
 		SKILL_RESOURCE_KIND,
 		input.installation.id,
 	);
-	const memberships = contextMemberships(input.ctx);
-	// `principal` may be absent (a team/organization/public grant still reaches via memberships or the
+	const scopes = contextScopes(input.ctx);
+	// `principal` may be absent (a team/organization/public grant still reaches via scopes or the
 	// public ref); the empty string never equals a real, non-empty principalRef, so the direct-match
 	// branch simply can't fire without a principal fact.
 	return grants.some(
 		(grant) =>
 			grantLevelSatisfies(grant.level, input.level) &&
-			grantReaches(grant, principal ?? "", memberships),
+			grantReaches(grant, principal ?? "", scopes),
 	);
 }
 

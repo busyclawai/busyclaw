@@ -563,7 +563,7 @@ const shareResourceInput = ark({
 	resourceId: "string",
 	principalRef: ark("string").configure({
 		euroclaw: {
-			doc: "The polymorphic grantee — `user:<id>` | `team:<id>` | `organization:<id>` | `public`. Opaque; `user:`/`public` grants are LIVE, `team:`/`organization:` land as data but stay dormant until memberships resolve.",
+			doc: "The polymorphic grantee — `user:<id>` | `team:<id>` | `organization:<id>` | `public`. Opaque; `user:`/`public` grants are LIVE, `team:`/`organization:` land as data but stay dormant until scopes resolve.",
 		},
 	}),
 	permission: accessGrantPermission.configure({

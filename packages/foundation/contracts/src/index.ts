@@ -35,7 +35,7 @@ export type {
 	AccessGrantPermission,
 	AccessGrantRecord,
 	AccessGrantStore,
-	GrantMembership,
+	GrantScope,
 	NewAccessGrant,
 } from "./authz/grant";
 export {

@@ -11,7 +11,7 @@
 
 import {
 	API_ACCESS_BASELINE,
-	type ApiMembership,
+	type PrincipalScope,
 	type ApiPermissionLevel,
 	type ApiResourceShape,
 	type CedarEngine,
@@ -432,9 +432,18 @@ export function governApi(input: {
 	adapter: Adapter | undefined;
 	/** The full plugin list — its `shareable` kinds merge into the loader registry (plugin-extensible). */
 	plugins: readonly EuroclawPlugin[];
-	resolveMemberships?: (
+	/** Which SCOPES the caller belongs to, and at what level — the caller-side mirror of the `(scope,
+	 *  scopeId)` a resource carries. The PEP renders each into an `in` edge, then Cedar decides; the pair
+	 *  is OPAQUE here exactly as it is on a resource, so this stays kind-blind (no `team:`/`organization:`
+	 *  branch anywhere — `grantReaches` compares `<scope>:<scopeId>` as a string). A plugin that knows what
+	 *  a group MEANS supplies it; `organization()` is the first. Absent ⇒ `[]`, so the scope-member and
+	 *  labelled-grant routes are dormant and only owner / `user:` / `public` decide.
+	 *
+	 *  A RESOLVER, never a field on the caller: scopes arriving in the caller object would be
+	 *  caller-supplied and therefore forgeable — the class of bug docs/plans/stamped-fields.md closed. */
+	resolvePrincipalScopes?: (
 		principal: string,
-	) => readonly ApiMembership[] | Promise<readonly ApiMembership[]>;
+	) => readonly PrincipalScope[] | Promise<readonly PrincipalScope[]>;
 	appAuthz: AppAuthzConfig | undefined;
 	warn: (message: string) => void;
 }): Record<string, unknown> {
@@ -451,7 +460,7 @@ export function governApi(input: {
 		bindings,
 		grantStore: input.grantStore,
 	});
-	const resolveMemberships = input.resolveMemberships ?? (() => []);
+	const resolvePrincipalScopes = input.resolvePrincipalScopes ?? (() => []);
 	const unsafeOpen = input.appAuthz?.unsafeOpen === true;
 	const shadow = input.appAuthz?.posture === "shadow";
 
@@ -472,15 +481,15 @@ export function governApi(input: {
 			const resource = isCreate
 				? { grants: [] }
 				: await loadResource(method, args[0], principal);
-			const memberships =
-				principal !== undefined ? await resolveMemberships(principal) : [];
+			const scopes =
+				principal !== undefined ? await resolvePrincipalScopes(principal) : [];
 			const result = await decideApiCall({
 				engine: input.engine,
 				method,
 				level,
 				principal,
 				resource,
-				memberships,
+				scopes,
 			});
 			if (result.decision === "permit") return call();
 			const message = `app-authz denied ${method}: ${result.reason ?? "no policy permits this call"}`;

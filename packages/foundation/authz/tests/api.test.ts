@@ -3,13 +3,13 @@
 // ENTITY GRAPH — owner is entity/attr equality, scope-member and grant are leveled Cedar `in`. Every
 // branch is proven GENERICALLY through stubs — no org plugin, no access_grant table — so the policies
 // are shown to read the opaque SHAPE (`createdBy`/`scope`/`scopeId`/`grants`) and the caller's opaque
-// memberships, never a kind/tier/role, and the LEVEL ordering (`read < use < manage`) is Cedar's, not a
+// scopes, never a kind/tier/role, and the LEVEL ordering (`read < use < manage`) is Cedar's, not a
 // TS compare.
 
 import { describe, expect, it } from "vitest";
 import {
 	API_ACCESS_BASELINE,
-	type ApiMembership,
+	type PrincipalScope,
 	type ApiResourceShape,
 	cedarApiEngine,
 	decideApiCall,
@@ -40,7 +40,7 @@ function decide(input: {
 	level: "read" | "use" | "manage";
 	principal: string | undefined;
 	resource?: ApiResourceShape;
-	memberships?: readonly ApiMembership[];
+	scopes?: readonly PrincipalScope[];
 }) {
 	return decideApiCall({
 		engine,
@@ -48,7 +48,7 @@ function decide(input: {
 		level: input.level,
 		principal: input.principal,
 		resource: input.resource ?? { grants: [] },
-		memberships: input.memberships ?? [],
+		scopes: input.scopes ?? [],
 	});
 }
 
@@ -119,7 +119,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 		// BOB holds a `use`-level membership in the resource's OWN opaque scope — proving the branch reads
 		// resource.scope/scopeId (here "team"/"team-eng"), never a hardcoded "organization", and that the
 		// level ordering is Cedar's `in`, not a TS compare.
-		const useMember: ApiMembership = {
+		const useMember: PrincipalScope = {
 			scope: "team",
 			scopeId: "team-eng",
 			level: "use",
@@ -132,7 +132,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 					level: "read",
 					principal: BOB,
 					resource: aliceClaw,
-					memberships: [useMember],
+					scopes: [useMember],
 				})
 			).decision,
 		).toBe("permit");
@@ -144,7 +144,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 					level: "use",
 					principal: BOB,
 					resource: aliceClaw,
-					memberships: [useMember],
+					scopes: [useMember],
 				})
 			).decision,
 		).toBe("permit");
@@ -156,7 +156,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 					level: "manage",
 					principal: BOB,
 					resource: aliceClaw,
-					memberships: [useMember],
+					scopes: [useMember],
 				})
 			).decision,
 		).toBe("deny");
@@ -168,7 +168,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 					level: "manage",
 					principal: BOB,
 					resource: aliceClaw,
-					memberships: [
+					scopes: [
 						{ scope: "team", scopeId: "team-eng", level: "manage" },
 					],
 				})
@@ -182,7 +182,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 			level: "read",
 			principal: BOB,
 			resource: aliceClaw,
-			memberships: [{ scope: "team", scopeId: "team-sales", level: "manage" }],
+			scopes: [{ scope: "team", scopeId: "team-sales", level: "manage" }],
 		});
 		expect(result.decision).toBe("deny");
 	});
@@ -209,7 +209,7 @@ describe("decideApiCall — grant (generic, stubbed as data, leveled Cedar `in`)
 				...aliceClaw,
 				grants: [{ principalRef: "team:team-eng", level: "manage" }],
 			},
-			memberships: [{ scope: "team", scopeId: "team-eng", level: "read" }],
+			scopes: [{ scope: "team", scopeId: "team-eng", level: "read" }],
 		});
 		expect(teamGrant.decision).toBe("permit");
 

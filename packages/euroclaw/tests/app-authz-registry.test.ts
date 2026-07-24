@@ -3,7 +3,7 @@
 // ONLY via a stubbed membership (dormant otherwise), and the LOAD-BEARING invariant that grants are
 // DATA — inserting/deleting one flips the decision while the compiled api bundle stays byte-identical.
 
-import type { AccessGrant, ApiMembership } from "@euroclaw/authz";
+import type { AccessGrant, PrincipalScope } from "@euroclaw/authz";
 import { API_ACCESS_BASELINE, loadPolicyBundle } from "@euroclaw/authz";
 import type {
 	AccessGrantStore,
@@ -46,7 +46,7 @@ function govern(opts: {
 	clawsStore?: ClawsStore;
 	runs?: ClawRunReadModel;
 	grantStore?: AccessGrantStore;
-	resolveMemberships?: (principal: string) => readonly ApiMembership[];
+	resolvePrincipalScopes?: (principal: string) => readonly PrincipalScope[];
 }): Governed {
 	return governApi({
 		api,
@@ -56,7 +56,7 @@ function govern(opts: {
 		grantStore: opts.grantStore,
 		adapter: undefined,
 		plugins: [],
-		resolveMemberships: opts.resolveMemberships ?? (() => []),
+		resolvePrincipalScopes: opts.resolvePrincipalScopes ?? (() => []),
 		appAuthz: undefined,
 		warn: () => {},
 	}) as unknown as Governed;
@@ -93,7 +93,7 @@ describe("app-authz slice 5 — run owner-isolation via the run loader", () => {
 	});
 });
 
-describe("app-authz slice 5 — a team grant is dormant without memberships", () => {
+describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 	const clawsStore = {
 		claws: {
 			get: async (id: string) =>
@@ -130,7 +130,7 @@ describe("app-authz slice 5 — a team grant is dormant without memberships", ()
 		const governed = govern({
 			clawsStore,
 			grantStore: grantStoreWith(rows),
-			resolveMemberships: (principal) =>
+			resolvePrincipalScopes: (principal) =>
 				principal === BOB
 					? [{ scope: "team", scopeId: "team-eng", level: "read" }]
 					: [],
