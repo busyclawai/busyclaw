@@ -68,3 +68,51 @@ describe("SYSTEM_POSTURE through cedar", () => {
 		).toBe("needs-approval");
 	});
 });
+
+describe("named policies — the determining-policy trail names the RULE", () => {
+	it("the floor's own rules are named, not positional", async () => {
+		const e = engine(SYSTEM_POSTURE);
+		// A read: the trail names the floor rule that permitted it.
+		expect((await e.authorize(req("readDoc"))).policies).toEqual([
+			"floor:reads-run",
+		]);
+		// An unconfirmed autonomous write parks. The trail on a needs-approval is the PROBE's — it names
+		// the rule that WOULD permit once confirmed, not the forbid that blocked it. That is the useful
+		// end: it says which confirmation requirement fired, which is what an escalation routes on.
+		const parked = await e.authorize(req("writeDoc", { runMode: "autonomous" }));
+		expect(parked.decision).toBe("needs-approval");
+		expect(parked.policies).toEqual(["floor:writes-need-confirmation"]);
+	});
+
+	it("a HARD deny names the forbid that blocked it", async () => {
+		const e = engine(
+			`${SYSTEM_POSTURE}\n@id("deny:tool-blocked") forbid(principal, action == Action::"readDoc", resource);`,
+		);
+		// Confirmation cannot unblock a forbid, so this stays a deny — and the trail names the rule.
+		const denied = await e.authorize(req("readDoc"));
+		expect(denied.decision).toBe("deny");
+		expect(denied.policies).toContain("deny:tool-blocked");
+	});
+
+	it("an @id on a customer slice reaches the trail — the escalation/audit channel", async () => {
+		const slice = `@id("escalate:accessibility-team")
+permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`;
+		const e = engine(`${SYSTEM_POSTURE}\n${slice}`);
+		// The probe flips this to needs-approval, and the trail carries the slice's OWN name — which is
+		// what lets the app route the approval to a queue without inventing a second decision channel.
+		const parked = await e.authorize(req("writeDoc", { runMode: "autonomous" }));
+		expect(parked.decision).toBe("needs-approval");
+		expect(parked.policies).toContain("escalate:accessibility-team");
+	});
+
+	it("un-annotated policies keep cedar's positional id (no regression)", async () => {
+		const e = engine(`permit(principal, action in Action::"reads", resource);`);
+		expect((await e.authorize(req("readDoc"))).policies).toEqual(["policy0"]);
+	});
+
+	it("a duplicate @id fails LOUD at construction", () => {
+		const dupe = `@id("same") permit(principal, action in Action::"reads", resource);
+@id("same") permit(principal, action in Action::"writes", resource);`;
+		expect(() => engine(dupe)).toThrow(/duplicate Cedar policy id: same/);
+	});
+});

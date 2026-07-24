@@ -80,9 +80,18 @@ export const API_CREATE_GROUP = "creates";
  *   - grant is present-but-dormant (`principal in resource.requiredGrantAccess`; grants are empty until
  *     the access_grant table lands) — the POLICY ships now, the DATA later.
  */
-export const API_ACCESS_BASELINE = `permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { resource.createdBy == principal };
+// `@id` per rule so a permit is legible in the determining-policy trail: an api decision's audit says
+// WHICH of the three access routes (owner / scope / grant) let the call through, not `policy1`.
+export const API_ACCESS_BASELINE = `@id("api:owner")
+permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { resource.createdBy == principal };
+
+@id("api:scope-member")
 permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredScopeAccess };
+
+@id("api:grant")
 permit(principal, action in ${API_ACTION_TYPE}::"${API_ACTION_GROUP}", resource) when { principal in resource.requiredGrantAccess };
+
+@id("api:create")
 permit(principal, action in ${API_ACTION_TYPE}::"${API_CREATE_GROUP}", resource);`;
 
 /** One entry in the generic ACL (a row of the `access_grant` table, projected). `principalRef` is

@@ -16,6 +16,15 @@
 // absent optional access (even under a `has` guard, verified 4.11.1) → an erroring forbid is SILENTLY
 // SKIPPED. With runMode guaranteed present, an unknown/autonomous mode reads as "must confirm"
 // (fail-closed) and only a known-interactive run relaxes.
-export const SYSTEM_POSTURE = `permit(principal, action in Action::"reads", resource);
+// Each policy carries an `@id` so the determining-policy trail (and the compliance audit that persists
+// it) NAMES the floor rule that decided, instead of a positional `policy0` that shifts as soon as a
+// customer slice is added above it. Annotations are metadata — never evaluated — so the posture's
+// semantics are untouched.
+export const SYSTEM_POSTURE = `@id("floor:reads-run")
+permit(principal, action in Action::"reads", resource);
+
+@id("floor:writes-need-confirmation")
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };
+
+@id("floor:unconfirmed-autonomous-write-forbidden")
 forbid(principal, action in Action::"writes", resource) unless { context.confirmationUsed || context.runMode == "interactive" };`;
