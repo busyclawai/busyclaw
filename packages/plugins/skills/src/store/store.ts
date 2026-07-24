@@ -1,4 +1,11 @@
-import { type Adapter, validationError } from "@euroclaw/contracts";
+import {
+	type AccessGrant,
+	type AccessGrantRecord,
+	type Adapter,
+	accessGrantCreateInput,
+	accessGrantFields,
+	validationError,
+} from "@euroclaw/contracts";
 import {
 	type EntityPatch,
 	type EntityWhere,
@@ -7,13 +14,11 @@ import {
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import {
-	type CreateSkillAclInput,
 	type CreateSkillActivationInput,
 	type CreateSkillInstallationInput,
 	type CreateSkillPackageInput,
 	type CreateSkillProposalInput,
 	type CreateSkillReadInput,
-	createSkillAclInput,
 	createSkillActivationInput,
 	createSkillInstallationInput,
 	createSkillPackageInput,
@@ -22,7 +27,6 @@ import {
 	type SkillInstallationStatusPatch,
 	type SkillProposalStatusPatch,
 	type SkillsStore,
-	skillAclFields,
 	skillActivationFields,
 	skillInstallationFields,
 	skillPackageFields,
@@ -66,10 +70,10 @@ function assertCreateSkillInstallationInput(
 	return valid;
 }
 
-function assertCreateSkillAclInput(input: unknown): CreateSkillAclInput {
-	const valid = createSkillAclInput(input);
+function assertNewAccessGrant(input: unknown) {
+	const valid = accessGrantCreateInput(input);
 	if (valid instanceof type.errors) {
-		throw validationError("create skill acl input invalid", valid.summary);
+		throw validationError("new access grant invalid", valid.summary);
 	}
 	return valid;
 }
@@ -121,7 +125,9 @@ export function createSkillsStore(
 	const db = entityView(adapter, {
 		skill_package: { fields: skillPackageFields },
 		skill_installation: { fields: skillInstallationFields },
-		skill_acl: { fields: skillAclFields },
+		// The generic shareable-resource ACL (a CORE table) — skill grants live here as
+		// `resourceKind="skill"` rows. Registered on the assembly's adapter, so this lens reaches it.
+		access_grant: { fields: accessGrantFields },
 		skill_activation: { fields: skillActivationFields },
 		skill_read: { fields: skillReadFields },
 		skill_proposal: { fields: skillProposalFields },
@@ -243,52 +249,48 @@ export function createSkillsStore(
 			},
 		},
 
-		acl: {
-			async grant(input) {
-				const valid = assertCreateSkillAclInput(input);
-				return db.create({
-					model: "skill_acl",
-					data: { ...valid, id: valid.id ?? newId(), createdAt: now() },
-				});
-			},
-
-			get(id) {
-				return db.findOne({
-					model: "skill_acl",
-					where: [{ field: "id", value: id }],
-				});
-			},
-
-			listForInstallation(installationId) {
-				return db.findMany({
-					model: "skill_acl",
-					where: [{ field: "installationId", value: installationId }],
+		// The generic AccessGrantStore over `access_grant`, backed by the SAME adapter (mirrors
+		// storage-durable's createAccessGrantStore, but via `entityView` since the assembly hands the
+		// plugin an already entity-validating adapter). Rows are IMMUTABLE: a share is a `create`, an
+		// unshare a `delete`. `listForResource` projects each validated row to the opaque
+		// `{ principalRef, level }` shape the runtime gate consumes.
+		grants: {
+			async listForResource(resourceKind, resourceId) {
+				const rows = await db.findMany({
+					model: "access_grant",
+					where: [
+						{ field: "resourceKind", value: resourceKind },
+						{ field: "resourceId", value: resourceId, connector: "AND" },
+					],
 					sortBy: { field: "createdAt", direction: "asc" },
 				});
+				return rows.map(
+					(row): AccessGrant => ({
+						principalRef: row.principalRef,
+						level: row.permission,
+					}),
+				);
 			},
 
-			listForPrincipal(input) {
-				const where: EntityWhere<typeof skillAclFields>[] = [
-					{ field: "principalType", value: input.principalType },
-				];
-				if (input.principalId !== undefined) {
-					where.push({
-						field: "principalId",
-						value: input.principalId,
-						connector: "AND",
-					});
-				}
-				if (input.permission !== undefined) {
-					where.push({
-						field: "permission",
-						value: input.permission,
-						connector: "AND",
-					});
-				}
-				return db.findMany({
-					model: "skill_acl",
-					where,
-					sortBy: { field: "createdAt", direction: "asc" },
+			async create(input) {
+				const valid = assertNewAccessGrant(input);
+				const record: AccessGrantRecord = {
+					id: newId(),
+					createdAt: now(),
+					...valid,
+				};
+				await db.create({ model: "access_grant", data: record });
+				return record;
+			},
+
+			delete({ resourceKind, resourceId, principalRef }) {
+				return db.deleteMany({
+					model: "access_grant",
+					where: [
+						{ field: "resourceKind", value: resourceKind },
+						{ field: "resourceId", value: resourceId, connector: "AND" },
+						{ field: "principalRef", value: principalRef, connector: "AND" },
+					],
 				});
 			},
 		},

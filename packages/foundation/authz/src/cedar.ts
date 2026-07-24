@@ -1,5 +1,6 @@
 // Cedar RENDERINGS of the neutral authorization model — pure string/data generation, no
-// cedar-wasm (validation lives in @euroclaw/policy-cedar). The model is canonical; Cedar text is
+// cedar-wasm here (the eval that consumes these lives beside it in ./cedar-engine). The model is
+// canonical; Cedar text is
 // a projection of it: one action per ActionDef with typed context.args (via the shared
 // projection — render and request-filter must agree), action groups via `in [...]` membership,
 // entity types with parents and `tags String` (ABAC via hasTag/getTag), principals declared by
@@ -12,6 +13,7 @@ import type {
 	EntityRef,
 	JsonObject,
 } from "@euroclaw/contracts";
+import { API_ACTION_GROUP, API_ACTION_TYPE, API_CREATE_GROUP } from "./api";
 import { cedarQuote, projectArgs } from "./projection";
 
 export type CedarSchemaOptions = {
@@ -42,7 +44,7 @@ function renderAction(
 	return `action ${cedarQuote(action.id)}${membership} appliesTo {principal: [${principals.join(", ")}], resource: [${action.resourceType}], context: {${CONTEXT_FIELDS}${args}}};`;
 }
 
-/** Render the model as Cedar schema text (parse/validate it with @euroclaw/policy-cedar). */
+/** Render the model as Cedar schema text (the ./cedar-engine eval parses/validates it). */
 export function modelToCedarSchema(
 	model: AuthzModel,
 	options: CedarSchemaOptions = {},
@@ -127,6 +129,37 @@ export function actionEntitiesFromModel(model: AuthzModel): CedarEntityJson[] {
 		uid: groupRef(a.id),
 		attrs: {},
 		parents: a.groups.map(groupRef),
+	}));
+	return [...groups, ...actions];
+}
+
+/**
+ * The `ClawApi::Action` hierarchy for the product-api PEP — every governed method under the `"api"`
+ * umbrella group (the owner/scope/grant permits target it), create methods additionally under
+ * `"creates"` (the create-permit targets it; `"creates" in "api"`, so a create action is still in the
+ * umbrella by transitivity). The api engine needs this at EVALUATION time, exactly as the tool floor
+ * needs `actionEntitiesFromModel` — but under the ClawApi ACTION NAMESPACE, which is the whole reason a
+ * `ClawApi::` policy cannot reach a `Tool::` request. Kept beside the tool renderer because this is
+ * where the cedar-wasm entity shape lives. `buildAuthzModel` is deliberately NOT reused: it hardcodes
+ * an access→`reads`/`writes` group (the pre-§6 tool-risk axis) and `actionEntitiesFromModel` emits
+ * UNQUALIFIED `Action::…` uids — both wrong for the generic, namespaced permission-level model.
+ */
+export function apiActionEntities(input: {
+	methods: readonly string[];
+	createMethods: readonly string[];
+}): CedarEntityJson[] {
+	const ref = (id: string): EntityRef => ({ type: API_ACTION_TYPE, id });
+	const creates = new Set(input.createMethods);
+	const groups: CedarEntityJson[] = [
+		{ uid: ref(API_ACTION_GROUP), attrs: {}, parents: [] },
+		{ uid: ref(API_CREATE_GROUP), attrs: {}, parents: [ref(API_ACTION_GROUP)] },
+	];
+	const actions: CedarEntityJson[] = input.methods.map((method) => ({
+		uid: ref(method),
+		attrs: {},
+		parents: [
+			creates.has(method) ? ref(API_CREATE_GROUP) : ref(API_ACTION_GROUP),
+		],
 	}));
 	return [...groups, ...actions];
 }

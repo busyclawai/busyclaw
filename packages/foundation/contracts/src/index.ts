@@ -5,6 +5,7 @@
 // ── errors ───────────────────────────────────────────────────────────────────
 export type { EuroclawErrorCode, EuroclawErrorInput } from "@euroclaw/errors";
 export {
+	authorizationError,
 	configurationError,
 	EuroclawError,
 	errorMessage,
@@ -28,6 +29,25 @@ export {
 // @euroclaw/policy-*) ──
 export type { AuthzEntity, EntityDirectory } from "./authz/directory";
 export type { PolicyEngine, PolicyEngineCapabilities } from "./authz/engine";
+// ── the generic shareable-resource ACL (app-authz slice 5): the access_grant entity + store port ──
+export type {
+	AccessGrant,
+	AccessGrantPermission,
+	AccessGrantRecord,
+	AccessGrantStore,
+	GrantMembership,
+	NewAccessGrant,
+} from "./authz/grant";
+export {
+	accessGrantCreateInput,
+	accessGrantFields,
+	accessGrantPermission,
+	accessGrantPermissionValues,
+	accessGrantRecord,
+	accessGrantSchema,
+	grantLevelSatisfies,
+	grantReaches,
+} from "./authz/grant";
 export type {
 	ActionAccess,
 	ActionDef,
@@ -299,6 +319,7 @@ export type {
 	EndpointRoute,
 	InferEndpoints,
 	ValidateEndpointOutputs,
+	ValidateEndpointResources,
 } from "./governance/endpoints";
 export {
 	ENDPOINTS_METADATA,
@@ -328,6 +349,9 @@ export type {
 	InferReasonCodes,
 	PolicySourceSlice,
 	SecretProviderPlugin,
+	ShareableKind,
+	ShareableLoaderContext,
+	ShareableResource,
 	UnionToIntersection,
 } from "./governance/plugin";
 // ── governance: the Principal vocabulary — the one authorizable identity (the `principal` schema is
@@ -375,6 +399,12 @@ export {
 	redactionContextFrom,
 	rehydrationContext,
 } from "./governance/redact";
+// ── governance: the co-located app-authz resource binding (base api route defs + plugin endpoints) ──
+export type {
+	LooseResourceBinding,
+	ResourceBinding,
+	ResourceInputKey,
+} from "./governance/resource-binding";
 export type {
 	NewRunCheckpoint,
 	RunCheckpointRecord,

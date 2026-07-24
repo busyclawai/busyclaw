@@ -172,8 +172,14 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("isolates scopes — another principal's personal row is unreachable", async () => {
 		const { provider, store } = connectedStore();
-		await store.set({ name: "PRIVATE", value: "alices", createdBy: "user:alice" });
-		expect(await provider.get("PRIVATE", { principal: "user:mallory" })).toBeNull();
+		await store.set({
+			name: "PRIVATE",
+			value: "alices",
+			createdBy: "user:alice",
+		});
+		expect(
+			await provider.get("PRIVATE", { principal: "user:mallory" }),
+		).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
 			await provider.get("PRIVATE", { organizationId: "org-a" }),
@@ -183,10 +189,12 @@ describe("the store provider — nearest-scope resolution", () => {
 	it("an ORG-LESS context resolves personal rows — org is fully additive", async () => {
 		const { provider, store } = connectedStore();
 		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "user:alice" });
-		expect(await provider.get("MY_TOKEN", { principal: "user:alice" })).toEqual({
-			kind: "token",
-			value: "v",
-		});
+		expect(await provider.get("MY_TOKEN", { principal: "user:alice" })).toEqual(
+			{
+				kind: "token",
+				value: "v",
+			},
+		);
 	});
 
 	it("a miss returns null; infrastructure failure THROWS — never coerced into a miss", async () => {
@@ -283,15 +291,19 @@ describe("data-tier precedence through buildSecrets", () => {
 			env({ vars: { SHARED_NAME: "from-env" } }),
 			provider,
 		]);
-		expect(await secrets.get("SHARED_NAME", { principal: "user:alice" })).toEqual({
+		expect(
+			await secrets.get("SHARED_NAME", { principal: "user:alice" }),
+		).toEqual({
 			kind: "token",
 			value: "from-store",
 		});
 		// a store miss falls through to the config tier — env still serves everyone else.
-		expect(await secrets.get("SHARED_NAME", { principal: "user:bob" })).toEqual({
-			kind: "token",
-			value: "from-env",
-		});
+		expect(await secrets.get("SHARED_NAME", { principal: "user:bob" })).toEqual(
+			{
+				kind: "token",
+				value: "from-env",
+			},
+		);
 	});
 });
 
@@ -303,7 +315,9 @@ describe("encryption at rest", () => {
 			value: "plain-secret",
 			createdBy: "user:alice",
 		});
-		expect(await provider.get("ROUNDTRIP", { principal: "user:alice" })).toEqual({
+		expect(
+			await provider.get("ROUNDTRIP", { principal: "user:alice" }),
+		).toEqual({
 			kind: "token",
 			value: "plain-secret",
 		});
@@ -341,7 +355,11 @@ describe("encryption at rest", () => {
 		const seeder = createStoredSecretsStore(db, {
 			cipher: cipherFor(TEST_KEY),
 		});
-		await seeder.set({ name: "LOCKED", value: "material", createdBy: "user:alice" });
+		await seeder.set({
+			name: "LOCKED",
+			value: "material",
+			createdBy: "user:alice",
+		});
 		// …but the plugin has no config key and its reader resolves nothing.
 		const plugin = secrets([], { store: true });
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
@@ -411,10 +429,12 @@ describe("encryption at rest", () => {
 		).toEqual({ kind: "token", value: TEST_KEY });
 		// …and a normal name resolves THROUGH that same reader-resolved key: the full loop — store
 		// row → decrypt → lazy key via env — with no recursion and no hang.
-		expect(await reader.get("USER_TOKEN", { principal: "user:alice" })).toEqual({
-			kind: "token",
-			value: "sealed",
-		});
+		expect(await reader.get("USER_TOKEN", { principal: "user:alice" })).toEqual(
+			{
+				kind: "token",
+				value: "sealed",
+			},
+		);
 	});
 });
 

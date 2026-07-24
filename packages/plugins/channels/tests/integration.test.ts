@@ -117,22 +117,28 @@ describe("channels ↔ euroclaw integration", () => {
 		expect(claw.api.channels.registrations).toBeDefined();
 
 		// register a user's bot at runtime through the public api, read it back
-		const created = await claw.api.channels.registrations.register({
-			provider: "telegram",
-			endpointKey: "acme-bot",
-			secret: "bot-token",
-			webhookSecret: "hook",
-			organizationId: "org-acme",
-		});
+		const created = await claw.api.channels.registrations.register(
+			{
+				provider: "telegram",
+				endpointKey: "acme-bot",
+				secret: "bot-token",
+				webhookSecret: "hook",
+				organizationId: "org-acme",
+			},
+			{ principal: "user:operator" },
+		);
 		expect(created).toMatchObject({
 			status: "active",
 			organizationId: "org-acme",
 		});
 		expect(
-			await claw.api.channels.registrations.getByKey({
-				provider: "telegram",
-				endpointKey: "acme-bot",
-			}),
+			await claw.api.channels.registrations.getByKey(
+				{
+					provider: "telegram",
+					endpointKey: "acme-bot",
+				},
+				{ principal: "user:operator" },
+			),
 		).toMatchObject({ id: created.id });
 	});
 
@@ -165,12 +171,15 @@ describe("channels ↔ euroclaw integration", () => {
 				}),
 			],
 		});
-		await claw.api.channels.registrations.register({
-			provider: "telegram",
-			endpointKey: "sales",
-			secret: "row-token",
-			webhookSecret: "hook",
-		});
+		await claw.api.channels.registrations.register(
+			{
+				provider: "telegram",
+				endpointKey: "sales",
+				secret: "row-token",
+				webhookSecret: "hook",
+			},
+			{ principal: "user:operator" },
+		);
 
 		const plugins = claw.$context.plugins ?? [];
 		const namedRoute = plugins

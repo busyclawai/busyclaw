@@ -2,11 +2,13 @@ import { validationError } from "@euroclaw/contracts";
 import { type as ark } from "arktype";
 import type {
 	GrantActivationInput,
+	GrantSkillInput,
 	RequestShareInput,
 	ShareSkillInput,
 } from "./contracts";
 import {
 	grantActivationInput,
+	grantSkillInput,
 	requestShareInput,
 	shareSkillInput,
 } from "./schema";
@@ -21,6 +23,14 @@ export function assertGrantActivationInput(
 		| ark.errors;
 	if (valid instanceof ark.errors) {
 		throw validationError("grant activation input invalid", valid.summary);
+	}
+	return valid;
+}
+
+export function assertGrantSkillInput(input: unknown): GrantSkillInput {
+	const valid = grantSkillInput(input) as GrantSkillInput | ark.errors;
+	if (valid instanceof ark.errors) {
+		throw validationError("grant skill input invalid", valid.summary);
 	}
 	return valid;
 }

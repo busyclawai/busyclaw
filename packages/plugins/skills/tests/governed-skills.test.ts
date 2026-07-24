@@ -1,10 +1,16 @@
+import { accessGrantFields } from "@euroclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { skillsModels } from "../src/core/index";
 import { createGovernedSkillsApi, createSkillsStore } from "../src/index";
 
-// Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => entityAdapter(memoryAdapter(), skillsModels);
+// Stores take the schema-aware adapter the assembly provides; tests wrap manually. Skill grants live
+// in the CORE access_grant table, so register it alongside the plugin's own models.
+const db = () =>
+	entityAdapter(memoryAdapter(), {
+		...skillsModels,
+		access_grant: { fields: accessGrantFields },
+	});
 
 describe("@euroclaw/skills (governed)", () => {
 	it("creates a nested skills API over a SkillsStore", async () => {
@@ -246,11 +252,12 @@ describe("@euroclaw/skills (governed)", () => {
 		await expect(api.read({ installationId: installation.id })).rejects.toThrow(
 			/actor cannot read this skill/,
 		);
-		await api.acl.grant({
+		await api.grants.grant({
 			installationId: installation.id,
 			permission: "read",
-			principalId: "user:actor-1",
 			principalType: "actor",
+			principalId: "user:actor-1",
+			grantedBy: "user:admin-1",
 		});
 		await expect(
 			api.read({ installationId: installation.id }),
@@ -285,11 +292,12 @@ describe("@euroclaw/skills (governed)", () => {
 			scopeId: "organization-1",
 			version: pkg.version,
 		});
-		await api.acl.grant({
+		await api.grants.grant({
 			installationId: installation.id,
 			permission: "read",
-			principalId: "user:actor-1",
 			principalType: "actor",
+			principalId: "user:actor-1",
+			grantedBy: "user:admin-1",
 		});
 
 		await expect(api.read({ installationId: installation.id })).rejects.toThrow(
@@ -323,23 +331,15 @@ describe("@euroclaw/skills (governed)", () => {
 			scopeId: "user:actor-1",
 			status: "enabled",
 		});
-		expect(result.grant).toMatchObject({
-			installationId: result.installation.id,
-			permission: "activate",
-			principalId: "user:actor-1",
-			principalType: "actor",
-		});
-		expect(result.readGrant).toMatchObject({
-			installationId: result.installation.id,
-			permission: "read",
-			principalId: "user:actor-1",
-			principalType: "actor",
-		});
+		// createPersonal mints no grants — the owner-rule authorizes the installer, so the grant list
+		// for the installation is empty.
+		expect("grant" in result).toBe(false);
+		expect("readGrant" in result).toBe(false);
 		await expect(
-			api.acl.listForInstallation({
+			api.grants.listForInstallation({
 				installationId: result.installation.id,
 			}),
-		).resolves.toEqual([result.grant, result.readGrant]);
+		).resolves.toEqual([]);
 	});
 
 	it("proposes sharing until approved, then grants", async () => {
@@ -383,10 +383,10 @@ describe("@euroclaw/skills (governed)", () => {
 			status: "proposed",
 		});
 		await expect(
-			api.acl.listForInstallation({
+			api.grants.listForInstallation({
 				installationId: personal.installation.id,
 			}),
-		).resolves.toHaveLength(2);
+		).resolves.toHaveLength(0);
 
 		// An explicit approver short-circuits straight to the grant.
 		await expect(
@@ -399,10 +399,11 @@ describe("@euroclaw/skills (governed)", () => {
 			}),
 		).resolves.toMatchObject({
 			grant: {
-				installationId: personal.installation.id,
-				permission: "activate",
-				principalId: "team-1",
-				principalType: "team",
+				resourceKind: "skill",
+				resourceId: personal.installation.id,
+				principalRef: "team:team-1",
+				permission: "use",
+				grantedBy: "user:admin-1",
 			},
 			status: "granted",
 		});
@@ -585,7 +586,7 @@ describe("@euroclaw/skills (governed)", () => {
 		).resolves.toMatchObject({ enabledBy: "user:admin-1", status: "enabled" });
 	});
 
-	it("checks activation grants before writing ACL records", async () => {
+	it("checks activation grants before writing grant records", async () => {
 		const api = createGovernedSkillsApi(createSkillsStore(db()));
 		const pkg = await api.packages.create({
 			packageId: "team.email-only",
@@ -609,12 +610,14 @@ describe("@euroclaw/skills (governed)", () => {
 				installationId: installation.id,
 				principalId: "user:actor-1",
 				principalType: "public",
+				grantedBy: "user:admin-1",
 			}),
 		).rejects.toThrow(/principalId must be undefined/);
 		await expect(
 			api.grantActivation({
 				installationId: installation.id,
 				principalType: "actor",
+				grantedBy: "user:admin-1",
 			}),
 		).rejects.toThrow(/principalId must be a string/);
 		await expect(
@@ -622,6 +625,7 @@ describe("@euroclaw/skills (governed)", () => {
 				installationId: "install-missing",
 				principalId: "user:actor-1",
 				principalType: "actor",
+				grantedBy: "user:admin-1",
 			}),
 		).rejects.toThrow(/installation not found/);
 		await expect(
@@ -629,12 +633,14 @@ describe("@euroclaw/skills (governed)", () => {
 				installationId: installation.id,
 				principalId: "user:actor-1",
 				principalType: "actor",
+				grantedBy: "user:admin-1",
 			}),
 		).resolves.toMatchObject({
-			installationId: installation.id,
-			permission: "activate",
-			principalId: "user:actor-1",
-			principalType: "actor",
+			resourceKind: "skill",
+			resourceId: installation.id,
+			principalRef: "user:actor-1",
+			permission: "use",
+			grantedBy: "user:admin-1",
 		});
 	});
 

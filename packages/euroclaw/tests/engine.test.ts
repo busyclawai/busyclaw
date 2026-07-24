@@ -7,6 +7,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	owned,
 	textModel,
 } from "./fixtures";
 
@@ -60,7 +61,7 @@ function fakeWorkflowEngine(
 describe("createClaw engine", () => {
 	it("runs through a non-SQL engine factory", async () => {
 		const events: string[] = [];
-		const claw = createClaw({
+		const claw = owned({
 			engine: fakeWorkflowEngine(events),
 			model: textModel("done"),
 		});
@@ -82,7 +83,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
 			model: textModel("done"),
@@ -134,8 +135,10 @@ describe("createClaw engine", () => {
 			"putPolicySlice",
 			"registerOpenApiSpec",
 			"sendMessage",
+			"shareResource",
 			"startRun",
 			"stream",
+			"unshareResource",
 			"updateClaw",
 			"updateToolCallStatus",
 		]);
@@ -146,7 +149,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(db, {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			database: db,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
@@ -188,7 +191,7 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
 			model: textModel("done"),
@@ -204,13 +207,18 @@ describe("createClaw engine", () => {
 
 		expect(result.status).toBe("completed");
 		expect(run.id).toMatch(/^[0-9a-f]{32}$/);
-		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
+		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read AS the run's principal.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+		).resolves.toMatchObject({
 			id: run.id,
 			status: "completed",
 			principal: "user:alice",
 			team: "acme",
 		});
-		await expect(claw.api.listRunEvents({ runId: run.id })).resolves.toEqual(
+		await expect(
+			claw.api.listRunEvents({ runId: run.id }, { principal: "user:alice" }),
+		).resolves.toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ type: "run.started" }),
 				expect.objectContaining({ type: "run.completed" }),
@@ -227,7 +235,7 @@ describe("createClaw engine", () => {
 		const abortObserved = new Promise<void>((resolve) => {
 			resolveAbort = resolve;
 		});
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1", leaseTtlMs: 1 }),
 			model: {

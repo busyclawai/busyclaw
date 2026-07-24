@@ -225,3 +225,56 @@ describe("composeDetectors", () => {
 		expect(out).toMatch(/^email \{\{pii:email:[a-z0-9-]+\}\} now$/);
 	});
 });
+
+describe("idempotence over existing placeholders", () => {
+	const ctx = { scope: "claw", scopeId: "a" };
+	// The hostile shape: a hex-run detector ALWAYS matches inside a token's 32-hex body, so
+	// without span masking a second pass is guaranteed to corrupt the placeholder.
+	const hexDetector: Detector = (text) => {
+		const spans: PiiSpan[] = [];
+		for (const match of text.matchAll(/[0-9a-f]{8,}/g)) {
+			const value = match[0];
+			if (value === undefined) continue;
+			const start = match.index ?? 0;
+			spans.push({
+				start,
+				end: start + value.length,
+				value,
+				kind: "id",
+				source: "regex",
+			});
+		}
+		return spans;
+	};
+
+	it("redact(redact(x)) === redact(x) even when the detector matches token bodies", async () => {
+		const mappings = createMemoryPiiMappingStore();
+		const save = vi.spyOn(mappings, "save");
+		const redactor = createStoredRedactor({
+			detector: hexDetector,
+			mappings,
+			indexKey: "test-key",
+		});
+		const once = await redactor.redactValue("serial deadbeef0123 done", ctx);
+		expect(once).toMatch(/^serial \{\{pii:id:[a-z0-9-]+\}\} done$/);
+		const savesAfterFirst = save.mock.calls.length;
+
+		const twice = await redactor.redactValue(once, ctx);
+		expect(twice).toBe(once);
+		expect(save.mock.calls.length).toBe(savesAfterFirst);
+	});
+
+	it("raw PII beside an existing placeholder is still caught; the placeholder survives", async () => {
+		const redactor = createStoredRedactor({
+			detector: composeDetectors(emailDetector, hexDetector),
+			mappings: createMemoryPiiMappingStore(),
+			indexKey: "test-key",
+		});
+		const once = await redactor.redactValue("serial deadbeef0123", ctx);
+
+		const mixed = await redactor.redactValue(`${once} and a@b.com`, ctx);
+		expect(mixed.startsWith(once)).toBe(true);
+		expect(mixed).toMatch(TOKEN);
+		expect(mixed).not.toContain("a@b.com");
+	});
+});

@@ -1,12 +1,11 @@
 import { SYSTEM_ANONYMOUS } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { createClaw } from "../src/index";
-import { durableRedactor, textModel } from "./fixtures";
+import { durableRedactor, owned, textModel } from "./fixtures";
 
 describe("createClaw conversation binding", () => {
 	it("idempotently binds an external conversation to a durable Claw thread", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },
@@ -62,7 +61,7 @@ describe("createClaw conversation binding", () => {
 
 	it("attributes an unauthenticated conversation to system:anonymous — external id + endpoint stay on the binding", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: textModel("done"),
 			redaction: { redactor },

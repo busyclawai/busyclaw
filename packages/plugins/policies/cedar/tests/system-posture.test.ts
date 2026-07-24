@@ -6,11 +6,11 @@ import {
 	type AuthzActionInput,
 	actionEntitiesFromModel,
 	buildAuthzModel,
+	cedarEngine,
 	SYSTEM_POSTURE,
 } from "@euroclaw/authz";
 import type { PolicyRequest } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { cedarEngine } from "../src/index";
 
 const model = buildAuthzModel([
 	{ id: "readDoc", source: "tool", governance: { access: "read" } },

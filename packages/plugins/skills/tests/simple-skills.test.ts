@@ -1,7 +1,8 @@
 import {
-	PRINCIPAL_CONTEXT_KEY,
+	accessGrantFields,
 	CLAW_ID_CONTEXT_KEY,
 	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	RUN_ID_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	THREAD_ID_CONTEXT_KEY,
@@ -20,8 +21,13 @@ import {
 	skillsPlugin,
 } from "../src/index";
 
-// Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => entityAdapter(memoryAdapter(), skillsModels);
+// Stores take the schema-aware adapter the assembly provides; tests wrap manually. Skill grants live
+// in the CORE access_grant table, so register it alongside the plugin's own models.
+const db = () =>
+	entityAdapter(memoryAdapter(), {
+		...skillsModels,
+		access_grant: { fields: accessGrantFields },
+	});
 
 describe("@euroclaw/skills (simple)", () => {
 	it("rejects unsafe manifest ids", () => {
@@ -137,7 +143,7 @@ describe("@euroclaw/skills (simple)", () => {
 		});
 	});
 
-	it("creates and reads private personal skills through read ACL", async () => {
+	it("creates and reads private personal skills through the owner-rule", async () => {
 		// No organization anywhere: a personal skill is created and read org-free (org is additive).
 		const api = createSimpleSkillsApi(createSkillsStore(db()), {
 			readContext: {
@@ -162,12 +168,9 @@ describe("@euroclaw/skills (simple)", () => {
 			scopeId: "user:actor-1",
 			status: "enabled",
 		});
-		expect(personal.grant).toMatchObject({
-			permission: "activate",
-			principalId: "user:actor-1",
-			principalType: "actor",
-		});
-		expect(personal.readGrant).toMatchObject({ permission: "read" });
+		// No self-grants are minted — the owner reads via the runtime gate's owner-rule.
+		expect("grant" in personal).toBe(false);
+		expect("readGrant" in personal).toBe(false);
 
 		const read = await api.read({
 			clawId: "claw-1",
@@ -453,11 +456,12 @@ describe("@euroclaw/skills (simple)", () => {
 			scopeId: "organization-1",
 			status: "enabled",
 		});
-		await store.acl.grant({
-			installationId: installation.id,
-			permission: "activate",
-			principalId: "organization-1",
-			principalType: "organization",
+		await store.grants.create({
+			resourceKind: "skill",
+			resourceId: installation.id,
+			principalRef: "organization:organization-1",
+			permission: "use",
+			grantedBy: "user:admin-1",
 		});
 		const ec = createGovernance({
 			plugins: [
@@ -513,15 +517,20 @@ describe("@euroclaw/skills (simple)", () => {
 				scopeId: "organization-1",
 				status: "enabled",
 			});
-			await store.acl.grant({
-				installationId: installation.id,
-				permission: "activate",
-				...(principalType === "actor" ? { principalId: "user:actor-1" } : {}),
-				...(principalType === "team" ? { principalId: "team-1" } : {}),
-				...(principalType === "organization"
-					? { principalId: "organization-1" }
-					: {}),
-				principalType,
+			const principalRef =
+				principalType === "actor"
+					? "user:actor-1"
+					: principalType === "team"
+						? "team:team-1"
+						: principalType === "organization"
+							? "organization:organization-1"
+							: "public";
+			await store.grants.create({
+				resourceKind: "skill",
+				resourceId: installation.id,
+				principalRef,
+				permission: "use",
+				grantedBy: "user:admin-1",
 			});
 			const ec = createGovernance({
 				plugins: [
@@ -612,11 +621,12 @@ describe("@euroclaw/skills (simple)", () => {
 			scopeId: "organization-1",
 			status: "enabled",
 		});
-		await store.acl.grant({
-			installationId: installation.id,
-			permission: "activate",
-			principalId: "organization-1",
-			principalType: "organization",
+		await store.grants.create({
+			resourceKind: "skill",
+			resourceId: installation.id,
+			principalRef: "organization:organization-1",
+			permission: "use",
+			grantedBy: "user:admin-1",
 		});
 		await store.activations.create({
 			activatedBy: "user:actor-2",
@@ -712,11 +722,12 @@ describe("@euroclaw/skills (simple)", () => {
 			scopeId: "organization-1",
 			status: "enabled",
 		});
-		await store.acl.grant({
-			installationId: secondInstallation.id,
-			permission: "activate",
-			principalId: "organization-1",
-			principalType: "organization",
+		await store.grants.create({
+			resourceKind: "skill",
+			resourceId: secondInstallation.id,
+			principalRef: "organization:organization-1",
+			permission: "use",
+			grantedBy: "user:admin-1",
 		});
 		const ec = createGovernance({
 			plugins: [

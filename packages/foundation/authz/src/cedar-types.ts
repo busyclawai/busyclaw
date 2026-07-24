@@ -1,11 +1,32 @@
-// The package's contracts — configuration and context types only; the engine impl lives in
-// ./engine, the plugin factory in ./plugin.
+// The Cedar engine's configuration and context types. The engine impl lives in ./cedar-engine, the
+// request mapper + escape-hatch plugin in ./cedar-plugin. (The `cedar()` policy-text SOURCE and its
+// CedarSourceConfig live in @euroclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
-import type { AuthzModel, PolicyRequest, ToolCall } from "@euroclaw/contracts";
+import type {
+	AuthzModel,
+	PolicyEngine,
+	PolicyRequest,
+	PolicyResult,
+	ToolCall,
+} from "@euroclaw/contracts";
 
 /** Cedar's request context: who is acting. Approval state is derived server-side. */
 export type CedarContext = { principal: string };
+
+/**
+ * A Cedar `PolicyEngine` that ALSO accepts per-DECISION entities. The base `authorize(req)` evaluates
+ * against the engine's construction-time entity directory; the product-api PEP additionally passes the
+ * request's own Principal/Resource/Access graph (owner/scope/grant are entity `in` / attribute compares,
+ * not context facts), which the engine merges under the directory for that one decision. A caller with
+ * only a `PolicyRequest` uses the base overload — `CedarEngine` is a strict widening of `PolicyEngine`.
+ */
+export type CedarEngine = PolicyEngine & {
+	authorize: (
+		req: PolicyRequest,
+		entities?: Entities,
+	) => Promise<PolicyResult>;
+};
 
 /** Entities: a static array, or a PROVIDER the engine re-reads per decision (the reload seam). */
 export type CedarEntitiesInput =
@@ -43,20 +64,6 @@ export type CedarMapCallConfig = {
 	/** The egress origin for an action, from its registered binding's server — stamped as the
 	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived. */
 	serverForAction?: (actionId: string) => string | undefined;
-};
-
-/** `cedar({ policies })` — a policy SOURCE. Contributes raw Cedar TEXT that the assembly merges UNDER
- *  the always-on SYSTEM_POSTURE floor into its ONE internal engine. It provides NO engine and NO
- *  schema (both are the assembly's) — connect it only to ADD custom rules beneath the floor. */
-export type CedarSourceConfig = {
-	/** Raw Cedar policy text — one or more `permit`/`forbid` statements laid beneath the floor. */
-	policies: string;
-	/** A human label / stable slice id (audit + bundle identity). Default derived from `id`. */
-	name?: string;
-	/** Plugin id. Default "policy:cedar". */
-	id?: string;
-	/** Merge mode. `enforce` (default) joins the live set; `shadow` is evaluated but never applied. */
-	mode?: "enforce" | "shadow" | "off";
 };
 
 export type CedarPluginConfig = CedarEngineConfig & {

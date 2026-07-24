@@ -1,15 +1,13 @@
 import { asPrincipal, endpoints, validationError } from "@euroclaw/contracts";
 import { type as ark } from "arktype";
 import type { SkillsApiOptions } from "../common/contracts";
+import { SKILL_RESOURCE_KIND } from "../common/grants";
 import { assertSkillManifest } from "../common/manifest";
 import { requireSkillsStore } from "../common/plugin";
 import type {
-	CreateSkillAclInput,
 	CreateSkillInstallationInput,
 	CreateSkillPackageInput,
 	CreateSkillProposalInput,
-	SkillAclPermission,
-	SkillAclPrincipalType,
 	SkillInstallationRecord,
 	SkillInstallationStatus,
 	SkillInstallationStatusPatch,
@@ -21,7 +19,6 @@ import type {
 	SkillsStore,
 } from "../core";
 import {
-	createSkillAclInput,
 	createSkillInstallationInput,
 	createSkillPackageInput,
 	createSkillProposalInput,
@@ -30,6 +27,7 @@ import { simpleSkillsEndpoints } from "../simple/api";
 import type {
 	EnableSkillInstallationInput,
 	GrantActivationInput,
+	GrantSkillInput,
 	InstallSkillInput,
 	RequestShareInput,
 	ShareSkillInput,
@@ -39,15 +37,16 @@ import type {
 } from "./contracts";
 import {
 	assertGrantActivationInput,
+	assertGrantSkillInput,
 	assertRequestShareInput,
 	assertShareSkillInput,
 } from "./grants";
 import {
 	enableSkillInstallationInput,
 	grantActivationInput,
+	grantSkillInput,
 	installSkillInput,
-	listSkillAclForInstallationInput,
-	listSkillAclForPrincipalInput,
+	listSkillGrantsForInstallationInput,
 	listSkillInstallationsInput,
 	listSkillPackagesInput,
 	listSkillProposalsInput,
@@ -63,6 +62,27 @@ import {
 	updateSkillInstallationStatusInput,
 	updateSkillProposalStatusInput,
 } from "./schema";
+
+/** Map the split grantee (principalType + principalId, the shape the skills API and proposals speak)
+ *  to the unified `access_grant.principalRef`: `public`; an `actor` is already a `user:<id>` principal
+ *  (verbatim); `team`/`organization` label their opaque id. This is the ONE write-time mapping — the
+ *  API surface keeps the split grantee, only the persisted row is unified. */
+function principalRefOf(grantee: {
+	principalType: "actor" | "team" | "organization" | "public";
+	principalId?: string;
+}): string {
+	if (grantee.principalType === "public") return "public";
+	if (grantee.principalId === undefined) {
+		// grantPrincipal enforces a principalId for every non-public type — unreachable past the schema.
+		throw validationError(
+			"grant input invalid",
+			`principalId is required for a ${grantee.principalType} grant`,
+		);
+	}
+	return grantee.principalType === "actor"
+		? grantee.principalId
+		: `${grantee.principalType}:${grantee.principalId}`;
+}
 
 function assertInstallSkillInput(input: unknown): InstallSkillInput {
 	const valid = installSkillInput(input);
@@ -189,7 +209,8 @@ async function createShareProposal(input: {
 }
 
 async function grantShare(input: {
-	share: ShareSkillInput | RequestShareInput;
+	share: ShareSkillInput;
+	approvedBy: string;
 	store: SkillsStore;
 }) {
 	const installation = await requireInstallation({
@@ -197,11 +218,14 @@ async function grantShare(input: {
 		label: "share skill input invalid",
 		store: input.store,
 	});
-	return input.store.acl.grant({
-		installationId: installation.id,
-		permission: "activate",
-		principalId: input.share.principalId,
-		principalType: input.share.principalType,
+	// The approved share becomes an access_grant at the `use` level (activation), attributed to the
+	// approver. The grantee's split principal maps to the unified principalRef at this one write site.
+	return input.store.grants.create({
+		resourceKind: SKILL_RESOURCE_KIND,
+		resourceId: installation.id,
+		principalRef: principalRefOf(input.share),
+		permission: "use",
+		grantedBy: asPrincipal(input.approvedBy),
 	});
 }
 
@@ -301,16 +325,17 @@ export function createGovernedSkillsApi(
 			input: grantActivationInput,
 			handler: async (input: GrantActivationInput) => {
 				const valid = assertGrantActivationInput(input);
-				await requireInstallation({
+				const installation = await requireInstallation({
 					installationId: valid.installationId,
 					label: "grant activation input invalid",
 					store: resolvedStore(),
 				});
-				return resolvedStore().acl.grant({
-					installationId: valid.installationId,
-					permission: "activate",
-					principalId: valid.principalId,
-					principalType: valid.principalType,
+				return resolvedStore().grants.create({
+					resourceKind: SKILL_RESOURCE_KIND,
+					resourceId: installation.id,
+					principalRef: principalRefOf(valid),
+					permission: "use",
+					grantedBy: asPrincipal(valid.grantedBy),
 				});
 			},
 		},
@@ -342,6 +367,7 @@ export function createGovernedSkillsApi(
 				return assertShareSkillResult({
 					grant: await grantShare({
 						share: valid,
+						approvedBy: valid.approvedBy,
 						store: resolvedStore(),
 					}),
 					status: "granted",
@@ -410,28 +436,35 @@ export function createGovernedSkillsApi(
 				}) => resolvedStore().installations.updateStatus(id, patch),
 			},
 		},
-		acl: {
+		// The raw generic-grant surface (the migrated `acl` group): grant writes an `access_grant` row
+		// for the installation; listForInstallation projects its grants to the `{ principalRef, level }`
+		// shape. Rows are immutable — no id-get / by-principal listing (both dropped with skill_acl).
+		grants: {
 			grant: {
-				input: createSkillAclInput,
-				handler: (input: CreateSkillAclInput) =>
-					resolvedStore().acl.grant(input),
-			},
-			get: {
-				input: skillRowLookupInput,
-				handler: ({ id }: { id: string }) => resolvedStore().acl.get(id),
+				input: grantSkillInput,
+				handler: async (input: GrantSkillInput) => {
+					const valid = assertGrantSkillInput(input);
+					const installation = await requireInstallation({
+						installationId: valid.installationId,
+						label: "grant skill input invalid",
+						store: resolvedStore(),
+					});
+					return resolvedStore().grants.create({
+						resourceKind: SKILL_RESOURCE_KIND,
+						resourceId: installation.id,
+						principalRef: principalRefOf(valid),
+						permission: valid.permission,
+						grantedBy: asPrincipal(valid.grantedBy),
+					});
+				},
 			},
 			listForInstallation: {
-				input: listSkillAclForInstallationInput,
+				input: listSkillGrantsForInstallationInput,
 				handler: ({ installationId }: { installationId: string }) =>
-					resolvedStore().acl.listForInstallation(installationId),
-			},
-			listForPrincipal: {
-				input: listSkillAclForPrincipalInput,
-				handler: (input: {
-					permission?: SkillAclPermission;
-					principalId?: string;
-					principalType: SkillAclPrincipalType;
-				}) => resolvedStore().acl.listForPrincipal(input),
+					resolvedStore().grants.listForResource(
+						SKILL_RESOURCE_KIND,
+						installationId,
+					),
 			},
 		},
 		activations: {

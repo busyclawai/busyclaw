@@ -1,12 +1,12 @@
 import { createMemoryAudit } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { approvalToolModel, emailTool, textModel } from "./fixtures";
+import { approvalToolModel, emailTool, owned, textModel } from "./fixtures";
 
 describe("createClaw boundary gates", () => {
 	it("denies a model before provider execution", async () => {
 		let providerRan = false;
-		const claw = createClaw({
+		const claw = owned({
 			model: {
 				...textModel("done", { modelId: "blocked-model" }),
 				doGenerate: async () => {
@@ -39,7 +39,7 @@ describe("createClaw boundary gates", () => {
 	it("denies a tool before tool execution", async () => {
 		let toolRuns = 0;
 		const audit = createMemoryAudit();
-		const claw = createClaw({
+		const claw = owned({
 			audit,
 			model: approvalToolModel(),
 			plugins: [

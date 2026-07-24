@@ -33,6 +33,12 @@ const nonEmptyString = type("string")
 // plain TS). Personal-only, so there is no scope/scopeId param: the principal is the whole boundary.
 // `principalSchema` (the contracts `principal` narrow) rejects a bare / malformed value, so a row is
 // never keyed to an untagged / unauthorizable owner — the host constructs it via `userPrincipal(id)`.
+//
+// REALIGNED to the app-authz caller (docs/plans/app-authz.md): the identity is now the PEP's out-of-band
+// caller argument (`claw.api.secrets.set(input, { principal })`) — the ONE identity path for a governed
+// in-process call. The in-INPUT `principal` stays OPTIONAL only as the HTTP fallback: the adapter's
+// endpoint route hands the raw handler no caller yet (the adapter-ingress frontier), so an over-the-wire
+// call still carries its principal in the body until that lands. The handler prefers the caller.
 export const setSecretInput = type({
 	name: nonEmptyString.configure({
 		euroclaw: {
@@ -44,9 +50,9 @@ export const setSecretInput = type({
 			doc: "Write-only material: the store seals it (AES-256-GCM) before any adapter call, so plaintext is never at rest. It is never returned by set or list and there is no get-plaintext method — it exits solely through the store provider (`secrets.get`).",
 		},
 	}),
-	principal: principalSchema.configure({
+	"principal?": principalSchema.configure({
 		euroclaw: {
-			doc: "The host-passed Principal that IS the whole v0 access boundary: the handler keys strictly to `(personal, principal)` and stamps `createdBy = principal`, so a caller can only ever touch their own rows (structural scoping stands in for the not-yet-built app-authz PEP).",
+			doc: "The owner Principal — the HTTP-fallback identity (the app-authz caller argument is preferred in-process). The handler keys strictly to `(personal, principal)` and stamps `createdBy = principal`, so a caller can only ever touch their own rows.",
 		},
 	}),
 });
@@ -56,16 +62,16 @@ export const deleteSecretInput = type({
 			doc: "Delete is idempotent by construction: the store no-ops when `(personal, principal, name)` matches nothing, so deleting an absent or foreign name silently succeeds — only infrastructure failure throws.",
 		},
 	}),
-	principal: principalSchema.configure({
+	"principal?": principalSchema.configure({
 		euroclaw: {
-			doc: "Must match the scopeId the row was written under in set; scopes the delete to the caller's own `(personal, principal)` boundary.",
+			doc: "The owner Principal (HTTP-fallback; caller argument preferred in-process); scopes the delete to that caller's own `(personal, principal)` boundary.",
 		},
 	}),
 });
 export const listSecretInput = type({
-	principal: principalSchema.configure({
+	"principal?": principalSchema.configure({
 		euroclaw: {
-			doc: "Reads the whole `(personal, principal)` boundary; rows come back with the SEALED value and are stripped to metadata views (name/kind/createdBy/timestamps) — the value is never opened on the list path.",
+			doc: "The owner Principal (HTTP-fallback; caller argument preferred in-process). Reads the whole `(personal, principal)` boundary; rows come back SEALED and stripped to metadata views — the value is never opened on the list path.",
 		},
 	}),
 });
@@ -135,12 +141,36 @@ export type SecretsPluginApi = {
 	readonly secrets: SecretsManagementApi;
 };
 
+/** The out-of-band app-authz caller the PEP threads as the 2nd argument. */
+type SecretsCaller = { principal?: string };
+
+/**
+ * The governed owner of the row: the app-authz caller principal (the ONE identity path in-process),
+ * falling back to the in-input principal over HTTP until the adapter resolves identity (the
+ * adapter-ingress frontier). Fails loud when neither is present — a secret row must have an owner. The
+ * PEP's actor floor already guarantees a caller for a governed in-process call; this backstops the raw
+ * HTTP handler, which the PEP does not yet reach.
+ */
+function ownerFrom(
+	caller: SecretsCaller | undefined,
+	inputPrincipal: string | undefined,
+): string {
+	const raw = caller?.principal ?? inputPrincipal;
+	if (raw === undefined) {
+		throw validationError(
+			"secret input invalid",
+			"no owner principal — pass the app-authz caller `{ principal }` (the 2nd argument)",
+		);
+	}
+	return raw;
+}
+
 /**
  * Build the management api over the store's lazy guard — a DECLARED `endpoints()` namespace, so the
  * adapter can route it (`POST /secrets/set`, `POST /secrets/delete`, `GET /secrets/list`) while the
- * in-process methods stay the plain handlers below. Every method resolves `requireStore()` at
- * call time (fails loud with no database, the provider's posture) and keys strictly to
- * `(personal, principal)` — the structural principal-scoping that IS v0's access control.
+ * in-process methods stay the plain handlers below. Every method resolves `requireStore()` at call time
+ * (fails loud with no database, the provider's posture) and keys strictly to `(personal, owner)` — the
+ * structural principal-scoping. The owner is the app-authz caller (2nd arg), input principal fallback.
  */
 export function createSecretsManagementApi(
 	requireStore: () => StoredSecretsStore,
@@ -148,17 +178,15 @@ export function createSecretsManagementApi(
 	return endpoints({
 		set: {
 			input: setSecretInput,
-			handler: async (input: SetSecretInput): Promise<StoredSecretView> => {
+			handler: async (
+				input: SetSecretInput,
+				caller?: SecretsCaller,
+			): Promise<StoredSecretView> => {
 				const valid = assertSetSecretInput(input);
-				// Structural scoping: personal:principal, always. The HOST passes the already-tagged
-				// `Principal` (it constructs `userPrincipal(userId)` at the trusted boundary); the input schema
-				// re-validates its principal form, and `asPrincipal` re-establishes the brand the `createdBy`
-				// stamp column carries. Both `createdBy` and the personal boundary key are that principal — the
-				// caller never names a target — and because sessionIdentity stamps the same principal onto
-				// ctx.principal, the written `scopeId` matches the provider's read (a boundary ref, so the
-				// principal widens to its plain string). `kind` is the store's to write (value-kind rows), so it
-				// is not passed here.
-				const owner = asPrincipal(valid.principal);
+				// Structural scoping: personal:owner, always. Both `createdBy` and the personal boundary
+				// key are the caller — the caller never names a target — and `asPrincipal` re-establishes
+				// the brand the `createdBy` stamp column carries. `kind` is the store's to write.
+				const owner = asPrincipal(ownerFrom(caller, valid.principal));
 				const record = await requireStore().set({
 					name: valid.name,
 					value: valid.value,
@@ -171,18 +199,26 @@ export function createSecretsManagementApi(
 		},
 		delete: {
 			input: deleteSecretInput,
-			handler: async (input: DeleteSecretInput): Promise<void> => {
+			handler: async (
+				input: DeleteSecretInput,
+				caller?: SecretsCaller,
+			): Promise<void> => {
 				const valid = assertDeleteSecretInput(input);
-				// Keys on the principal boundary, so it must match `set`'s scopeId.
-				await requireStore().delete("personal", valid.principal, valid.name);
+				const owner = ownerFrom(caller, valid.principal);
+				// Keys on the owner boundary, so it must match `set`'s scopeId.
+				await requireStore().delete("personal", owner, valid.name);
 			},
 		},
 		list: {
 			input: listSecretInput,
-			handler: async (input: ListSecretInput): Promise<StoredSecretView[]> => {
+			handler: async (
+				input: ListSecretInput,
+				caller?: SecretsCaller,
+			): Promise<StoredSecretView[]> => {
 				const valid = assertListSecretInput(input);
-				// Reads the principal boundary the rows were written under.
-				const records = await requireStore().list("personal", valid.principal);
+				const owner = ownerFrom(caller, valid.principal);
+				// Reads the owner boundary the rows were written under.
+				const records = await requireStore().list("personal", owner);
 				return records.map(toView);
 			},
 		},

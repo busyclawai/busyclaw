@@ -106,6 +106,44 @@ export type PolicySourceSlice = {
 	mode: "enforce" | "shadow" | "off";
 };
 
+/**
+ * The base access facts the product-api PEP reads off ANY shareable resource — the opaque
+ * `{ createdBy, scope, scopeId }` triple (docs/plans/app-authz.md §6, the ONE resource shape). All
+ * optional; a loader returns `null` for an absent/unresolvable row and the PEP FAILS CLOSED. Kind-blind:
+ * a claw, a thread, a skill installation all present this same shape and the generic owner ∪ scope ∪
+ * grant decision reads it, never the concrete kind.
+ */
+export type ShareableResource = {
+	createdBy?: string;
+	scope?: string;
+	scopeId?: string;
+};
+
+/**
+ * The store deps a shareable loader binds against at ASSEMBLY — the resolved storage adapter, from which
+ * a plugin builds its own store the same way `configure` does. `adapter` is optional (a no-database claw
+ * has no rows to load — the loader is then never invoked). Read STATICALLY off the raw plugin before any
+ * `configure` runs, so a loader is store-bound the way `policies` / api namespaces are collected.
+ */
+export type ShareableLoaderContext = {
+	readonly adapter?: Adapter;
+};
+
+/**
+ * A shareable resource KIND a plugin registers into the PEP's loader registry (docs/plans/app-authz.md
+ * §6 — "the only per-kind bit"). `kind` is the OPAQUE label this resource's `access_grant` rows carry;
+ * `load` is a store-bound FACTORY (`deps → (id) => base row | null`) so the assembly merges core + plugin
+ * loaders into ONE map. Its grants live in the SAME generic `access_grant` table — so registering a kind
+ * makes it governable with ZERO new authz code, only this data-fetcher. NOT authz logic: the ACL, the
+ * policies, and the decision stay fully generic.
+ */
+export type ShareableKind = {
+	kind: string;
+	load: (
+		context: ShareableLoaderContext,
+	) => (id: string) => Promise<ShareableResource | null>;
+};
+
 // Core contributes the dependencies it OWNS (claws, effects, events, secrets) plus the resolved storage
 // adapter. A plugin that owns its own tables (e.g. channels, skills) reads `adapter` and builds its OWN
 // store from it — the assembly passes it in, so core stays agnostic about what plugins exist and never
@@ -123,6 +161,26 @@ export type EuroclawPluginConfigureContext = {
 	/** The resolved storage adapter (schema-aware, wrapped once by the assembly). A plugin that owns
 	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
 	readonly adapter?: Adapter;
+	/** Tokenize plugin-held data — the SAFE direction (a redacted value may travel anywhere; only
+	 *  rehydration is fenced). Without `clawId` the value redacts into this plugin's own
+	 *  ("plugin", id) container; with `clawId` into that claw's ("claw", clawId) container — the
+	 *  SAME container transcript writes use, over the same resolved redactor, so the same value
+	 *  wears the same token and the claw's birth posture decides (a raw-posture claw passes
+	 *  through; never a second posture path). `subjectIds` joins the mappings to the erasure
+	 *  index, so per-subject erasure reaches plugin-held rows. Unarmed deployments (no
+	 *  detector/custom redactor, or posture "raw") receive the identity function — the method is
+	 *  always present, so plugin code runs unchanged in both modes. */
+	readonly redact?: (
+		value: unknown,
+		opts?: { clawId?: string; subjectIds?: readonly string[] },
+	) => Promise<unknown>;
+	/** Resolve tokens this plugin itself minted — ONLY within its own ("plugin", id) container.
+	 *  Deliberately no `clawId` option: a claw/transcript token is INERT here by containment
+	 *  (resolution requires the minting container to match), so a plugin can never lift PII out of
+	 *  a conversation it merely observes. Every call against an armed redactor is audited
+	 *  (boundary "privacy", "pii.reidentification") when the deployment configures audit.
+	 *  Unarmed → identity. */
+	readonly rehydrate?: (value: unknown) => Promise<unknown>;
 	readonly [key: string]: unknown;
 };
 
@@ -195,6 +253,13 @@ export type EuroclawPlugin<
 	 *  plugin object (like `secrets.providers`/`eventSinks`), so the engine compiles before any
 	 *  `configure` runs. `cedar({ policies })` is the canonical source; any plugin may contribute. */
 	policies?: readonly PolicySourceSlice[];
+	/** Shareable resource kinds this plugin owns — each a `{ kind, load }` the assembly merges into the
+	 *  ONE loader registry the product-api PEP consults (docs/plans/app-authz.md §6). Read STATICALLY off
+	 *  the raw plugin object (like `policies`/`secrets.providers`), so the registry binds before
+	 *  `configure` runs. A resource of a registered kind then presents the generic `{ createdBy, scope,
+	 *  scopeId }` shape to the decision and its `access_grant` rows are enforced — with ZERO new policy.
+	 *  Skills is the first consumer (its `skill` installation kind). */
+	shareable?: readonly ShareableKind[];
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];
 	/** Boundary before-gates this plugin installs (decide across tool/model boundaries). */

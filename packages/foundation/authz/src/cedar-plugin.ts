@@ -1,28 +1,23 @@
-// The Cedar governance surfaces:
-//   - `cedar({ policies })`      — a policy SOURCE: it contributes raw Cedar TEXT that the ASSEMBLY
-//     merges UNDER the always-on SYSTEM_POSTURE floor into its ONE internal engine. It provides no
-//     engine and no schema; connect it only to add custom rules beneath the floor.
+// The Cedar EVAL surfaces — the runtime that turns the neutral model + policy TEXT into decisions.
+// Consolidated into @euroclaw/authz beside cedar.ts (the schema renderer these consume) so this
+// package is THE Cedar decision engine:
 //   - `cedarMapCall(config)`     — the default request mapper (tool call → PARC request): stamps the
 //     spoof-proof facts, projects `context.args` to the model's declared subset, and stamps the
 //     model-derived `context.server`. Used BOTH by the assembly's floor engine and `cedarPolicyPlugin`.
-//   - `cedarPolicyPlugin(config)`— the engine-wrapper ESCAPE HATCH (the shape `cedar()` used to be):
-//     `cedarEngine` + `cedarMapCall` behind `createPolicyPlugin`, with NO floor. For a host that wants
-//     Cedar as a standalone gate outside the assembly, and for the policy-engine test surface.
+//   - `cedarFloorEngine(config)` — raw policy TEXT + the action MODEL → a Cedar PolicyEngine, the
+//     model's action hierarchy merged in as entities. What the assembly compiles its internal floor
+//     bundle (SYSTEM_POSTURE + plugin `policies` sources) into.
+//   - `cedarPolicyPlugin(config)`— the engine-wrapper ESCAPE HATCH: `cedarEngine` + `cedarMapCall`
+//     behind `createPolicyPlugin`, with NO floor. For a host that wants Cedar as a standalone gate
+//     outside the assembly, and for the policy-engine test surface.
 //
-// The AUTHORIZATION MODEL drives the mapper/engine when provided: it renders the Cedar schema, merges
-// the action hierarchy into the entities (so `action in Action::"writes"` works at evaluation time),
-// and filters `context.args` to the PROJECTED subset (the same walker that rendered the schema, so
-// request validation and reality never disagree).
+// The `cedar()` policy-TEXT SOURCE (contributes slices under the floor, no eval) lives in
+// @euroclaw/policy-cedar. The AUTHORIZATION MODEL drives the mapper/engine when provided: it renders
+// the Cedar schema, merges the action hierarchy into the entities (so `action in Action::"writes"`
+// works at evaluation time), and filters `context.args` to the PROJECTED subset (the same walker that
+// rendered the schema, so request validation and reality never disagree).
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
-import {
-	type ArgsProjection,
-	actionEntitiesFromModel,
-	createPolicyPlugin,
-	modelToCedarSchema,
-	type PolicyPlugin,
-	projectArgs,
-} from "@euroclaw/authz";
 import type {
 	AuthzModel,
 	PolicyEngine,
@@ -35,14 +30,21 @@ import {
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
+import {
+	actionEntitiesFromModel,
+	apiActionEntities,
+	modelToCedarSchema,
+} from "./cedar";
+import { cedarEngine } from "./cedar-engine";
 import type {
 	CedarContext,
+	CedarEngine,
 	CedarEntitiesInput,
 	CedarMapCallConfig,
 	CedarPluginConfig,
-	CedarSourceConfig,
-} from "./contracts";
-import { cedarEngine } from "./engine";
+} from "./cedar-types";
+import { createPolicyPlugin, type PolicyPlugin } from "./plugin";
+import { type ArgsProjection, projectArgs } from "./projection";
 
 type ModelIndexEntry = {
 	resourceType: string;
@@ -143,6 +145,28 @@ export function cedarFloorEngine(config: {
 }
 
 /**
+ * Build the product-api Cedar PolicyEngine (`decideApiCall`'s engine) from the compiled api policy
+ * text + the governed method names: the `ClawApi::Action` hierarchy becomes the engine's entities so
+ * `action in ClawApi::Action::"api"`/`"creates"` resolves at evaluation time. The api-side sibling of
+ * `cedarFloorEngine` — the tool floor's SYSTEM_POSTURE is deliberately NOT here: reads/writes/confirm
+ * is an AGENT-autonomy floor, meaningless for product-api calls, whose sealed floor is the generic
+ * `API_ACCESS_BASELINE`. So this engine only ever sees `ClawApi::` policies + entities.
+ */
+export function cedarApiEngine(config: {
+	policies: string;
+	methods: readonly string[];
+	createMethods: readonly string[];
+}): CedarEngine {
+	return cedarEngine({
+		policies: config.policies,
+		entities: apiActionEntities({
+			methods: config.methods,
+			createMethods: config.createMethods,
+		}) as Entities,
+	});
+}
+
+/**
  * The engine-wrapper ESCAPE HATCH (the shape `cedar()` used to be): `cedarEngine` + `cedarMapCall`
  * behind `createPolicyPlugin`, with NO SYSTEM_POSTURE floor. `createGovernance({ plugins: [
  * cedarPolicyPlugin({ policies }) ] })` makes every matched tool call answer to Cedar directly
@@ -211,30 +235,4 @@ export function cedarPolicyPlugin(
 		id: config.id ?? "policy:cedar",
 		sealed: config.sealed,
 	});
-}
-
-/**
- * `cedar({ policies })` — a policy SOURCE. It contributes raw Cedar TEXT into the assembly's bundle,
- * merged UNDER the sealed SYSTEM_POSTURE floor (`forbid` > `permit`) by the assembly's ONE internal
- * engine. It provides NO engine and NO schema: `cedar()` connected or not, the engine is the
- * assembly's. Connect it only to ADD custom rules beneath the floor — a `forbid` narrows, a `permit`
- * widens, and neither can remove the floor's un-removable forbids.
- *
- * The `$InferContext` still surfaces (and requires) a `principal` on `run(prompt, ctx)`: the source's
- * policies reference the principal, and the internal engine's mapper reads it.
- */
-export function cedar(config: CedarSourceConfig): PolicyPlugin<CedarContext> {
-	const id = config.id ?? "policy:cedar";
-	return {
-		id,
-		// Phantom (types only): the request context these policies read, folded onto `run`'s ctx.
-		$InferContext: {} as CedarContext,
-		policies: [
-			{
-				name: config.name ?? id,
-				cedar: config.policies,
-				mode: config.mode ?? "enforce",
-			},
-		],
-	};
 }

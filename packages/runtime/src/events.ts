@@ -1,9 +1,11 @@
 import {
+	type Event,
 	type EventSink,
 	errorMessage,
 	jsonObject,
 	jsonValue,
 	RESERVED_CONTEXT_PREFIX,
+	type Redactor,
 	validationError,
 } from "@euroclaw/contracts";
 import { type as ark } from "arktype";
@@ -280,18 +282,73 @@ async function fanoutRuntimeEvent(
 }
 
 /**
+ * Door redaction: under a redacted posture, a door event's plugin-authored payload is tokenized
+ * BEFORE fan-out, so no sink ever holds raw PII. The assembly passes this only when redaction is
+ * ARMED (a detector or custom redactor exists) — the no-redaction recipe and posture "raw" hand
+ * the door nothing, and that path stays byte-identical (the payload is never even walked).
+ */
+export type PluginEventRedaction = {
+	/** The deployment's ONE resolved redactor, per-claw routing included — a raw-posture claw's
+	 *  door events pass through by the same decision its transcript writes do. */
+	redactor: Redactor;
+	/** The emitting plugin's id: a claw-less event (boot/cron/webhook — no `recording`) redacts
+	 *  into the ("plugin", <id>) container, mirroring the ("claw", <clawId>) transcript container. */
+	plugin: string;
+};
+
+// The runtime-owned envelope; every other key on a door event is plugin-authored payload.
+const DOOR_ENVELOPE_KEYS = new Set([
+	"createdAt",
+	"id",
+	"recording",
+	"runId",
+	"type",
+]);
+
+async function redactDoorEvent(
+	event: Event,
+	redaction: PluginEventRedaction,
+): Promise<Event> {
+	const envelope: Record<string, unknown> = {};
+	const payload: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(event)) {
+		if (DOOR_ENVELOPE_KEYS.has(key)) envelope[key] = value;
+		else payload[key] = value;
+	}
+	// A well-formed recording attributes the event to a claw → its container, shared with the
+	// transcript. Anything else is claw-less and fails CLOSED into the per-plugin container
+	// (under per-claw routing, a non-claw scope resolves to the configured default posture).
+	const recording = runtimeRecordingContext(
+		(event as { recording?: unknown }).recording,
+	);
+	const ctx =
+		recording instanceof ark.errors
+			? { scope: "plugin", scopeId: redaction.plugin }
+			: { scope: "claw", scopeId: recording.clawId };
+	const redacted = await redaction.redactor.redactValue(payload, ctx);
+	// Envelope last: it stays verbatim no matter what a custom redactor returned.
+	return { ...redacted, ...envelope } as Event;
+}
+
+/**
  * Adapt the runtime's operational event fan-out to the neutral `EventSink` port handed to plugins
  * via `EuroclawPluginConfigureContext.events`. Plugin-emitted events ride the SAME pipeline as
  * runtime events (recording first, then isolated observers); each sink reads `type` and ignores
  * events it doesn't recognise (e.g. the durable sink early-returns), so a plugin event simply
- * lands wherever a sink knows what to do with it. The cast is the documented seam: plugin events
- * are base `event`s today and become part of the `RuntimeEvent` union as concrete schemas
- * (skill.*, channel.*) are added in later tasks.
+ * lands wherever a sink knows what to do with it. With `redaction` present the payload is
+ * tokenized before fan-out (see {@link PluginEventRedaction}); the runtime's own kinds never pass
+ * through here — they are redacted at their source boundaries (`emitRuntimeEvent` is untouched).
+ * The cast is the documented seam: plugin events are base `event`s today and become part of the
+ * `RuntimeEvent` union as concrete schemas (skill.*, channel.*) are added in later tasks.
  */
-export function pluginEventSink(fanout: RuntimeEventFanout): EventSink {
+export function pluginEventSink(
+	fanout: RuntimeEventFanout,
+	redaction?: PluginEventRedaction,
+): EventSink {
 	return {
 		async emit(event) {
-			await fanoutRuntimeEvent(fanout, event as RuntimeEvent);
+			const out = redaction ? await redactDoorEvent(event, redaction) : event;
+			await fanoutRuntimeEvent(fanout, out as RuntimeEvent);
 		},
 	};
 }

@@ -428,9 +428,12 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		// list is a GET by the name rule; input rides the ?input= JSON convention.
 		const list = await handler(
-			new Request(encodedInputUrl("/secrets/list", { principal: "user:alice" }), {
-				method: "GET",
-			}),
+			new Request(
+				encodedInputUrl("/secrets/list", { principal: "user:alice" }),
+				{
+					method: "GET",
+				},
+			),
 		);
 		expect(list.status).toBe(200);
 		await expect(list.json()).resolves.toMatchObject({
@@ -446,9 +449,12 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		);
 		expect(remove.status).toBe(200);
 		const afterDelete = await handler(
-			new Request(encodedInputUrl("/secrets/list", { principal: "user:alice" }), {
-				method: "GET",
-			}),
+			new Request(
+				encodedInputUrl("/secrets/list", { principal: "user:alice" }),
+				{
+					method: "GET",
+				},
+			),
 		);
 		await expect(afterDelete.json()).resolves.toMatchObject({
 			data: [{ name: "SEEDED" }],
@@ -561,12 +567,19 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			model: model as never,
 			redaction: { posture: "raw" },
 			plugins: [secrets([], { store: { key: SECRET_STORE_TEST_KEY } })],
+			// A TRANSPORT test (HTTP routing), not an authz test — the adapter does not yet resolve a
+			// caller principal (adapter-ingress frontier), so it runs host-authorized here.
+			appAuthz: { unsafeOpen: true },
 		});
 		const handler = toRequestHandler(claw as unknown as Claw);
 
 		const set = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				body: JSON.stringify({ name: "E2E", value: "v", principal: "user:alice" }),
+				body: JSON.stringify({
+					name: "E2E",
+					value: "v",
+					principal: "user:alice",
+				}),
 				method: "POST",
 			}),
 		);

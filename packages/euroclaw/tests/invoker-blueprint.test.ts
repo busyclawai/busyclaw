@@ -6,8 +6,8 @@
 // execute; the model cannot redirect the origin; a missing credential fails loud; a private target
 // is blocked by the floor.
 
+import { cedarPolicyPlugin } from "@euroclaw/authz";
 import type { JsonObject, Secrets } from "@euroclaw/contracts";
-import { cedarPolicyPlugin } from "@euroclaw/policy-cedar";
 import { buildSecrets } from "@euroclaw/secrets";
 import {
 	createRegisteredToolProvider,

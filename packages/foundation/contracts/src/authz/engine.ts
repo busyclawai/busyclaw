@@ -1,5 +1,5 @@
 // The policy-engine PORT. Engines are pluggable evaluators over the one PARC vocabulary:
-// @euroclaw/policy-cedar is the reference engine (and the sealed floor — only it has
+// @euroclaw/authz is the reference engine (and the sealed floor — only it has
 // arg-conditions + the needs-approval probe); better-auth/SAP/remote engines layer beside it as
 // additional deny-capable gates. Ports are behaviour, not data — plain types, no schema.
 

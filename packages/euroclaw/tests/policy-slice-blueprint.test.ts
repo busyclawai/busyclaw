@@ -9,6 +9,7 @@ import {
 	type AuthzActionInput,
 	actionEntitiesFromModel,
 	authzBundleKey,
+	cedarEngine,
 	createOrgPolicyRouter,
 	createPolicyPlugin,
 	createShadowPolicyEngine,
@@ -22,7 +23,6 @@ import {
 	RUN_MODE_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
-import { cedarEngine } from "@euroclaw/policy-cedar";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";
 import { describe, expect, it } from "vitest";

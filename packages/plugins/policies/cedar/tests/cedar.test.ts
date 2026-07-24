@@ -1,8 +1,11 @@
-import { buildAuthzModel } from "@euroclaw/authz";
+import {
+	buildAuthzModel,
+	cedarEngine,
+	cedarPolicyPlugin,
+} from "@euroclaw/authz";
 import type { ToolCall } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
-import { cedarEngine, cedarPolicyPlugin } from "../src/index";
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
 

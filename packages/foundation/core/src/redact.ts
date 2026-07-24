@@ -294,6 +294,26 @@ function cleanSpans(spans: PiiSpan[], textLength: number): PiiSpan[] {
 	return out;
 }
 
+// Existing placeholders are opaque to detection: a detector whose pattern can match inside a
+// token's body (a digit/hex-run phone-card-id detector can) would corrupt it on a second pass.
+// Dropping every detected span that touches one makes redact(redact(x)) === redact(x) a property
+// of the redactor, not a promise about detector alphabets.
+function withoutPlaceholderOverlaps(
+	spans: PiiSpan[],
+	text: string,
+): PiiSpan[] {
+	const taken: { start: number; end: number }[] = [];
+	for (const match of text.matchAll(PLACEHOLDER)) {
+		const start = match.index ?? 0;
+		taken.push({ start, end: start + match[0].length });
+	}
+	if (taken.length === 0) return spans;
+	return spans.filter(
+		(span) =>
+			!taken.some((range) => span.start < range.end && span.end > range.start),
+	);
+}
+
 function validateRedactionContext(
 	ctx: RedactionContext | undefined,
 ): RedactionContext | undefined {
@@ -366,7 +386,10 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 				detected.summary,
 			);
 		}
-		const spans = cleanSpans(detected, text.length);
+		const spans = cleanSpans(
+			withoutPlaceholderOverlaps(detected, text),
+			text.length,
+		);
 		if (spans.length === 0) return text;
 		let out = "";
 		let last = 0;

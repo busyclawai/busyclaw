@@ -8,7 +8,7 @@ import { cedar } from "@euroclaw/policy-cedar";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
-import { durableRedactor, type V2Model } from "./fixtures";
+import { durableRedactor, owned, type V2Model } from "./fixtures";
 
 /** A mock model that calls `toolName` once (step 0), then answers "done" (step 1). */
 function toolCallModel(toolName: string): V2Model {
@@ -79,7 +79,7 @@ describe("createClaw authz floor (slice 0)", () => {
 		// A read: the floor permits reads unconditionally → the tool runs, the run completes.
 		let readRan = false;
 		const { db: readDb, redactor: readRedactor } = durableRedactor();
-		const readClaw = createClaw({
+		const readClaw = owned({
 			database: readDb,
 			redaction: { redactor: readRedactor },
 			model: toolCallModel("readDoc"),
@@ -93,7 +93,7 @@ describe("createClaw authz floor (slice 0)", () => {
 		// but confirmation WOULD unblock it → needs-approval, and the tool never ran.
 		let writeRan = false;
 		const { db: writeDb, redactor: writeRedactor } = durableRedactor();
-		const writeClaw = createClaw({
+		const writeClaw = owned({
 			database: writeDb,
 			redaction: { redactor: writeRedactor },
 			model: toolCallModel("writeDoc"),
@@ -109,7 +109,7 @@ describe("createClaw authz floor (slice 0)", () => {
 		// (The run completes: the model sees the tool denial and answers.)
 		let readRan = false;
 		const { db: readDb, redactor: readRedactor } = durableRedactor();
-		const forbidClaw = createClaw({
+		const forbidClaw = owned({
 			database: readDb,
 			redaction: { redactor: readRedactor },
 			model: toolCallModel("readDoc"),
@@ -128,7 +128,7 @@ describe("createClaw authz floor (slice 0)", () => {
 		// autonomous write → still needs-approval, the tool never ran.
 		let writeRan = false;
 		const { db: writeDb, redactor: writeRedactor } = durableRedactor();
-		const permitClaw = createClaw({
+		const permitClaw = owned({
 			database: writeDb,
 			redaction: { redactor: writeRedactor },
 			model: toolCallModel("writeDoc"),

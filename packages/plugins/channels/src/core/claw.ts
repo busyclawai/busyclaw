@@ -1,25 +1,34 @@
 import {
 	type BindConversationInput,
 	configurationError,
+	type Principal,
 } from "@euroclaw/contracts";
+
+/** The out-of-band app-authz caller — identity beside the domain input (the real Claw's WithCaller
+ *  contract). The dispatch acts on behalf of a stranger, so it passes `system:anonymous`. */
+type Caller = { principal?: Principal };
 
 /**
  * The minimal claw surface the dispatch engine consumes — two api methods, nothing more. The route
  * and cron contexts deliver the assembled product as `unknown` (the adapter owns the real type);
  * requireClaw narrows to this. Keeping the type structural is what lets this package depend only on
  * the protocol (@euroclaw/contracts), never on the euroclaw assembly — the real Claw satisfies it,
- * pinned by a type test.
+ * pinned by a type test. Each method takes the optional app-authz caller (2nd arg) the PEP reads.
  */
 export type ClawLike = {
 	api: {
 		bindConversation: (
 			input: BindConversationInput,
+			caller?: Caller,
 		) => Promise<{ claw: { id: string }; thread: { id: string } }>;
-		sendMessage: (input: {
-			clawId: string;
-			threadId: string;
-			message: string;
-		}) => Promise<{ result: { status: string; text?: string | undefined } }>;
+		sendMessage: (
+			input: {
+				clawId: string;
+				threadId: string;
+				message: string;
+			},
+			caller?: Caller,
+		) => Promise<{ result: { status: string; text?: string | undefined } }>;
 	};
 };
 

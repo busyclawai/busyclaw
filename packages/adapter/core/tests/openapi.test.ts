@@ -141,7 +141,10 @@ describe("clawOpenApi — the generated document", () => {
 		expect(parameter).toMatchObject({ name: "input", in: "query" });
 		expect(parameter?.description).toContain("?input=");
 		const schema = objectSchema(parameter?.content["application/json"].schema);
-		expect(schema.required).toEqual(["principal"]);
+		// `principal` is the HTTP-fallback identity (app-authz realigned it to the caller argument), so
+		// it documents as an OPTIONAL property — not `required`.
+		expect(schema.properties.principal).toBeDefined();
+		expect(schema.required).toBeUndefined();
 	});
 
 	it("documents POST input as the application/json requestBody", () => {
@@ -150,9 +153,9 @@ describe("clawOpenApi — the generated document", () => {
 		const schema = objectSchema(
 			set?.requestBody?.content["application/json"].schema,
 		);
-		expect(schema.required).toEqual(
-			expect.arrayContaining(["name", "value", "principal"]),
-		);
+		// `name` + `value` are required; `principal` is the optional HTTP-fallback identity.
+		expect(schema.required).toEqual(expect.arrayContaining(["name", "value"]));
+		expect(schema.required).not.toContain("principal");
 	});
 
 	it("flows field-level .describe() metadata into the emitted schema", () => {

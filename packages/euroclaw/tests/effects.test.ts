@@ -1,12 +1,17 @@
 import type { EffectStore } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
-import { approvalToolModel, durableRedactor, emailTool } from "./fixtures";
+import {
+	approvalToolModel,
+	durableRedactor,
+	emailTool,
+	owned,
+} from "./fixtures";
 
 describe("createClaw effects", () => {
 	it("applies default redacted effect output policy", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },
@@ -37,7 +42,7 @@ describe("createClaw effects", () => {
 
 	it("supports explicit full effect output policy", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },
@@ -70,7 +75,7 @@ describe("createClaw effects", () => {
 	it("does not persist effect output by default for non-idempotent tools", async () => {
 		let toolRuns = 0;
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },
@@ -142,7 +147,7 @@ describe("createClaw effects", () => {
 			},
 		};
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			effectStore,
 			model: approvalToolModel(),

@@ -15,6 +15,8 @@
 import {
 	type AuthzActionInput,
 	buildAuthzModel,
+	cedarFloorEngine,
+	cedarMapCall,
 	createPolicyPlugin,
 	createShadowPolicyEngine,
 	loadPolicyBundle,
@@ -28,7 +30,6 @@ import {
 	toolGovernance,
 	validationError,
 } from "@euroclaw/contracts";
-import { cedarFloorEngine, cedarMapCall } from "@euroclaw/policy-cedar";
 import type { ToolSet } from "ai";
 import { type } from "arktype";
 

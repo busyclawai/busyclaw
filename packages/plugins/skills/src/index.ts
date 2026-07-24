@@ -35,16 +35,11 @@ export {
 	readSkillInput,
 } from "./common/schema";
 export type {
-	CreateSkillAclInput,
 	CreateSkillActivationInput,
 	CreateSkillInstallationInput,
 	CreateSkillPackageInput,
 	CreateSkillProposalInput,
 	CreateSkillReadInput,
-	SkillAclPermission,
-	SkillAclPrincipalType,
-	SkillAclRecord,
-	SkillAclStore,
 	SkillActivationRecord,
 	SkillActivationSource,
 	SkillActivationStore,
@@ -67,7 +62,6 @@ export type {
 	SkillsStore,
 } from "./core";
 export {
-	skillAclPrincipalType,
 	skillInstallationStatus,
 	skillManifest,
 	skillManifestLimits,

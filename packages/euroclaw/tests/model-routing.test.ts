@@ -2,11 +2,10 @@
 // its id makes `result.text` name the model that ran). Type-safety is proven in
 // model-routing.test-d.ts; this proves the option actually reaches the runtime's selector.
 import { describe, expect, it } from "vitest";
-import { createClaw } from "../src/index";
-import { textModel } from "./fixtures";
+import { owned, textModel } from "./fixtures";
 
 describe("createClaw model routing (api.run)", () => {
-	const claw = createClaw({
+	const claw = owned({
 		models: {
 			fast: textModel("fast"),
 			smart: { model: textModel("smart"), default: true, tags: ["reasoning"] },

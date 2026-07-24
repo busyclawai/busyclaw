@@ -1,14 +1,9 @@
 export type {
-	CreateSkillAclInput,
 	CreateSkillActivationInput,
 	CreateSkillInstallationInput,
 	CreateSkillPackageInput,
 	CreateSkillProposalInput,
 	CreateSkillReadInput,
-	SkillAclPermission,
-	SkillAclPrincipalType,
-	SkillAclRecord,
-	SkillAclStore,
 	SkillActivationRecord,
 	SkillActivationSource,
 	SkillActivationStore,
@@ -32,8 +27,6 @@ export type {
 } from "./contracts";
 export type { SkillProposalState } from "./schema";
 export {
-	createSkillAclInput,
-	createSkillAclInputOptions,
 	createSkillActivationInput,
 	createSkillActivationInputOptions,
 	createSkillInstallationInput,
@@ -45,13 +38,6 @@ export {
 	createSkillReadInput,
 	createSkillReadInputOptions,
 	nonEmptyString,
-	skillAclEntity,
-	skillAclFields,
-	skillAclPermission,
-	skillAclPermissionValues,
-	skillAclPrincipalType,
-	skillAclPrincipalTypeValues,
-	skillAclRecord,
 	skillActivationEntity,
 	skillActivationFields,
 	skillActivationRecord,

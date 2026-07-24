@@ -49,10 +49,9 @@ describe("euroclaw core skills", () => {
 			required: true,
 			type: "string",
 		});
-		expect(skillsSchema.skill_acl.fields.permission).toMatchObject({
-			index: true,
-			required: true,
-		});
+		// The bespoke skill_acl table is retired — grants live in the CORE access_grant table now, so
+		// the plugin no longer contributes a skill_acl model to its own schema.
+		expect(skillsSchema.skill_acl).toBeUndefined();
 	});
 
 	it("validates skill package records", () => {

@@ -12,6 +12,7 @@ import {
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
+	type Redactor,
 	type Secrets,
 } from "@euroclaw/contracts";
 import {
@@ -26,6 +27,7 @@ import {
 import { buildSecrets, env } from "@euroclaw/secrets";
 import { entityAdapter } from "@euroclaw/storage-core";
 import {
+	createAccessGrantStore,
 	createClawsStore,
 	createEffectStore,
 	createRegistryStores,
@@ -41,6 +43,14 @@ import {
 	createClawApi,
 } from "./api";
 import { buildFloorPolicyPlugin } from "./authz-floor";
+import {
+	type AppAuthzConfig,
+	buildApiPolicyEngine,
+	CORE_API_CREATE_METHODS,
+	enumerateApiMethodIds,
+	governApi,
+	type WithCaller,
+} from "./authz-pep";
 import { type ClawDatabase, resolveDatabase } from "./database";
 import { createClawRuntimeEventSink } from "./events";
 import type { ClawSchemaConfig, RequireNoCoreColumnCollision } from "./models";
@@ -60,6 +70,7 @@ export type {
 	BindConversationResult,
 	BindConversationThreadInput,
 	ClawApi,
+	ClawApiCaller,
 	ClawApiHttpMethod,
 	ClawApiInputSchema,
 	ClawApiMethod,
@@ -81,6 +92,7 @@ export {
 	clawCronHandlerUnsafeConfig,
 	parseClawApiInput,
 } from "./api";
+export type { AppAuthzConfig, WithCaller } from "./authz-pep";
 
 export type ClawStores = {
 	claws?: ClawsStore;
@@ -99,6 +111,9 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	| "resolveTools"
 	| "redactor"
 > & {
+	/** App-authz PEP posture (docs/plans/app-authz.md). Default: enforce. `unsafeOpen` restores the
+	 *  pre-PEP host-authorizes world; `posture: "shadow"` logs would-be denials without blocking. */
+	appAuthz?: AppAuthzConfig;
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
 	engine?: ClawEngineFactory<
@@ -225,7 +240,9 @@ type RequireDatabaseForPlugins<Config> =
 		: unknown;
 
 export type Claw<Config extends RuntimeConfig = RuntimeConfig> = {
-	readonly api: ClawApi<Config> & InferPluginApi<Config>;
+	// The app-authz PEP appends the out-of-band caller context to every governed method (flat core +
+	// nested plugin), so `claw.api.getClaw({ id }, { principal })` — identity beside the domain input.
+	readonly api: WithCaller<ClawApi<Config> & InferPluginApi<Config>>;
 	readonly $context: ClawContext<Config> & {
 		readonly audit?: AuditSink;
 		readonly approvals: Runtime<Config>["approvals"];
@@ -290,17 +307,78 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
 	}
 }
 
+/** The context fields bound PER PLUGIN (the emit door + the redaction handles) — each closes over
+ *  the plugin's id so claw-less door redactions and plugin-minted mappings attribute to that
+ *  plugin's own ("plugin", id) container, never a shared bucket. */
+type PluginBoundContext = Pick<
+	EuroclawPluginConfigureContext,
+	"events" | "redact" | "rehydrate"
+>;
+
 function configurePlugins(input: {
+	/** The shared context WITHOUT the per-plugin fields — those are bound below. */
 	context: EuroclawPluginConfigureContext;
+	bind: (plugin: EuroclawPlugin) => PluginBoundContext;
 	plugins: readonly EuroclawPlugin[];
 }): EuroclawPlugin[] {
 	return input.plugins.map((plugin) => {
 		// configure returns only the RUNTIME half (routes/cron/api built over the arriving store/reader);
 		// merge it over the static plugin. The static fields (schema, secrets, gates, $phantoms) are the
 		// plugin's own — the runtime half can only add/replace routes/cron/api, never a static field.
-		const runtime = plugin.configure?.(input.context);
+		const runtime = plugin.configure?.({
+			...input.context,
+			...input.bind(plugin),
+		});
 		return runtime ? { ...plugin, ...runtime } : plugin;
 	});
+}
+
+const identity = async (value: unknown): Promise<unknown> => value;
+
+/**
+ * The per-plugin redaction handles (docs/plans/observability-plan.md, slice 6). `redact` tokenizes
+ * plugin-held data: without `clawId` into the plugin's own ("plugin", id) container — the same
+ * container its claw-less door events use — and with `clawId` into that claw's ("claw", clawId)
+ * container, the SAME container transcript writes use, over the SAME resolved redactor, so tokens
+ * cohere with the transcript and per-claw birth posture decides here exactly like everywhere else.
+ * `rehydrate` resolves ONLY the plugin's own container: a claw token is inert by containment
+ * (resolution requires the minting container to match — no token filtering exists or is needed),
+ * and every call against an armed redactor lands one pii.reidentification audit record when audit
+ * is configured. Unarmed (`redactor` absent: no detector/custom redactor, or posture "raw") both
+ * handles are the identity — always present, so plugin code never branches on the deployment.
+ */
+function pluginRedactionHandles(input: {
+	audit: AuditSink | undefined;
+	plugin: EuroclawPlugin;
+	redactor: Redactor | undefined;
+}): Pick<EuroclawPluginConfigureContext, "redact" | "rehydrate"> {
+	const redactor = input.redactor;
+	if (!redactor) return { redact: identity, rehydrate: identity };
+	const container = { scope: "plugin", scopeId: input.plugin.id };
+	return {
+		redact: (value, opts) =>
+			redactor.redactValue(value, {
+				...(opts?.clawId !== undefined
+					? { scope: "claw", scopeId: opts.clawId }
+					: container),
+				...(opts?.subjectIds !== undefined
+					? { subjectIds: [...opts.subjectIds] }
+					: {}),
+			}),
+		rehydrate: async (value) => {
+			const out = await redactor.rehydrateValue(value, container);
+			// Same accountability rule as the api's read-side views (api.ts auditPrivacy): a
+			// re-identifying read is evidence; payloads carry identifiers only.
+			await input.audit?.append({
+				ts: new Date().toISOString(),
+				boundary: "privacy",
+				name: "pii.reidentification",
+				status: "ok",
+				payload: container,
+			});
+			return out;
+		},
+	};
 }
 
 function assertApiContribution(input: {
@@ -537,6 +615,15 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const registryStores =
 		config.stores?.registry ??
 		(adapter ? createRegistryStores(adapter) : undefined);
+	// The generic shareable-resource ACL (slice 5) — product durable state, sibling of the registry
+	// stores. Takes the RAW adapter and wraps internally (like the other durable stores); feeds real
+	// grants into the product-api PEP and backs the share/unshare api. Absent on a no-database claw.
+	const grantStore = adapter ? createAccessGrantStore(adapter) : undefined;
+	// The adapter wrapped ONCE with the merged models — the entity-validating lens plugins get through
+	// `configure`. Built here so the PEP's plugin `shareable` loaders bind against the SAME adapter a
+	// plugin's `configure` builds its store from (a skills loader `entityView`s over it, just like its
+	// store does). storage-durable stores deliberately take the RAW adapter and wrap internally instead.
+	const pluginAdapter = adapter ? entityAdapter(adapter, models) : undefined;
 	// Registered tools become executable per run (see registeredToolResolver above): the invoker
 	// resolves each row's credential through the one-door reader by its `source` name.
 	const resolveTools = registryStores
@@ -563,6 +650,18 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		observers: observerSinks,
 		warn,
 	};
+	// Door redaction (docs/plans/observability-plan.md, slice 5): a plugin-emitted event's payload
+	// is tokenized BEFORE fan-out, but only under redacted postures — `armed` is false for the
+	// no-redaction recipe and posture "raw", and that path stays byte-identical (the door never
+	// walks the payload). Each plugin gets its OWN door: a claw-less emit (boot/cron/webhook — no
+	// recording) lands in that plugin's ("plugin", id) container, while a recording-carrying emit
+	// lands in the claw's ("claw", clawId) container — the same container transcript writes use,
+	// over the same resolved redactor, so per-claw birth posture decides door events exactly like
+	// transcript rows. The runtime's own event kinds never pass through the door; they are
+	// redacted at their source boundaries. The same armed-or-nothing redactor feeds the per-plugin
+	// redact/rehydrate handles (slice 6, pluginRedactionHandles above); their audit sink is the
+	// SAME config.audit the runtime and the product api use.
+	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -574,12 +673,24 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 			// (entityDb is theirs to use), and their constructors are public host API — the wrap-once
 			// rule exists to keep PLUGINS free of the storage implementation, not to move every wrap to
 			// the assembly.
-			adapter: adapter ? entityAdapter(adapter, models) : undefined,
+			adapter: pluginAdapter,
 			clawsStore,
 			effects: effectsStore,
-			events: pluginEventSink(eventFanout),
 			secrets,
 		},
+		bind: (plugin) => ({
+			events: pluginEventSink(
+				eventFanout,
+				doorRedactor
+					? { plugin: plugin.id, redactor: doorRedactor }
+					: undefined,
+			),
+			...pluginRedactionHandles({
+				audit: config.audit,
+				plugin,
+				redactor: doorRedactor,
+			}),
+		}),
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
 	});
 	// The always-on governance FLOOR — the assembly's ONE internal Cedar engine (SYSTEM_POSTURE + every
@@ -623,6 +734,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		cronHandler: config.cronHandler,
 		effects: effectsStore,
 		engine: engine?.engine,
+		grantStore,
 		plugins,
 		registry: registryStores,
 		runs: engine?.runs,
@@ -631,10 +743,31 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		secretDeclarations,
 	};
 	const baseApi = createClawApi({ context, newId });
-	const api = {
+	// The assembled api BEFORE the PEP — core methods + plugin namespaces. The product-api PEP
+	// (docs/plans/app-authz.md) wraps the WHOLE surface: every governed method routes through
+	// `decideApiCall` (the actor floor + the GENERIC owner∪scope∪grant ACL) before executing. The
+	// engine's action model is derived from the assembled method ids (core flat + plugin dotted), so a
+	// plugin method is a first-class `ClawApi::Action` under the same generic baseline.
+	const mergedApi = {
 		...baseApi,
 		...createPluginApi({ baseApi, context, plugins }),
-	} as Claw<ResolvedConfig<Config>>["api"];
+	} as Record<string, unknown>;
+	const apiEngine = buildApiPolicyEngine({
+		methodIds: enumerateApiMethodIds(mergedApi),
+		createMethodIds: CORE_API_CREATE_METHODS,
+		plugins,
+	});
+	const api = governApi({
+		api: mergedApi,
+		engine: apiEngine,
+		clawsStore,
+		runs: engine?.runs,
+		grantStore,
+		adapter: pluginAdapter,
+		plugins,
+		appAuthz: config.appAuthz,
+		warn,
+	}) as Claw<ResolvedConfig<Config>>["api"];
 
 	// Boot validation — warn-only, fired fire-and-forget (createClaw is sync so it cannot await; the
 	// probe walks the provider chain). It NEVER fails boot: a rejected promise is caught and warned.

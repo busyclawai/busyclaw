@@ -3,7 +3,7 @@ import { createRunCheckpointStore } from "@euroclaw/storage-durable";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, type V2Model } from "./fixtures";
+import { durableRedactor, owned, type V2Model } from "./fixtures";
 
 /** Tool-calls for `toolSteps` model turns, then finishes with text — a run too long for one slice. */
 function multiStepModel(toolSteps: number): V2Model {
@@ -60,7 +60,7 @@ describe("createClaw deadline slicing", () => {
 		const now = () => iso(clock);
 		const store = createSqlEngineStore(db, { now });
 		let toolRuns = 0;
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: { secret: "s3cret" },
 			database: db,
 			effectLeaseTtlMs: 600_000,
@@ -104,7 +104,10 @@ describe("createClaw deadline slicing", () => {
 		// Invocation 1: slice runs step 0, yields, and the drain stops claiming past the budget.
 		const first = await cronTask.handler({ claw: {} });
 		expect(first).toMatchObject({ processed: 1, status: "idle" });
-		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
+		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read the run AS its principal.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+		).resolves.toMatchObject({
 			status: "queued",
 		});
 		expect(toolRuns).toBe(1);
@@ -120,13 +123,18 @@ describe("createClaw deadline slicing", () => {
 		const third = await cronTask.handler({ claw: {} });
 		expect(third).toMatchObject({ processed: 1, status: "idle" });
 
-		await expect(claw.api.getRun({ id: run.id })).resolves.toMatchObject({
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+		).resolves.toMatchObject({
 			status: "completed",
 			principal: "user:alice",
 		});
 		expect(toolRuns).toBe(2); // each step executed exactly once across all slices
 
-		const events = await claw.api.listRunEvents({ runId: run.id });
+		const events = await claw.api.listRunEvents(
+			{ runId: run.id },
+			{ principal: "user:alice" },
+		);
 		expect(events.map((event) => event.type)).toEqual([
 			"run.started",
 			"run.yielded",
@@ -158,7 +166,7 @@ describe("createClaw deadline slicing", () => {
 		const clock = 0;
 		const now = () => iso(clock);
 		const store = createSqlEngineStore(db, { now });
-		const claw = createClaw({
+		const claw = owned({
 			cronHandler: { secret: "s3cret" },
 			database: db,
 			engine: sqlEngine({
@@ -186,7 +194,12 @@ describe("createClaw deadline slicing", () => {
 		)?.cron?.[0];
 		if (!cronTask) throw new Error("expected engine-sql cron task");
 
-		const run = await claw.api.startRun({ prompt: "hello" });
+		// The run's principal matches the owned caller (user:actor-1), so the owner-isolated getRun/
+		// listRunEvents (app-authz slice 5) permit the reads below.
+		const run = await claw.api.startRun({
+			prompt: "hello",
+			run: { principal: "user:actor-1" },
+		});
 		const result = await cronTask.handler({ claw: {} });
 
 		expect(result).toMatchObject({ processed: 1, status: "idle" });

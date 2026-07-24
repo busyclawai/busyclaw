@@ -51,7 +51,9 @@ export const CLAW_API_METHOD_NAMES = [
 	"putPolicySlice",
 	"registerOpenApiSpec",
 	"sendMessage",
+	"shareResource",
 	"startRun",
+	"unshareResource",
 	"updateClaw",
 	"updateToolCallStatus",
 ] as const;
