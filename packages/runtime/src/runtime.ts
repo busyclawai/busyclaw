@@ -218,6 +218,23 @@ export type RuntimeConfig = {
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
 	audit?: AuditSink;
+	/**
+	 * Whose authority an APPROVED action executes under when the run resumes — the escalation semantic.
+	 * It is read from the IMMUTABLE {@link ApprovalRecord}, never from whoever calls `continueRun`
+	 * (that was an unenforced convention: any caller could pick the executing identity).
+	 *
+	 * - `"requester"` (default) — ATTEST: the action stays the requester's and the approver only
+	 *   vouches for it. Fail-safe, because approving never lends authority: a requester who lacks
+	 *   permission is still denied by every gate the approval did not satisfy.
+	 * - `"approver"` — ASSUME: the approver LENDS their authority (four-eyes escalation), so an action
+	 *   the requester may NOT perform executes because the approver may. This is the setting for
+	 *   "request something above your permissions and have someone entitled sign it off".
+	 *
+	 * Either way the audit records BOTH parties — `principal` (who it ran as) and `decidedBy` (who
+	 * approved) — so a lent authority is never silent. Approval still bypasses only the ONE gate that
+	 * demanded it, so this can never manufacture access the executing principal lacks elsewhere.
+	 */
+	approvalAuthority?: "requester" | "approver";
 	effectStore?: EffectStore;
 	effectLeaseTtlMs?: number;
 	database?: Adapter;
@@ -1323,7 +1340,24 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = `approval:${id}`;
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
-		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
+		// WHOSE AUTHORITY the approved action executes under — fixed by the immutable approval record,
+		// NOT by whoever calls continueRun. `requester` (default) keeps the action the requester's, the
+		// approver merely vouching; `approver` LENDS the approver's authority, which is what makes an
+		// escalation — an action the requester may not perform — actually execute. See
+		// `approvalAuthority` and docs/plans/approvals-authz.md.
+		const executingPrincipal =
+			config.approvalAuthority === "approver"
+				? record.decidedBy
+				: record.principal;
+		if (config.approvalAuthority === "approver" && executingPrincipal === undefined) {
+			// A granted approval always stamps `decidedBy` (the api stamps it from the authenticated
+			// approver) — so this is an invariant violation, not a caller error. Fail LOUD: silently
+			// running with no principal would look like a fail-closed deny for the wrong reason.
+			throw stateError("approval resume cannot assume an absent approver", {
+				approvalId: id,
+			});
+		}
+		state.callerPrincipal = executingPrincipal;
 		// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
 		state.approvedBy = record.decidedBy;
 		state.recording = effectiveRecording;
@@ -1399,6 +1433,10 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		resumeState.runInstanceId = `${state.runInstanceId}:resume`;
 		resumeState.abortSignal = options?.abortSignal;
 		resumeState.runMode = options?.runMode ?? "autonomous";
+		// The run CONTINUES under the same authority the approved action ran with — carried explicitly,
+		// or every tool call after a resume would be principal-less and fail closed at the tool floor.
+		resumeState.callerPrincipal = executingPrincipal;
+		resumeState.approvedBy = record.decidedBy;
 		resumeState.recording = effectiveRecording;
 		resumeState.runId = options?.runId;
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.

@@ -1208,7 +1208,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				? recordingFromRuntimeApprovalMetadata(approval.metadata)
 				: undefined;
 			// A human just granted the approval → interactive (a caller may override explicitly). The
-			// authenticated caller seeds the resumed run's principal (`euroclaw__principal`).
+			// caller AUTHORIZES this resume (the PEP decides the call) but does NOT choose the executing
+			// identity: the approved action runs under the authority the IMMUTABLE approval record fixes
+			// — the requester, or the approver under `approvalAuthority: "approver"` (the escalation
+			// semantic; runtime.ts). The caller rides along so the option shape stays uniform with
+			// generate/sendMessage; the resume path overrides it from the record.
 			const continueOptions = runtimeRunOptionsWithCaller(
 				{ ...options, runMode: options?.runMode ?? "interactive" },
 				caller?.principal,

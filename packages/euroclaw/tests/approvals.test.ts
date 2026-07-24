@@ -1,4 +1,10 @@
-import { auditActorKind, auditSupervision } from "@euroclaw/contracts";
+import {
+	APPROVED_BY_CONTEXT_KEY,
+	auditActorKind,
+	auditSupervision,
+	type EuroclawPlugin,
+	PRINCIPAL_CONTEXT_KEY,
+} from "@euroclaw/contracts";
 import { createMemoryAudit } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
@@ -131,5 +137,97 @@ describe("createClaw approvals", () => {
 		await expect(
 			claw.api.grantApproval({ approvalId }, { principal: "user:reviewer" }),
 		).resolves.not.toBeNull();
+	});
+
+	it("the resume caller cannot choose the executing identity — the record fixes it (attest)", async () => {
+		const { db, redactor } = durableRedactor();
+		const audit = createMemoryAudit();
+		const claw = owned({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			audit,
+			tools: emailNeedsApproval(),
+		});
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+
+		await claw.api.grantApproval({ approvalId }, { principal: "user:approver-9" });
+		// A THIRD party resumes. Under the old convention the replay executed as WHOEVER called
+		// continueRun — so this call could have silently chosen the acting identity.
+		await claw.api.continueRun({ approvalId }, { principal: "user:random-8" });
+
+		const executed = audit
+			.entries()
+			.find((e) => e.name === "send_email" && e.status === "ok");
+		// It ran as the REQUESTER (default `attest`) — not the resumer, not the approver.
+		expect(executed?.principal).toBe("user:actor-1");
+		expect(executed?.decidedBy).toBe("user:approver-9");
+	});
+
+	it("approvalAuthority 'approver' LENDS authority — escalation past the requester's limits (assume)", async () => {
+		const ALICE = "user:alice-requester";
+		const BOB = "user:bob-entitled";
+		// A SECOND gate, distinct from the one that demands approval — the replay bypasses only the
+		// demanding gate (by id), so this one re-evaluates against whoever the action executes AS. It
+		// matches only on an approved replay, leaving the drafting step to the approval gate.
+		const sendEntitledTo = (allowed: string): EuroclawPlugin => ({
+			id: "send-entitlement",
+			gates: [
+				{
+					id: "send-entitlement",
+					matcher: (call, ctx) =>
+						call.name === "send_email" &&
+						ctx[APPROVED_BY_CONTEXT_KEY] !== undefined,
+					handler: (_call, ctx) =>
+						ctx[PRINCIPAL_CONTEXT_KEY] === allowed
+							? { decision: "permit" }
+							: { decision: "deny", reason: "not entitled to send" },
+				},
+			],
+		});
+		const run = async (approvalAuthority?: "approver") => {
+			const { db, redactor } = durableRedactor();
+			const audit = createMemoryAudit();
+			const claw = createClaw({
+				database: db,
+				model: approvalToolModel(),
+				redaction: { redactor },
+				audit,
+				plugins: [sendEntitledTo(BOB)],
+				tools: emailNeedsApproval(),
+				...(approvalAuthority ? { approvalAuthority } : {}),
+			});
+			const waiting = await claw.api.generate(
+				{ prompt: "email alice@personal.com" },
+				{ principal: ALICE },
+			);
+			if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+				throw new Error("expected approval wait");
+			}
+			const approvalId = waiting.approvalIds[0];
+			await claw.api.grantApproval({ approvalId }, { principal: BOB });
+			await claw.api.continueRun({ approvalId }, { principal: BOB });
+			return audit
+				.entries()
+				.find((e) => e.name === "send_email" && e.status !== "needs-approval");
+		};
+
+		// Default (attest): the action stays ALICE's — she is not entitled, so approving does NOT
+		// launder the authority. The entitlement gate denies on replay.
+		const attested = await run();
+		expect(attested?.principal).toBe(ALICE);
+		expect(attested?.status).toBe("denied");
+
+		// assume: BOB lends his authority, so the action ALICE may not perform executes because BOB may.
+		const assumed = await run("approver");
+		expect(assumed?.principal).toBe(BOB);
+		expect(assumed?.status).toBe("ok");
+		expect(assumed?.decidedBy).toBe(BOB);
 	});
 });
