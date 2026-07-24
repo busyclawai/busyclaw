@@ -449,12 +449,11 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("set writes a personal row, list shows the name (no value), and the provider resolves the material", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		const view = await api.set({
-			name: "MY_NOTION_TOKEN",
-			value: "secret-v1",
-			principal: userPrincipal("alice"),
-		});
-		// The HOST passes the already-tagged principal — createdBy is that `user:alice`, stored verbatim.
+		const view = await api.set(
+			{ name: "MY_NOTION_TOKEN", value: "secret-v1" },
+			{ principal: userPrincipal("alice") },
+		);
+		// The caller (arg 2) is the already-tagged principal — createdBy is that `user:alice`, verbatim.
 		expect(view).toMatchObject({
 			name: "MY_NOTION_TOKEN",
 			kind: "value",
@@ -462,7 +461,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		});
 		expect(view).not.toHaveProperty("value");
 		// The name shows in alice's inventory, still with no value…
-		const listed = await api.list({ principal: userPrincipal("alice") });
+		const listed = await api.list({}, { principal: userPrincipal("alice") });
 		expect(listed.map((v) => v.name)).toEqual(["MY_NOTION_TOKEN"]);
 		expect(listed[0]).not.toHaveProperty("value");
 		// …and the write-side meets the read-side: the row was written under `user:alice`, so the
@@ -480,17 +479,16 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("principal isolation — a caller only ever touches their OWN personal rows (the security invariant)", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({
-			name: "X",
-			value: "alices",
-			principal: userPrincipal("alice"),
-		});
+		await api.set(
+			{ name: "X", value: "alices" },
+			{ principal: userPrincipal("alice") },
+		);
 		// bob's list does not include alice's X…
-		expect(await api.list({ principal: userPrincipal("bob") })).toEqual([]);
+		expect(await api.list({}, { principal: userPrincipal("bob") })).toEqual([]);
 		// …bob's delete of X is a no-op (alice's row survives — a caller cannot reach across principals)…
-		await api.delete({ name: "X", principal: userPrincipal("bob") });
+		await api.delete({ name: "X" }, { principal: userPrincipal("bob") });
 		expect(
-			(await api.list({ principal: userPrincipal("alice") })).map(
+			(await api.list({}, { principal: userPrincipal("alice") })).map(
 				(v) => v.name,
 			),
 		).toEqual(["X"]);
@@ -510,16 +508,15 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("values are write-only — neither set's return nor list's entries carry value/provider/ref", async () => {
 		const { api } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		const view = await api.set({
-			name: "WO",
-			value: "hidden",
-			principal: userPrincipal("alice"),
-		});
+		const view = await api.set(
+			{ name: "WO", value: "hidden" },
+			{ principal: userPrincipal("alice") },
+		);
 		for (const key of ["value", "provider", "ref"]) {
 			expect(view).not.toHaveProperty(key);
 		}
 		expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
-		const [listed] = await api.list({ principal: userPrincipal("alice") });
+		const [listed] = await api.list({}, { principal: userPrincipal("alice") });
 		for (const key of ["value", "provider", "ref"]) {
 			expect(listed).not.toHaveProperty(key);
 		}
@@ -529,20 +526,18 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("upsert — re-setting a name rotates the value in place (one row, latest wins)", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({
-			name: "ROT",
-			value: "v1",
-			principal: userPrincipal("alice"),
-		});
-		await api.set({
-			name: "ROT",
-			value: "v2",
-			principal: userPrincipal("alice"),
-		});
-		// one row, not two…
-		expect(await api.list({ principal: userPrincipal("alice") })).toHaveLength(
-			1,
+		await api.set(
+			{ name: "ROT", value: "v1" },
+			{ principal: userPrincipal("alice") },
 		);
+		await api.set(
+			{ name: "ROT", value: "v2" },
+			{ principal: userPrincipal("alice") },
+		);
+		// one row, not two…
+		expect(
+			await api.list({}, { principal: userPrincipal("alice") }),
+		).toHaveLength(1);
 		// …and the resolved value is the latest (read on the tagged boundary the api wrote under).
 		expect(
 			await provider.get("ROT", { principal: userPrincipal("alice") }),
@@ -555,36 +550,31 @@ describe("the personal management api — claw.api.secrets.*", () => {
 	it("delete — set then delete leaves an empty list and the provider resolves null", async () => {
 		const { api, provider } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		await api.set({
-			name: "GONE",
-			value: "v",
-			principal: userPrincipal("alice"),
-		});
-		await api.delete({ name: "GONE", principal: userPrincipal("alice") });
-		expect(await api.list({ principal: userPrincipal("alice") })).toEqual([]);
+		await api.set(
+			{ name: "GONE", value: "v" },
+			{ principal: userPrincipal("alice") },
+		);
+		await api.delete({ name: "GONE" }, { principal: userPrincipal("alice") });
+		expect(await api.list({}, { principal: userPrincipal("alice") })).toEqual(
+			[],
+		);
 		expect(
 			await provider.get("GONE", { principal: userPrincipal("alice") }),
 		).toBeNull();
 	});
 
-	it("a missing, blank, or malformed principal fails loud — validationError on both set and list", async () => {
+	it("a call with no caller fails loud — the owner is the caller argument, never the body", async () => {
 		const { api } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
 		const validationFailed = { code: "EUROCLAW_VALIDATION_FAILED" };
-		// A personal secret must have an owner — no principal is not a silent global write.
-		await expect(
-			api.set({ name: "X", value: "v" } as never),
-		).rejects.toMatchObject(validationFailed);
-		await expect(
-			api.set({ name: "X", value: "v", principal: "" }),
-		).rejects.toMatchObject(validationFailed);
-		// A bare (untagged) host id is rejected at the boundary — the host must pass a `<kind>:<id>`
-		// principal (`userPrincipal(id)`), never a raw string that cannot be authorized.
-		await expect(
-			api.set({ name: "X", value: "v", principal: "alice" }),
-		).rejects.toMatchObject(validationFailed);
-		await expect(api.list({} as never)).rejects.toMatchObject(validationFailed);
-		await expect(api.list({ principal: "   " })).rejects.toMatchObject(
+		// A personal secret must have an owner, and the owner is the app-authz caller (arg 2) — NEVER the
+		// input body (docs/plans/stamped-fields.md, #3). With no caller every method fails loud rather than
+		// keying a row to an anonymous or forged owner; the input can no longer carry a `principal` at all.
+		await expect(api.set({ name: "X", value: "v" })).rejects.toMatchObject(
+			validationFailed,
+		);
+		await expect(api.list({})).rejects.toMatchObject(validationFailed);
+		await expect(api.delete({ name: "X" })).rejects.toMatchObject(
 			validationFailed,
 		);
 	});

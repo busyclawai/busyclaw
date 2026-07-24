@@ -13,6 +13,7 @@ import type {
 	checkpointKindValues,
 	clawFields,
 	clawStatusValues,
+	clawStoreCreateInputOptions,
 	conversationBindingFields,
 	createCheckpointInputOptions,
 	createClawInputOptions,
@@ -51,9 +52,16 @@ export type ConversationBindingRecord = EntityRecord<
 	typeof conversationBindingFields
 >;
 
+/** The CALLER-FACING create input — no `createdBy`/`scope`/`scopeId` (server-stamped). */
 export type CreateClawInput = EntitySchemaInput<
 	typeof clawFields,
 	typeof createClawInputOptions
+>;
+/** The PERSISTENCE create input the {@link ClawStore} takes — `createdBy` required (the handler has
+ *  stamped it), `scope`/`scopeId` optional (defaulted in the store). */
+export type ClawStoreCreateInput = EntitySchemaInput<
+	typeof clawFields,
+	typeof clawStoreCreateInputOptions
 >;
 export type CreateThreadInput = EntitySchemaInput<
 	typeof threadFields,
@@ -80,12 +88,18 @@ export type CreateConversationBindingInput = EntitySchemaInput<
 	typeof createConversationBindingInputOptions
 >;
 
-export type UpdateClawInput = EntityUpdateInput<typeof clawFields>;
+// `scope`/`scopeId` are storage-mutable (a claw re-shares over its life) but NOT patchable through
+// `updateClaw`: re-scoping is a governed sharing transition (a `manage`-gated op), never a mass-assignable
+// patch field (docs/plans/stamped-fields.md, finding #5). Omitted here so a body value is a compile error.
+export type UpdateClawInput = EntityUpdateInput<
+	typeof clawFields,
+	"scope" | "scopeId"
+>;
 
 export type ToolCallStatusPatch = EntityUpdateInput<typeof toolCallFields>;
 
 export type ClawStore = {
-	create: (input: CreateClawInput) => Promise<ClawRecord>;
+	create: (input: ClawStoreCreateInput) => Promise<ClawRecord>;
 	get: (id: string) => Promise<ClawRecord | null>;
 	update: (id: string, patch: UpdateClawInput) => Promise<ClawRecord | null>;
 	archive: (id: string) => Promise<ClawRecord | null>;

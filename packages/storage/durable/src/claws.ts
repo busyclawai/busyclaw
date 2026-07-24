@@ -10,10 +10,10 @@ import {
 	type CreateToolResultInput,
 	checkpointFields,
 	clawFields,
+	clawStoreCreateInputOptions,
 	configurationError,
 	conversationBindingFields,
 	createCheckpointInput,
-	createClawInputOptions,
 	createConversationBindingInput,
 	createThreadInput,
 	createToolCallInput,
@@ -123,10 +123,13 @@ export function createClawsStore(
 		checkpoint: { fields: checkpointFields },
 		conversation_binding: { fields: conversationBindingFields },
 	});
-	// The merged create-input schema still validates host/plugin extra fields at the create boundary
-	// (the entity layer's write validation covers the assembled record; this covers the caller input).
+	// The merged store create-input schema still validates host/plugin extra fields at the store boundary
+	// (the entity layer's write validation covers the assembled record; this covers the input the euroclaw
+	// handler hands the store). It uses the PERSISTENCE options — `createdBy` is required here because the
+	// handler has already stamped it from the authenticated `{ principal }` (the caller-facing
+	// createClawInput omits it entirely; docs/plans/stamped-fields.md).
 	const createClawInputMerged = entity("claw", clawFieldsMerged).schema(
-		createClawInputOptions,
+		clawStoreCreateInputOptions,
 	);
 	const assertCreateClawInput = (input: unknown) => {
 		const valid = createClawInputMerged(input);

@@ -46,12 +46,16 @@ function buildClawAndClient() {
 		model: model as never,
 		plugins: [secrets([], { store: { key: SECRET_STORE_TEST_KEY } })],
 		redaction: { posture: "raw" },
-		// A TRANSPORT e2e (client ↔ adapter ↔ claw), not an authz test. The HTTP adapter does not yet
-		// resolve a caller principal (the adapter-ingress frontier), so it runs host-authorized: the
-		// in-input `principal` carries identity over the wire until that lands.
+		// A TRANSPORT e2e (client ↔ adapter ↔ claw), not an authz test. Identity comes from the
+		// resolveCaller seam below (a fixed test principal); the body never carries it. unsafeOpen keeps
+		// the in-process governed calls host-authorized so this stays a transport test.
 		appAuthz: { unsafeOpen: true },
 	});
-	const handler = toRequestHandler(claw as unknown as Claw);
+	const handler = toRequestHandler(claw as unknown as Claw, {
+		// The identity seam: the host resolves the caller from the request (here a fixed test principal) —
+		// the sole over-the-wire identity path now that the body carries no `principal`.
+		resolveCaller: () => ({ principal: "user:alice" }),
+	});
 	const client = createClawClient<typeof claw>({
 		baseUrl: "https://app.test/api/euroclaw",
 		fetch: (input, init) => handler(new Request(input, init)),
@@ -64,13 +68,10 @@ describe("end-to-end: createClaw + toRequestHandler + createClawClient", () => {
 	it("round-trips the secrets namespace: set → list → delete, typed from `typeof claw`", async () => {
 		const { claw, client } = buildClawAndClient();
 
-		const set = await client.secrets.set({
-			name: "NOTION",
-			principal: "user:alice",
-			value: "tok-1",
-		});
+		const set = await client.secrets.set({ name: "NOTION", value: "tok-1" });
 		expect(set.error).toBeNull();
 		expect(set.data).toMatchObject({
+			// createdBy is the SEAM-resolved caller (user:alice), never a body value.
 			createdBy: "user:alice",
 			kind: "value",
 			name: "NOTION",
@@ -80,33 +81,28 @@ describe("end-to-end: createClaw + toRequestHandler + createClawClient", () => {
 			(set.data as unknown as Record<string, unknown>).value,
 		).toBeUndefined();
 
-		// list rides GET + ?input= end to end.
-		const listed = await client.secrets.list({ principal: "user:alice" });
+		// list rides GET + ?input= end to end; identity is the seam-resolved caller, not a query param.
+		const listed = await client.secrets.list({});
 		expect(listed.error).toBeNull();
 		expect(listed.data).toMatchObject([{ name: "NOTION" }]);
 
-		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors.
+		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors;
+		// identity rides the caller argument here.
 		await expect(
-			claw.api.secrets.list({ principal: "user:alice" }),
+			claw.api.secrets.list({}, { principal: "user:alice" }),
 		).resolves.toMatchObject([{ name: "NOTION" }]);
 
-		const removed = await client.secrets.delete({
-			name: "NOTION",
-			principal: "user:alice",
-		});
+		const removed = await client.secrets.delete({ name: "NOTION" });
 		expect(removed.error).toBeNull();
-		const after = await client.secrets.list({ principal: "user:alice" });
+		const after = await client.secrets.list({});
 		expect(after.data).toEqual([]);
 	});
 
 	it("surfaces a boundary validation failure as { error } with the server's code", async () => {
 		const { client } = buildClawAndClient();
 
-		const result = await client.secrets.set({
-			name: "K",
-			principal: "",
-			value: "v",
-		});
+		// An empty name is rejected by the declared schema at the boundary, before the handler runs.
+		const result = await client.secrets.set({ name: "", value: "v" });
 
 		expect(result.data).toBeNull();
 		expect(result.error?.status).toBe(400);

@@ -95,6 +95,7 @@ export type {
 	ClawRecord,
 	ClawStatus,
 	ClawStore,
+	ClawStoreCreateInput,
 	ClawsStore,
 	ConversationBindingLookup,
 	ConversationBindingRecord,
@@ -136,6 +137,8 @@ export {
 	clawFields,
 	clawRecord,
 	clawStatus,
+	clawStoreCreateInput,
+	clawStoreCreateInputOptions,
 	clawsSchema,
 	conversationBindingEntity,
 	conversationBindingFields,
@@ -169,8 +172,6 @@ export {
 // ── primitives: json + the entity schema DSL ─────────────────────────────────
 export type { JsonObject, JsonPrimitive, JsonValue } from "./common";
 export { jsonObject, jsonValue } from "./common";
-// ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
-export type { TextDeltaStream } from "./stream";
 // ── cross-cutting ports: effects, events, per-tool governance ────────────────
 export type {
 	EffectClaim,
@@ -356,7 +357,7 @@ export type {
 } from "./governance/plugin";
 // ── governance: the Principal vocabulary — the one authorizable identity (the `principal` schema is
 // the boundary validator behind field.principal) ──
-export type { Principal } from "./governance/principal";
+export type { ClawApiCaller, Principal } from "./governance/principal";
 export {
 	asPrincipal,
 	parsePrincipal,
@@ -441,6 +442,8 @@ export type {
 	WhereOperator,
 } from "./storage";
 export { isWhereGroup, sortByList } from "./storage";
+// ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
+export type { TextDeltaStream } from "./stream";
 // ── tool registry: durable rows for uploaded tool surfaces (impls in storage/runtime) ──
 export type {
 	FactsOverlayRecord,

@@ -8,6 +8,7 @@ import type {
 	BindConversationInput,
 	BindConversationResult,
 	CheckpointRecord,
+	ClawApiCaller,
 	ClawApiMethodName,
 	ClawEngineHandle,
 	ClawRecord,
@@ -43,7 +44,6 @@ import {
 	accessGrantPermission,
 	appendMessageInput,
 	approvalStatus,
-	asPrincipal,
 	bindConversationInput,
 	bindConversationResult,
 	CLAW_API_METHOD_NAMES,
@@ -89,11 +89,11 @@ import { type ActionView, assembleOrgActions } from "./registry";
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
 export type MessageView = "redacted" | "original";
 
-/** The out-of-band caller context every governed `claw.api` method takes as its 2nd argument — the
- *  function-intake image of better-auth's server `auth.api.x({ headers })`. Identity travels BESIDE the
- *  pure domain input, never inside it; the PEP reads `principal` as the authz subject and threads it
- *  into a run context. Defined here (the api surface) so the WithCaller transform names one type. */
-export type ClawApiCaller = { principal?: Principal };
+/** The out-of-band caller context every governed `claw.api` method takes as its 2nd argument. Defined
+ *  in `@euroclaw/contracts` (the shared protocol home, beside `Principal`) so euroclaw's api surface and
+ *  the HTTP adapter's `resolveCaller` seam name ONE caller type; re-exported here for `from "euroclaw"`
+ *  consumers and the `WithCaller` transform. */
+export type { ClawApiCaller };
 
 export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	clawId: string;
@@ -263,13 +263,13 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		options?: RunOptionsFor<Config>;
 	}) => Promise<RuntimeResult | null>;
 
+	// The decider identity (`decidedBy`) is SERVER-STAMPED from the authenticated `{ principal }`, never
+	// a caller-supplied `by` — a forged approver is a compile error (docs/plans/stamped-fields.md, #6).
 	grantApproval: (input: {
 		approvalId: string;
-		by: string;
 	}) => Promise<ApprovalRecord | null>;
 	denyApproval: (input: {
 		approvalId: string;
-		by: string;
 		reason?: string;
 	}) => Promise<ApprovalRecord | null>;
 	getApproval: (input: { id: string }) => Promise<ApprovalRecord | null>;
@@ -282,10 +282,11 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 
 	// Tool registry (product): register an OpenAPI spec as governed tools, and read the assembled
 	// per-organization action vocabulary the policy router compiles against.
+	// `registeredBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md, #5-family);
+	// `organizationId` stays caller-supplied for now (its stamping needs `organization()`, out of scope).
 	registerOpenApiSpec: (input: {
 		source: string;
 		document: JsonObject;
-		registeredBy: string;
 		organizationId: string;
 	}) => Promise<SpecRegistrationReport>;
 	listRegisteredTools: (input: {
@@ -298,12 +299,13 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	// merged over the code-owned system posture. Edits append to the authz change log → the org
 	// router rebuilds on the next decision. euroclaw stays engine-agnostic — it stores the slices; the
 	// host composes createOrgPolicyRouter with a cedar engineFor (see the policy-slice E2E).
+	// `updatedBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md); `organizationId`
+	// stays caller-supplied until `organization()` lands (out of scope).
 	putPolicySlice: (input: {
 		organizationId: string;
 		name: string;
 		cedar: string;
 		mode: "enforce" | "shadow" | "off";
-		updatedBy: string;
 	}) => Promise<PolicySliceRecord>;
 	listPolicySlices: (input: {
 		organizationId: string;
@@ -322,14 +324,13 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 
 	// The generic share/unshare api (slice 5) — write/revoke an access_grant on ANY shareable resource.
 	// LEVEL manage: the PEP requires the caller MANAGE the target (resourceKind, resourceId) first, so you
-	// can only share what you manage. `grantedBy` is the accountable grantor (coerced via asPrincipal),
-	// the same attribution convention as putPolicySlice.updatedBy / registerOpenApiSpec.registeredBy.
+	// can only share what you manage. The accountable grantor (`grantedBy`) is SERVER-STAMPED from the
+	// authenticated `{ principal }`, never caller-supplied (docs/plans/stamped-fields.md).
 	shareResource: (input: {
 		resourceKind: string;
 		resourceId: string;
 		principalRef: string;
 		permission: AccessGrantPermission;
-		grantedBy: string;
 	}) => Promise<AccessGrantRecord>;
 	unshareResource: (input: {
 		resourceKind: string;
@@ -419,8 +420,10 @@ const engineRunMetadataInput = ark({
 const engineRunMetadataOrUndefined = engineRunMetadataInput.or("undefined");
 // Both derive straight from the entities' immutable/input flags — every mutable, caller-facing column,
 // all optional. No hand-listed pick/optional (which is also why the updatedAt server column no longer
-// leaks into the tool-call patch).
-const updateClawPatchInput = clawEntity.updateSchema();
+// leaks into the tool-call patch). `scope`/`scopeId` are storage-mutable but OMITTED from the updateClaw
+// patch: re-scoping is a governed sharing transition, never a mass-assignable patch field
+// (docs/plans/stamped-fields.md, #5) — a `patch.scope` is a compile error.
+const updateClawPatchInput = clawEntity.updateSchema("scope", "scopeId");
 const toolCallStatusPatchInput = toolCallEntity.updateSchema();
 
 export type {
@@ -515,21 +518,11 @@ const continueRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"options?": runtimeRunOptionsOrUndefined,
 });
-const grantApprovalInput = ark({
-	approvalId: "string",
-	by: ark("string").configure({
-		euroclaw: {
-			doc: "The grantor identity, coerced via `asPrincipal` before it is recorded — a principal, not a free-form name.",
-		},
-	}),
-});
+// No `by`: the decider (`decidedBy`) is stamped from the authenticated caller `{ principal }` in the
+// handler, so a forged approver identity is impossible (docs/plans/stamped-fields.md, #6).
+const grantApprovalInput = ark({ approvalId: "string" });
 const denyApprovalInput = ark({
 	approvalId: "string",
-	by: ark("string").configure({
-		euroclaw: {
-			doc: "The denier identity, coerced via `asPrincipal` — a principal string.",
-		},
-	}),
 	"reason?": "string | undefined",
 });
 const listApprovalsInput = ark({
@@ -575,11 +568,8 @@ const shareResourceInput = ark({
 			doc: "The level conferred (`read` < `use` < `manage`); `share` folds into `manage`.",
 		},
 	}),
-	grantedBy: ark("string").configure({
-		euroclaw: {
-			doc: "The accountable grantor identity, coerced via `asPrincipal` before it is recorded — the audit stamp, same convention as putPolicySlice.updatedBy.",
-		},
-	}),
+	// No `grantedBy`: the accountable grantor is stamped from the authenticated caller `{ principal }` in
+	// the handler (docs/plans/stamped-fields.md), never caller-supplied.
 });
 const unshareResourceInput = ark({
 	resourceKind: "string",
@@ -597,11 +587,8 @@ const registerOpenApiSpecInput = ark({
 		},
 	}),
 	organizationId: "string",
-	registeredBy: ark("string").configure({
-		euroclaw: {
-			doc: "Registrant identity stored raw on the spec-registration row for provenance (not on the per-tool records); `asPrincipal` is applied only to the authz change-log entry the registration appends.",
-		},
-	}),
+	// No `registeredBy`: the registrant is stamped from the authenticated caller `{ principal }` in the
+	// handler (docs/plans/stamped-fields.md), never caller-supplied.
 	source: ark("string").configure({
 		euroclaw: {
 			doc: "Address prefix grouping the spec's tools (`<source>.<tool>`); must be a dot-free slug, and later filters `listRegisteredTools` by source.",
@@ -640,11 +627,8 @@ const putPolicySliceInput = ark({
 		},
 	}),
 	organizationId: "string",
-	updatedBy: ark("string").configure({
-		euroclaw: {
-			doc: "Editor identity, coerced via `asPrincipal`; the edit appends to the authz change log so the org router rebuilds on the next decision.",
-		},
-	}),
+	// No `updatedBy`: the editor identity is stamped from the authenticated caller `{ principal }` in the
+	// handler (docs/plans/stamped-fields.md), never caller-supplied.
 });
 const listPolicySlicesInput = ark({ organizationId: "string" });
 const deletePolicySliceInput = ark({
@@ -969,7 +953,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	};
 
 	const api = {
-		async bindConversation(args) {
+		async bindConversation(args, caller?: ClawApiCaller) {
 			const clawsStore = store();
 			const existing = await clawsStore.conversationBindings.getByExternal({
 				provider: args.provider,
@@ -997,11 +981,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					: await clawsStore.claws.create({
 							...args.claw,
 							// createdBy is a PRINCIPAL (owner-rule / "my resources" / erasure key), never a
-							// telegram id or a bot key: a stranger's conversation is created by
-							// system:anonymous. The stranger (externalActorId) and the endpoint (provider/
-							// endpointKey) are recorded on the binding row below, so nothing is lost for
-							// erasure or routing — they are simply not creators.
-							createdBy: args.claw?.createdBy ?? SYSTEM_ANONYMOUS,
+							// telegram id or a bot key, and it is SERVER-STAMPED from the authenticated caller —
+							// NEVER from the registration's claw defaults (which no longer carry it). A stranger's
+							// (unauthenticated) conversation has no caller, so it is created by system:anonymous.
+							// The stranger (externalActorId) and the endpoint (provider/endpointKey) are recorded
+							// on the binding row below, so nothing is lost for erasure or routing — they are simply
+							// not creators (docs/plans/stamped-fields.md, #14).
+							createdBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 						});
 
 			const thread = existingThread
@@ -1031,7 +1017,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return { binding, claw, thread, created: true };
 		},
 
-		createClaw: (args) => store().claws.create(args),
+		// The owner and the access boundary are SERVER-STAMPED from the authenticated caller, never caller
+		// input (docs/plans/stamped-fields.md, #5): `createdBy` = the caller (the owner-rule + erasure key),
+		// and the claw is personal to that caller at create (`scope`/`scopeId`). A caller-less escape-hatch
+		// call (unsafeOpen) stamps system:anonymous rather than crashing; the actor floor already denies an
+		// absent principal for a governed call, so a normal create stamps exactly the caller it always did.
+		createClaw: (args, caller?: ClawApiCaller) => {
+			const principal = caller?.principal ?? SYSTEM_ANONYMOUS;
+			return store().claws.create({
+				...args,
+				createdBy: principal,
+				scope: "personal",
+				scopeId: principal,
+			});
+		},
 		getClaw: ({ id }) => store().claws.get(id),
 		updateClaw: ({ id, patch }) => store().claws.update(id, patch),
 		archiveClaw: ({ id }) => store().claws.archive(id),
@@ -1189,12 +1188,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			);
 		},
 
-		grantApproval: ({ approvalId, by }) =>
-			context.runtime.approvals?.grant(approvalId, asPrincipal(by)) ??
-			Promise.resolve(null),
-		denyApproval: ({ approvalId, by, reason }) =>
-			context.runtime.approvals?.deny(approvalId, asPrincipal(by), reason) ??
-			Promise.resolve(null),
+		// `decidedBy` is stamped from the authenticated caller `{ principal }`, never a caller-supplied `by`
+		// (docs/plans/stamped-fields.md, #6) — a forged approver identity is impossible. The runtime store's
+		// grant/deny write it as the decision stamp.
+		grantApproval: ({ approvalId }, caller?: ClawApiCaller) =>
+			context.runtime.approvals?.grant(
+				approvalId,
+				caller?.principal ?? SYSTEM_ANONYMOUS,
+			) ?? Promise.resolve(null),
+		denyApproval: ({ approvalId, reason }, caller?: ClawApiCaller) =>
+			context.runtime.approvals?.deny(
+				approvalId,
+				caller?.principal ?? SYSTEM_ANONYMOUS,
+				reason,
+			) ?? Promise.resolve(null),
 		getApproval: ({ id }) =>
 			context.runtime.approvals?.get(id) ?? Promise.resolve(null),
 		listApprovals: (args) =>
@@ -1202,8 +1209,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 
 		getEffect: ({ id }) => requireEffects(context.effects).get(id),
 
-		registerOpenApiSpec: (args) =>
-			createSpecRegistry(registry()).registerOpenApiSpec(args),
+		// `registeredBy` is stamped from the authenticated caller `{ principal }`, never caller input
+		// (docs/plans/stamped-fields.md). `organizationId` stays caller-supplied until `organization()`.
+		registerOpenApiSpec: (args, caller?: ClawApiCaller) =>
+			createSpecRegistry(registry()).registerOpenApiSpec({
+				...args,
+				registeredBy: caller?.principal ?? SYSTEM_ANONYMOUS,
+			}),
 		listRegisteredTools: ({ organizationId, source }) =>
 			source !== undefined
 				? registry().registeredTools.listBySource(organizationId, source)
@@ -1221,10 +1233,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			}).actions;
 		},
 
-		putPolicySlice: (args) =>
+		// `updatedBy` is stamped from the authenticated caller `{ principal }`, never caller input
+		// (docs/plans/stamped-fields.md). `organizationId` stays caller-supplied until `organization()`.
+		putPolicySlice: (args, caller?: ClawApiCaller) =>
 			registry().policySlices.upsert({
 				...args,
-				updatedBy: asPrincipal(args.updatedBy),
+				updatedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
 		listPolicySlices: ({ organizationId }) =>
 			registry().policySlices.listByOrganization(organizationId),
@@ -1243,20 +1257,19 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		listRunEvents: ({ runId }) => requireRuns(context.runs).events(runId),
 
 		// The PEP has already required the caller MANAGE (resourceKind, resourceId) — so a write here is a
-		// share the caller is entitled to make. The store is org-blind; principalRef stays opaque.
-		shareResource: ({
-			resourceKind,
-			resourceId,
-			principalRef,
-			permission,
-			grantedBy,
-		}) =>
+		// share the caller is entitled to make. The store is org-blind; principalRef stays opaque. The
+		// accountable grantor (`grantedBy`) is stamped from the authenticated caller `{ principal }`, never
+		// caller input (docs/plans/stamped-fields.md).
+		shareResource: (
+			{ resourceKind, resourceId, principalRef, permission },
+			caller?: ClawApiCaller,
+		) =>
 			requireGrantStore(context.grantStore).create({
 				resourceKind,
 				resourceId,
 				principalRef,
 				permission,
-				grantedBy: asPrincipal(grantedBy),
+				grantedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
 		unshareResource: ({ resourceKind, resourceId, principalRef }) =>
 			requireGrantStore(context.grantStore).delete({

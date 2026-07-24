@@ -39,6 +39,16 @@ import { type } from "arktype";
 export type Principal = string & { readonly __brand: "Principal" };
 
 /**
+ * The out-of-band caller context every governed `claw.api` method takes as its 2nd argument — the
+ * function-intake image of better-auth's server `auth.api.x({ headers })`. Identity travels BESIDE the
+ * pure domain input, never inside it: the PEP reads `principal` as the authz subject, and the HTTP
+ * adapter's `resolveCaller` seam fills it from the session/token (never the request body). A shared
+ * protocol type — euroclaw's api surface (the `WithCaller` transform) and the adapter name ONE caller
+ * type instead of re-declaring `{ principal? }` at each boundary.
+ */
+export type ClawApiCaller = { principal?: Principal };
+
+/**
  * Build the principal for a human the host authenticated: `` `user:${id}` ``. The `id` is the host's
  * own user id (opaque to euroclaw, may itself contain colons, e.g. `auth0|abc`). A blank id is
  * rejected — a principal must identify someone. This constructor is a sanctioned brand producer: the
@@ -105,9 +115,10 @@ function principalParts(
  * value is not a well-formed principal: no colon, an empty kind, an empty id, or a kind that is not
  * exactly `"user"` or `"system"`.
  */
-export function parsePrincipal(
-	principal: string,
-): { kind: "user" | "system"; id: string } {
+export function parsePrincipal(principal: string): {
+	kind: "user" | "system";
+	id: string;
+} {
 	const parts = principalParts(principal);
 	if ("reject" in parts) {
 		throw validationError("principal invalid", `expected ${parts.reject}`, {

@@ -4,7 +4,10 @@ import {
 	jsonObject as jsonObjectSchema,
 	jsonValue as jsonValueSchema,
 } from "./common";
-import { type Principal, principal as principalSchema } from "./governance/principal";
+import {
+	type Principal,
+	principal as principalSchema,
+} from "./governance/principal";
 import type { FieldAttribute, FieldType } from "./storage";
 
 // A field's PERSISTED meta IS the storage protocol's FieldAttribute — one definition, extended (never
@@ -164,12 +167,17 @@ type UpdatableKeys<Fields extends Record<string, EntityField>> = {
  * The update-patch shape derived from the fields themselves — every mutable, caller-facing field, all
  * optional. Mutability lives on the field (the same `immutable` flag the storage layer enforces) instead
  * of a hand-kept pick/optional list: mark identity/immutable columns `immutable: true` and
- * server-managed ones (e.g. updatedAt) `input: false`, and the patch shape follows.
+ * server-managed ones (e.g. updatedAt) `input: false`, and the patch shape follows. `Omitted` drops
+ * otherwise-mutable columns from a SPECIFIC patch surface without marking the field immutable — used where
+ * a column is storage-mutable but not mass-assignable through a given api (the claw `scope`/`scopeId`
+ * access boundary, which changes only through a governed sharing transition, never an `updateClaw` patch).
  */
-export type EntityUpdateInput<Fields extends Record<string, EntityField>> =
-	Simplify<{
-		[K in UpdatableKeys<Fields>]?: FieldValue<Fields[K]>;
-	}>;
+export type EntityUpdateInput<
+	Fields extends Record<string, EntityField>,
+	Omitted extends keyof Fields = never,
+> = Simplify<{
+	[K in Exclude<UpdatableKeys<Fields>, Omitted>]?: FieldValue<Fields[K]>;
+}>;
 
 function enumExpression(values: readonly string[]): string {
 	return values.map((value) => `'${value}'`).join(" | ");
@@ -494,14 +502,23 @@ export function entity<const Fields extends Record<string, EntityField>>(
 			>,
 		// The update-patch validator, derived from the fields' own `immutable`/`input` flags rather than a
 		// hand-listed pick/optional set — the same source of truth the storage layer enforces (see
-		// EntityUpdateInput). Every mutable, caller-facing field, all optional.
-		updateSchema: () => {
+		// EntityUpdateInput). Every mutable, caller-facing field, all optional. The rest `omit` args drop
+		// columns that are storage-mutable but not mass-assignable through THIS patch surface (e.g. the
+		// claw `scope`/`scopeId` boundary, changed only by a governed sharing transition) — the omitted
+		// key is then a compile error in the derived input, not a runtime override.
+		updateSchema: <const Omitted extends keyof Fields & string = never>(
+			...omit: Omitted[]
+		) => {
+			const omitted = new Set<string>(omit);
 			const keys = Object.entries(fields)
-				.filter(([, field]) => !field.immutable && field.input !== false)
+				.filter(
+					([key, field]) =>
+						!field.immutable && field.input !== false && !omitted.has(key),
+				)
 				.map(([key]) => key);
 			return ark(shapeFor(fields, { pick: keys, optional: keys })).pipe(
 				dropUndefined,
-			) as unknown as Type<EntityUpdateInput<Fields>>;
+			) as unknown as Type<EntityUpdateInput<Fields, Omitted>>;
 		},
 	};
 }

@@ -31,11 +31,14 @@ describe("model extension — derived types", () => {
 		expectTypeOf<ClawA["priority"]>().toEqualTypeOf<number | undefined>();
 		expectTypeOf<ClawA["id"]>().toEqualTypeOf<string>(); // base field still present
 		expectTypeOf<CreateA["priority"]>().toEqualTypeOf<number | undefined>();
-		// a claw's creator is a required core column, now a branded Principal (not a raw string); its
-		// (scope, scopeId) access boundary is optional on input — the store defaults it to
-		// personal/creator, and it stays mutable for re-sharing
-		expectTypeOf<CreateA["createdBy"]>().toEqualTypeOf<Principal>();
-		expectTypeOf<CreateA["scope"]>().toEqualTypeOf<string | undefined>();
+		// createdBy / scope / scopeId are SERVER-STAMPED (docs/plans/stamped-fields.md, #5): they are NOT
+		// on the caller-facing create input — a body value is a COMPILE ERROR — yet they remain on the
+		// RECORD (createdBy a required branded Principal, scope a required string defaulted at create).
+		expectTypeOf<ClawA["createdBy"]>().toEqualTypeOf<Principal>();
+		expectTypeOf<ClawA["scope"]>().toEqualTypeOf<string>();
+		expectTypeOf<CreateA>().not.toHaveProperty("createdBy");
+		expectTypeOf<CreateA>().not.toHaveProperty("scope");
+		expectTypeOf<CreateA>().not.toHaveProperty("scopeId");
 		expectTypeOf<ClawA>().not.toHaveProperty("nope"); // undeclared field never appears
 	});
 

@@ -29,6 +29,7 @@ import type {
 	Secrets,
 } from "../tools/secrets";
 import type { AfterGate, BoundaryGate, Gate } from "./boundary";
+import type { ClawApiCaller } from "./principal";
 import type { ReasonCode } from "./reason-codes";
 
 export type EuroclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
@@ -56,6 +57,12 @@ export type EuroclawRouteContext<ClawLike = unknown> = {
 	 *  configure-captured reader. Optional because the adapter dispatches with whatever claw it is
 	 *  handed — a partial claw (tests, a bare handler) carries no `$context.secrets`. */
 	secrets?: Secrets;
+	/** The authenticated caller the HTTP adapter resolved from the request via its `resolveCaller` seam
+	 *  (the host extracts the principal from the session/token). Threaded to governed api methods and
+	 *  plugin endpoint handlers as their out-of-band 2nd argument — the over-the-wire analog of the
+	 *  in-process `{ principal }`. Absent when no resolver is configured (the pre-seam default);
+	 *  identity NEVER comes from the request body (docs/plans/stamped-fields.md). */
+	caller?: ClawApiCaller;
 };
 
 export type EuroclawRoute<ClawLike = unknown> = {

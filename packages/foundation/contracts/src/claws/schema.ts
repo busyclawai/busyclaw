@@ -302,13 +302,29 @@ export const toolResultRecord = toolResultEntity.record;
 export const checkpointRecord = checkpointEntity.record;
 export const conversationBindingRecord = conversationBindingEntity.record;
 
+// The CALLER-FACING create input. The identity/tenancy columns are SERVER-STAMPED, never caller input:
+// `createdBy` (owner-rule + erasure key) and the `(scope, scopeId)` access boundary are set by the
+// handler from the authenticated `{ principal }`, so they are OMITTED here — a body value for any of them
+// is a compile error, not a runtime override (docs/plans/stamped-fields.md, finding #5). The claws store
+// takes the wider clawStoreCreateInput below (the handler has stamped the owner by then).
 export const createClawInputOptions = {
-	omit: ["status", "createdAt", "updatedAt"],
-	// scope/scopeId default in the store (scope="personal", scopeId=createdBy) — a claw is personal to
-	// its creator until re-shared; `createdBy` is required (a claw always has a creator).
-	optional: ["id", "context", "scope", "scopeId"],
+	omit: ["status", "createdAt", "updatedAt", "createdBy", "scope", "scopeId"],
+	optional: ["id", "context"],
 } as const;
 export const createClawInput = clawEntity.schema(createClawInputOptions);
+
+// The PERSISTENCE create input the ClawStore takes — the handler has already stamped the owner, so
+// `createdBy` is REQUIRED here and `scope`/`scopeId` optional (the store defaults them to
+// personal/createdBy). This is the store boundary, NOT the caller boundary: the caller sees the narrower
+// createClawInput above; the euroclaw handler stamps `createdBy`/`scope`/`scopeId` from `{ principal }`
+// and hands the store this shape.
+export const clawStoreCreateInputOptions = {
+	omit: ["status", "createdAt", "updatedAt"],
+	optional: ["id", "context", "scope", "scopeId"],
+} as const;
+export const clawStoreCreateInput = clawEntity.schema(
+	clawStoreCreateInputOptions,
+);
 
 export const createThreadInputOptions = {
 	omit: [
@@ -366,16 +382,16 @@ export const createConversationBindingInput = conversationBindingEntity.schema(
 // Protocol, not product: these derive purely from the entities above, so they live here — channel
 // plugins validate against them without depending on the euroclaw assembly.
 
-// Claw bind defaults are claw-creation input with `createdBy` OPTIONAL: bindConversation fills the
-// creator at bind time — always a real principal, defaulting to system:anonymous for an
+// Claw bind defaults are claw-creation input with `createdBy` OMITTED: bindConversation stamps the
+// creator at bind time from the authenticated `{ principal }` — defaulting to system:anonymous for an
 // unauthenticated (stranger's) conversation (the external actor + endpoint stay on the binding row,
-// never masquerading as the creator) — so endpoint/registration defaults never carry it. They
-// describe placement (scope/scopeId) and naming, not who created the claw. Tenancy is optional
-// placement data, never part of the binding's identity. (claws.create still REQUIRES createdBy — a
-// stored claw always has a creator.)
+// never masquerading as the creator) — so a registration's claw defaults can never carry a `createdBy`
+// (a body value is a compile error; docs/plans/stamped-fields.md, finding #14). They describe placement
+// (scope/scopeId) and naming, not who created the claw. (claws.create still REQUIRES createdBy — a stored
+// claw always has a creator; the handler supplies it.)
 export const bindConversationClawInputOptions = {
-	omit: ["status", "createdAt", "updatedAt"],
-	optional: ["id", "context", "scope", "scopeId", "createdBy"],
+	omit: ["status", "createdAt", "updatedAt", "createdBy"],
+	optional: ["id", "context", "scope", "scopeId"],
 } as const;
 export const bindConversationClawInput = clawEntity.schema(
 	bindConversationClawInputOptions,

@@ -219,11 +219,12 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
-		await api.denyApproval({
-			approvalId,
-			by: "user:alice",
-			reason: "Not allowed",
-		});
+		// `decidedBy` is stamped from the caller (arg 2), never a body `by` — alice denies here, so the
+		// denial records decidedBy = user:alice (docs/plans/stamped-fields.md, #6).
+		await api.denyApproval(
+			{ approvalId, reason: "Not allowed" },
+			{ principal: "user:alice" },
+		);
 		await expect(api.continueRun({ approvalId })).resolves.toMatchObject({
 			approvalId,
 			decidedBy: "user:alice",

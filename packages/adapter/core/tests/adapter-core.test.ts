@@ -395,20 +395,24 @@ function encodedInputUrl(path: string, input: unknown): string {
 describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 	it("routes a migrated plugin api over HTTP while the in-process call stays direct", async () => {
 		const api = secretsApiOverMemory();
-		const handler = toRequestHandler({ api } as unknown as Claw);
+		// The identity seam: the host resolves the caller from the request (here a fixed test principal).
+		// Over the wire the BODY never carries a principal — the resolved caller is the sole identity path.
+		const handler = toRequestHandler({ api } as unknown as Claw, {
+			resolveCaller: () => ({ principal: "user:alice" }),
+		});
 
-		// The in-process path is untouched: the namespace method is the handler itself.
+		// The in-process path is untouched: the namespace method is the handler itself, and identity rides
+		// the out-of-band caller argument (arg 2), never the input body.
 		await expect(
-			api.secrets.set({ name: "SEEDED", value: "v0", principal: "user:alice" }),
+			api.secrets.set(
+				{ name: "SEEDED", value: "v0" },
+				{ principal: "user:alice" },
+			),
 		).resolves.toMatchObject({ name: "SEEDED", kind: "value" });
 
 		const set = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				body: JSON.stringify({
-					name: "NOTION",
-					value: "tok-1",
-					principal: "user:alice",
-				}),
+				body: JSON.stringify({ name: "NOTION", value: "tok-1" }),
 				method: "POST",
 			}),
 		);
@@ -421,19 +425,15 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		expect(setBody.data).toMatchObject({
 			name: "NOTION",
 			kind: "value",
+			// createdBy is the SEAM-resolved caller, not a body value.
 			createdBy: "user:alice",
 		});
 		// Values are write-only: the routed surface returns the metadata VIEW, never the material.
 		expect(setBody.data.value).toBeUndefined();
 
-		// list is a GET by the name rule; input rides the ?input= JSON convention.
+		// list is a GET by the name rule; input rides the ?input= JSON convention (no principal in it).
 		const list = await handler(
-			new Request(
-				encodedInputUrl("/secrets/list", { principal: "user:alice" }),
-				{
-					method: "GET",
-				},
-			),
+			new Request(encodedInputUrl("/secrets/list", {}), { method: "GET" }),
 		);
 		expect(list.status).toBe(200);
 		await expect(list.json()).resolves.toMatchObject({
@@ -443,18 +443,13 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const remove = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/delete", {
-				body: JSON.stringify({ name: "NOTION", principal: "user:alice" }),
+				body: JSON.stringify({ name: "NOTION" }),
 				method: "POST",
 			}),
 		);
 		expect(remove.status).toBe(200);
 		const afterDelete = await handler(
-			new Request(
-				encodedInputUrl("/secrets/list", { principal: "user:alice" }),
-				{
-					method: "GET",
-				},
-			),
+			new Request(encodedInputUrl("/secrets/list", {}), { method: "GET" }),
 		);
 		await expect(afterDelete.json()).resolves.toMatchObject({
 			data: [{ name: "SEEDED" }],
@@ -464,12 +459,14 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 	it("validates endpoint input at the HTTP boundary before the handler runs", async () => {
 		const api = secretsApiOverMemory();
-		const handler = toRequestHandler({ api } as unknown as Claw);
+		const handler = toRequestHandler({ api } as unknown as Claw, {
+			resolveCaller: () => ({ principal: "user:alice" }),
+		});
 
 		const response = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				// principal must be non-empty and tagged — rejected by the declared schema, not the store.
-				body: JSON.stringify({ name: "K", value: "v", principal: "" }),
+				// name must be non-empty — rejected by the declared schema, before the handler runs.
+				body: JSON.stringify({ name: "", value: "v" }),
 				method: "POST",
 			}),
 		);
@@ -567,19 +564,18 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			model: model as never,
 			redaction: { posture: "raw" },
 			plugins: [secrets([], { store: { key: SECRET_STORE_TEST_KEY } })],
-			// A TRANSPORT test (HTTP routing), not an authz test — the adapter does not yet resolve a
-			// caller principal (adapter-ingress frontier), so it runs host-authorized here.
+			// A TRANSPORT test (HTTP routing), not an authz test — identity comes from the resolveCaller
+			// seam below (a fixed test principal), never the body; unsafeOpen keeps the in-process governed
+			// calls host-authorized so this stays a routing test, not an authz one.
 			appAuthz: { unsafeOpen: true },
 		});
-		const handler = toRequestHandler(claw as unknown as Claw);
+		const handler = toRequestHandler(claw as unknown as Claw, {
+			resolveCaller: () => ({ principal: "user:alice" }),
+		});
 
 		const set = await handler(
 			new Request("https://app.test/api/euroclaw/secrets/set", {
-				body: JSON.stringify({
-					name: "E2E",
-					value: "v",
-					principal: "user:alice",
-				}),
+				body: JSON.stringify({ name: "E2E", value: "v" }),
 				method: "POST",
 			}),
 		);
@@ -588,9 +584,10 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			data: { name: "E2E", kind: "value" },
 			ok: true,
 		});
-		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors.
+		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors;
+		// identity rides the caller argument here too.
 		await expect(
-			claw.api.secrets.list({ principal: "user:alice" }),
+			claw.api.secrets.list({}, { principal: "user:alice" }),
 		).resolves.toMatchObject([{ name: "E2E" }]);
 	});
 });

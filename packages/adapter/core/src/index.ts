@@ -1,4 +1,5 @@
 import type {
+	ClawApiCaller,
 	ClawResponseEnvelope,
 	EuroclawCronResult,
 	EuroclawCronTask,
@@ -39,6 +40,16 @@ export type ClawRequestHandlerOptions = {
 	/** Opt-in `GET /openapi.json` serving the generated document — absent ⇒ no route. `true` for
 	 *  default info; `{ enabled: true, info }` to title/version the document. */
 	openApi?: true | { enabled: true; info?: ClawOpenApiOptions };
+	/** The identity seam: resolve the authenticated caller from the request (the host extracts the
+	 *  principal from its session/token), threaded to every governed api method and plugin endpoint
+	 *  handler as their out-of-band 2nd argument — the over-the-wire analog of the in-process
+	 *  `{ principal }`. This is the ONLY over-the-wire identity path: request BODIES never carry a
+	 *  who/where field (docs/plans/stamped-fields.md). Absent ⇒ no caller is threaded (governed methods
+	 *  then rely on the actor floor / their own fail-closed owner check). Returning `undefined` is the
+	 *  same as an unauthenticated request. */
+	resolveCaller?: (
+		request: Request,
+	) => ClawApiCaller | undefined | Promise<ClawApiCaller | undefined>;
 };
 
 type CronTaskResult = EuroclawCronResult & { id: string };
@@ -248,7 +259,7 @@ function apiRoutes(): ResolvedRoute[] {
 			id: `api:${name}`,
 			method,
 			path: apiRoute.path,
-			handler: async ({ request, claw: routeClaw }) => {
+			handler: async ({ request, claw: routeClaw, caller }) => {
 				const fn = (routeClaw.api as Record<string, unknown>)[name];
 				if (typeof fn !== "function") {
 					return {
@@ -260,7 +271,11 @@ function apiRoutes(): ResolvedRoute[] {
 					};
 				}
 				const input = parseClawApiInput(name, await readInput(request, method));
-				const data = await (fn as (input: unknown) => Promise<unknown>)(input);
+				// The resolved caller rides at arg index 1 (the WithCaller contract) so a governed method
+				// gets its authenticated principal over the wire — identity beside the input, never in it.
+				const data = await (
+					fn as (input: unknown, caller?: unknown) => Promise<unknown>
+				)(input, caller);
 				return { body: { data, ok: true } };
 			},
 		} satisfies ResolvedRoute;
@@ -489,7 +504,7 @@ function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
 				id: `endpoint:${route.method}:${path}`,
 				method: route.method,
 				path,
-				handler: async ({ request }) => {
+				handler: async ({ request, caller }) => {
 					const valid = route.input(await readInput(request, route.method));
 					if (valid instanceof type.errors) {
 						throw validationError(
@@ -497,9 +512,11 @@ function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
 							valid.summary,
 						);
 					}
-					const data = await (route.handler as (input: unknown) => unknown)(
-						valid,
-					);
+					// The resolved caller rides at arg index 1 (the WithCaller contract) so a plugin
+					// endpoint (e.g. secrets.set) keys off the authenticated principal, not the body.
+					const data = await (
+						route.handler as (input: unknown, caller?: unknown) => unknown
+					)(valid, caller);
 					return { body: { data, ok: true } };
 				},
 			} satisfies ResolvedRoute;
@@ -560,6 +577,13 @@ export function toRequestHandler(
 			: matchPatternRoutes(patternRoutes, method, normalizedPath);
 		if (!matched) return errorResponse("not found", 404);
 		try {
+			// The identity seam: the host resolves the caller from the request (session/token). Threaded
+			// to governed api methods + plugin endpoint handlers as their 2nd arg — identity NEVER rides
+			// the body. Absent resolver ⇒ no caller (the pre-seam default; the actor floor / owner check
+			// then decides).
+			const caller = options.resolveCaller
+				? await options.resolveCaller(request)
+				: undefined;
 			return resultToResponse(
 				await matched.route.handler({
 					claw,
@@ -567,6 +591,7 @@ export function toRequestHandler(
 					request,
 					// Thread the one-door reader from the assembled claw (absent on a partial claw).
 					secrets: claw.$context?.secrets,
+					caller,
 				}),
 			);
 		} catch (error) {

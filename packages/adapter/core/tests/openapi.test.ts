@@ -134,15 +134,16 @@ describe("clawOpenApi — the generated document", () => {
 	});
 
 	it("documents GET input as the one ?input= JSON-encoded query parameter (content-style)", () => {
-		const list = document.paths["/secrets/list"]?.get;
+		// listApprovals is a GET with an all-optional input ({ status?, principal? }) — `principal` here is
+		// the query FILTER, not the caller identity (identity now rides the resolveCaller seam, never the URL).
+		const list = document.paths["/list-approvals"]?.get;
 		expect(list?.requestBody).toBeUndefined();
 		expect(list?.parameters).toHaveLength(1);
 		const parameter = list?.parameters?.[0];
 		expect(parameter).toMatchObject({ name: "input", in: "query" });
 		expect(parameter?.description).toContain("?input=");
 		const schema = objectSchema(parameter?.content["application/json"].schema);
-		// `principal` is the HTTP-fallback identity (app-authz realigned it to the caller argument), so
-		// it documents as an OPTIONAL property — not `required`.
+		// An all-optional input: the `principal` filter documents as an OPTIONAL property, no `required`.
 		expect(schema.properties.principal).toBeDefined();
 		expect(schema.required).toBeUndefined();
 	});
@@ -153,7 +154,8 @@ describe("clawOpenApi — the generated document", () => {
 		const schema = objectSchema(
 			set?.requestBody?.content["application/json"].schema,
 		);
-		// `name` + `value` are required; `principal` is the optional HTTP-fallback identity.
+		// `name` + `value` are the only inputs — identity is NOT a body field (it rides the resolveCaller
+		// seam), so `principal` never appears in the secrets.set request schema.
 		expect(schema.required).toEqual(expect.arrayContaining(["name", "value"]));
 		expect(schema.required).not.toContain("principal");
 	});

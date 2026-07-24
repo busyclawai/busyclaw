@@ -17,8 +17,9 @@ describe("createClaw conversation binding", () => {
 			externalConversationId: "chat-1",
 			externalActorId: "user-1",
 			metadata: { source: "webhook" },
-			// the creator is claw-creation data — it rides the claw bind defaults, not the binding key
-			claw: { name: "Recruiting assistant", createdBy: "user:actor-1" },
+			// createdBy is NOT a bind default — it is server-stamped from the authenticated caller (here
+			// the `owned` fixture's user:actor-1); the defaults describe naming + placement only.
+			claw: { name: "Recruiting assistant" },
 			thread: { title: "Telegram chat" },
 		});
 		const second = await claw.api.bindConversation({
@@ -67,17 +68,21 @@ describe("createClaw conversation binding", () => {
 			redaction: { redactor },
 		});
 
-		// A stranger's bot conversation carries no principal (no claw.createdBy) — the fresh claw's
-		// creator is system:anonymous, NOT the telegram id or the bot endpoint (the bleed the principal
-		// standardization closes: createdBy is a principal, read by the owner-rule / erasure).
-		const bound = await claw.api.bindConversation({
-			provider: "telegram",
-			endpointKey: "sales",
-			externalConversationId: "chat-9",
-			externalActorId: "stranger-9",
-			claw: { name: "Sales assistant" },
-			thread: { title: "Telegram chat" },
-		});
+		// A stranger's bot conversation is dispatched with the system:anonymous caller (channels' dispatch
+		// does exactly this) — so the fresh claw's creator is STAMPED system:anonymous, NOT the telegram id
+		// or the bot endpoint (the bleed stamped-fields closes: createdBy is the caller principal, read by
+		// the owner-rule / erasure, never a body value).
+		const bound = await claw.api.bindConversation(
+			{
+				provider: "telegram",
+				endpointKey: "sales",
+				externalConversationId: "chat-9",
+				externalActorId: "stranger-9",
+				claw: { name: "Sales assistant" },
+				thread: { title: "Telegram chat" },
+			},
+			{ principal: SYSTEM_ANONYMOUS },
+		);
 
 		expect(bound.created).toBe(true);
 		expect(bound.claw.createdBy).toBe(SYSTEM_ANONYMOUS);
