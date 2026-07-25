@@ -63,9 +63,23 @@ export type BoundaryCall = ToolBoundaryCall | ModelBoundaryCall;
  * what the value means, exactly as `shareable` kinds are opaque labels with plugin-owned loaders. An
  * after-gate is where a plugin acts on them (route an escalation, feed its own queue) — governance
  * only carries the fact.
+ *
+ * One shape, TWO bags, split by the declaration's `audience` and never merged again: `annotations`
+ * is the HOST's (the default) and `modelAnnotations` is the AGENT's. The split is made once, where
+ * the declarations are known — the policy engine — so a host-audience value is not "filtered out" at
+ * each model-facing door but structurally absent from the field those doors read.
  */
 export const policyAnnotations = type({ "[string]": "string" });
 export type PolicyAnnotations = typeof policyAnnotations.infer;
+
+/**
+ * The ceiling on ONE model-audience annotation value, in characters (~128 tokens). It is prose
+ * addressed to an agent — a sentence or three of what to do instead, not a document — and unlike the
+ * host bag it lands in a context window and a transcript, so it is bounded at the source: an engine REJECTS
+ * an over-long value when it indexes the policy set, which is assembly time, not decision time. Same
+ * class of failure as unparseable policy text, caught at the same moment.
+ */
+export const MODEL_ANNOTATION_MAX_LENGTH = 512;
 
 export const gateDecision = type({ decision: "'permit'" })
 	.or({
@@ -73,12 +87,14 @@ export const gateDecision = type({ decision: "'permit'" })
 		"reason?": "string",
 		"reasonCode?": "string",
 		"annotations?": policyAnnotations,
+		"modelAnnotations?": policyAnnotations,
 	})
 	.or({
 		decision: "'needs-approval'",
 		"reason?": "string",
 		"reasonCode?": "string",
 		"annotations?": policyAnnotations,
+		"modelAnnotations?": policyAnnotations,
 	});
 export type GateDecision = typeof gateDecision.infer;
 
@@ -91,6 +107,7 @@ export const handleResult = type({ status: "'ok'", output: "unknown" })
 		reason: "string",
 		"reasonCode?": "string",
 		"annotations?": policyAnnotations,
+		"modelAnnotations?": policyAnnotations,
 	})
 	.or({
 		status: "'needs-approval'",
@@ -98,6 +115,7 @@ export const handleResult = type({ status: "'ok'", output: "unknown" })
 		reason: "string",
 		"reasonCode?": "string",
 		"annotations?": policyAnnotations,
+		"modelAnnotations?": policyAnnotations,
 	});
 export type HandleResult = typeof handleResult.infer;
 

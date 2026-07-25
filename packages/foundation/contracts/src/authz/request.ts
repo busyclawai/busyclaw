@@ -40,8 +40,13 @@ export const policyResult = type({
 	/** The DECLARED annotations of the determining policies (`@escalate("team:x")` → `{escalate}`),
 	 *  filtered to the keys plugins declared. Opaque here — the declaring plugin owns the meaning. */
 	"annotations?": type({ "[string]": "string" }).or("undefined"),
+	/** The same, for the keys declared `audience: "model"` — a DISJOINT bag, because these reach the
+	 *  agent (a blocked call's result, a tool-search disclosure) and the ones above never may. An
+	 *  engine that fills this owes the {@link MODEL_ANNOTATION_MAX_LENGTH} bound per value. */
+	"modelAnnotations?": type({ "[string]": "string" }).or("undefined"),
 });
 
 /** What an engine returns. `policies` is the determining-policy trail (for the audit); `annotations`
- *  carries the declared policy metadata a plugin routes on. */
+ *  carries the declared policy metadata a plugin routes on, and `modelAnnotations` the metadata
+ *  written for the agent instead. */
 export type PolicyResult = typeof policyResult.infer;

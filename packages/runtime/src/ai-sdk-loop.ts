@@ -1,6 +1,7 @@
 import {
 	configurationError,
 	EuroclawError,
+	type HandleResult,
 	stateError,
 } from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
@@ -98,6 +99,30 @@ export function toolResultMessage(
 				},
 			},
 		],
+	};
+}
+
+/**
+ * What the MODEL is told when a governed call did not go through. The one builder for it, shared by
+ * the loop and the approval resume, because it is the door author-written policy text uses to reach
+ * an agent and a second copy would drift.
+ *
+ * `annotations` here is the MODEL-audience bag only — the keys a plugin declared `audience: "model"`
+ * (`@guidance("ask the requester to route this to People Ops")`). The host's bag is a different field
+ * on the result and is not read here at all: an `@escalate("betterauth:org_123")` is an internal id
+ * for an after-gate to route on, and nothing internal should be spent on, or exposed to, a context
+ * window. Advisory like the rest of this payload — it explains a decision already made.
+ */
+export function governanceToolResult(
+	result: Extract<HandleResult, { status: "denied" | "needs-approval" }>,
+): Record<string, unknown> {
+	return {
+		__governance: result.status,
+		reason: result.reason,
+		reasonCode: result.reasonCode,
+		...(result.modelAnnotations
+			? { annotations: result.modelAnnotations }
+			: {}),
 	};
 }
 
@@ -465,11 +490,7 @@ export async function runAiSdkLoop(
 			const output =
 				result.status === "ok"
 					? await redact(input, result.output)
-					: {
-							__governance: result.status,
-							reason: result.reason,
-							reasonCode: result.reasonCode,
-						};
+					: governanceToolResult(result);
 			if (result.status === "ok") {
 				await input.emitEvent?.({
 					durationMs: toolDurationMs,

@@ -62,10 +62,10 @@ const SEARCH_DESCRIPTION =
 	"(e.g. 'publish a document', 'list github issues') and this returns matching tools with their " +
 	"canonical path, what they do, and the JSON Schema of their arguments. Run one with " +
 	`${toolModelName(EXECUTE_TOOL_PATH)}. A result may carry an \`authorization\` hint — ` +
-	"`available` (nothing objected), `needs-approval` (calling it pauses for a human; " +
-	"`annotations` says who to escalate to), or `conditional` (not permitted as a bare call — the " +
-	"arguments you pass may change that, so try it if it fits). The hint is ADVISORY and may be " +
-	"stale: you are authorized when you call, never here.";
+	"`available` (nothing objected), `needs-approval` (calling it pauses for a human), or " +
+	"`conditional` (not permitted as a bare call — the arguments you pass may change that, so try " +
+	"it if it fits), and `annotations` may carry a note the policy author wrote for you about what " +
+	"to do instead. The hint is ADVISORY and may be stale: you are authorized when you call, never here.";
 
 const EXECUTE_DESCRIPTION =
 	"Run a tool you found with search, by its canonical path. Pass the tool's own arguments as " +
@@ -87,8 +87,8 @@ export type ToolAccessProbe = (
  * What the floor would say about calling a tool — ADVISORY, never a grant and never a refusal:
  *
  *   - `available`      nothing objected to a bare call.
- *   - `needs-approval` it would park for a human; `annotations` carries the deciding rules' own
- *                      metadata (e.g. `{ escalate: "betterauth:team_eng" }`) VERBATIM.
+ *   - `needs-approval` it would park for a human; `annotations` may carry what the deciding rules'
+ *                      author wrote FOR THE AGENT about it.
  *   - `conditional`    a bare call is not permitted, but this tool takes arguments and a policy may
  *                      condition on them, so the real call may well be. See {@link discloseTool}.
  *
@@ -167,11 +167,12 @@ function discloseTool(
 ): DiscoveredTool | null {
 	if (outcome === undefined || outcome.status === "error") return found;
 	if (outcome.status === "ok") return { ...found, authorization: "available" };
-	// Annotations ride out VERBATIM and opaque — `<authority>:<id>` is the host's vocabulary, never
-	// split on the colon here, never interpreted. The engine reports the rules that WOULD permit once
-	// confirmed, so what the model is told to escalate to is the rule that actually gates it.
-	const annotations = outcome.annotations
-		? { annotations: outcome.annotations }
+	// The MODEL-audience annotations only, verbatim — what a policy author wrote for whoever is
+	// reading this ("this needs HR sign-off, ask the requester to route it"). The host's bag is a
+	// different field and is never read here: an escalation target is an internal id for an
+	// after-gate, and a disclosure is the one place a policy speaks to the agent, not about it.
+	const annotations = outcome.modelAnnotations
+		? { annotations: outcome.modelAnnotations }
 		: {};
 	if (outcome.status === "needs-approval") {
 		return { ...found, authorization: "needs-approval", ...annotations };

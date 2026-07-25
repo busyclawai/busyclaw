@@ -25,6 +25,7 @@ import {
 	type ModelRunner,
 	modelCall,
 	type Outcome,
+	type PolicyAnnotations,
 	RESERVED_CONTEXT_PREFIX,
 	type ReasonCode,
 	type Redactor,
@@ -214,6 +215,21 @@ export function createGovernance<const Config extends GovernanceConfig>(
 		v.reason ??
 		(v.reasonCode ? (reasonCodes[v.reasonCode]?.message ?? v.reasonCode) : "");
 
+	// Both annotation bags off a verdict, copied together onto the outcome. Together because they are
+	// one fact split by AUDIENCE, and forgetting the model half at one of four sites would make an
+	// annotation reach the agent on some paths and not others. Governance reads neither: which key
+	// belongs to which audience was settled by its declaration, in the engine.
+	const annotationsOf = (v: {
+		annotations?: PolicyAnnotations;
+		modelAnnotations?: PolicyAnnotations;
+	}): {
+		annotations?: PolicyAnnotations;
+		modelAnnotations?: PolicyAnnotations;
+	} => ({
+		...(v.annotations ? { annotations: v.annotations } : {}),
+		...(v.modelAnnotations ? { modelAnnotations: v.modelAnnotations } : {}),
+	});
+
 	// Internal lists are context-erased; the typed surface lives on the methods.
 	const boundaryBefore: BoundaryGate<TurnContext>[] = [];
 	const before: Gate<TurnContext>[] = [];
@@ -313,7 +329,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
-					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+					...annotationsOf(verdict),
 				};
 			}
 			if (verdict.decision === "needs-approval") {
@@ -328,7 +344,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
-					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+					...annotationsOf(verdict),
 				};
 			}
 		}
@@ -363,7 +379,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
-					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+					...annotationsOf(verdict),
 				};
 			}
 			if (verdict.decision === "needs-approval") {
@@ -374,7 +390,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
-					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+					...annotationsOf(verdict),
 				};
 			}
 		}

@@ -50,7 +50,8 @@ export type CedarEngineConfig = {
 	policies: string | NamedPolicies;
 	/** Policy ANNOTATION keys to surface on decisions — the allowlist plugins declare via
 	 *  `plugin.policyAnnotations`. A declared key found on a DETERMINING policy rides out on
-	 *  `PolicyResult.annotations`; anything undeclared is inert. Only meaningful for a NAMED set. */
+	 *  `PolicyResult.annotations` (or `modelAnnotations`, for a key declared `audience: "model"`);
+	 *  anything undeclared is inert. Only meaningful for a NAMED set. */
 	annotations?: readonly PolicyAnnotationKind[];
 	/** Cedar schema text. Optional; when set, requests are validated against it. */
 	schema?: string;

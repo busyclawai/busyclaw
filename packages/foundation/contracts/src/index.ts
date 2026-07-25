@@ -295,6 +295,7 @@ export {
 	CLAW_ID_CONTEXT_KEY,
 	gateDecision,
 	handleResult,
+	MODEL_ANNOTATION_MAX_LENGTH,
 	modelCall,
 	modelMessage,
 	ORGANIZATION_CONTEXT_KEY,

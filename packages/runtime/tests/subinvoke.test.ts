@@ -294,6 +294,73 @@ describe("@euroclaw/runtime subInvoke", () => {
 		expect(pending).toHaveLength(0);
 	});
 
+	it("hands the guest the MODEL's annotations and drops the host's — this value is read by model code", async () => {
+		// The least obvious model-facing door: what subInvoke returns round-trips into the sandbox as
+		// JSON, and the script reading it was written by the model. So the same wall the transcript has
+		// applies here — and the model-audience half survives the park→deny conversion, because "you
+		// cannot do this here, do X instead" is precisely what its author wrote it for.
+		const nested: HandleResult[] = [];
+		const runtime = createRuntime({
+			model: callToolOnceModel("run_code", {}),
+			tools: {
+				run_code: invokerTool(async (subInvoke) => {
+					nested.push(await subInvoke("parks", {}));
+					nested.push(await subInvoke("refuses", {}));
+					return { ok: true };
+				}),
+				parks: govern(
+					tool({
+						description: "Parks.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => ({ done: true }),
+					}),
+					{
+						gate: () => ({
+							decision: "needs-approval",
+							annotations: { escalate: "betterauth:team_eng" },
+							modelAnnotations: { guidance: "ask a release manager" },
+						}),
+					},
+				),
+				refuses: govern(
+					tool({
+						description: "Refuses.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => ({ done: true }),
+					}),
+					{
+						gate: () => ({
+							decision: "deny",
+							reason: "no",
+							annotations: { escalate: "betterauth:team_eng" },
+							modelAnnotations: { guidance: "try the read-only endpoint" },
+						}),
+					},
+				),
+			},
+		});
+
+		expect((await runtime.generate("do it")).status).toBe("completed");
+		expect(nested).toHaveLength(2);
+		for (const outcome of nested) {
+			expect(outcome).toMatchObject({ status: "denied" });
+			expect(outcome).not.toHaveProperty("annotations");
+			expect(JSON.stringify(outcome)).not.toContain("betterauth:team_eng");
+		}
+		expect(nested[0]).toMatchObject({
+			modelAnnotations: { guidance: "ask a release manager" },
+		});
+		expect(nested[1]).toMatchObject({
+			modelAnnotations: { guidance: "try the read-only endpoint" },
+		});
+	});
+
 	it("runs concurrent nested calls without cross-contaminating outputs", async () => {
 		const results: HandleResult[] = [];
 		const runtime = createRuntime({
