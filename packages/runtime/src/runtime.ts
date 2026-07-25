@@ -964,6 +964,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			redactor,
 			audit: config.audit,
 			approvalStore: approvalStoreOverride,
+			// The SAME operator-notice door the event fan-out and the tool-name collisions use — so a
+			// plugin's after-gate reports where the host is already looking, instead of console.warn.
+			warn,
 			approvalMetadata: () => {
 				const metadata: JsonObject = {
 					version: "runtime.ai-sdk.v1",

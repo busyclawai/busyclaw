@@ -71,6 +71,11 @@ export type GovernanceConfig = {
 	runTool?: ToolRunner;
 	/** Invokes the model (LLM). Required to use `handleModelCall`. Keeps governance SDK-agnostic. */
 	callModel?: ModelRunner;
+	/** The host's single operator-notice door, handed to every after-gate handler so a plugin
+	 *  OBSERVER reports a swallowed failure where the host is already looking (the runtime threads
+	 *  `RuntimeConfig.warn` in here, already defaulted to `console.warn`). NOT a logger, and never a
+	 *  decision path. Omit → silent, the same rule redact.ts states: core has no console. */
+	warn?: (message: string) => void;
 	/** Time source (a Clock port, simplified). */
 	now?: () => string;
 };
@@ -155,6 +160,11 @@ export function createGovernance<const Config extends GovernanceConfig>(
 	const resolveContext = config.resolveContext;
 	const runTool = config.runTool ?? defaultRunTool;
 	const callModel = config.callModel;
+	// Resolved ONCE, before any gate runs — so an after-gate takes it as a plain argument and never
+	// has to `?.` it (the rule the plugin configure context's `secrets` follows). Unset is SILENT, not
+	// console: core has no console (redact.ts says the same), and the runtime — which does — hands its
+	// already-defaulted `RuntimeConfig.warn` down, so every assembled claw's plugins get a real door.
+	const warn = config.warn ?? (() => {});
 	const now = config.now ?? (() => new Date().toISOString());
 	const plugins = config.plugins ?? [];
 
@@ -377,7 +387,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			const final: Outcome = outcome ?? { status: "error", reason: "unknown" };
 			for (const gate of after) {
 				if (gate.matcher(boundaryCall, ctx))
-					await gate.handler(boundaryCall, ctx, final);
+					await gate.handler(boundaryCall, ctx, final, warn);
 			}
 		}
 	}
@@ -388,7 +398,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 		outcome: Outcome,
 	): Promise<void> {
 		for (const gate of after) {
-			if (gate.matcher(call, ctx)) await gate.handler(call, ctx, outcome);
+			if (gate.matcher(call, ctx)) await gate.handler(call, ctx, outcome, warn);
 		}
 	}
 
