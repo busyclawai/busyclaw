@@ -46,6 +46,10 @@ function fakeChannel(overrides: Partial<Channel> = {}): Channel {
 		supports: { webhook: true, poll: true },
 		mode: "webhook",
 		identify: (request) => request.headers.get("x-secret") ?? undefined,
+		// A webhook channel must say how it authenticates: dispatch refuses one with no verifier
+		// rather than serving anonymous POSTs. Accepting unconditionally is this double's explicit,
+		// visible opt-in — the fail-closed cases below override it.
+		verify: () => true,
 		parseInbound: ({ request }) => [
 			{ externalConversationId: "chat-1", text: request.rawBody },
 		],

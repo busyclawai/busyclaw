@@ -37,6 +37,10 @@ function fakeChannel(overrides: Partial<Channel> = {}): Channel {
 		provider: "fake",
 		supports: { webhook: true, poll: true },
 		mode: "webhook",
+		// A webhook channel must say how it authenticates: dispatch refuses one with no verifier
+		// rather than serving anonymous POSTs. Accepting unconditionally is this double's explicit,
+		// visible opt-in — a test that cares overrides it.
+		verify: () => true,
 		parseInbound: ({ request }) => [
 			{ externalConversationId: "chat-1", text: request.rawBody },
 		],
@@ -61,6 +65,28 @@ function eventSink(events: EndpointEvent[]) {
 }
 
 describe("dispatch engine", () => {
+	// Authentication is not "verify if the channel happens to offer it". A webhook-capable channel with
+	// no verifier — a new provider, a half-finished one — would otherwise serve every anonymous POST
+	// that reaches its URL as a genuine provider message, silently and with nothing to notice.
+	it("refuses a webhook-capable channel that declares no verifier", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const events: EndpointEvent[] = [];
+		const { verify: _dropped, ...noVerifier } = fakeChannel();
+
+		const result = await dispatchWebhook({
+			claw: fakeClaw(recorded),
+			channel: noVerifier as Channel,
+			endpoint: endpoint(),
+			request: { headers: { get: () => null }, rawBody: "hello" },
+			persist: eventSink(events),
+		});
+
+		expect(result.status).toBe(401);
+		// Refused before the body was parsed or anything relayed — not after.
+		expect(recorded.relayed).toEqual([]);
+		expect(events).toEqual([]);
+	});
+
 	it("dispatches a webhook: verify -> parse -> bind -> relay -> reply -> report", async () => {
 		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
 		const replies: string[] = [];
