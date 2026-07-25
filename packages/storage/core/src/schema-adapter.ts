@@ -247,9 +247,68 @@ function transformWhere(input: {
 				}) as WhereClause["value"];
 			}
 		}
+		assertComparableValue({
+			action: input.action,
+			field: node.field,
+			isJsonColumn: mapping.meta.type === "json" && input.jsonMode === "native",
+			model: model.logical,
+			operator: node.operator,
+			value,
+		});
 		return { ...node, field: mapping.physical, value };
 	};
 	return input.where.map(transformNode);
+}
+
+/**
+ * A where VALUE must be a comparison operand, never a fragment of query structure.
+ *
+ * Every adapter splices the value straight into its driver — Mongo's `{[field]: value}`, Prisma's
+ * `{[field]: value}` — because by then it is assumed to be a scalar. An OBJECT arriving there stops
+ * being data and becomes syntax: `{$ne: null}` or `{$gt: ""}` in Mongo, `{not: null}` in Prisma, each
+ * of which silently WIDENS the predicate it was supposed to narrow. That is how an ownership or
+ * tenancy filter turns into a match-everything, and nothing downstream can tell — by that point it is
+ * a well-formed query.
+ *
+ * Checked HERE rather than in each adapter: this is the one boundary all five pass through, so the
+ * guard cannot be missed by the sixth. Values are typed as scalars at the API edge and every caller
+ * inside euroclaw sends one today; this is what keeps that true the day a boundary forwards something
+ * less examined.
+ *
+ * A NATIVE json column is the one legitimate exception — there an object IS the operand.
+ */
+function assertComparableValue(input: {
+	action: string;
+	field: string;
+	isJsonColumn: boolean;
+	model: string;
+	operator: WhereClause["operator"];
+	value: unknown;
+}): void {
+	if (input.isJsonColumn) return;
+	const scalar = (value: unknown): boolean =>
+		value === null ||
+		value === undefined ||
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean" ||
+		value instanceof Date;
+	const ok = Array.isArray(input.value)
+		? input.value.every(scalar)
+		: scalar(input.value);
+	if (ok) return;
+	throw validationError(
+		`${input.action}: where value for "${input.field}" is not a comparison operand`,
+		"must be a scalar (or an array of scalars) — an object operand is query STRUCTURE, not data",
+		{
+			model: input.model,
+			field: input.field,
+			operator: input.operator,
+			received: Array.isArray(input.value)
+				? "array containing a non-scalar"
+				: typeof input.value,
+		},
+	);
 }
 
 function transformSortBy(input: {
