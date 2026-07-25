@@ -39,7 +39,15 @@ const DEFAULT_DESCRIPTION =
 export function runCodeTool(input: {
 	sandbox: Sandbox;
 	/** Per-execution context assembly. Host-supplied; may close over integration/actor to build a
-	 *  governed fetchAdapter. Default: {} (no fetch, no fs, defaults-only bounds). */
+	 *  governed fetchAdapter. Default: {} (no fetch, no fs, defaults-only bounds).
+	 *
+	 *  The guest has no network stack of its own, so `fetchAdapter` is the ONLY way out — and the
+	 *  provider turns fetch on from its mere presence, without inspecting what it does. Pass
+	 *  `governedFetch()` rather than `fetch`: a bare passthrough reaches loopback, the private
+	 *  network, and the cloud metadata endpoint.
+	 *
+	 *      context: () => ({ fetchAdapter: governedFetch() })
+	 */
 	context?: (options: { toolCallId: string }) => ExecutionContext;
 	description?: string;
 	/** When supplied, the mounted filesystem PERSISTS across run_code calls that resolve to the same
