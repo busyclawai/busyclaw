@@ -12,8 +12,9 @@
 // only this flow and the domain-verb action constant.
 
 import {
-	asPrincipal,
 	type AuthzChangeStore,
+	asPrincipal,
+	configurationError,
 	type JsonObject,
 	jsonObject,
 	type RegisteredToolStore,
@@ -163,6 +164,24 @@ export function createSpecRegistry(
 			// Throws validationError itself on a non-3.x document.
 			const extraction = toolsFromOpenApi(input.document);
 
+			// One row per address is this flow's own invariant — the diff below tells rows apart by
+			// address, and the address IS the Cedar action id, so a repeat would leave a policy naming
+			// it governing whichever row won. Extraction owns the untrusted document (the OpenAPI
+			// source reports a colliding operationId into `skipped` and keeps the first), so a repeat
+			// arriving HERE is a SOURCE breaking its output contract: code, like the plugin-tool
+			// collisions that throw, not the org data the per-run merge skips. Loud, before any write.
+			const seen = new Set<string>();
+			for (const tool of extraction.tools) {
+				const address = `${input.source}.${tool.name}`;
+				if (seen.has(address)) {
+					throw configurationError(
+						"duplicate registered tool address in one extraction",
+						{ address, source: input.source },
+					);
+				}
+				seen.add(address);
+			}
+
 			const existing = await stores.registeredTools.listBySource(
 				input.organizationId,
 				input.source,
@@ -171,12 +190,10 @@ export function createSpecRegistry(
 
 			const added: string[] = [];
 			const updated: string[] = [];
-			const seen = new Set<string>();
 			const perRowVersions: string[] = [];
 
 			for (const tool of extraction.tools) {
 				const address = `${input.source}.${tool.name}`;
-				seen.add(address);
 				const version = toolContentVersion({
 					name: tool.name,
 					description: tool.description,

@@ -39,6 +39,10 @@ export type SourceExtraction<
 	Binding,
 	Diagnostic extends SourceDiagnostic = SourceDiagnostic,
 > = {
+	/** Names are UNIQUE within one extraction — the registry addresses a row (and Cedar names an
+	 *  action) `<source>.<name>`, so a repeat is not a lost tool but two rows one policy cannot tell
+	 *  apart. A source that cannot make two operations distinct keeps the first and reports the
+	 *  loser in `skipped`; the registration refuses an extraction that breaks this. */
 	tools: SourceTool<Binding>[];
 	/** Operations that did NOT become tools, and why. */
 	skipped: Diagnostic[];

@@ -7,8 +7,27 @@ import type {
 	SpecRegistrationRecord,
 	SpecRegistrationStore,
 } from "@euroclaw/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSpecRegistry } from "../src/tools/registry";
+import type { OpenApiExtraction } from "../src/tools/sources/openapi";
+
+// The registry's address-uniqueness guard is unreachable through a real source — the OpenAPI
+// extractor already keeps the first of a colliding pair and reports the loser — which is precisely
+// why the guard is an assertion about SOURCE code rather than about an uploaded document. Reaching
+// it means standing in a source that breaks the contract, so the extractor module delegates to the
+// real one unless a test installs an override.
+const extractor = vi.hoisted(() => ({
+	override: undefined as OpenApiExtraction | undefined,
+}));
+vi.mock("../src/tools/sources/openapi", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../src/tools/sources/openapi")>();
+	return {
+		...actual,
+		toolsFromOpenApi: (document: JsonObject) =>
+			extractor.override ?? actual.toolsFromOpenApi(document),
+	};
+});
 
 // An in-memory fake of the append-only change log (slice 6b) — the registration flow's optional
 // third collaborator; when present, each registration appends a `spec_registered` event.
@@ -331,5 +350,36 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		expect(report.added).toEqual(["svc.dup"]);
 		expect(report.skipped).toHaveLength(1);
 		expect(report.skipped[0]?.reason).toContain("already taken");
+		// The loser neither overwrote the winner nor doubled the address: ONE row, and it is /a's.
+		expect(stores.tools.size).toBe(1);
+		expect([...stores.tools.values()][0]?.binding).toMatchObject({
+			path: "/a",
+		});
+	});
+
+	it("refuses an extraction whose tools collide on one address, writing nothing", async () => {
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		const twin = {
+			name: "dup",
+			inputSchema: { type: "object", properties: {} },
+			governance: { access: "read" },
+			binding: { method: "get", path: "/a", parameters: [] },
+		} satisfies OpenApiExtraction["tools"][number];
+		extractor.override = { tools: [twin, twin], skipped: [], warnings: [] };
+		try {
+			await expect(
+				registry.registerOpenApiSpec({
+					organizationId: "org-a",
+					source: "svc",
+					document: petstore(),
+					registeredBy: "user:alice",
+				}),
+			).rejects.toThrow("duplicate registered tool address");
+			expect(stores.tools.size).toBe(0);
+			expect(stores.specs.size).toBe(0);
+		} finally {
+			extractor.override = undefined;
+		}
 	});
 });
