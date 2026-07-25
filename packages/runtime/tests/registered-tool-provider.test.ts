@@ -6,7 +6,7 @@ import type {
 } from "@euroclaw/contracts";
 import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
-import { modelFacingTools, toolExecutor } from "../src/tools";
+import { modelToolProjection, toolExecutor } from "../src/tools";
 import type { EgressLookup } from "../src/tools/invoke/egress";
 import {
 	createRegisteredToolProvider,
@@ -247,7 +247,13 @@ describe("createRegisteredToolProvider", () => {
 			],
 			{ organizationId: "org-a" },
 		);
-		const view = modelFacingTools(tools)["petstore.getPet"] as Record<
+		// A registered tool is addressed by its dotted PATH and offered under the SAME flattened
+		// wire name a plugin tool gets — one naming scheme, so nothing reaches a provider with a
+		// dot in it any more.
+		const projection = modelToolProjection(tools);
+		expect(Object.keys(projection.tools)).toEqual(["petstore__getPet"]);
+		expect(projection.pathOf("petstore__getPet")).toBe("petstore.getPet");
+		const view = projection.tools["petstore__getPet"] as Record<
 			string,
 			unknown
 		>;

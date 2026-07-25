@@ -5,8 +5,12 @@
 //                       egress floor, and the provider that synthesizes executable HTTP tools
 //   registry.ts       — the governed OpenAPI registration write flow
 
-export type { ToolExecutable } from "./dispatch";
-export { modelFacingTools, registerToolGates, toolExecutor } from "./dispatch";
+export type { ModelToolProjection, ToolExecutable } from "./dispatch";
+export {
+	modelToolProjection,
+	registerToolGates,
+	toolExecutor,
+} from "./dispatch";
 export type { EgressLookup, ResolvedAddress } from "./invoke/egress";
 export type { PlanEgressInput, PlanEgressResult } from "./invoke/plan-egress";
 export { planEgress } from "./invoke/plan-egress";

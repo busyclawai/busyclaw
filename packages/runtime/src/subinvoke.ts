@@ -2,9 +2,11 @@ import type { HandleResult } from "@euroclaw/contracts";
 
 /** Governed nested tool invocation, handed to invoker-stamped tools' execute.
  *  Full pipeline (redact → gates → execute → audit); NO effect claim; a
- *  needs-approval outcome is converted to a denied value (see the runtime wiring). */
+ *  needs-approval outcome is converted to a denied value (see the runtime wiring).
+ *  `path` is the tool's CANONICAL id (`docs.admin.publish`) — a nested caller is
+ *  inside the runtime, past the provider edge, so it never speaks wire names. */
 export type SubInvoke = (
-	name: string,
+	path: string,
 	args: Record<string, unknown>,
 	ctx?: Record<string, unknown>,
 ) => Promise<HandleResult>;

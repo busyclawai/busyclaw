@@ -25,6 +25,7 @@ import {
 	redactionContextFrom,
 	stateError,
 	THREAD_ID_CONTEXT_KEY,
+	toolModelName,
 	validationError,
 } from "@euroclaw/contracts";
 import { createGovernance, type Governance } from "@euroclaw/core";
@@ -35,7 +36,7 @@ import {
 } from "@euroclaw/storage-durable";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
-import type { ModelMessage, ToolSet, wrapLanguageModel } from "ai";
+import type { ModelMessage, wrapLanguageModel } from "ai";
 import { type as ark } from "arktype";
 import {
 	aiSdkLoop,
@@ -71,7 +72,12 @@ import {
 	NESTED_INVOKER_TOOL,
 	type SubInvoke,
 } from "./subinvoke";
-import { modelFacingTools, registerToolGates, toolExecutor } from "./tools";
+import {
+	type ModelToolProjection,
+	modelToolProjection,
+	registerToolGates,
+	toolExecutor,
+} from "./tools";
 
 export type RuntimeModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -207,11 +213,11 @@ export type RuntimeConfig = {
 	 *  Swap for a different SDK or a streaming-capable vendor. */
 	loop?: ModelLoopVendor;
 	/** The host's tools as canonical DESCRIPTORS (`tool()` / `govern()`) — governance is a field the
-	 *  compiler checks, not a passenger inside the AI-SDK type. The model-facing `ToolSet` is derived
-	 *  from these; the record key is each tool's name. */
+	 *  compiler checks, not a passenger inside the AI-SDK type. The record key is each tool's PATH
+	 *  (its canonical id); the model-facing `ToolSet`, keyed by the flattened wire name, is derived. */
 	tools?: ToolDefinitionSet;
 	/** Resolve extra tools for THIS run (an organization's registered tools) from the resolved turn
-	 *  context, merged over the static `tools` ONCE per run. Code tools win name collisions — a
+	 *  context, merged over the static `tools` ONCE per run. Code tools win collisions — a
 	 *  host tool is never shadowed by a registered upload; a colliding registered tool is skipped,
 	 *  never silently substituted. Registrations are rare and decisions hot, so the merge is per-run,
 	 *  not per tool call. */
@@ -507,6 +513,10 @@ export const runtimeApprovalMetadata = ark({
 	waitId: "string",
 	step: "number",
 	toolCallId: "string",
+	/** The CANONICAL path of the parked call — the same id the ApprovalRecord's own `toolName`
+	 *  column carries, so a resume dispatches and decides on exactly what was parked. The wire
+	 *  name the provider used is NOT stored: it is derived back with `toolModelName` at the one
+	 *  place the resume touches the wire (rebuilding the tool-result message). */
 	toolName: "string",
 	toolInput: "unknown",
 	...runtimeResumeStateShape,
@@ -732,36 +742,52 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		membership: config.membership,
 		organization: config.organization,
 	});
-	const modelTools = modelFacingTools(tools);
+	const staticProjection = modelToolProjection(tools);
 	const catalog = createToolCatalog(toolEntriesFromTools(tools));
 
-	// Merge a run's resolved tools over the static code tools: code tools WIN name collisions (a host
+	// Merge a run's resolved tools over the static code tools: code tools WIN collisions (a host
 	// tool is never shadowed by a registered upload), and a colliding registered tool is skipped
-	// loudly, never silently replaced.
+	// loudly, never silently replaced. Two ways to collide, both checked — the PATH (one canonical
+	// id, two tools: policy would cover whichever won) and the model-facing NAME two distinct paths
+	// can still project onto (`a.b` and a flat `a__b`), which would silently drop one from the
+	// toolset while leaving the other reachable under it. The static assembly fails loud on both;
+	// a per-run registration is data a host does not control, so here it is skip-and-warn.
 	const mergeRunTools = (resolved: ToolDefinitionSet): ToolDefinitionSet => {
 		const merged: ToolDefinitionSet = { ...tools };
-		for (const [name, tool] of Object.entries(resolved)) {
-			if (name in tools) {
+		const modelNames = new Set(Object.keys(staticProjection.tools));
+		for (const [path, tool] of Object.entries(resolved)) {
+			if (path in tools) {
 				warn(
-					`euroclaw: registered tool "${name}" skipped — a code tool already owns that name`,
+					`euroclaw: registered tool "${path}" skipped — a code tool already owns that path`,
 				);
 				continue;
 			}
-			merged[name] = tool;
+			const modelName = toolModelName(path);
+			if (modelNames.has(modelName)) {
+				warn(
+					`euroclaw: registered tool "${path}" skipped — another tool is already offered as "${modelName}"`,
+				);
+				continue;
+			}
+			modelNames.add(modelName);
+			merged[path] = tool;
 		}
 		return merged;
 	};
-	// Resolve the run's tool set + model-facing view ONCE per run. With no resolver the precomputed
-	// static sets are reused (zero cost); both dispatch (`runTools[name]`) and the model-facing view
-	// see the SAME merged set.
+	// Resolve the run's tool set + its provider edge ONCE per run. With no resolver the precomputed
+	// static projection is reused (zero cost); dispatch (`runTools[call.name]`), the ingress
+	// translation, and the offered toolset all come off the SAME merged set.
 	const resolveRunTools = async (
 		resolvedCtx: Record<string, unknown>,
-	): Promise<{ runTools: ToolDefinitionSet; runModelTools: ToolSet }> => {
+	): Promise<{
+		runTools: ToolDefinitionSet;
+		projection: ModelToolProjection;
+	}> => {
 		if (!config.resolveTools) {
-			return { runTools: tools, runModelTools: modelTools };
+			return { runTools: tools, projection: staticProjection };
 		}
 		const runTools = mergeRunTools(await config.resolveTools(resolvedCtx));
-		return { runTools, runModelTools: modelFacingTools(runTools) };
+		return { runTools, projection: modelToolProjection(runTools) };
 	};
 	const emitEvent = (
 		context: { recording?: RuntimeRecordingContext; runId?: string },
@@ -901,7 +927,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					waitId: state.currentApprovalWaitId ?? "",
 					step: state.currentStep,
 					toolCallId: state.currentToolCallId,
-					toolName: state.currentToolName,
+					toolName: state.currentToolPath,
 					toolInput: toJsonValue(
 						state.currentToolInput,
 						"runtime approval tool input invalid",
@@ -1204,7 +1230,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runId = options?.runId;
 		const emitCtx = { recording, runId: options?.runId };
 		const resolvedCtx = await resolveRunContext(ctx);
-		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 		if (onDelta !== undefined) {
 			if (!loop.stream) {
@@ -1244,7 +1270,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const { usage: runUsage, ...result } = await driver({
 			model: selected.model,
 			rawPii: selected.rawPii,
-			tools: runModelTools,
+			tools: projection.tools,
+			resolveToolPath: projection.pathOf,
 			system: config.system,
 			prompt: redactedPrompt,
 			ctx,
@@ -1342,7 +1369,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		if (record.status !== "approved" && record.status !== "consumed")
 			return null;
 		const resolvedCtx = await resolveRunContext(ctx);
-		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 
 		const state = createRunState();
@@ -1358,7 +1385,10 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			config.approvalAuthority === "approver"
 				? record.decidedBy
 				: record.principal;
-		if (config.approvalAuthority === "approver" && executingPrincipal === undefined) {
+		if (
+			config.approvalAuthority === "approver" &&
+			executingPrincipal === undefined
+		) {
 			// A granted approval always stamps `decidedBy` (the api stamps it from the authenticated
 			// approver) — so this is an invariant violation, not a caller error. Fail LOUD: silently
 			// running with no principal would look like a fail-closed deny for the wrong reason.
@@ -1372,7 +1402,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.recording = effectiveRecording;
 		state.runId = options?.runId;
 		state.currentToolCallId = checkpoint.toolCallId;
-		state.currentToolName = checkpoint.toolName;
+		state.currentToolPath = checkpoint.toolName;
 		state.currentToolInput = checkpoint.toolInput;
 		const checkpointMessages = checkpoint.messages;
 		state.currentMessages = checkpointMessages;
@@ -1433,9 +1463,18 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				type: "tool.denied",
 			});
 		}
+		// The one place the resume touches the WIRE: the checkpoint stores the canonical path, and the
+		// provider needs the result back under the name it emitted. `toolModelName` is total and
+		// deterministic, so re-deriving reproduces exactly the name the offered toolset carries — no
+		// second id to keep in sync, and nothing to drift if a tool is re-addressed (a re-addressed
+		// tool fails CLOSED at dispatch above instead, which is the outcome we want).
 		const messages = [
 			...checkpointMessages,
-			toolResultMessage(checkpoint.toolCallId, checkpoint.toolName, output),
+			toolResultMessage(
+				checkpoint.toolCallId,
+				toolModelName(checkpoint.toolName),
+				output,
+			),
 		];
 
 		const resumeState = createRunState();
@@ -1452,7 +1491,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const { usage: runUsage, ...result } = await loop.generate({
 			model: selected.model,
 			rawPii: selected.rawPii,
-			tools: runModelTools,
+			tools: projection.tools,
+			resolveToolPath: projection.pathOf,
 			system: config.system,
 			messages,
 			startStep: checkpoint.step + 1,
@@ -1495,7 +1535,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const runId = options?.runId ?? checkpoint.runId;
 		const emitCtx = { recording, runId };
 		const resolvedCtx = await resolveRunContext(ctx);
-		const { runTools, runModelTools } = await resolveRunTools(resolvedCtx);
+		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 
 		const state = createRunState();
@@ -1510,7 +1550,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const { usage: runUsage, ...result } = await loop.generate({
 			model: selected.model,
 			rawPii: selected.rawPii,
-			tools: runModelTools,
+			tools: projection.tools,
+			resolveToolPath: projection.pathOf,
 			system: config.system,
 			messages: checkpoint.messages,
 			startStep: checkpoint.nextStep,

@@ -1,11 +1,14 @@
 // The registered-tool provider: turns an organization's `registered_tool` rows into `binding`
 // descriptors whose executor is the generic HTTP invoker bound to the row's binding. They join the
-// tool set beside code tools and ride the SAME chokepoint (redact → gate → execute → audit).
+// tool set beside code tools and ride the SAME chokepoint (redact → gate → execute → audit) under
+// the SAME addressing: the row's dotted `address` IS the descriptor's path, so the Cedar action,
+// the catalog address and the audit name all agree, and the model is offered the flattened
+// projection of it exactly like a plugin tool's.
 //
 // The invocation tag is load-bearing here: these are the tools that exist as DATA. The declarative
 // binding rides in the descriptor (the egress floor and `serverForAction` read the same field the
 // row stores), while the credentials, the resolver, and the turn's org/principal stay
-// closure-captured inside the executor — never descriptor fields. `modelFacingTools` is an
+// closure-captured inside the executor — never descriptor fields. `modelToolProjection` is an
 // allowlist projection, so neither the binding nor anything else can reach the model regardless.
 //
 //   • organizationId/principal come from the per-run CONTEXT passed to the provider (the turn's trusted
@@ -135,6 +138,7 @@ export function createRegisteredToolProvider(
 			};
 
 			const description = row.description;
+			// Keyed by the row's dotted address — the canonical PATH, the id the model is built from.
 			tools[row.address] = {
 				...(typeof description === "string" && description !== ""
 					? { description }

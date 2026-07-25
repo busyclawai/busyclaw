@@ -66,7 +66,7 @@ const petstore = (server = "https://petstore.example/v1"): JsonObject => ({
 	},
 });
 
-/** A model that calls petstore.getPet once with the given petId, then stops. */
+/** A model that calls the getPet tool once with the given petId, then stops. */
 function getPetModel(petId: string): RuntimeModel {
 	let step = 0;
 	return {
@@ -90,7 +90,9 @@ function getPetModel(petId: string): RuntimeModel {
 						{
 							type: "tool-call",
 							toolCallId: "c1",
-							toolName: "petstore.getPet",
+							// The WIRE name — a registered tool is offered under the same flattened projection a
+							// plugin tool is, and the run loop translates it back to `petstore.getPet`.
+							toolName: "petstore__getPet",
 							input: JSON.stringify({ petId }),
 						},
 					],

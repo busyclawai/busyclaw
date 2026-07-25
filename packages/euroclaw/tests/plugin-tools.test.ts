@@ -9,6 +9,7 @@
 // tools can land on the same name or the same path fails LOUD at assembly.
 
 import type { EuroclawPlugin, ToolDefinition } from "@euroclaw/contracts";
+import { createMemoryAudit } from "@euroclaw/core";
 import { cedar } from "@euroclaw/policy-cedar";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
@@ -244,6 +245,105 @@ describe("plugin.tools — governed by the same floor", () => {
 	});
 });
 
+// The id UNIFICATION: the wire name lives at the provider edge and nowhere else. Everything past the
+// run loop's ingress — the Cedar decision, the audit, the transcript, an approval checkpoint,
+// dispatch — speaks the canonical PATH. Grepping the compliance log for `docs.search` used to find
+// nothing, because the audit recorded `docs__search` while the decision recorded `docs.search`.
+describe("plugin.tools — one id past the provider edge", () => {
+	it("the AUDIT and the transcript record the canonical path, not the wire name", async () => {
+		const ran: string[] = [];
+		const audit = createMemoryAudit();
+		const toolEvents: string[] = [];
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: callingModel("docs__search", { names: [] }),
+			audit,
+			events: {
+				emit: async (event) => {
+					if (event.type === "tool.called") toolEvents.push(event.toolName);
+				},
+			},
+			plugins: [docsPlugin(ran)],
+		});
+
+		expect((await claw.api.generate({ prompt: "search" })).status).toBe(
+			"completed",
+		);
+		expect(ran).toEqual(["search"]);
+
+		// The model was OFFERED `docs__search` and called it under that name — and neither record of
+		// the call mentions it. One id in the log, and it is the one a policy or a grant enumerates.
+		const entry = audit.entries().find((e) => e.boundary === "tool");
+		expect(entry?.name).toBe("docs.search");
+		// The transcript rides the same event the claws-store sink writes its `tool_call` row from.
+		expect(toolEvents).toEqual(["docs.search"]);
+	});
+
+	it("an approved plugin-tool call resumes onto the SAME tool, correlated as the provider sent it", async () => {
+		const ran: string[] = [];
+		const audit = createMemoryAudit();
+		// Captures the prompt of the model call AFTER the resume — where the parked tool's result is
+		// handed back. The correlation pair must be exactly what the provider emitted.
+		const resumed: { toolResults: { id: unknown; name: unknown }[] } = {
+			toolResults: [],
+		};
+		const inner = callingModel("docs__admin__publish", { names: [] });
+		const model: V2Model = {
+			...inner,
+			doGenerate: async (options) => {
+				for (const message of options.prompt) {
+					if (message.role !== "tool") continue;
+					for (const part of message.content) {
+						if (part.type !== "tool-result") continue;
+						resumed.toolResults.push({
+							id: part.toolCallId,
+							name: part.toolName,
+						});
+					}
+				}
+				return inner.doGenerate(options);
+			},
+		};
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model,
+			audit,
+			// `admin.publish` is a WRITE, so the floor parks it for approval on an autonomous run.
+			plugins: [docsPlugin(ran)],
+		});
+
+		const waiting = await claw.api.generate({ prompt: "publish" });
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected approval wait");
+		}
+		expect(ran).toEqual([]);
+		const approvalId = waiting.approvalIds[0];
+
+		// The approval was parked under the CANONICAL id — the same id the Cedar decision used, and
+		// the id `continueRun` re-dispatches on. A record written under one id and replayed under
+		// another would either miss (fail closed) or, worse, land on some other tool.
+		const parked = await claw.api.getApproval({ id: approvalId });
+		expect(parked?.toolName).toBe("docs.admin.publish");
+
+		await claw.api.grantApproval({ approvalId });
+		expect((await claw.api.continueRun({ approvalId }))?.status).toBe(
+			"completed",
+		);
+		// The right tool ran — exactly once.
+		expect(ran).toEqual(["publish"]);
+		// …and the result went back keyed the way the provider sent the call: same call id, and the
+		// WIRE name, re-derived from the stored path (a provider that matches a result by name — as
+		// Gemini's functionResponse does — would otherwise see an unanswered call).
+		expect(resumed.toolResults).toEqual([
+			{ id: "c1", name: "docs__admin__publish" },
+		]);
+	});
+});
+
 describe("plugin.tools — collisions fail loud", () => {
 	const collide = (input: {
 		tools?: Record<string, ToolDefinition>;
@@ -310,5 +410,21 @@ describe("plugin.tools — collisions fail loud", () => {
 				],
 			}),
 		).toThrow(/duplicate euroclaw plugin tool name/);
+	});
+
+	it("two HOST tools that project onto one name — caught where the names are minted", () => {
+		const ran: string[] = [];
+		// No plugin involved, so the plugin-merge checks never run. The projection itself is the
+		// backstop: one of these two would simply not be offered, and the model calling `a__b` would
+		// reach whichever won.
+		expect(() =>
+			collide({
+				tools: {
+					"a.b": recordingTool(ran, "dotted", "read"),
+					a__b: recordingTool(ran, "flat", "read"),
+				},
+				plugins: [],
+			}),
+		).toThrow(/duplicate model-facing tool name/);
 	});
 });
