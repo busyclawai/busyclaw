@@ -16,6 +16,7 @@ import {
 	type Redactor,
 	type Secrets,
 	type ToolDefinitionSet,
+	toolModelName,
 } from "@euroclaw/contracts";
 import {
 	createRegisteredToolProvider,
@@ -316,13 +317,16 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
  * action model is built before any `configure` runs — a tool the floor never saw would reach the
  * runtime ungoverned.
  *
- * The record key is the model-facing NAME (the flattened projection — providers reject dots); the
- * dotted `path` rides on the definition as the canonical id policy and the catalog address use.
+ * The record key is the canonical PATH — the Cedar action, the catalog address, what the audit
+ * records, what dispatch looks up. The model-facing name is derived from it at the provider edge and
+ * translated back at the run loop's ingress, so it exists nowhere in here.
  *
- * Collisions FAIL LOUD on BOTH, because they are different collisions: two paths can be distinct and
- * still collide once flattened (plugin `docs` shipping `admin__publish` beside a group `admin` with
- * `publish`). Shadowing silently is the worst option available — the caller keeps its name while the
- * behaviour and the governance facts behind it become someone else's.
+ * Collisions FAIL LOUD on BOTH the path and the derived name, because they are different collisions:
+ * two paths can be distinct and still project onto one name (plugin `docs` shipping `admin__publish`
+ * beside a group `admin` with `publish`). Shadowing silently is the worst option available — the
+ * caller keeps its name while the behaviour and the governance facts behind it become someone
+ * else's. The name check is also what makes the id unification safe: a stale wire name can never
+ * resolve to some OTHER tool's path, because such a pair cannot be assembled in the first place.
  *
  * Returns the host's own set UNCHANGED when no plugin ships tools: the common path adds nothing.
  */
@@ -342,11 +346,19 @@ function collectPluginTools(input: {
 	const merged: ToolDefinitionSet = { ...input.tools };
 	const nameOwners = new Map<string, string>();
 	const pathOwners = new Map<string, string>();
-	for (const [name, definition] of Object.entries(input.tools ?? {})) {
-		nameOwners.set(name, "host");
-		pathOwners.set(definition.path ?? name, "host");
+	for (const path of Object.keys(input.tools ?? {})) {
+		nameOwners.set(toolModelName(path), "host");
+		pathOwners.set(path, "host");
 	}
 	for (const tool of contributed) {
+		const pathOwner = pathOwners.get(tool.path);
+		if (pathOwner !== undefined) {
+			throw configurationError("duplicate euroclaw plugin tool path", {
+				path: tool.path,
+				pluginId: tool.pluginId,
+				previous: pathOwner,
+			});
+		}
 		const nameOwner = nameOwners.get(tool.name);
 		if (nameOwner !== undefined) {
 			throw configurationError("duplicate euroclaw plugin tool name", {
@@ -356,17 +368,9 @@ function collectPluginTools(input: {
 				previous: nameOwner,
 			});
 		}
-		const pathOwner = pathOwners.get(tool.path);
-		if (pathOwner !== undefined) {
-			throw configurationError("duplicate euroclaw plugin tool path", {
-				path: tool.path,
-				pluginId: tool.pluginId,
-				previous: pathOwner,
-			});
-		}
 		nameOwners.set(tool.name, tool.pluginId);
 		pathOwners.set(tool.path, tool.pluginId);
-		merged[tool.name] = { ...tool.definition, path: tool.path };
+		merged[tool.path] = tool.definition;
 	}
 	return merged;
 }

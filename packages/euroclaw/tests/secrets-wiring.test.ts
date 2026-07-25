@@ -57,7 +57,7 @@ const petstore = (server = PUBLIC_SERVER): JsonObject => ({
 	},
 });
 
-/** A model that calls petstore.getPet once with the given petId, then stops. */
+/** A model that calls the getPet tool once with the given petId, then stops. */
 function getPetModel(petId: string): RuntimeModel {
 	let step = 0;
 	return {
@@ -81,7 +81,9 @@ function getPetModel(petId: string): RuntimeModel {
 						{
 							type: "tool-call",
 							toolCallId: "c1",
-							toolName: "petstore.getPet",
+							// The WIRE name — a registered tool is offered under the same flattened projection a
+							// plugin tool is, and the run loop translates it back to `petstore.getPet`.
+							toolName: "petstore__getPet",
 							input: JSON.stringify({ petId }),
 						},
 					],
@@ -182,7 +184,11 @@ describe("secrets assembly wiring (createClaw)", () => {
 			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
 
-		const result = await claw.$context.runtime.generate("get pet 7", runCtx, asAlice);
+		const result = await claw.$context.runtime.generate(
+			"get pet 7",
+			runCtx,
+			asAlice,
+		);
 		expect(result.status).toBe("completed");
 		expect(calls).toHaveLength(1);
 		expect(apiKeyHeaderOf(calls[0])).toBe("env-secret-key");

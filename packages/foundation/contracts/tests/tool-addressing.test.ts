@@ -50,18 +50,20 @@ describe("flattenToolTree — nested records become rooted paths", () => {
 	});
 });
 
-describe("toolDescriptors — the one place a key becomes a path", () => {
-	it("uses the record key when the definition was never addressed", () => {
+describe("toolDescriptors — the key IS the path", () => {
+	it("addresses a flat tool by its own key", () => {
 		expect(toolDescriptors({ readDoc: leaf("read") })[0]?.path).toBe("readDoc");
 	});
 
-	it("keeps an already-addressed definition's dotted path", () => {
+	it("addresses an already-flattened tool by the dotted key it was placed under", () => {
 		const [addressed] = flattenToolTree("docs", {
 			admin: { publish: leaf("p") },
 		});
 		if (addressed === undefined) throw new Error("expected one addressed tool");
+		// The assembly keys the merged set by PATH — the wire name is derived at the provider edge,
+		// never stored beside the definition, so there is no second id here to disagree with.
 		const descriptors = toolDescriptors({
-			[addressed.name]: { ...addressed.definition, path: addressed.path },
+			[addressed.path]: addressed.definition,
 		});
 		expect(descriptors[0]?.path).toBe("docs.admin.publish");
 	});

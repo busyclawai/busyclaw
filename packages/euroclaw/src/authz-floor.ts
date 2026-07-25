@@ -88,26 +88,16 @@ export function buildFloorPolicyPlugin(input: {
 	//    MODELED actions. deny-by-default applies WITHIN the modeled set; an unmodeled tool call skips
 	//    the floor entirely, preserving its own gate (or ungoverned) behaviour.
 	//
-	//    A call arrives under its model-facing NAME; the model's actions are PATHS. They coincide for
-	//    a host tool (key === path) and diverge for a plugin tool, which is called as
-	//    `docs__admin__publish` and modeled as `docs.admin.publish`. This index is the ONE place the
-	//    two meet — the matcher and the mapper read it together, so every call the matcher claims is
-	//    a call the mapper can address, and a name nothing declared falls through to `call.name` and
-	//    is simply unmodeled (the pre-existing skip, never a permit).
+	//    `call.name` IS the action id here: the model-facing wire name is translated back to the
+	//    canonical path at the run loop's ingress, so the floor — like dispatch, the audit and every
+	//    gate — only ever sees paths. It used to need an index to reconcile the two, which put a
+	//    second id inside the governance layer; moving the translation to the edge deleted it.
 	const modeled = new Set(model.actions.map((action) => action.id));
-	const pathByName = new Map(
-		Object.entries(input.tools ?? {}).map(([name, tool]) => [
-			name,
-			tool.path ?? name,
-		]),
-	);
-	const actionId = (name: string): string => pathByName.get(name) ?? name;
 	const mapCall = cedarMapCall({ model });
 	return createPolicyPlugin({
 		engine,
-		mapCall: (call, ctx) =>
-			mapCall({ ...call, name: actionId(call.name) }, ctx),
-		matcher: (call: ToolCall) => modeled.has(actionId(call.name)),
+		mapCall,
+		matcher: (call: ToolCall) => modeled.has(call.name),
 		id: FLOOR_POLICY_ID,
 		sealed: true,
 	});

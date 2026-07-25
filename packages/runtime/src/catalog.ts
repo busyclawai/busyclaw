@@ -9,7 +9,12 @@
 // never permits calling it — every call still routes through the governance
 // chokepoint (handleToolCall). tools-plan.md invariant #8.
 
-import { type ToolDefinitionSet, validationError } from "@euroclaw/contracts";
+import {
+	type ToolDefinitionSet,
+	toolDescriptors,
+	toolModelName,
+	validationError,
+} from "@euroclaw/contracts";
 import { type } from "arktype";
 
 const ADDRESS_SEP = ".";
@@ -283,20 +288,21 @@ export function createToolCatalog(
 // ── Source adapters ────────────────────────────────────────────────────────
 
 /**
- * Adapt the host's tool descriptors into catalog entries. A host tool is FLAT
- * (address === name); a plugin's tools arrive already addressed, so their
- * dotted `path` is the address and the record key is only the model-facing
- * name — which is what gives a plugin a real subtree to drill into rather than
- * one flat leaf per tool. Other structured addresses come from sourced tools
- * (MCP servers, OpenAPI tags) which build their own ToolEntry[] directly. This
+ * Adapt the host's tool descriptors into catalog entries. The descriptor's
+ * PATH is the address, which is what gives a plugin (or a registered OpenAPI
+ * source) a real subtree to drill into rather than one flat leaf per tool; a
+ * flat host tool addresses itself. `name` is the model-facing projection of
+ * that path — the string a reader of the catalog would actually have to emit
+ * to call the tool. Other structured addresses come from sourced tools (MCP
+ * servers, OpenAPI tags) which build their own ToolEntry[] directly. This
  * adapter does not copy the executable (the catalog is a read-path, not a
  * dispatcher — execution stays behind handleToolCall). `source` is "host";
  * `risk` is projected from the descriptor's governance facts.
  */
 export function toolEntriesFromTools(tools: ToolDefinitionSet): ToolEntry[] {
-	return Object.entries(tools).map(([name, t]) => ({
-		address: t.path ?? name,
-		name,
+	return toolDescriptors(tools).map((t) => ({
+		address: t.path,
+		name: toolModelName(t.path),
 		source: "host",
 		description: t.description,
 		inputSchema: t.inputSchema,

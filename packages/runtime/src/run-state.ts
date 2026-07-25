@@ -11,7 +11,10 @@ import type { RuntimeAbortSignal } from "./runtime";
 
 export type RunState = {
 	currentToolCallId: string;
-	currentToolName: string;
+	/** The CANONICAL id of the call in flight — the path, never the wire name the provider used.
+	 *  The loop translates at ingress, so everything reading this (approval checkpoints, events,
+	 *  effect ids) records the same id the policy decision did. */
+	currentToolPath: string;
 	currentToolInput: unknown;
 	currentMessages: ModelMessage[];
 	currentStep: number;
@@ -43,7 +46,7 @@ export type RunState = {
 export function createRunState(): RunState {
 	return {
 		currentToolCallId: "",
-		currentToolName: "",
+		currentToolPath: "",
 		currentToolInput: undefined,
 		currentMessages: [],
 		currentStep: 0,

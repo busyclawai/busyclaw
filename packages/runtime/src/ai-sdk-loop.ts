@@ -25,6 +25,13 @@ export type AiSdkLoopInput = {
 	 *  it and re-redacts its output, so durable state stays tokenized. Default false. */
 	rawPii?: boolean;
 	tools: ToolSet;
+	/**
+	 * The tool-call INGRESS translation: the wire name the provider emitted → the canonical path.
+	 * Applied once, at the top of the call, so governance, dispatch, the audit, approvals, effects
+	 * and the transcript all speak the one canonical id. Absent (or a name nothing offered) leaves
+	 * the name as it arrived.
+	 */
+	resolveToolPath?: (modelName: string) => string;
 	system?: string;
 	/** Arrives ALREADY redacted (the caller redacts at ingress) — the loop never re-redacts it. */
 	prompt?: string;
@@ -61,6 +68,12 @@ export type AiSdkLoopInput = {
 	rehydrateValue?: (text: string) => Promise<string>;
 };
 
+/**
+ * The tool result as the provider expects it back. `toolName` is the MODEL-FACING wire name — the
+ * one the provider emitted, not the canonical path — because a result is correlated by the pair the
+ * call arrived as: most providers match on `toolCallId` alone, but some (Gemini's `functionResponse`)
+ * match on the name. This is the one place inside the loop that still speaks the wire.
+ */
 export function toolResultMessage(
 	toolCallId: string,
 	toolName: string,
@@ -341,10 +354,20 @@ export async function runAiSdkLoop(
 		const toolMessages: ModelMessage[] = [];
 		for (const toolCall of res.toolCalls) {
 			abortIfNeeded(input.abortSignal);
+			// THE INGRESS. `toolCall.toolName` is the wire name — the flattened projection the provider
+			// was offered, because providers reject dots. Resolve it to the canonical path ONCE, here,
+			// and nothing downstream has to know the wire name existed: the floor decides on this id,
+			// dispatch looks it up, the audit and the transcript record it, an approval parks under it.
+			// The wire name survives exactly where the wire needs it — the tool RESULT, which must come
+			// back correlated the way the provider sent it (some providers match a result by NAME, not
+			// only by call id), so `toolResultMessage` below keeps `toolCall.toolName` verbatim.
+			const toolPath = input.resolveToolPath
+				? input.resolveToolPath(toolCall.toolName)
+				: toolCall.toolName;
 			// Model-authored args may contain NOVEL raw PII the model composed — still redacted here.
 			const redactedToolInput = await redact(input, toolCall.input);
 			input.state.currentToolCallId = toolCall.toolCallId;
-			input.state.currentToolName = toolCall.toolName;
+			input.state.currentToolPath = toolPath;
 			input.state.currentToolInput = redactedToolInput;
 			input.state.currentStep = step;
 			input.state.currentEffectId = undefined;
@@ -358,14 +381,14 @@ export async function runAiSdkLoop(
 				args: redactedToolInput,
 				step,
 				toolCallId: toolCall.toolCallId,
-				toolName: toolCall.toolName,
+				toolName: toolPath,
 				type: "tool.called",
 			});
 			const toolStartedAt = Date.now();
 			let result: Awaited<ReturnType<Governance["handleToolCall"]>>;
 			try {
 				result = await input.core.handleToolCall(
-					{ name: toolCall.toolName, args: redactedToolInput },
+					{ name: toolPath, args: redactedToolInput },
 					input.ctx,
 				);
 			} catch (err) {
@@ -375,7 +398,7 @@ export async function runAiSdkLoop(
 					error: redactedError,
 					step,
 					toolCallId: toolCall.toolCallId,
-					toolName: toolCall.toolName,
+					toolName: toolPath,
 					type: "tool.failed",
 				});
 				throw err;
@@ -385,7 +408,7 @@ export async function runAiSdkLoop(
 				if (!input.core.approvals) {
 					throw configurationError(
 						"runtime cannot wait for approval without a durable approval store",
-						{ toolName: toolCall.toolName, toolCallId: toolCall.toolCallId },
+						{ toolName: toolPath, toolCallId: toolCall.toolCallId },
 					);
 				}
 				const pendingAfter =
@@ -403,7 +426,7 @@ export async function runAiSdkLoop(
 					throw stateError(
 						"approval was parked without runtime checkpoint metadata",
 						{
-							toolName: toolCall.toolName,
+							toolName: toolPath,
 							toolCallId: toolCall.toolCallId,
 							approvalIds: fallbackIds,
 						},
@@ -413,7 +436,7 @@ export async function runAiSdkLoop(
 					approvalIds,
 					step,
 					toolCallId: toolCall.toolCallId,
-					toolName: toolCall.toolName,
+					toolName: toolPath,
 					type: "tool.waiting_approval",
 				});
 				return {
@@ -443,7 +466,7 @@ export async function runAiSdkLoop(
 					...(output !== undefined ? { output } : {}),
 					step,
 					toolCallId: toolCall.toolCallId,
-					toolName: toolCall.toolName,
+					toolName: toolPath,
 					type: "tool.completed",
 				});
 			} else if (result.status === "denied") {
@@ -452,7 +475,7 @@ export async function runAiSdkLoop(
 					reasonCode: result.reasonCode,
 					step,
 					toolCallId: toolCall.toolCallId,
-					toolName: toolCall.toolName,
+					toolName: toolPath,
 					type: "tool.denied",
 				});
 			}

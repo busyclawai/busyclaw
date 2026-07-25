@@ -92,17 +92,18 @@ export type ToolDescriptor<
 };
 
 /** A descriptor before it has an address — what an authoring helper (`tool()`, `govern()`) returns.
- *  The record key it is placed under supplies the `path`, unless the definition already carries one:
- *  a nested record flattens into a dotted path whose key becomes the flattened model-facing NAME, so
- *  key and path stop coinciding. Set by the addressing pass ({@link flattenToolTree}), never by hand. */
+ *  The record key it is placed under supplies the `path`; a nested record is flattened into that key
+ *  by the addressing pass ({@link flattenToolTree}) first. A definition never carries its own path:
+ *  one id, one place to read it. */
 export type ToolDefinition<
 	InputSchema = unknown,
 	Invocation extends ToolInvocation = ToolInvocation,
-> = Omit<ToolDescriptor<InputSchema, Invocation>, "path"> & { path?: string };
+> = Omit<ToolDescriptor<InputSchema, Invocation>, "path">;
 
-/** What the authoring surfaces speak (`RuntimeConfig.tools`, a run's resolved tools): NAME →
- *  definition. The key is the model-facing name — what the provider is sent, what a tool call
- *  arrives under, and what dispatch looks up. */
+/** What the authoring surfaces speak (`RuntimeConfig.tools`, a run's resolved tools, a plugin's
+ *  assembled tools): PATH → definition. The key is the canonical id — the Cedar action, the catalog
+ *  address, what dispatch looks up, what the audit records. The model-facing NAME is derived from it
+ *  ({@link toolModelName}) at the provider edge and nowhere else. */
 export type ToolDefinitionSet = Record<string, ToolDefinition>;
 
 /** Tool declarations, optionally GROUPED: a nested record is a group whose key becomes a path
@@ -122,8 +123,13 @@ export type AddressedTool = {
 
 /**
  * The model-facing NAME of a path — the derived projection, never the canonical id. Providers reject
- * dots in a tool name, so `docs.admin.publish` is offered as `docs__admin__publish`. One-way by
- * design: the path is what policy and grants enumerate, the name is only what the wire accepts.
+ * dots in a tool name, so `docs.admin.publish` is offered as `docs__admin__publish`. The path is what
+ * policy and grants enumerate; the name is only what the wire accepts, and it exists nowhere inside
+ * the runtime — the run loop translates it back at ingress.
+ *
+ * One-way ON ITS OWN: `docs__admin__publish` could equally be a flat tool literally named that, so
+ * reversing it means indexing the set that was actually offered, never splitting on `__`. Two paths
+ * that project onto one name is a collision the assembly fails loud on.
  */
 export function toolModelName(path: string): string {
 	return path.split(PATH_SEPARATOR).join(NAME_SEPARATOR);
@@ -167,12 +173,11 @@ export function flattenToolTree(root: string, tree: ToolTree): AddressedTool[] {
 	return addressed;
 }
 
-/** Address a set of definitions — the one place a key becomes a `path`. A definition that was
- *  already addressed ({@link flattenToolTree}) keeps its dotted path; everything else is flat, its
- *  key serving as both name and path. */
+/** Lift a set into descriptors — the key IS the path, so this only makes the canonical id explicit
+ *  on the shape (`ToolDescriptor` requires it; `ToolDefinition` deliberately cannot carry it). */
 export function toolDescriptors(tools: ToolDefinitionSet): ToolDescriptor[] {
-	return Object.entries(tools).map(([name, definition]) => ({
+	return Object.entries(tools).map(([path, definition]) => ({
 		...definition,
-		path: definition.path ?? name,
+		path,
 	}));
 }

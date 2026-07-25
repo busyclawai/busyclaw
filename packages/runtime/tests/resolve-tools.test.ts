@@ -133,4 +133,26 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 			),
 		).toBe(true);
 	});
+
+	it("a registered tool whose PATH projects onto an offered name is skipped too", async () => {
+		const ran: string[] = [];
+		const offered = { names: [] as string[] };
+		const warnings: string[] = [];
+		// Distinct paths, one wire name: the flat `a__b` and the dotted `a.b` are different tools that
+		// the provider cannot tell apart. Letting the second in would drop one from the offered set
+		// while leaving the other reachable under it — the model calls `a__b` and gets whichever won.
+		const runtime = createRuntime({
+			model: callingModel("a__b", offered),
+			tools: { a__b: recordingTool(ran, "code") },
+			organization: orgResolver,
+			resolveTools: () => ({ "a.b": recordingTool(ran, "registered") }),
+			warn: (message) => warnings.push(message),
+		});
+		await runtime.generate("go", { org: "org-a" });
+		expect(ran).toEqual(["code"]);
+		expect(offered.names).toEqual(["a__b"]);
+		expect(
+			warnings.some((message) => message.includes('already offered as "a__b"')),
+		).toBe(true);
+	});
 });
