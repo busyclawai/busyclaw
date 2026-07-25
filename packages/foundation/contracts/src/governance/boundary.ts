@@ -223,6 +223,13 @@ export type BoundaryGate<Ctx extends TurnContext = TurnContext> = {
  * An after-gate observes a finished call (the canonical one is audit). It runs in a
  * finally — even when a before-gate denied or the tool threw — so a sealed after-gate
  * is a guaranteed record. It observes; it does not decide.
+ *
+ * `warn` is the HOST's one operator-notice door (`RuntimeConfig.warn`), handed in rather than read
+ * off the plugin's own options: an after-gate is the one gate class that must SWALLOW its failures
+ * (throwing here runs inside governance's `finally` and would mask the call's real outcome), and a
+ * swallowed failure an operator never sees is the failure mode this argument exists to prevent.
+ * Always supplied — governance resolves it (default `console.warn`) before it runs a single gate —
+ * so a handler never `?.`-chains it. Before-gates get no such door: they decide, they don't swallow.
  */
 export type AfterGate<Ctx extends TurnContext = TurnContext> = {
 	id: string;
@@ -231,6 +238,7 @@ export type AfterGate<Ctx extends TurnContext = TurnContext> = {
 		call: BoundaryCall,
 		ctx: Ctx,
 		outcome: Outcome,
+		warn: (message: string) => void,
 	) => void | Promise<void>;
 	sealed?: boolean;
 };

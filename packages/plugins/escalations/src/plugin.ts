@@ -67,13 +67,10 @@ export type EscalationsOptions = {
 	/**
 	 * Where an escalation goes — page a team, open a ticket, write your own queue row. Awaited, like
 	 * every observer in this runtime, so a short-lived host cannot return before the notice is sent;
-	 * hand off fast (enqueue, don't deliver inline). Throwing is safe — the failure is warned, never
-	 * propagated — but a hang is still a hang.
+	 * hand off fast (enqueue, don't deliver inline). Throwing is safe — the failure goes to the host's
+	 * own `warn` door, never into the run — but a hang is still a hang.
 	 */
 	onEscalate: (escalation: Escalation) => void | Promise<void>;
-	/** Where routing failures are reported. Defaults to `console.warn` — the same operator-notice door,
-	 *  and the same default, the runtime gives its observer sinks. */
-	warn?: (message: string) => void;
 	/** Plugin id override (default "euroclaw.escalations"), which the after-gate's id derives from.
 	 *  Two installs need two ids — same-id gates replace, they do not stack. */
 	id?: string;
@@ -141,13 +138,15 @@ export function escalations(
 	// contribute cron" and would make every host that installs this plugin pass a `cronHandler`.
 ): EuroclawPlugin<"no-cron"> {
 	const id = options.id ?? "euroclaw.escalations";
-	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const gate: AfterGate = {
 		id,
 		// Every boundary: an escalation annotated onto a model-egress forbid is the same fact as one on
 		// a tool forbid. Narrowing to the tool boundary here would drop it silently.
 		matcher: () => true,
-		handler: async (call, ctx, result) => {
+		// `warn` arrives from governance — the HOST's one operator-notice door (`createClaw({ warn })`),
+		// not a second knob on this plugin. A router that swallows a failure the host never sees is a
+		// silently dropped escalation.
+		handler: async (call, ctx, result, warn) => {
 			// Nothing to route: no annotation on the deciding policies (every `ok`, and the ordinary
 			// deny), or a policy annotated a key no plugin declared — which never leaves the engine.
 			const escalation = escalating(result);

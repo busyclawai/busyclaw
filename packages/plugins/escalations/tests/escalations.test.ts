@@ -72,11 +72,14 @@ function clawWith(input: {
 	// createClaw ask this test for a cronHandler.
 	plugins: readonly EuroclawPlugin<"no-cron">[];
 	onRun?: () => void;
+	/** The host's one operator-notice door — what a failing observer is reported through. */
+	warn?: (message: string) => void;
 }) {
 	const db = memoryAdapter();
 	return createClaw({
 		database: db,
 		model: toolCallModel(input.toolName),
+		...(input.warn ? { warn: input.warn } : {}),
 		redaction: {
 			redactor: createStoredRedactor({
 				detector: noopDetector,
@@ -211,7 +214,7 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 		expect(routed).toEqual([]);
 	});
 
-	it("a throwing onEscalate does NOT fail the run — it warns", async () => {
+	it("a throwing onEscalate does NOT fail the run — it warns through the HOST's door", async () => {
 		const warnings: string[] = [];
 		let ran = false;
 		const claw = clawWith({
@@ -220,12 +223,14 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 			onRun: () => {
 				ran = true;
 			},
+			// The plugin takes no warn of its own: the door is `createClaw({ warn })`, threaded through
+			// the runtime and governance into the after-gate handler. A host configures one door, once.
+			warn: (message) => void warnings.push(message),
 			plugins: [
 				escalations({
 					onEscalate: () => {
 						throw new Error("pager is down");
 					},
-					warn: (message) => void warnings.push(message),
 				}),
 				escalatingPark("betterauth:team_eng"),
 			],
