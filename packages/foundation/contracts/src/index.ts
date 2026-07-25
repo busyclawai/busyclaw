@@ -494,14 +494,20 @@ export type {
 } from "./tools/secrets";
 // ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──
 export type {
+	AddressedTool,
 	ToolDefinition,
 	ToolDefinitionSet,
 	ToolDescriptor,
 	ToolExecute,
 	ToolInvocation,
 	ToolPresence,
+	ToolTree,
 } from "./tools/descriptor";
-export { toolDescriptors } from "./tools/descriptor";
+export {
+	flattenToolTree,
+	toolDescriptors,
+	toolModelName,
+} from "./tools/descriptor";
 // ── tool sources: what every extractor produces (impls in @euroclaw/runtime) ──
 export type {
 	SourceDiagnostic,

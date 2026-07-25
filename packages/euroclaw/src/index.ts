@@ -9,11 +9,13 @@ import {
 	type EuroclawPlugin,
 	type EuroclawPluginConfigureContext,
 	errorMessage,
+	flattenToolTree,
 	type InferPluginApi,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
 	type Secrets,
+	type ToolDefinitionSet,
 } from "@euroclaw/contracts";
 import {
 	createRegisteredToolProvider,
@@ -305,6 +307,68 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
 			seen.set(key, routeId);
 		}
 	}
+}
+
+/**
+ * Assemble the ONE tool set the runtime and the governance floor are both built from: the host's own
+ * `tools` plus every plugin's static `tools`, each rooted at its plugin's id (`docs.admin.publish`).
+ * Read STATICALLY off the raw plugin list (like `policies`/`secrets.providers`), because the floor's
+ * action model is built before any `configure` runs — a tool the floor never saw would reach the
+ * runtime ungoverned.
+ *
+ * The record key is the model-facing NAME (the flattened projection — providers reject dots); the
+ * dotted `path` rides on the definition as the canonical id policy and the catalog address use.
+ *
+ * Collisions FAIL LOUD on BOTH, because they are different collisions: two paths can be distinct and
+ * still collide once flattened (plugin `docs` shipping `admin__publish` beside a group `admin` with
+ * `publish`). Shadowing silently is the worst option available — the caller keeps its name while the
+ * behaviour and the governance facts behind it become someone else's.
+ *
+ * Returns the host's own set UNCHANGED when no plugin ships tools: the common path adds nothing.
+ */
+function collectPluginTools(input: {
+	tools: ToolDefinitionSet | undefined;
+	plugins: readonly EuroclawPlugin[];
+}): ToolDefinitionSet | undefined {
+	const contributed = input.plugins.flatMap((plugin) =>
+		plugin.tools
+			? flattenToolTree(plugin.id, plugin.tools).map((addressed) => ({
+					...addressed,
+					pluginId: plugin.id,
+				}))
+			: [],
+	);
+	if (contributed.length === 0) return input.tools;
+	const merged: ToolDefinitionSet = { ...input.tools };
+	const nameOwners = new Map<string, string>();
+	const pathOwners = new Map<string, string>();
+	for (const [name, definition] of Object.entries(input.tools ?? {})) {
+		nameOwners.set(name, "host");
+		pathOwners.set(definition.path ?? name, "host");
+	}
+	for (const tool of contributed) {
+		const nameOwner = nameOwners.get(tool.name);
+		if (nameOwner !== undefined) {
+			throw configurationError("duplicate euroclaw plugin tool name", {
+				name: tool.name,
+				path: tool.path,
+				pluginId: tool.pluginId,
+				previous: nameOwner,
+			});
+		}
+		const pathOwner = pathOwners.get(tool.path);
+		if (pathOwner !== undefined) {
+			throw configurationError("duplicate euroclaw plugin tool path", {
+				path: tool.path,
+				pluginId: tool.pluginId,
+				previous: pathOwner,
+			});
+		}
+		nameOwners.set(tool.name, tool.pluginId);
+		pathOwners.set(tool.path, tool.pluginId);
+		merged[tool.name] = { ...tool.definition, path: tool.path };
+	}
+	return merged;
 }
 
 /** The context fields bound PER PLUGIN (the emit door + the redaction handles) — each closes over
@@ -693,19 +757,29 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		}),
 		plugins: (config.plugins ?? []) as readonly EuroclawPlugin[],
 	});
+	// Host tools + every plugin's static tools, assembled ONCE. The floor and the runtime are built
+	// from the SAME set on purpose: a plugin tool the floor's model didn't see would be a tool the
+	// floor's matcher skips, which is the one bypass this surface must not have.
+	const tools = collectPluginTools({
+		tools: config.tools,
+		plugins: pluginList,
+	});
 	// The always-on governance FLOOR — the assembly's ONE internal Cedar engine (SYSTEM_POSTURE + every
 	// plugin's `policies` sources), wired into the runtime chokepoint UNCONDITIONALLY. Sources are read
 	// STATICALLY off the raw plugin list (like secrets.providers); the model is built from the static
 	// tools that declare an access class. It is a runtime GATE only — invisible to the api/routes/cron
 	// surfaces below — so a zero-config claw is governed by the floor without any policy plugin.
 	const floorPlugin = buildFloorPolicyPlugin({
-		...(config.tools ? { tools: config.tools } : {}),
+		...(tools ? { tools } : {}),
 		plugins: pluginList,
 		...(config.warn ? { warn: config.warn } : {}),
 	});
 	const runtime = createRuntime({
 		...config,
 		plugins: [floorPlugin, ...configuredPlugins],
+		// AFTER the spread: the assembled set (host + plugin tools) replaces the host's own, so
+		// dispatch, the model-facing projection, and the catalog all see what the floor governs.
+		...(tools ? { tools } : {}),
 		...(adapter ? { database: adapter } : {}),
 		...(effectsStore ? { effectStore: effectsStore } : {}),
 		// Explicit, AFTER the spread: overrides `config.events` with the merged host+plugin observer

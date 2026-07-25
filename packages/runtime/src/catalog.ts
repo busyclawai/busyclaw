@@ -283,17 +283,19 @@ export function createToolCatalog(
 // ── Source adapters ────────────────────────────────────────────────────────
 
 /**
- * Adapt the host's tool descriptors into catalog entries. Host tools are FLAT
- * (address === name); structured, multi-segment addresses come from sourced
- * tools (MCP servers, OpenAPI tags, skill wrappers) which build their own
- * ToolEntry[] directly. This adapter is the bridge for the existing in-process
- * registry; it does not copy the executable (the catalog is a read-path, not a
+ * Adapt the host's tool descriptors into catalog entries. A host tool is FLAT
+ * (address === name); a plugin's tools arrive already addressed, so their
+ * dotted `path` is the address and the record key is only the model-facing
+ * name — which is what gives a plugin a real subtree to drill into rather than
+ * one flat leaf per tool. Other structured addresses come from sourced tools
+ * (MCP servers, OpenAPI tags) which build their own ToolEntry[] directly. This
+ * adapter does not copy the executable (the catalog is a read-path, not a
  * dispatcher — execution stays behind handleToolCall). `source` is "host";
  * `risk` is projected from the descriptor's governance facts.
  */
 export function toolEntriesFromTools(tools: ToolDefinitionSet): ToolEntry[] {
 	return Object.entries(tools).map(([name, t]) => ({
-		address: name,
+		address: t.path ?? name,
 		name,
 		source: "host",
 		description: t.description,
