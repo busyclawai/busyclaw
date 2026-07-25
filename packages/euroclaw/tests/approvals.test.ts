@@ -7,7 +7,7 @@ import {
 } from "@euroclaw/contracts";
 import { createMemoryAudit } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
-import { createClaw, govern } from "../src/index";
+import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
 	durableRedactor,
@@ -25,20 +25,22 @@ describe("createClaw approvals", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({
+				send_email: emailTool(
+					{
 						onExecute: (to) => {
 							toolRuns++;
 							toolSaw = to;
 							return { sent: true, to };
 						},
-					}),
+					},
 					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});
 
-		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
 		expect(waiting.status).toBe("waiting_approval");
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
@@ -60,8 +62,8 @@ describe("createClaw approvals", () => {
 
 	// A send_email tool that always parks for approval — the shared shape for the authz + audit proofs.
 	const emailNeedsApproval = () => ({
-		send_email: govern(
-			emailTool({ onExecute: (to: string) => ({ sent: true, to }) }),
+		send_email: emailTool(
+			{ onExecute: (to: string) => ({ sent: true, to }) },
 			{ gate: () => ({ decision: "needs-approval" as const }) },
 		),
 	});
@@ -157,7 +159,10 @@ describe("createClaw approvals", () => {
 		}
 		const approvalId = waiting.approvalIds[0];
 
-		await claw.api.grantApproval({ approvalId }, { principal: "user:approver-9" });
+		await claw.api.grantApproval(
+			{ approvalId },
+			{ principal: "user:approver-9" },
+		);
 		// A THIRD party resumes. Under the old convention the replay executed as WHOEVER called
 		// continueRun — so this call could have silently chosen the acting identity.
 		await claw.api.continueRun({ approvalId }, { principal: "user:random-8" });

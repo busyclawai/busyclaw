@@ -7,13 +7,13 @@
 //
 // slice-0 SCOPE: the floor governs the actions in its MODEL — built from the STATIC `tools` that
 // declare an `access` class (read/write). A tool that declares no access class is NOT a policy-modeled
-// action: the floor's gate matcher skips it, so its own `govern({ gate })` (or nothing, as before)
+// action: the floor's gate matcher skips it, so its own gate (or nothing, as before)
 // still governs it — the existing per-tool chokepoint is untouched. Per-org registered-tool + stored
 // policy-slice routing (the `createOrgPolicyRouter` composition) is a later slice; this floor delivers
 // zero-config governance for host-declared tools.
 
 import {
-	type AuthzActionInput,
+	actionInputsFromTools,
 	buildAuthzModel,
 	cedarFloorEngine,
 	cedarMapCall,
@@ -27,35 +27,12 @@ import {
 	type PolicyEngine,
 	type PolicySourceSlice,
 	type ToolCall,
-	toolGovernance,
-	validationError,
+	type ToolDefinitionSet,
+	toolDescriptors,
 } from "@euroclaw/contracts";
-import type { ToolSet } from "ai";
-import { type } from "arktype";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
 export const FLOOR_POLICY_ID = "policy:floor";
-
-/**
- * Read a tool's `govern()` stamp and, ONLY when it declares an `access` class, turn it into a floor
- * action input. A malformed stamp fails loud here (the same read boundary the runtime enforces); a
- * tool with no `access` opts OUT of the floor model (it is not a policy-modeled action).
- */
-function toolActionInput(
-	name: string,
-	tool: object,
-): AuthzActionInput | undefined {
-	if (!("euroclaw" in tool) || tool.euroclaw === undefined) return undefined;
-	const stamp = toolGovernance(tool.euroclaw);
-	if (stamp instanceof type.errors) {
-		throw validationError(
-			`tool "${name}" carries an invalid governance stamp`,
-			stamp.summary,
-		);
-	}
-	if (stamp.access === undefined) return undefined;
-	return { id: name, source: "tool", governance: stamp };
-}
 
 /**
  * Build the always-on floor policy plugin: the ONE internal Cedar engine over `SYSTEM_POSTURE` +
@@ -65,17 +42,16 @@ function toolActionInput(
  * never a config option.
  */
 export function buildFloorPolicyPlugin(input: {
-	tools?: ToolSet;
+	tools?: ToolDefinitionSet;
 	plugins: readonly EuroclawPlugin[];
 	warn?: (message: string) => void;
 }): EuroclawPlugin {
-	// 1. The floor's action model — the STATIC tools that declare an access class.
-	const actionInputs: AuthzActionInput[] = [];
-	for (const [name, tool] of Object.entries(input.tools ?? {})) {
-		const action = toolActionInput(name, tool);
-		if (action) actionInputs.push(action);
-	}
-	const model = buildAuthzModel(actionInputs);
+	// 1. The floor's action model — the STATIC tools that declare an access class. Descriptors carry
+	//    governance as a typed field, so this is a projection, not a re-validation: a tool with no
+	//    `access` simply isn't a policy-modeled action and drops out.
+	const model = buildAuthzModel(
+		actionInputsFromTools(toolDescriptors(input.tools ?? {})),
+	);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({
 	//    policies })` is the canonical contributor; any plugin may add slices. `PolicySourceSlice` is

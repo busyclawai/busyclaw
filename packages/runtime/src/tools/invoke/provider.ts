@@ -1,19 +1,20 @@
-// The registered-tool provider: turns an organization's `registered_tool` rows into executable
-// AuthoredTools whose `execute` is the generic HTTP invoker bound to the row's binding. They join
-// the tool set beside code tools and ride the SAME chokepoint (redact → gate → execute → audit).
+// The registered-tool provider: turns an organization's `registered_tool` rows into `binding`
+// descriptors whose executor is the generic HTTP invoker bound to the row's binding. They join the
+// tool set beside code tools and ride the SAME chokepoint (redact → gate → execute → audit).
 //
-// Two seam invariants:
-//   • The binding, the credentials, the resolver, and the turn's org/principal are ALL closure-captured
-//     inside `execute` — never object fields on the tool. So `modelFacingTools` (which strips only
-//     `euroclaw` + `execute`) cannot leak a binding or a credential to the model.
+// The invocation tag is load-bearing here: these are the tools that exist as DATA. The declarative
+// binding rides in the descriptor (the egress floor and `serverForAction` read the same field the
+// row stores), while the credentials, the resolver, and the turn's org/principal stay
+// closure-captured inside the executor — never descriptor fields. `modelFacingTools` is an
+// allowlist projection, so neither the binding nor anything else can reach the model regardless.
+//
 //   • organizationId/principal come from the per-run CONTEXT passed to the provider (the turn's trusted
 //     org + principal), NOT from the AI-SDK execute options — those carry no turn context.
 //
 // Governance rides through typed: the registry column is schema-first (`field.json(toolGovernance)`),
-// so the store validates it on read and `row.governance` is a `ToolGovernance` here — no cast. The
-// dispatch floor still re-validates every stamp at the runtime chokepoint (the §2 invariant:
-// governance blobs are never trusted raw). The stored binding is an adapter-read boundary, so it is
-// arktype-parsed inside `execute`
+// so the store validates it on read and `row.governance` is a `ToolGovernance` here — no cast, and
+// no second re-validation downstream now that the descriptor keeps it in the type. The stored
+// binding is an adapter-read boundary, so it is arktype-parsed inside the executor
 // before it can drive a request. The response is UNTRUSTED data: parsed as data only (never
 // executed), size-capped, and time-bounded; a non-2xx status is RETURNED (not thrown) so policy and
 // the model can react. Throws are reserved for infra / guard / missing-required-credential.
@@ -22,15 +23,15 @@ import type {
 	JsonValue,
 	RegisteredToolRecord,
 	Secrets,
+	ToolDefinitionSet,
 } from "@euroclaw/contracts";
 import {
 	configurationError,
-	govern,
 	jsonObject,
 	jsonValue,
 	validationError,
 } from "@euroclaw/contracts";
-import { jsonSchema, type ToolSet } from "ai";
+import { jsonSchema } from "ai";
 import { type } from "arktype";
 import { openApiBinding } from "../sources/openapi";
 import { applyCredentials } from "./credentials";
@@ -71,7 +72,7 @@ export type RegisteredToolProviderOptions = {
 export type RegisteredToolProvider = (
 	rows: readonly RegisteredToolRecord[],
 	context: RegisteredToolContext,
-) => ToolSet;
+) => ToolDefinitionSet;
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -85,9 +86,9 @@ export function createRegisteredToolProvider(
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
 	return (rows, context) => {
-		const tools: ToolSet = {};
+		const tools: ToolDefinitionSet = {};
 		for (const row of rows) {
-			// Closure captures: binding source, resolver, org/principal — none become object fields.
+			// Closure captures: credentials resolver, org/principal — none become descriptor fields.
 			const execute = async (
 				args: unknown,
 				_callOptions: unknown,
@@ -134,21 +135,27 @@ export function createRegisteredToolProvider(
 			};
 
 			const description = row.description;
-			tools[row.address] = govern(
-				{
-					...(typeof description === "string" && description !== ""
-						? { description }
-						: {}),
-					inputSchema: jsonSchema(
-						row.inputSchema as Parameters<typeof jsonSchema>[0],
-					),
+			tools[row.address] = {
+				...(typeof description === "string" && description !== ""
+					? { description }
+					: {}),
+				// Registered tools are merged into the run's toolset and offered like code tools —
+				// `discoverable` is for sets nobody hand-curated, which is a later slice.
+				presence: "always",
+				inputSchema: jsonSchema(
+					row.inputSchema as Parameters<typeof jsonSchema>[0],
+				),
+				// `row.governance` is typed `ToolGovernance`: the registry column is schema-first and
+				// the store validates it on read, so this is the boundary — nothing re-validates it
+				// downstream, because the descriptor carries it in the type from here on.
+				governance: row.governance,
+				invocation: {
+					kind: "binding",
+					provider: "openapi",
+					binding: row.binding,
 					execute,
 				},
-				// `row.governance` is typed `ToolGovernance`: the registry column is schema-first and the
-				// store validates it on read, so no cast is needed here. The dispatch floor still
-				// re-checks every stamp at the runtime chokepoint — including tools that never hit this store.
-				row.governance,
-			) as ToolSet[string];
+			};
 		}
 		return tools;
 	};

@@ -9,6 +9,7 @@ import type {
 	Redactor,
 	RunMode,
 	TextDeltaStream,
+	ToolDefinitionSet,
 	ToolEffectPolicy,
 } from "@euroclaw/contracts";
 import {
@@ -44,7 +45,7 @@ import {
 import {
 	createToolCatalog,
 	type ToolCatalog,
-	toolEntriesFromToolSet,
+	toolEntriesFromTools,
 } from "./catalog";
 import {
 	composeContext,
@@ -70,7 +71,7 @@ import {
 	NESTED_INVOKER_TOOL,
 	type SubInvoke,
 } from "./subinvoke";
-import { modelFacingTools, registerToolGates, toolGovernance } from "./tools";
+import { modelFacingTools, registerToolGates, toolExecutor } from "./tools";
 
 export type RuntimeModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -205,13 +206,18 @@ export type RuntimeConfig = {
 	/** The model-loop vendor — how the LLM is driven. Default: the AI SDK's `generateText` loop.
 	 *  Swap for a different SDK or a streaming-capable vendor. */
 	loop?: ModelLoopVendor;
-	tools?: ToolSet;
+	/** The host's tools as canonical DESCRIPTORS (`tool()` / `govern()`) — governance is a field the
+	 *  compiler checks, not a passenger inside the AI-SDK type. The model-facing `ToolSet` is derived
+	 *  from these; the record key is each tool's name. */
+	tools?: ToolDefinitionSet;
 	/** Resolve extra tools for THIS run (an organization's registered tools) from the resolved turn
 	 *  context, merged over the static `tools` ONCE per run. Code tools win name collisions — a
 	 *  host tool is never shadowed by a registered upload; a colliding registered tool is skipped,
 	 *  never silently substituted. Registrations are rare and decisions hot, so the merge is per-run,
 	 *  not per tool call. */
-	resolveTools?: (ctx: Record<string, unknown>) => ToolSet | Promise<ToolSet>;
+	resolveTools?: (
+		ctx: Record<string, unknown>,
+	) => ToolDefinitionSet | Promise<ToolDefinitionSet>;
 	system?: string;
 	redactor?: Redactor;
 	organization?: OrganizationResolver;
@@ -727,13 +733,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		organization: config.organization,
 	});
 	const modelTools = modelFacingTools(tools);
-	const catalog = createToolCatalog(toolEntriesFromToolSet(tools));
+	const catalog = createToolCatalog(toolEntriesFromTools(tools));
 
 	// Merge a run's resolved tools over the static code tools: code tools WIN name collisions (a host
 	// tool is never shadowed by a registered upload), and a colliding registered tool is skipped
 	// loudly, never silently replaced.
-	const mergeRunTools = (resolved: ToolSet): ToolSet => {
-		const merged: ToolSet = { ...tools };
+	const mergeRunTools = (resolved: ToolDefinitionSet): ToolDefinitionSet => {
+		const merged: ToolDefinitionSet = { ...tools };
 		for (const [name, tool] of Object.entries(resolved)) {
 			if (name in tools) {
 				warn(
@@ -750,7 +756,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	// see the SAME merged set.
 	const resolveRunTools = async (
 		resolvedCtx: Record<string, unknown>,
-	): Promise<{ runTools: ToolSet; runModelTools: ToolSet }> => {
+	): Promise<{ runTools: ToolDefinitionSet; runModelTools: ToolSet }> => {
 		if (!config.resolveTools) {
 			return { runTools: tools, runModelTools: modelTools };
 		}
@@ -852,7 +858,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const createRunCore = (
 		state: RunState,
 		approvalStoreOverride = approvalStore,
-		runTools: ToolSet = tools,
+		runTools: ToolDefinitionSet = tools,
 		redactor: Redactor | undefined = config.redactor,
 	) => {
 		const resolveGovernanceContext = async (
@@ -927,15 +933,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			runTool: async (call, _ctx, { rehydrate }) => {
 				abortIfNeeded(state.abortSignal);
 				const tool = runTools[call.name];
-				if (!tool || typeof tool.execute !== "function") {
+				const executeTool = tool && toolExecutor(tool);
+				if (!executeTool) {
 					throw stateError(`euroclaw: no executable tool "${call.name}"`, {
 						toolName: call.name,
 					});
 				}
-				const executeTool = tool.execute;
-				// The stamp is read ONCE per call; invoker + effect both come from the validated view.
-				const stamp = toolGovernance(tool, call.name);
-				const isInvokerTool = stamp?.invoker === true;
+				// Governance is a descriptor FIELD — nothing to read back, nothing to re-validate.
+				const stamp = tool.governance;
+				const isInvokerTool = stamp.invoker === true;
 				// An invoker tool is BRAIN, not edge: it runs untrusted model-authored code, so its args
 				// must stay redacted (placeholders reach the guest). A normal tool is the trusted edge and
 				// rehydrates. Nested calls the guest makes are re-redacted on the way back (nested runTool
@@ -943,15 +949,17 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				// variant opts out here.
 				const args = isInvokerTool ? call.args : await rehydrate(call.args);
 				const execute = (abortSignal?: unknown) =>
-					// Blessed seam cast: the AI-SDK ToolCallOptions type is closed; euroclaw extends it
-					// with `subInvoke` for invoker-stamped capability tools only (least authority).
+					// The runtime's calling convention: the AI-SDK call options plus `subInvoke`, which
+					// euroclaw adds for invoker-stamped capability tools only (least authority). The
+					// descriptor's executable is deliberately untyped in its parameters, so the
+					// extension passes through without the casts the closed AI-SDK type used to force.
 					executeTool(args, {
 						toolCallId: state.currentToolCallId,
 						messages: state.currentMessages,
-						abortSignal: abortSignal as never,
+						abortSignal,
 						...(isInvokerTool ? { subInvoke } : {}),
-					} as never);
-				const effectPolicy = stamp?.effect;
+					});
+				const effectPolicy = stamp.effect;
 				const outputMode = effectOutputMode(effectPolicy);
 				if (!effectStore) return execute(state.abortSignal);
 				if (outputMode === "redacted" && !redactor) {
@@ -1092,16 +1100,17 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				runTool: async (call, nestedCtx, { rehydrate }) => {
 					abortIfNeeded(state.abortSignal);
 					const tool = runTools[call.name];
-					if (!tool || typeof tool.execute !== "function") {
+					const executeTool = tool && toolExecutor(tool);
+					if (!executeTool) {
 						throw stateError(`euroclaw: no executable tool "${call.name}"`, {
 							toolName: call.name,
 						});
 					}
 					const args = await rehydrate(call.args);
-					const output = await tool.execute(args, {
+					const output = await executeTool(args, {
 						toolCallId: newId("nested"),
 						messages: [],
-						abortSignal: state.abortSignal as never,
+						abortSignal: state.abortSignal,
 						// v7 requires the toolsContext channel field; euroclaw injects capabilities
 						// through its own seam, so nested leaf calls run context-less.
 						context: undefined,
@@ -1130,7 +1139,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			// deeper with a worse error — fail closed at the door. runTools (not the static `tools`)
 			// so a per-run registered invoker tool is guarded too.
 			const target = runTools[name];
-			if (target && toolGovernance(target, name)?.invoker === true) {
+			if (target?.governance.invoker === true) {
 				return {
 					status: "denied",
 					gateId: "runtime:nested-invoke",

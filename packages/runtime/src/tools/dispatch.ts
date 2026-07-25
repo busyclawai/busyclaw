@@ -1,40 +1,39 @@
-// Tool-dispatch glue the model loop depends on: reading the govern() stamp (a real trust
-// boundary — the AI-SDK ToolSet type ERASES the euroclaw field, so the contracts schema validates
-// what a host attached), registering per-tool gates on the governance core, and stripping
-// governance/execute off a tool before it reaches the model.
+// Tool-dispatch glue the model loop depends on: registering each descriptor's gate on the
+// governance core, and DERIVING the model-facing AI-SDK ToolSet the provider is sent.
+//
+// There is no stamp to read back any more. Governance used to ride inside the AI-SDK `ToolSet`,
+// which erases unknown fields, so the runtime re-validated it with arktype on EVERY call — a
+// type-erased field laundered back into a trusted one. Descriptors carry governance as a typed
+// field, so that reader is gone; arktype now runs only where governance genuinely arrives untyped
+// (storage rows, spec extraction).
 
-import {
-	type ToolGovernance,
-	toolGovernance as toolGovernanceSchema,
-	validationError,
-} from "@euroclaw/contracts";
+import type { ToolDefinition, ToolDefinitionSet } from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
 import type { ToolSet } from "ai";
-import { type } from "arktype";
+
+/** The one calling convention the chokepoint uses: model args, then the AI-SDK call options plus
+ *  euroclaw's own `subInvoke` extension. Deliberately loose — the runtime, not the vendor, owns it. */
+export type ToolExecutable = (input: unknown, options: unknown) => unknown;
 
 /**
- * Read the governance stamp `govern()` attached to a tool. A malformed stamp (typo'd idempotency,
- * wrong risk value) must fail loud here, not fail OPEN downstream where a misspelled "none" would
- * silently make an effect auto-retryable.
+ * The executable behind a descriptor's invocation — BOTH tags carry one (a `binding` tool's is the
+ * invoker the provider bound to its row). The descriptor types it as the widest possible function
+ * so any vendor's signature is assignable; this is the single place that narrows it back to the
+ * runtime's convention. `undefined` when what arrived is not callable at all.
  */
-export function toolGovernance(
-	tool: object,
-	name: string,
-): ToolGovernance | undefined {
-	if (!("euroclaw" in tool) || tool.euroclaw === undefined) return undefined;
-	const stamp = toolGovernanceSchema(tool.euroclaw);
-	if (stamp instanceof type.errors) {
-		throw validationError(
-			`tool "${name}" carries an invalid governance stamp`,
-			stamp.summary,
-		);
-	}
-	return stamp;
+export function toolExecutor(tool: ToolDefinition): ToolExecutable | undefined {
+	const execute = tool.invocation.execute;
+	return typeof execute === "function"
+		? (execute as ToolExecutable)
+		: undefined;
 }
 
-export function registerToolGates(core: Governance, tools: ToolSet): void {
+export function registerToolGates(
+	core: Governance,
+	tools: ToolDefinitionSet,
+): void {
 	for (const [name, tool] of Object.entries(tools)) {
-		const gate = toolGovernance(tool, name)?.gate;
+		const gate = tool.governance.gate;
 		if (gate) {
 			core.registerGate({
 				id: `tool:${name}`,
@@ -45,17 +44,23 @@ export function registerToolGates(core: Governance, tools: ToolSet): void {
 	}
 }
 
-export function modelFacingTools(tools: ToolSet): ToolSet {
+/**
+ * The model-facing projection: descriptors → the AI-SDK `ToolSet` the provider is sent. An
+ * ALLOWLIST, not a strip-list — whatever else a descriptor carries (an HTTP binding, the
+ * executable, the governance facts) cannot reach the model by being forgotten here. The tools
+ * carry no `execute`: the AI SDK only reports the calls, the governance chokepoint runs them.
+ */
+export function modelFacingTools(tools: ToolDefinitionSet): ToolSet {
 	return Object.fromEntries(
-		Object.entries(tools).map(([name, tool]) => {
-			// The ToolSet type erases the `euroclaw` stamp, so widen just enough to strip it — the
-			// rest of the tool keeps its type (the outer cast only bridges fromEntries' widening).
-			const {
-				euroclaw: _euroclaw,
-				execute: _execute,
-				...rest
-			} = tool as ToolSet[string] & { euroclaw?: unknown };
-			return [name, rest];
-		}),
+		Object.entries(tools).map(([name, tool]) => [
+			name,
+			{
+				...(tool.description !== undefined
+					? { description: tool.description }
+					: {}),
+				inputSchema: tool.inputSchema,
+			},
+		]),
+		// fromEntries widens to Record<string, {…}>; the entries above ARE a ToolSet's shape.
 	) as ToolSet;
 }

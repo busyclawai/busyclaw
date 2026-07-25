@@ -1,6 +1,6 @@
 import type { EffectStore } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { createClaw, govern } from "../src/index";
+import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
 	durableRedactor,
@@ -16,14 +16,16 @@ describe("createClaw effects", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({ onExecute: (to) => ({ sent: true, recipient: to }) }),
+				send_email: emailTool(
+					{ onExecute: (to) => ({ sent: true, recipient: to }) },
 					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});
 
-		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -47,8 +49,8 @@ describe("createClaw effects", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({ onExecute: (to) => ({ sent: true, recipient: to }) }),
+				send_email: emailTool(
+					{ onExecute: (to) => ({ sent: true, recipient: to }) },
 					{
 						gate: () => ({ decision: "needs-approval" }),
 						effect: { output: "full" },
@@ -57,7 +59,9 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -80,13 +84,13 @@ describe("createClaw effects", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({
+				send_email: emailTool(
+					{
 						onExecute: (to) => {
 							toolRuns++;
 							return { sent: true, recipient: to };
 						},
-					}),
+					},
 					{
 						gate: () => ({ decision: "needs-approval" }),
 						effect: { idempotency: "none" },
@@ -95,7 +99,9 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -153,13 +159,13 @@ describe("createClaw effects", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({
+				send_email: emailTool(
+					{
 						onExecute: () => {
 							toolRuns++;
 							return { sent: true };
 						},
-					}),
+					},
 					{
 						gate: () => ({ decision: "needs-approval" }),
 						effect: { idempotency: "none" },
@@ -168,7 +174,9 @@ describe("createClaw effects", () => {
 			},
 		});
 
-		const waiting = await claw.api.generate({ prompt: "email alice@personal.com" });
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}

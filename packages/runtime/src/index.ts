@@ -75,6 +75,7 @@ export type {
 	ResolvedAddress,
 	SpecRegistrationReport,
 	SpecRegistry,
+	ToolExecutable,
 } from "./tools";
 export {
 	createRegisteredToolProvider,
@@ -82,5 +83,6 @@ export {
 	normalizeOrigin,
 	planEgress,
 	REGISTER_OPENAPI_SPEC_ACTION,
+	toolExecutor,
 	toolsFromOpenApi,
 } from "./tools";

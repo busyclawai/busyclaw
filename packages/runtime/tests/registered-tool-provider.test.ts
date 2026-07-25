@@ -2,10 +2,11 @@ import type {
 	JsonObject,
 	RegisteredToolRecord,
 	Secrets,
+	ToolDefinitionSet,
 } from "@euroclaw/contracts";
 import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
-import { modelFacingTools } from "../src/tools";
+import { modelFacingTools, toolExecutor } from "../src/tools";
 import type { EgressLookup } from "../src/tools/invoke/egress";
 import {
 	createRegisteredToolProvider,
@@ -72,12 +73,16 @@ function fakeFetch(handler: (url: string, init: RequestInit) => Response): {
 	};
 }
 
-const exec = (tools: Record<string, unknown>, name: string, args: JsonObject) =>
-	(
-		tools[name] as {
-			execute: (a: unknown, o: unknown) => Promise<InvokerResponse>;
-		}
-	).execute(args, {});
+const exec = async (
+	tools: ToolDefinitionSet,
+	name: string,
+	args: JsonObject,
+): Promise<InvokerResponse> => {
+	const tool = tools[name];
+	const execute = tool && toolExecutor(tool);
+	if (!execute) throw new Error(`no executable tool "${name}"`);
+	return (await execute(args, {})) as InvokerResponse;
+};
 
 describe("createRegisteredToolProvider", () => {
 	it("a GET builds the right URL and returns the parsed body", async () => {
@@ -248,9 +253,28 @@ describe("createRegisteredToolProvider", () => {
 		>;
 		expect(Object.keys(view).sort()).toEqual(["description", "inputSchema"]);
 		expect(view).not.toHaveProperty("execute");
-		expect(view).not.toHaveProperty("euroclaw");
-		expect(view).not.toHaveProperty("binding");
+		expect(view).not.toHaveProperty("invocation");
+		expect(view).not.toHaveProperty("governance");
 		// The origin the model must never see is not reachable anywhere in the model-facing view.
 		expect(JSON.stringify(view)).not.toContain("secret-internal.example");
+	});
+
+	it("a row becomes a `binding` tool — the declarative binding rides in the descriptor", () => {
+		const provider = createRegisteredToolProvider({ secrets: noSecrets });
+		const tool = provider([row({})], { organizationId: "org-a" })[
+			"petstore.getPet"
+		];
+		// The tag is the line SSOT cannot erase: this tool exists as DATA (a row), so it is storable
+		// and its outbound target is describable — unlike a host closure, which is neither.
+		expect(tool?.invocation.kind).toBe("binding");
+		if (tool?.invocation.kind !== "binding")
+			throw new Error("expected binding");
+		expect(tool.invocation.provider).toBe("openapi");
+		expect(tool.invocation.binding).toMatchObject({
+			method: "get",
+			server: "https://api.example/v1",
+		});
+		// Governance came off the row as a typed field — nothing re-validates it downstream.
+		expect(tool.governance.access).toBe("read");
 	});
 });

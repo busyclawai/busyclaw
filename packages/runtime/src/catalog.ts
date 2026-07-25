@@ -9,7 +9,7 @@
 // never permits calling it — every call still routes through the governance
 // chokepoint (handleToolCall). tools-plan.md invariant #8.
 
-import { validationError } from "@euroclaw/contracts";
+import { type ToolDefinitionSet, validationError } from "@euroclaw/contracts";
 import { type } from "arktype";
 
 const ADDRESS_SEP = ".";
@@ -282,37 +282,23 @@ export function createToolCatalog(
 
 // ── Source adapters ────────────────────────────────────────────────────────
 
-/** Minimal structural shape of an AI-SDK tool — kept structural so the catalog
- *  never imports the `ai` package. A real ToolSet satisfies this. */
-type ToolSetLike = Record<
-	string,
-	{
-		// v7 allows context-dependent description FUNCTIONS; the catalog is a static visibility
-		// surface, so those render as absent rather than being invoked with a fabricated context.
-		description?: string | ((...args: never[]) => string);
-		inputSchema?: unknown;
-		outputSchema?: unknown;
-		euroclaw?: { effect?: { risk?: ToolRisk } };
-	}
->;
-
 /**
- * Adapt a host-native AI-SDK ToolSet into catalog entries. Host tools are FLAT
+ * Adapt the host's tool descriptors into catalog entries. Host tools are FLAT
  * (address === name); structured, multi-segment addresses come from sourced
  * tools (MCP servers, OpenAPI tags, skill wrappers) which build their own
  * ToolEntry[] directly. This adapter is the bridge for the existing in-process
- * registry; it does not copy `execute` (the catalog is a read-path, not a
+ * registry; it does not copy the executable (the catalog is a read-path, not a
  * dispatcher — execution stays behind handleToolCall). `source` is "host";
- * `risk` is projected from the stamped governance (`govern`'s effect policy).
+ * `risk` is projected from the descriptor's governance facts.
  */
-export function toolEntriesFromToolSet(tools: ToolSetLike): ToolEntry[] {
+export function toolEntriesFromTools(tools: ToolDefinitionSet): ToolEntry[] {
 	return Object.entries(tools).map(([name, t]) => ({
 		address: name,
 		name,
 		source: "host",
-		description: typeof t.description === "string" ? t.description : undefined,
+		description: t.description,
 		inputSchema: t.inputSchema,
 		outputSchema: t.outputSchema,
-		risk: t.euroclaw?.effect?.risk,
+		risk: t.governance.effect?.risk,
 	}));
 }

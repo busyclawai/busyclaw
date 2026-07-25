@@ -304,9 +304,12 @@ describe("the registration verb is itself governed", () => {
 		const model = buildAuthzModel([REGISTER_OPENAPI_SPEC_ACTION]);
 		const runTool = async (call: ToolCall) =>
 			call.name === "register_openapi_spec"
-				? registerTool.execute(
+				? registerTool.invocation.execute(
 						call.args as never,
-						{ toolCallId: "t", messages: [] } as never,
+						{
+							toolCallId: "t",
+							messages: [],
+						} as never,
 					)
 				: runEcho(call);
 		const coreWith = (policies: string) =>

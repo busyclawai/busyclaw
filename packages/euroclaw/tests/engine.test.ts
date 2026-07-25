@@ -2,7 +2,7 @@ import type { ClawEngineFactory } from "@euroclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { createClaw, govern } from "../src/index";
+import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
 	durableRedactor,
@@ -156,8 +156,8 @@ describe("createClaw engine", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({ onExecute: (to) => ({ sent: true, to }) }),
+				send_email: emailTool(
+					{ onExecute: (to) => ({ sent: true, to }) },
 					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},

@@ -24,7 +24,7 @@ export {
 	decideApiCall,
 } from "./api";
 export type { AuthzActionInput, BuildAuthzModelOptions } from "./build";
-export { buildAuthzModel } from "./build";
+export { actionInputsFromTools, buildAuthzModel } from "./build";
 export type { CedarEntityJson, CedarSchemaOptions } from "./cedar";
 export {
 	actionEntitiesFromModel,

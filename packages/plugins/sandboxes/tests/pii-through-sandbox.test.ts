@@ -12,6 +12,7 @@
 // rehydrated value at its trusted edge (BLIND-P3 asserts both directions).
 
 import type { Detector, PiiSpan } from "@euroclaw/contracts";
+import { govern } from "@euroclaw/contracts";
 import { createMemoryAudit, createMemoryRedactor } from "@euroclaw/core";
 import { createRuntime } from "@euroclaw/runtime";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
@@ -149,14 +150,17 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			audit: createMemoryAudit(),
 			tools: {
 				run_code: runCodeTool({ sandbox: quickjs() }),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async ({ to }) => {
-						captured = to;
-						return { sent: true };
-					},
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async ({ to }) => {
+							captured = to;
+							return { sent: true };
+						},
+					}),
+					{},
+				),
 			},
 		});
 
@@ -178,11 +182,14 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			audit: createMemoryAudit(),
 			tools: {
 				run_code: runCodeTool({ sandbox: quickjs() }),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async () => ({ sent: true }),
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async () => ({ sent: true }),
+					}),
+					{},
+				),
 			},
 		});
 
@@ -234,14 +241,17 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			audit: createMemoryAudit(),
 			tools: {
 				run_code: runCodeTool({ sandbox: rec.sandbox }),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async ({ to }) => {
-						captured = to;
-						return { sentTo: to };
-					},
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async ({ to }) => {
+							captured = to;
+							return { sentTo: to };
+						},
+					}),
+					{},
+				),
 			},
 		});
 
@@ -270,11 +280,14 @@ describe("@euroclaw/sandboxes PII through the sandbox", () => {
 			audit: createMemoryAudit(),
 			tools: {
 				run_code: runCodeTool({ sandbox: rec.sandbox }),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async ({ to }) => ({ sentTo: to }),
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async ({ to }) => ({ sentTo: to }),
+					}),
+					{},
+				),
 			},
 		});
 

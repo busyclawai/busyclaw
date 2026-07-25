@@ -1,14 +1,16 @@
-// The per-tool governance CONTRACT (a port). Generic and runtime-free: `govern` just stamps
-// a gate onto a tool-like object — it never runs a tool or imports a framework. Each adapter
-// (the AI SDK claw, a future LangChain adapter, …) provides the IMPLEMENTATION: it reads the
-// stamped `euroclaw` field and wires the gate into the pipeline. Contract here, impl there.
+// The per-tool governance CONTRACT (a port). Generic and runtime-free: `govern` pairs a governance
+// stamp with a tool-like object — it never runs a tool or imports a framework. Each adapter (the AI
+// SDK claw, a future LangChain adapter, …) provides the IMPLEMENTATION: it reads the descriptor's
+// first-class `governance` field and wires the gate into the pipeline. Contract here, impl there.
 //
-// The stamp's data shape is an arktype schema, not a plain type, because adapters read it
-// back through type-ERASING framework types (the AI-SDK ToolSet drops `euroclaw` entirely),
-// so the compiler cannot check what a host attached. A typo'd effect policy would fail OPEN
-// (e.g. idempotency "nonee" ≠ "none" → the effect gets auto-retried); schema validation at
-// the read boundary fails loud instead.
+// The stamp's data shape is an arktype schema, not a plain type, because governance also arrives
+// from places the compiler cannot check: a storage row, a spec extractor, an untyped host. That is
+// where the schema runs. It no longer runs per CALL — the descriptor keeps governance as a typed
+// field instead of a passenger inside a type-erasing framework type. A typo'd effect policy would
+// fail OPEN (idempotency "nonee" ≠ "none" → the effect gets auto-retried), so the boundaries that
+// do read untyped governance fail loud through this schema.
 
+import { configurationError } from "@euroclaw/errors";
 import { type } from "arktype";
 import { effectCompensation } from "./effects";
 import type {
@@ -16,6 +18,11 @@ import type {
 	ToolCall,
 	TurnContext,
 } from "./governance/boundary";
+import type {
+	ToolDefinition,
+	ToolExecute,
+	ToolPresence,
+} from "./tools/descriptor";
 
 export const toolEffectPolicy = type({
 	"kind?": "'internal' | 'external'",
@@ -61,13 +68,45 @@ export const toolGovernance = type({
 export type ToolGovernance = typeof toolGovernance.infer;
 
 /**
- * Attach governance to a tool: `govern(tool, { gate })`. Generic — it only stamps metadata;
- * an adapter applies it by running the gate whenever that tool is called. The stamp-WRITE
- * side is compiler-checked (this signature); the read-back side validates with the schema.
+ * ADOPT a tool you did not author: `govern(tool, { gate })` reads its model-facing definition and
+ * pairs it with governance, producing the canonical {@link ToolDefinition}. Structural, never
+ * framework-coupled — this names the four fields every vendor's tool has and nothing else, so an
+ * AI-SDK tool, an MCP tool, and a hand-written object all adopt identically.
+ *
+ * Vendor-EXOTIC fields (streaming hooks, provider-defined tool markers) are NOT carried across: a
+ * descriptor is vendor-neutral, and a passthrough for them has no consumer yet.
+ *
+ * A STATIC description is mandatory — it is the tool's only interface to the model, and catalog
+ * search has nothing else to match on. The vendor's own type cannot promise one (the AI SDK marks
+ * it optional and allows a per-call description FUNCTION), so this is the boundary that enforces it:
+ * fail loud here rather than ship a tool the model cannot understand. Restate it explicitly
+ * (`govern({ ...vendorTool, description }, …)`) when the vendor computes its own.
+ *
+ * `presence` is `always` for an adopted tool — a host adopting a tool by hand means it to be in the
+ * context window. Discovery is for the sets nobody hand-curates (a plugin shipping fifty tools).
  */
-export function govern<T extends object>(
-	tool: T,
+export function govern<InputSchema, Execute extends ToolExecute>(
+	tool: {
+		description?: string | ((...args: never[]) => string);
+		inputSchema: InputSchema;
+		outputSchema?: unknown;
+		execute: Execute;
+	},
 	governance: ToolGovernance,
-): T & { euroclaw: ToolGovernance } {
-	return { ...tool, euroclaw: governance };
+): ToolDefinition<InputSchema, { kind: "local"; execute: Execute }> {
+	if (typeof tool.description !== "string" || tool.description === "") {
+		throw configurationError(
+			"a governed tool needs a static description — the model has no other way to know what it does",
+		);
+	}
+	return {
+		description: tool.description,
+		...(tool.outputSchema !== undefined
+			? { outputSchema: tool.outputSchema }
+			: {}),
+		presence: "always" satisfies ToolPresence,
+		inputSchema: tool.inputSchema,
+		governance,
+		invocation: { kind: "local", execute: tool.execute },
+	};
 }

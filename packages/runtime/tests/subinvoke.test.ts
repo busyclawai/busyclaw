@@ -142,11 +142,14 @@ describe("@euroclaw/runtime subInvoke", () => {
 					nested = await subInvoke("send_email", { to: "a@x.com" });
 					return { handled: true };
 				}),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async () => ({ sent: true }),
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async () => ({ sent: true }),
+					}),
+					{},
+				),
 			},
 		});
 
@@ -172,14 +175,17 @@ describe("@euroclaw/runtime subInvoke", () => {
 				run_code: invokerTool((subInvoke) =>
 					subInvoke("send_email", { to: "alice@personal.com" }),
 				),
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: emailInputSchema,
-					execute: async ({ to }) => {
-						nestedToolSaw = to;
-						return { sent: true };
-					},
-				}),
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: emailInputSchema,
+						execute: async ({ to }) => {
+							nestedToolSaw = to;
+							return { sent: true };
+						},
+					}),
+					{},
+				),
 			},
 		});
 
@@ -221,15 +227,18 @@ describe("@euroclaw/runtime subInvoke", () => {
 					}),
 					{ invoker: true, effect: { output: "none" } },
 				),
-				echo: tool({
-					description: "Echo.",
-					inputSchema: jsonSchema<{ v: string }>({
-						type: "object",
-						properties: { v: { type: "string" } },
-						required: ["v"],
+				echo: govern(
+					tool({
+						description: "Echo.",
+						inputSchema: jsonSchema<{ v: string }>({
+							type: "object",
+							properties: { v: { type: "string" } },
+							required: ["v"],
+						}),
+						execute: async ({ v }) => ({ v }),
 					}),
-					execute: async ({ v }) => ({ v }),
-				}),
+					{},
+				),
 			},
 		});
 
@@ -299,15 +308,18 @@ describe("@euroclaw/runtime subInvoke", () => {
 					results.push(a, b);
 					return { a, b };
 				}),
-				echo: tool({
-					description: "Echo.",
-					inputSchema: jsonSchema<{ v: string }>({
-						type: "object",
-						properties: { v: { type: "string" } },
-						required: ["v"],
+				echo: govern(
+					tool({
+						description: "Echo.",
+						inputSchema: jsonSchema<{ v: string }>({
+							type: "object",
+							properties: { v: { type: "string" } },
+							required: ["v"],
+						}),
+						execute: async ({ v }) => ({ v }),
 					}),
-					execute: async ({ v }) => ({ v }),
-				}),
+					{},
+				),
 			},
 		});
 
@@ -357,14 +369,17 @@ describe("@euroclaw/runtime subInvoke", () => {
 		const runtime = createRuntime({
 			model: callToolOnceModel("plain", {}),
 			tools: {
-				plain: tool({
-					description: "Plain tool.",
-					inputSchema: jsonSchema({ type: "object" }),
-					execute: async (_input, options) => {
-						sawSubInvokeKey = "subInvoke" in (options as object);
-						return { ok: true };
-					},
-				}),
+				plain: govern(
+					tool({
+						description: "Plain tool.",
+						inputSchema: jsonSchema({ type: "object" }),
+						execute: async (_input, options) => {
+							sawSubInvokeKey = "subInvoke" in (options as object);
+							return { ok: true };
+						},
+					}),
+					{},
+				),
 			},
 		});
 

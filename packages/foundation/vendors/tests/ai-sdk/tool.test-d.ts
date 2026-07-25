@@ -1,4 +1,4 @@
-import type { ToolGovernance } from "@euroclaw/contracts";
+import type { ToolDefinition, ToolGovernance } from "@euroclaw/contracts";
 import { jsonSchema } from "ai";
 import { describe, expectTypeOf, it } from "vitest";
 import { tool } from "../../src/ai-sdk/index";
@@ -33,7 +33,7 @@ describe("tool() type inference", () => {
 			execute: async () => 0,
 			access: "read",
 		});
-		expectTypeOf(t.euroclaw).toEqualTypeOf<ToolGovernance>();
+		expectTypeOf(t.governance).toEqualTypeOf<ToolGovernance>();
 		// the facts are closed unions on the contract — a typo'd access cannot compile
 		expectTypeOf<ToolGovernance["access"]>().toEqualTypeOf<
 			"read" | "write" | undefined
@@ -72,8 +72,8 @@ describe("direct arktype inputSchema inference", () => {
 	});
 });
 
-describe("AuthoredTool assignability", () => {
-	it("what tool() returns drops into an AI-SDK ToolSet", async () => {
+describe("descriptor assignability", () => {
+	it("what tool() returns drops into the canonical definition set", async () => {
 		const { jsonSchema } = await import("ai");
 		const t = tool({
 			description: "read",
@@ -81,6 +81,9 @@ describe("AuthoredTool assignability", () => {
 			execute: async () => 0,
 			access: "read",
 		});
-		expectTypeOf(t).toExtend<import("ai").Tool>();
+		// The AI-SDK Tool is no longer what a tool IS — the model-facing ToolSet is derived from
+		// this shape downstream, so what must hold is assignability to the CANONICAL type.
+		expectTypeOf(t).toExtend<ToolDefinition>();
+		expectTypeOf(t.invocation.kind).toEqualTypeOf<"local">();
 	});
 });

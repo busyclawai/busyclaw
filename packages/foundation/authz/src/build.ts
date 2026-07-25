@@ -10,12 +10,13 @@ import type {
 	AuthzModel,
 	EntityTypeDef,
 	JsonObject,
+	ToolDescriptor,
 	ToolGovernance,
 } from "@euroclaw/contracts";
 import { validationError } from "@euroclaw/errors";
 
 export type AuthzActionInput = {
-	/** The action id — the tool's derived address (`mcp:github:create_issue`) or the domain verb. */
+	/** The action id — the tool's canonical path (`petstore.getPet`) or the domain verb. */
 	id: string;
 	source: ActionSource;
 	/** The governance stamp — `access`/`groups`/`resource`/`audit` facts are read from it. */
@@ -25,6 +26,33 @@ export type AuthzActionInput = {
 	 *  to policy, never silently mistyped. */
 	args?: JsonObject;
 };
+
+/**
+ * Tool descriptors → action inputs. A descriptor feeds the model DIRECTLY: `path` is the action id
+ * and `governance` is already a typed field, so nothing re-reads or re-validates a stamp on the way
+ * in. This is the whole payoff of the descriptor collapse — the builder used to be fed by two
+ * shape-specific reconcilers (one unwrapping the AI-SDK `euroclaw` passenger, one unwrapping a
+ * storage row), each re-validating what the other had just validated.
+ *
+ * A tool with NO declared access class is skipped: it is not a policy-modeled action, so the floor's
+ * matcher must not claim it (its own gate, or nothing, still governs it — exactly as before).
+ * `args` is deliberately not derived from `inputSchema` here: an AI-SDK schema object is not a JSON
+ * Schema, and projecting host tools' args into policy is a change of behaviour, not of shape.
+ */
+export function actionInputsFromTools(
+	descriptors: readonly ToolDescriptor[],
+): AuthzActionInput[] {
+	const inputs: AuthzActionInput[] = [];
+	for (const descriptor of descriptors) {
+		if (descriptor.governance.access === undefined) continue;
+		inputs.push({
+			id: descriptor.path,
+			source: "tool",
+			governance: descriptor.governance,
+		});
+	}
+	return inputs;
+}
 
 export type BuildAuthzModelOptions = {
 	/** Resource entity type when the stamp declares none. Default "Tool". */

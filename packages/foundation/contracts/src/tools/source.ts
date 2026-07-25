@@ -4,6 +4,10 @@
 // Inputs are deliberately NOT contracted: sources differ there (a spec document, a live MCP
 // connection, an SDL string) — only the output shape is shared. Promoted from runtime to contracts
 // (slice 5): the tool registry stores these as rows, so a non-runtime tier now consumes the type.
+//
+// This is the PRE-STORAGE shape, upstream of the canonical {@link ToolDescriptor}: extraction has a
+// binding but no executor (credentials and turn context don't exist yet), so a row is what it
+// produces, and the registered-tool provider is what turns a row into a `binding` descriptor.
 
 import { type } from "arktype";
 import type { JsonObject } from "../common";
