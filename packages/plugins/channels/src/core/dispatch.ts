@@ -81,10 +81,23 @@ export async function dispatchWebhook(input: {
 	persist: PersistEndpointEvent;
 }): Promise<ChannelDispatchResult> {
 	const { claw, channel, endpoint, request } = input;
-	if (channel.verify) {
-		const ok = await channel.verify({ request, endpoint });
-		if (!ok) return { status: 401, body: { ok: false, error: "unauthorized" } };
+	// Authentication is NOT optional here. `if (channel.verify)` read as "verify when the channel
+	// offers it", which means a channel that simply does not implement `verify` — a new provider, a
+	// half-finished one — serves every anonymous POST that reaches its URL as a genuine message from
+	// the provider, silently and with no error to notice. A webhook endpoint with nothing to
+	// authenticate it is not an endpoint yet, so the absence is refused rather than skipped.
+	if (!channel.verify) {
+		return {
+			status: 401,
+			body: {
+				ok: false,
+				error: "unauthorized",
+				reason: `channel "${channel.provider}" has no webhook verifier`,
+			},
+		};
 	}
+	const ok = await channel.verify({ request, endpoint });
+	if (!ok) return { status: 401, body: { ok: false, error: "unauthorized" } };
 	const messages = await channel.parseInbound({ request, endpoint });
 	for (const message of messages) {
 		await handleInbound({ claw, channel, endpoint, message });

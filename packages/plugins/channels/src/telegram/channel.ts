@@ -86,6 +86,23 @@ export type TelegramConfig =
 	  });
 
 /**
+ * Compare a presented webhook secret against the expected one WITHOUT leaking, through timing, how
+ * much of a guess was right. `===` on strings short-circuits at the first differing byte, which turns
+ * a secret into something an attacker can walk out one character at a time given enough requests.
+ *
+ * Both sides are hashed to a fixed 32 bytes first, so the comparison length is constant and reveals
+ * nothing about the secret's own length either; the XOR-accumulate then always reads every byte.
+ */
+function constantTimeEquals(presented: string | null, expected: string): boolean {
+	if (presented === null) return false;
+	const a = sha256(utf8ToBytes(presented));
+	const b = sha256(utf8ToBytes(expected));
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+	return diff === 0;
+}
+
+/**
  * The webhook secret for a bot — derived from its token (domain-separated hash), so verification
  * needs no second credential: telegraf's secretPathComponent precedent, on Telegram's official
  * secret_token mechanism. Pass this value as `secret_token` when you call setWebhook; `verify`
@@ -306,7 +323,10 @@ export function telegram(
 						"pass a bot token (the secret_token derives from it) or set webhookSecret on the registration",
 				});
 			}
-			return request.headers.get("x-telegram-bot-api-secret-token") === secret;
+			return constantTimeEquals(
+				request.headers.get("x-telegram-bot-api-secret-token"),
+				secret,
+			);
 		},
 
 		parseInbound({ request }) {
