@@ -9,6 +9,29 @@
 // and re-sealing the same plaintext never reuses a nonce. GCM appends its 16-byte auth tag to the
 // ciphertext, so the minimum sealed length is 28 bytes (56 hex chars) — tampering or a wrong key
 // fails authentication loud in `open`.
+//
+// Every seal is BOUND to the row it belongs to, as GCM additional authenticated data (authenticated,
+// not encrypted). Without it a sealed value is portable: the blob says nothing about where it came
+// from, so anyone able to write the value column — SQL injection, a backup restored into the wrong
+// tenant, a rogue DBA, an app bug addressing the wrong row — can copy one tenant's sealed secret into
+// another tenant's row and the reader decrypts it happily, because the key is right and the tag is
+// valid. The binding makes the ciphertext refuse to open anywhere but its own row.
+//
+// The binding is the RESOLUTION KEY `(scope, scopeId, name)`, deliberately not the row `id`. The
+// read path finds a row by that tuple and never by id, so binding to id would leave a gap: a row
+// carrying a victim's id but the attacker's boundary is still found by the attacker's lookup, and the
+// AAD would match. Binding to the tuple closes it structurally — to make the AAD match you must set
+// the row's boundary to the victim's, and then the attacker's lookup no longer finds the row at all.
+// The thing bound and the thing looked up are one key, so nothing fits between them.
+//
+// Scope of the guarantee, honestly: this defends DB write WITHOUT key access. Anyone holding the
+// master key can re-seal any value under any binding, and AAD does not pretend otherwise — it is the
+// cheap version of per-tenant keys, not a replacement.
+//
+// PRE-ALPHA HARD CUT: a value sealed before this binding existed is byte-identical to a bound one, so
+// `open` cannot tell them apart and there is no legacy path — accepting one would be a permanent
+// downgrade oracle on exactly the attack this closes. Rows written earlier fail to open and must be
+// re-entered.
 
 import { configurationError, errorMessage } from "@euroclaw/contracts";
 import { gcm } from "@noble/ciphers/aes.js";
@@ -37,10 +60,13 @@ export function parseSecretStoreKey(encoded: string): Uint8Array {
 	let bytes: Uint8Array;
 	try {
 		bytes = hexToBytes(encoded);
-	} catch (err) {
+	} catch {
+		// SHAPE ONLY — never the cause. noble's hex error quotes the offending characters, which here
+		// are MASTER KEY material, and this throw travels to the operator-notice door and the logs.
+		// The length is enough to diagnose a truncated or mis-encoded key.
 		throw configurationError(
 			"secret store master key is not valid hex — pass 32 bytes hex-encoded (64 chars)",
-			{ cause: errorMessage(err) },
+			{ length: encoded.length },
 		);
 	}
 	if (bytes.length !== KEY_BYTES) {
@@ -52,11 +78,33 @@ export function parseSecretStoreKey(encoded: string): Uint8Array {
 	return bytes;
 }
 
+/**
+ * The row a sealed value belongs to — the store's resolution key, and the only place its ciphertext
+ * may be opened. Exactly the tuple `findByKey` looks up by, which is what makes the bind airtight.
+ */
+export type SecretBinding = {
+	scope: string;
+	scopeId: string;
+	name: string;
+};
+
+/**
+ * The binding as AAD bytes. Encoded as a JSON ARRAY so the parts cannot run together: concatenating
+ * them would make `("a","bc",…)` and `("ab","c",…)` the same AAD, and a relocation between two such
+ * rows would silently verify. An array is unambiguous and has no key-order question.
+ */
+function bindingAad(binding: SecretBinding): Uint8Array {
+	return utf8ToBytes(
+		JSON.stringify([binding.scope, binding.scopeId, binding.name]),
+	);
+}
+
 /** Seal/open stored secret values. One instance per plugin, shared by the store (write path) and
- *  the provider (read path), so both sides always use the same key. */
+ *  the provider (read path), so both sides always use the same key. Both halves take the row's
+ *  binding: seal writes it into the tag, open verifies it, so a value moved between rows fails. */
 export type SecretCipher = {
-	seal: (plaintext: string) => Promise<string>;
-	open: (sealed: string) => Promise<string>;
+	seal: (plaintext: string, binding: SecretBinding) => Promise<string>;
+	open: (sealed: string, binding: SecretBinding) => Promise<string>;
 };
 
 /**
@@ -75,32 +123,46 @@ export function createSecretCipher(
 	};
 
 	return {
-		seal: async (plaintext) => {
+		seal: async (plaintext, binding) => {
 			const nonce = randomBytes(NONCE_BYTES);
-			const sealed = gcm(await key(), nonce).encrypt(utf8ToBytes(plaintext));
+			const sealed = gcm(await key(), nonce, bindingAad(binding)).encrypt(
+				utf8ToBytes(plaintext),
+			);
 			return bytesToHex(nonce) + bytesToHex(sealed);
 		},
-		open: async (sealed) => {
+		open: async (sealed, binding) => {
 			const k = await key();
 			let bytes: Uint8Array;
 			try {
 				bytes = hexToBytes(sealed);
-			} catch (err) {
+			} catch {
+				// Shape only, same rule as the key parse — noble's hex error quotes the offending
+				// characters, and here those are stored ciphertext.
 				throw configurationError(
 					"stored secret value is not a sealed payload — the row was written outside the store",
-					{ cause: errorMessage(err) },
+					{ length: sealed.length },
 				);
 			}
 			try {
 				return bytesToUtf8(
-					gcm(k, bytes.slice(0, NONCE_BYTES)).decrypt(bytes.slice(NONCE_BYTES)),
+					gcm(k, bytes.slice(0, NONCE_BYTES), bindingAad(binding)).decrypt(
+						bytes.slice(NONCE_BYTES),
+					),
 				);
 			} catch (err) {
-				// GCM authentication failed: a wrong/rotated key or a tampered row. Loud and actionable —
+				// GCM authentication failed. One of: a wrong/rotated master key, a tampered row, a value
+				// sealed for a DIFFERENT row and moved here (the binding refusing, which is the point), or
+				// a row written before values were bound (pre-alpha — re-enter it). Indistinguishable by
+				// construction, so the message names all four rather than guessing. Loud and actionable —
 				// never ciphertext, never a miss.
 				throw configurationError(
-					"cannot decrypt stored secret — wrong or rotated master key, or a tampered row",
-					{ cause: errorMessage(err) },
+					"cannot decrypt stored secret — wrong or rotated master key, a tampered row, a value sealed for another row, or a row predating value binding",
+					{
+						cause: errorMessage(err),
+						scope: binding.scope,
+						scopeId: binding.scopeId,
+						name: binding.name,
+					},
 				);
 			}
 		},

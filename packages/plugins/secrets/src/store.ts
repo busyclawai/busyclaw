@@ -172,7 +172,14 @@ export function createStoredSecretsStore(
 			const scopeId = valid.scopeId ?? valid.createdBy;
 			// Seal BEFORE any adapter call — plaintext never at rest. An unresolvable master key
 			// propagates loud out of the write (configurationError from the cipher), never a raw row.
-			const sealed = await cipher.seal(valid.value);
+			// Bound to the RESOLVED boundary (the defaults above, not the raw input), because that tuple
+			// is what the read path will look this row up by — bind to anything else and the two can
+			// disagree. A re-set rotates only `value`, so the binding stays true for the row's life.
+			const sealed = await cipher.seal(valid.value, {
+				scope,
+				scopeId,
+				name: valid.name,
+			});
 			const existing = await findByKey(scope, scopeId, valid.name);
 			const stamp = now();
 			if (existing) {

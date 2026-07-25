@@ -67,8 +67,17 @@ async function materialOf(
 		});
 	}
 	// Rows hold the SEALED form only; an unresolvable key or failed decrypt propagates loud out of
-	// `open` (configurationError) — never ciphertext, never a miss.
-	return { kind: "token", value: await cipher.open(row.value) };
+	// `open` (configurationError) — never ciphertext, never a miss. The row's own boundary is the
+	// binding the value was sealed under: a blob moved here from another row fails authentication
+	// rather than resolving as this row's secret.
+	return {
+		kind: "token",
+		value: await cipher.open(row.value, {
+			scope: row.scope,
+			scopeId: row.scopeId,
+			name: row.name,
+		}),
+	};
 }
 
 /**

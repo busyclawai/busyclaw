@@ -14,6 +14,7 @@ export {
 	createSecretCipher,
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
+	type SecretBinding,
 	type SecretCipher,
 } from "./crypto";
 export {
