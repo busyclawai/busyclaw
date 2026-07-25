@@ -1,8 +1,13 @@
-// slice-2 proof: a plugin ships its own tools, and they are tools like any other — the model is
-// offered them, the runtime dispatches them, and the SAME always-on floor decides them. Nesting is
-// the `endpoints()` shape (a nested record is a group), so `{ search, admin: { publish } }` on plugin
-// `docs` addresses `docs.search` / `docs.admin.publish`; the model-facing name is the flattened
-// projection of that path, because providers reject dots.
+// slice-2 proof: a plugin ships its own tools, and they are tools like any other — the runtime
+// dispatches them and the SAME always-on floor decides them. Nesting is the `endpoints()` shape (a
+// nested record is a group), so `{ search, admin: { publish } }` on plugin `docs` addresses
+// `docs.search` / `docs.admin.publish`; the model-facing name is the flattened projection of that
+// path, because providers reject dots.
+//
+// A plugin's tools now default to `presence: "discoverable"`, so the model reaches them through the
+// `euroclaw__execute` meta-tool rather than finding them in its toolset — which is why most calls
+// below arrive wrapped. What arrives wrapped is decided, dispatched, audited and parked on the
+// TARGET's own path: see tool-discovery.test.ts for that guarantee stated on its own.
 //
 // The collision cases are the load-bearing ones. A shadowed tool keeps its caller while swapping the
 // behaviour and the governance facts behind it — the worst available failure mode — so every way two
@@ -16,9 +21,22 @@ import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
 import { durableRedactor, owned, type V2Model } from "./fixtures";
 
-/** A model that records the tool names it was OFFERED, optionally calls one, then answers. */
+/** One wire call the mock model emits: a tool name and the JSON input beside it. */
+type WireCall = { name: string; input?: string };
+
+/** The wire encoding of a DISCOVERY-routed call — the meta-tool's name, the target in its envelope.
+ *  This is exactly what a model that has just searched would emit. */
+const viaExecute = (
+	path: string,
+	args: Record<string, unknown> = {},
+): WireCall => ({
+	name: "euroclaw__execute",
+	input: JSON.stringify({ path, args }),
+});
+
+/** A model that records the tool names it was OFFERED, optionally emits one call, then answers. */
 function callingModel(
-	toolName: string | null,
+	call: WireCall | null,
 	offered: { names: string[] },
 ): V2Model {
 	let step = 0;
@@ -40,14 +58,14 @@ function callingModel(
 				},
 				outputTokens: { total: 1, text: undefined, reasoning: undefined },
 			};
-			if (toolName !== null && step++ === 0) {
+			if (call !== null && step++ === 0) {
 				return {
 					content: [
 						{
 							type: "tool-call" as const,
 							toolCallId: "c1",
-							toolName,
-							input: "{}",
+							toolName: call.name,
+							input: call.input ?? "{}",
 						},
 					],
 					finishReason: { unified: "tool-calls" as const, raw: undefined },
@@ -72,6 +90,7 @@ const recordingTool = (
 	ran: string[],
 	label: string,
 	access: "read" | "write",
+	presence?: "always" | "discoverable",
 ): ToolDefinition =>
 	govern(
 		tool({
@@ -86,6 +105,7 @@ const recordingTool = (
 			},
 		}),
 		{ access },
+		{ presence },
 	);
 
 /** The reference plugin: one top-level tool and one grouped tool, at both access classes. */
@@ -98,7 +118,7 @@ const docsPlugin = (ran: string[]): EuroclawPlugin => ({
 });
 
 describe("plugin.tools — nesting, addressing, and dispatch", () => {
-	it("nested records become dotted PATHS; the model is offered the flattened names", async () => {
+	it("a plugin's tools are DISCOVERABLE by default — the model is offered the meta-tools", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
 		const { db, redactor } = durableRedactor();
@@ -111,10 +131,11 @@ describe("plugin.tools — nesting, addressing, and dispatch", () => {
 
 		await claw.api.generate({ prompt: "hello" });
 
-		// Providers reject dots, so the wire name is the projection — never the canonical id.
+		// A plugin can ship fifty tools at zero context cost: none of them is in the toolset, and the
+		// two meta-tools that reach them are.
 		expect(offered.names.sort()).toEqual([
-			"docs__admin__publish",
-			"docs__search",
+			"euroclaw__execute",
+			"euroclaw__search",
 		]);
 
 		// …while the catalog addresses by PATH, which is what gives a plugin a real subtree instead
@@ -142,20 +163,45 @@ describe("plugin.tools — nesting, addressing, and dispatch", () => {
 		]);
 	});
 
-	it("a plugin tool is CALLABLE — the model calls it, the runtime dispatches it", async () => {
+	it("a plugin tool is CALLABLE — the model routes through execute, the runtime dispatches it", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
 		const { db, redactor } = durableRedactor();
 		const claw = owned({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("docs__search", offered),
+			model: callingModel(viaExecute("docs.search"), offered),
 			plugins: [docsPlugin(ran)],
 		});
 
 		const result = await claw.api.generate({ prompt: "search" });
 		expect(result.status).toBe("completed");
 		expect(ran).toEqual(["search"]);
+	});
+
+	it("a plugin tool can opt back INTO the context window with presence: always", async () => {
+		const ran: string[] = [];
+		const offered = { names: [] as string[] };
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: callingModel({ name: "docs__search" }, offered),
+			plugins: [
+				{
+					id: "docs",
+					tools: { search: recordingTool(ran, "search", "read", "always") },
+				},
+			],
+		});
+
+		expect((await claw.api.generate({ prompt: "search" })).status).toBe(
+			"completed",
+		);
+		expect(ran).toEqual(["search"]);
+		// The only tool in the run is `always`, so nothing is discoverable and the meta-tools are
+		// not minted at all — the flattened wire name is the whole toolset.
+		expect(offered.names).toEqual(["docs__search"]);
 	});
 
 	it("host tools keep working beside plugin tools, and keep their flat address", async () => {
@@ -165,7 +211,7 @@ describe("plugin.tools — nesting, addressing, and dispatch", () => {
 		const claw = owned({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("readDoc", offered),
+			model: callingModel({ name: "readDoc" }, offered),
 			tools: { readDoc: recordingTool(ran, "readDoc", "read") },
 			plugins: [docsPlugin(ran)],
 		});
@@ -174,6 +220,7 @@ describe("plugin.tools — nesting, addressing, and dispatch", () => {
 			"completed",
 		);
 		expect(ran).toEqual(["readDoc"]);
+		// The host's own `tools` keep the opposite default: written down by hand, so offered.
 		expect(offered.names).toContain("readDoc");
 		expect(claw.$context.runtime.catalog.describe("readDoc")?.name).toBe(
 			"readDoc",
@@ -191,7 +238,7 @@ describe("plugin.tools — governed by the same floor", () => {
 		const claw = owned({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("docs__admin__publish", offered),
+			model: callingModel(viaExecute("docs.admin.publish"), offered),
 			plugins: [docsPlugin(ran)],
 		});
 
@@ -207,7 +254,7 @@ describe("plugin.tools — governed by the same floor", () => {
 		const claw = owned({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("docs__search", offered),
+			model: callingModel(viaExecute("docs.search"), offered),
 			plugins: [
 				docsPlugin(ran),
 				cedar({
@@ -234,7 +281,7 @@ describe("plugin.tools — governed by the same floor", () => {
 		const claw = createClaw({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("docs__search", offered),
+			model: callingModel(viaExecute("docs.search"), offered),
 			plugins: [docsPlugin(ran)],
 		});
 
@@ -258,7 +305,7 @@ describe("plugin.tools — one id past the provider edge", () => {
 		const claw = owned({
 			database: db,
 			redaction: { redactor },
-			model: callingModel("docs__search", { names: [] }),
+			model: callingModel(viaExecute("docs.search"), { names: [] }),
 			audit,
 			events: {
 				emit: async (event) => {
@@ -273,8 +320,9 @@ describe("plugin.tools — one id past the provider edge", () => {
 		);
 		expect(ran).toEqual(["search"]);
 
-		// The model was OFFERED `docs__search` and called it under that name — and neither record of
-		// the call mentions it. One id in the log, and it is the one a policy or a grant enumerates.
+		// The model emitted `euroclaw__execute` — and neither record of the call mentions it, or the
+		// flattened `docs__search` either. One id in the log, and it is the one a policy or a grant
+		// enumerates.
 		const entry = audit.entries().find((e) => e.boundary === "tool");
 		expect(entry?.name).toBe("docs.search");
 		// The transcript rides the same event the claws-store sink writes its `tool_call` row from.
@@ -289,7 +337,7 @@ describe("plugin.tools — one id past the provider edge", () => {
 		const resumed: { toolResults: { id: unknown; name: unknown }[] } = {
 			toolResults: [],
 		};
-		const inner = callingModel("docs__admin__publish", { names: [] });
+		const inner = callingModel(viaExecute("docs.admin.publish"), { names: [] });
 		const model: V2Model = {
 			...inner,
 			doGenerate: async (options) => {
@@ -335,11 +383,13 @@ describe("plugin.tools — one id past the provider edge", () => {
 		);
 		// The right tool ran — exactly once.
 		expect(ran).toEqual(["publish"]);
-		// …and the result went back keyed the way the provider sent the call: same call id, and the
-		// WIRE name, re-derived from the stored path (a provider that matches a result by name — as
-		// Gemini's functionResponse does — would otherwise see an unanswered call).
+		// …and the result went back keyed the way the provider sent the call: same call id, same
+		// name. The parked target was never offered under a name of its own, so there is nothing to
+		// re-derive — the checkpoint carries the meta-tool's wire name for this one line. Answering
+		// under `docs__admin__publish` would leave a provider that matches a result by NAME (Gemini's
+		// functionResponse) staring at an unanswered call.
 		expect(resumed.toolResults).toEqual([
-			{ id: "c1", name: "docs__admin__publish" },
+			{ id: "c1", name: "euroclaw__execute" },
 		]);
 	});
 });

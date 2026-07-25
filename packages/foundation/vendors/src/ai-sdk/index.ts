@@ -37,6 +37,7 @@ import {
 	type StandardSchemaV1Like,
 	type ToolDefinition,
 	type ToolGovernance,
+	type ToolPresence,
 } from "@euroclaw/contracts";
 import {
 	jsonSchema,
@@ -80,13 +81,27 @@ export function tool<const S extends ToolSchemaLike, OUTPUT>(
 		description: string;
 		inputSchema: S;
 		execute: ToolExecuteFunction<ToolInput<S>, OUTPUT, unknown>;
+		/** CONTEXT-WINDOW policy, never an access decision. Omit and the door this tool is handed to
+		 *  decides (host `tools` → `always`, `plugin.tools` → `discoverable`); state it to opt one
+		 *  tool out of its door's default. */
+		presence?: ToolPresence;
 	} & ToolGovernance,
 ): AuthoredTool<ToolInput<S>, OUTPUT> {
 	// Split the governance facts off the model-facing definition; drop undefined facts so the stamp
 	// stays clean (an absent `access` must read as absent — the model builder's fail-closed default
-	// owns it). `govern` then assembles the descriptor: the same adoption path a foreign tool takes.
-	const { gate, effect, invoker, access, groups, resource, audit, ...rest } =
-		definition;
+	// owns it). `presence` splits off too: it is neither model-facing nor a governance fact.
+	// `govern` then assembles the descriptor: the same adoption path a foreign tool takes.
+	const {
+		gate,
+		effect,
+		invoker,
+		access,
+		groups,
+		resource,
+		audit,
+		presence,
+		...rest
+	} = definition;
 	return govern(
 		{
 			...rest,
@@ -101,6 +116,7 @@ export function tool<const S extends ToolSchemaLike, OUTPUT>(
 			...(resource !== undefined ? { resource } : {}),
 			...(audit !== undefined ? { audit } : {}),
 		},
+		{ presence },
 	);
 }
 
@@ -162,6 +178,7 @@ function toValidation<T>(
 export type {
 	JsonSchemaSource,
 	StandardSchemaV1Like,
+	TextDeltaStream,
 	ToolDefinition,
 	ToolDefinitionSet,
 	ToolDescriptor,
@@ -172,5 +189,4 @@ export type {
 	ToolPresence,
 } from "@euroclaw/contracts";
 export { govern, hasToJsonSchema, isStandardSchema } from "@euroclaw/contracts";
-export type { TextDeltaStream } from "@euroclaw/contracts";
 export { toTextStreamResponse, toUIMessageStreamResponse } from "./stream";

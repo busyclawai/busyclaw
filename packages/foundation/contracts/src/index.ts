@@ -42,8 +42,8 @@ export {
 	accessGrantCreateInput,
 	accessGrantFields,
 	accessGrantPermission,
-	accessGrantPrincipalRef,
 	accessGrantPermissionValues,
+	accessGrantPrincipalRef,
 	accessGrantRecord,
 	accessGrantSchema,
 	grantLevelSatisfies,
@@ -294,12 +294,12 @@ export {
 	APPROVED_BY_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
 	gateDecision,
-	policyAnnotations,
 	handleResult,
 	modelCall,
 	modelMessage,
 	ORGANIZATION_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
+	policyAnnotations,
 	RESERVED_CONTEXT_PREFIX,
 	ROLE_CONTEXT_KEY,
 	RUN_ID_CONTEXT_KEY,
@@ -451,6 +451,23 @@ export type {
 export { isWhereGroup, sortByList } from "./storage";
 // ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
 export type { TextDeltaStream } from "./stream";
+// ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──
+export type {
+	AddressedTool,
+	ToolDefinition,
+	ToolDefinitionSet,
+	ToolDescriptor,
+	ToolExecute,
+	ToolInvocation,
+	ToolPresence,
+	ToolTree,
+} from "./tools/descriptor";
+export {
+	EUROCLAW_TOOL_NAMESPACE,
+	flattenToolTree,
+	toolDescriptors,
+	toolModelName,
+} from "./tools/descriptor";
 // ── tool registry: durable rows for uploaded tool surfaces (impls in storage/runtime) ──
 export type {
 	FactsOverlayRecord,
@@ -492,22 +509,6 @@ export type {
 	SecretProvider,
 	Secrets,
 } from "./tools/secrets";
-// ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──
-export type {
-	AddressedTool,
-	ToolDefinition,
-	ToolDefinitionSet,
-	ToolDescriptor,
-	ToolExecute,
-	ToolInvocation,
-	ToolPresence,
-	ToolTree,
-} from "./tools/descriptor";
-export {
-	flattenToolTree,
-	toolDescriptors,
-	toolModelName,
-} from "./tools/descriptor";
 // ── tool sources: what every extractor produces (impls in @euroclaw/runtime) ──
 export type {
 	SourceDiagnostic,

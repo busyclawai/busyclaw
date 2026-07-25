@@ -15,6 +15,12 @@ export type RunState = {
 	 *  The loop translates at ingress, so everything reading this (approval checkpoints, events,
 	 *  effect ids) records the same id the policy decision did. */
 	currentToolPath: string;
+	/** The WIRE name the call arrived under. Read at exactly one site — parking an approval, so the
+	 *  resumed tool result can be correlated the way the provider sent it. Usually the flattened
+	 *  projection of the path and therefore re-derivable; not when the call arrived through the
+	 *  `execute` meta-tool, which is why it is carried rather than recomputed. Never an id anything
+	 *  decides or dispatches on. */
+	currentToolWireName?: string;
 	currentToolInput: unknown;
 	currentMessages: ModelMessage[];
 	currentStep: number;

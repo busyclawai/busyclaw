@@ -20,7 +20,13 @@ describe("govern() — adopting a foreign tool as a descriptor", () => {
 		});
 		expect(descriptor.invocation.kind).toBe("local");
 		expect(descriptor.invocation.execute).toBe(plain.execute);
-		expect(descriptor.presence).toBe("always");
+		// `presence` is left UNSTATED unless the author says so — the door the descriptor is handed
+		// to owns the default (host `tools` → always, `plugin.tools` → discoverable), and stamping
+		// one here would silently make the other door wrong.
+		expect(descriptor.presence).toBeUndefined();
+		expect(govern(plain, {}, { presence: "discoverable" }).presence).toBe(
+			"discoverable",
+		);
 		// The executable is NOT a top-level field: the model-facing projection is an allowlist over
 		// description/inputSchema, so nothing else can leak by being forgotten.
 		expect("execute" in descriptor).toBe(false);

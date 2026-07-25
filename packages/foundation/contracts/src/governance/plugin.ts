@@ -301,11 +301,12 @@ export type EuroclawPlugin<
 	 *  host's own `tools`, on the path or on the flattened name — FAILS LOUD, like a duplicate api
 	 *  namespace: a silently shadowed tool would keep its caller while swapping its governance facts.
 	 *
-	 *  Every plugin tool rides at `presence: "always"` today — the whole set is in the context window
-	 *  from the first step. The eventual default is `discoverable` (a plugin can then ship fifty tools
-	 *  at zero context cost), but discovery needs the toolset to change BETWEEN STEPS, which is a
-	 *  run-loop change: until it lands, defaulting to `discoverable` would mean shipping tools no model
-	 *  can ever see. */
+	 *  A tool that states no `presence` rides at `discoverable`: it is NOT in the context window, and
+	 *  the model reaches it through the `euroclaw__search` / `euroclaw__execute` meta-tools. So a
+	 *  plugin can ship fifty tools at zero context cost, and the few that matter every turn opt in
+	 *  with `presence: "always"`. Presence is context-window policy and NEVER an access decision —
+	 *  a discoverable tool is authorized on its own canonical path, by the same floor, whether the
+	 *  model reached it through discovery or emitted its name unprompted. */
 	tools?: ToolTree;
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];

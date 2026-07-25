@@ -26,12 +26,17 @@ export type AiSdkLoopInput = {
 	rawPii?: boolean;
 	tools: ToolSet;
 	/**
-	 * The tool-call INGRESS translation: the wire name the provider emitted → the canonical path.
-	 * Applied once, at the top of the call, so governance, dispatch, the audit, approvals, effects
-	 * and the transcript all speak the one canonical id. Absent (or a name nothing offered) leaves
-	 * the name as it arrived.
+	 * The tool-call INGRESS translation: the wire encoding the provider emitted → the canonical path
+	 * and the target's own args. Applied once, at the top of the call, so governance, dispatch, the
+	 * audit, approvals, effects and the transcript all speak the one canonical id. Two encodings
+	 * arrive here — a flattened wire name, and an `euroclaw__execute` envelope naming a discoverable
+	 * tool — and neither survives the translation. Absent (or a name nothing declared) leaves the
+	 * call exactly as it arrived.
 	 */
-	resolveToolPath?: (modelName: string) => string;
+	resolveToolCall?: (call: { name: string; input: unknown }) => {
+		path: string;
+		args: unknown;
+	};
 	system?: string;
 	/** Arrives ALREADY redacted (the caller redacts at ingress) — the loop never re-redacts it. */
 	prompt?: string;
@@ -354,20 +359,28 @@ export async function runAiSdkLoop(
 		const toolMessages: ModelMessage[] = [];
 		for (const toolCall of res.toolCalls) {
 			abortIfNeeded(input.abortSignal);
-			// THE INGRESS. `toolCall.toolName` is the wire name — the flattened projection the provider
-			// was offered, because providers reject dots. Resolve it to the canonical path ONCE, here,
-			// and nothing downstream has to know the wire name existed: the floor decides on this id,
-			// dispatch looks it up, the audit and the transcript record it, an approval parks under it.
+			// THE INGRESS. What arrives is a WIRE encoding: the flattened projection of a path (providers
+			// reject dots), or an `euroclaw__execute` envelope naming a discoverable tool. Resolve it to
+			// the canonical path and the target's own args ONCE, here, and nothing downstream has to
+			// know either encoding existed: the floor decides on this id, dispatch looks it up, the
+			// audit and the transcript record it, an approval parks under it. That is also what stops
+			// `execute` from becoming the thing governance decides on — there is no path through this
+			// loop on which a routed call is dispatched as anything but its target.
 			// The wire name survives exactly where the wire needs it — the tool RESULT, which must come
 			// back correlated the way the provider sent it (some providers match a result by NAME, not
 			// only by call id), so `toolResultMessage` below keeps `toolCall.toolName` verbatim.
-			const toolPath = input.resolveToolPath
-				? input.resolveToolPath(toolCall.toolName)
-				: toolCall.toolName;
+			const resolved = input.resolveToolCall
+				? input.resolveToolCall({
+						name: toolCall.toolName,
+						input: toolCall.input,
+					})
+				: { path: toolCall.toolName, args: toolCall.input };
+			const toolPath = resolved.path;
 			// Model-authored args may contain NOVEL raw PII the model composed — still redacted here.
-			const redactedToolInput = await redact(input, toolCall.input);
+			const redactedToolInput = await redact(input, resolved.args);
 			input.state.currentToolCallId = toolCall.toolCallId;
 			input.state.currentToolPath = toolPath;
+			input.state.currentToolWireName = toolCall.toolName;
 			input.state.currentToolInput = redactedToolInput;
 			input.state.currentStep = step;
 			input.state.currentEffectId = undefined;
