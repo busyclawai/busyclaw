@@ -298,6 +298,53 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 		expect(row?.updatedAt).toBe("updated");
 	});
 
+	// A where VALUE is a comparison operand. Every adapter splices it straight into its driver, so an
+	// OBJECT arriving there stops being data and becomes syntax — `{$ne: null}` in Mongo, `{not: null}`
+	// in Prisma — which WIDENS the predicate it was meant to narrow. That is how an ownership filter
+	// becomes a match-everything, and by then it is a well-formed query nothing downstream can question.
+	// Guarded at this one boundary so all five adapters inherit it.
+	it("refuses an object where-value (operator injection), and still allows scalars", async () => {
+		const db = schemaAdapter(memoryAdapter(), fieldSchema);
+		await db.create({ model: "claw", data: { id: "c9", organizationId: "t9" } });
+
+		await expect(
+			db.findOne({
+				model: "claw",
+				where: [
+					{ field: "organizationId", value: { $ne: null } as never },
+				],
+			}),
+		).rejects.toThrow(/not a comparison operand/);
+
+		// …including smuggled inside an `in` list.
+		await expect(
+			db.findMany({
+				model: "claw",
+				where: [
+					{
+						field: "organizationId",
+						operator: "in",
+						value: ["t9", { $gt: "" }] as never,
+					},
+				],
+			}),
+		).rejects.toThrow(/not a comparison operand/);
+
+		// Scalars, arrays of scalars, and null are untouched.
+		expect(
+			await db.findOne({
+				model: "claw",
+				where: [{ field: "id", value: "c9" }],
+			}),
+		).toMatchObject({ id: "c9" });
+		expect(
+			await db.findMany({
+				model: "claw",
+				where: [{ field: "id", operator: "in", value: ["c9", "nope"] }],
+			}),
+		).toHaveLength(1);
+	});
+
 	it("lets explicit update values win over onUpdate", async () => {
 		const db = schemaAdapter(memoryAdapter(), fieldSchema);
 		await db.create({
