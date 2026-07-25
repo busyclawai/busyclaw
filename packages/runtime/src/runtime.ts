@@ -73,6 +73,8 @@ import {
 	type SubInvoke,
 } from "./subinvoke";
 import {
+	DISCOVERY_TOOL_PATHS,
+	discoveryTools,
 	type ModelToolProjection,
 	modelToolProjection,
 	registerToolGates,
@@ -515,9 +517,15 @@ export const runtimeApprovalMetadata = ark({
 	toolCallId: "string",
 	/** The CANONICAL path of the parked call — the same id the ApprovalRecord's own `toolName`
 	 *  column carries, so a resume dispatches and decides on exactly what was parked. The wire
-	 *  name the provider used is NOT stored: it is derived back with `toolModelName` at the one
-	 *  place the resume touches the wire (rebuilding the tool-result message). */
+	 *  name the provider used is normally NOT stored: it is derived back with `toolModelName` at the
+	 *  one place the resume touches the wire (rebuilding the tool-result message). */
 	toolName: "string",
+	/** The wire name, stored ONLY when it is not the flattened projection of `toolName` — i.e. when
+	 *  the call arrived through the `execute` meta-tool, which offers no name to re-derive. Read at
+	 *  that same single site and nowhere else: a result is correlated by the pair the call arrived
+	 *  as (some providers match by name, not only by call id). Never decided or dispatched on, so a
+	 *  wrong value can only mis-address a result message — never reach a different tool. */
+	"toolWireName?": "string | undefined",
 	toolInput: "unknown",
 	...runtimeResumeStateShape,
 });
@@ -718,7 +726,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const now = config.environment?.now ?? (() => new Date().toISOString());
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const maxSteps = config.maxSteps ?? 8;
-	const tools = config.tools ?? {};
+	const declaredTools = config.tools ?? {};
 	const warn = config.warn ?? ((message: string) => console.warn(message));
 	const eventFanout: RuntimeEventFanout = {
 		recording: config.recording,
@@ -742,8 +750,29 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		membership: config.membership,
 		organization: config.organization,
 	});
-	const staticProjection = modelToolProjection(tools);
-	const catalog = createToolCatalog(toolEntriesFromTools(tools));
+	// The run's tool set, plus the discovery meta-tools when anything in it is `discoverable`. They
+	// are ordinary descriptors from here on — dispatched, gate-registered and catalogued through the
+	// same paths as any tool — which is why `search` runs and `execute` is reachable at all. A set
+	// with nothing discoverable gets itself back untouched: no meta-tools, no new wire names.
+	const withDiscovery = (tools: ToolDefinitionSet): ToolDefinitionSet => {
+		const meta = discoveryTools(tools);
+		for (const path of Object.keys(meta)) {
+			// Loud, because what reaches here declaring a reserved path is CODE. A per-run
+			// registration is data, and is turned away by the merge below instead.
+			if (path in tools) {
+				throw configurationError(
+					`tool "${path}" is in euroclaw's reserved namespace`,
+					{ path },
+				);
+			}
+		}
+		return Object.keys(meta).length === 0 ? tools : { ...tools, ...meta };
+	};
+	const staticTools = withDiscovery(declaredTools);
+	const staticProjection = modelToolProjection(staticTools);
+	// The catalog is the HOST's read-path over the tools it declared — the meta-tools are the
+	// runtime's own plumbing and would only be noise in it.
+	const catalog = createToolCatalog(toolEntriesFromTools(declaredTools));
 
 	// Merge a run's resolved tools over the static code tools: code tools WIN collisions (a host
 	// tool is never shadowed by a registered upload), and a colliding registered tool is skipped
@@ -751,14 +780,22 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	// id, two tools: policy would cover whichever won) and the model-facing NAME two distinct paths
 	// can still project onto (`a.b` and a flat `a__b`), which would silently drop one from the
 	// toolset while leaving the other reachable under it. The static assembly fails loud on both;
-	// a per-run registration is data a host does not control, so here it is skip-and-warn.
+	// a per-run registration is data a host does not control, so here it is skip-and-warn. Names come
+	// off the declared set, not the offered one: a discoverable tool is out of the context window but
+	// its wire name is still indexed, so colliding with it is the same loss.
 	const mergeRunTools = (resolved: ToolDefinitionSet): ToolDefinitionSet => {
-		const merged: ToolDefinitionSet = { ...tools };
-		const modelNames = new Set(Object.keys(staticProjection.tools));
+		const merged: ToolDefinitionSet = { ...declaredTools };
+		const modelNames = new Set(Object.keys(declaredTools).map(toolModelName));
 		for (const [path, tool] of Object.entries(resolved)) {
-			if (path in tools) {
+			if (path in declaredTools) {
 				warn(
 					`euroclaw: registered tool "${path}" skipped — a code tool already owns that path`,
+				);
+				continue;
+			}
+			if (DISCOVERY_TOOL_PATHS.includes(path)) {
+				warn(
+					`euroclaw: registered tool "${path}" skipped — euroclaw's own namespace is reserved`,
 				);
 				continue;
 			}
@@ -774,9 +811,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 		return merged;
 	};
-	// Resolve the run's tool set + its provider edge ONCE per run. With no resolver the precomputed
-	// static projection is reused (zero cost); dispatch (`runTools[call.name]`), the ingress
-	// translation, and the offered toolset all come off the SAME merged set.
+	// Resolve the run's tool set + its provider edge ONCE per run — and ONLY once. Discovery
+	// deliberately does NOT re-resolve the toolset per step: what the model is offered at step 1 is
+	// what it is offered at step 8, and a discoverable tool is reached through `execute` rather than
+	// by joining the offered set mid-run. That keeps this a tool-layer change instead of a run-loop
+	// one. With no resolver the precomputed static projection is reused (zero cost); dispatch
+	// (`runTools[call.name]`), the ingress translation, and the offered toolset all come off the SAME
+	// merged set.
 	const resolveRunTools = async (
 		resolvedCtx: Record<string, unknown>,
 	): Promise<{
@@ -784,9 +825,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		projection: ModelToolProjection;
 	}> => {
 		if (!config.resolveTools) {
-			return { runTools: tools, projection: staticProjection };
+			return { runTools: staticTools, projection: staticProjection };
 		}
-		const runTools = mergeRunTools(await config.resolveTools(resolvedCtx));
+		const runTools = withDiscovery(
+			mergeRunTools(await config.resolveTools(resolvedCtx)),
+		);
 		return { runTools, projection: modelToolProjection(runTools) };
 	};
 	const emitEvent = (
@@ -884,7 +927,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const createRunCore = (
 		state: RunState,
 		approvalStoreOverride = approvalStore,
-		runTools: ToolDefinitionSet = tools,
+		runTools: ToolDefinitionSet = staticTools,
 		redactor: Redactor | undefined = config.redactor,
 	) => {
 		const resolveGovernanceContext = async (
@@ -937,6 +980,16 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						"runtime approval messages invalid",
 					),
 				};
+				// Only when the wire name is NOT the path's own projection — a call routed through the
+				// `execute` meta-tool. Carrying it always would put a second id in the checkpoint for
+				// every approval; carrying it never would answer a routed call under a name the
+				// provider was never offered.
+				if (
+					state.currentToolWireName !== undefined &&
+					state.currentToolWireName !== toolModelName(state.currentToolPath)
+				) {
+					metadata.toolWireName = state.currentToolWireName;
+				}
 				if (state.recording !== undefined) {
 					metadata.recording = toJsonValue(
 						state.recording,
@@ -1271,7 +1324,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: projection.tools,
-			resolveToolPath: projection.pathOf,
+			resolveToolCall: projection.resolveCall,
 			system: config.system,
 			prompt: redactedPrompt,
 			ctx,
@@ -1467,12 +1520,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// provider needs the result back under the name it emitted. `toolModelName` is total and
 		// deterministic, so re-deriving reproduces exactly the name the offered toolset carries — no
 		// second id to keep in sync, and nothing to drift if a tool is re-addressed (a re-addressed
-		// tool fails CLOSED at dispatch above instead, which is the outcome we want).
+		// tool fails CLOSED at dispatch above instead, which is the outcome we want). A call routed
+		// through the `execute` meta-tool is the one case with nothing to re-derive — the provider
+		// emitted the META-tool's name, and the target was never offered — so the checkpoint carries
+		// that name for this line alone.
 		const messages = [
 			...checkpointMessages,
 			toolResultMessage(
 				checkpoint.toolCallId,
-				toolModelName(checkpoint.toolName),
+				checkpoint.toolWireName ?? toolModelName(checkpoint.toolName),
 				output,
 			),
 		];
@@ -1492,7 +1548,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: projection.tools,
-			resolveToolPath: projection.pathOf,
+			resolveToolCall: projection.resolveCall,
 			system: config.system,
 			messages,
 			startStep: checkpoint.step + 1,
@@ -1551,7 +1607,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			model: selected.model,
 			rawPii: selected.rawPii,
 			tools: projection.tools,
-			resolveToolPath: projection.pathOf,
+			resolveToolCall: projection.resolveCall,
 			system: config.system,
 			messages: checkpoint.messages,
 			startStep: checkpoint.nextStep,

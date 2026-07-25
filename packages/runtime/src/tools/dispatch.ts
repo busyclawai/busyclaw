@@ -12,6 +12,7 @@ import type { ToolDefinition, ToolDefinitionSet } from "@euroclaw/contracts";
 import { configurationError, toolModelName } from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
 import type { ToolSet } from "ai";
+import { EXECUTE_TOOL_PATH, readExecuteEnvelope } from "./discovery";
 
 /** The one calling convention the chokepoint uses: model args, then the AI-SDK call options plus
  *  euroclaw's own `subInvoke` extension. Deliberately loose — the runtime, not the vendor, owns it. */
@@ -48,12 +49,23 @@ export function registerToolGates(
 	}
 }
 
+/** A tool call as everything past the provider edge speaks it: the canonical path, and the args the
+ *  target itself receives. */
+export type ResolvedToolCall = {
+	path: string;
+	args: unknown;
+};
+
 /** The two directions of the provider edge, built together (see {@link modelToolProjection}). */
 export type ModelToolProjection = {
 	/** What the provider is sent — keyed by the model-facing WIRE name. */
 	readonly tools: ToolSet;
-	/** wire name → canonical path: the ingress translation the run loop applies to every call. */
-	readonly pathOf: (modelName: string) => string;
+	/** The ingress translation the run loop applies to every call: whatever wire encoding the call
+	 *  arrived in → the canonical path plus the target's own args. */
+	readonly resolveCall: (call: {
+		name: string;
+		input: unknown;
+	}) => ResolvedToolCall;
 };
 
 /**
@@ -64,12 +76,16 @@ export type ModelToolProjection = {
  * descriptor carries — an HTTP binding, the executable, the governance facts — cannot reach the
  * model by being forgotten here. They carry no `execute` either; the AI SDK only reports the calls,
  * the governance chokepoint runs them. Keys are the flattened wire names, because providers reject
- * dots in a tool name.
+ * dots in a tool name. A `discoverable` tool is left OUT of the offered set — that is the whole of
+ * what presence does — but it is still INDEXED below, because hiding a tool from the context window
+ * is UX and must never become the reason a call cannot be resolved and decided.
  *
- * INBOUND, `pathOf` is the inverse, and it has to be an INDEX: `docs__admin__publish` could equally
- * be a flat tool named exactly that, so splitting on `__` would guess. A name nothing offered passes
- * through unchanged — an unmodeled call stays unmodeled, which is the pre-existing skip at the
- * floor's matcher, never a permit.
+ * INBOUND, `resolveCall` is the inverse, and it has to be an INDEX: `docs__admin__publish` could
+ * equally be a flat tool named exactly that, so splitting on `__` would guess. A name nothing
+ * declared passes through unchanged — an unmodeled call stays unmodeled, which is the pre-existing
+ * skip at the floor's matcher, never a permit. It also unwraps the `execute` meta-tool, which is a
+ * second wire ENCODING of a call rather than a tool: past this line the loop cannot tell a routed
+ * call from a direct one, which is exactly why the floor decides on the target (see discovery.ts).
  *
  * Two paths landing on one name FAIL LOUD here, because this is where the loss would happen: one of
  * them would simply not be offered, while the model calling that name would reach the other. Loud
@@ -92,6 +108,7 @@ export function modelToolProjection(
 			});
 		}
 		pathByModelName.set(modelName, path);
+		if (tool.presence === "discoverable") continue;
 		projected[modelName] = {
 			...(tool.description !== undefined
 				? { description: tool.description }
@@ -102,6 +119,16 @@ export function modelToolProjection(
 	return {
 		// The entries above ARE a ToolSet's shape; the record type only widened building them.
 		tools: projected as ToolSet,
-		pathOf: (modelName) => pathByModelName.get(modelName) ?? modelName,
+		resolveCall: (call) => {
+			const path = pathByModelName.get(call.name) ?? call.name;
+			// Unwrapping happens only when THIS run's set actually contains the meta-tool — the same
+			// index everything else resolves through, not a special-cased wire name. A run that never
+			// minted it resolves `euroclaw__execute` to nothing, and the call fails closed at dispatch
+			// like any other name nobody declared.
+			if (path !== EXECUTE_TOOL_PATH) return { path, args: call.input };
+			// An envelope that names no usable target stays on the meta-tool, whose executable fails
+			// closed — never a guess at what the model meant.
+			return readExecuteEnvelope(call.input) ?? { path, args: call.input };
+		},
 	};
 }

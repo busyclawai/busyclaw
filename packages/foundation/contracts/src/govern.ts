@@ -82,8 +82,9 @@ export type ToolGovernance = typeof toolGovernance.infer;
  * fail loud here rather than ship a tool the model cannot understand. Restate it explicitly
  * (`govern({ ...vendorTool, description }, …)`) when the vendor computes its own.
  *
- * `presence` is `always` for an adopted tool — a host adopting a tool by hand means it to be in the
- * context window. Discovery is for the sets nobody hand-curates (a plugin shipping fifty tools).
+ * `presence` rides in `options` and is left ABSENT when unstated — the door the tool is handed to
+ * then applies its own default (host `tools` → `always`, `plugin.tools` → `discoverable`). Stating a
+ * default here would silently make one of those two doors wrong.
  */
 export function govern<InputSchema, Execute extends ToolExecute>(
 	tool: {
@@ -93,6 +94,7 @@ export function govern<InputSchema, Execute extends ToolExecute>(
 		execute: Execute;
 	},
 	governance: ToolGovernance,
+	options?: { presence?: ToolPresence },
 ): ToolDefinition<InputSchema, { kind: "local"; execute: Execute }> {
 	if (typeof tool.description !== "string" || tool.description === "") {
 		throw configurationError(
@@ -104,7 +106,7 @@ export function govern<InputSchema, Execute extends ToolExecute>(
 		...(tool.outputSchema !== undefined
 			? { outputSchema: tool.outputSchema }
 			: {}),
-		presence: "always" satisfies ToolPresence,
+		...(options?.presence !== undefined ? { presence: options.presence } : {}),
 		inputSchema: tool.inputSchema,
 		governance,
 		invocation: { kind: "local", execute: tool.execute },

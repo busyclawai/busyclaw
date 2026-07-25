@@ -42,7 +42,22 @@ describe("@euroclaw/ai tool() — authoring the canonical descriptor", () => {
 		expect("effect" in t.governance).toBe(false);
 		// the executable is behind the invocation tag: in-process code, un-storable
 		expect(t.invocation.kind).toBe("local");
-		expect(t.presence).toBe("always");
+		// presence is not a governance fact and not stated by default — the door the tool is handed
+		// to defaults it (host tools → always, plugin tools → discoverable)
+		expect(t.presence).toBeUndefined();
+		expect("presence" in t.governance).toBe(false);
+	});
+
+	it("presence is authored beside the facts, and stays off the stamp", () => {
+		const t = tool({
+			description: "Read a record",
+			inputSchema: toSchema,
+			execute: async () => 1,
+			access: "read",
+			presence: "discoverable",
+		});
+		expect(t.presence).toBe("discoverable");
+		expect(t.governance).toEqual({ access: "read" });
 	});
 
 	it("governance facts never leak onto the descriptor's top level", () => {

@@ -252,7 +252,9 @@ describe("createRegisteredToolProvider", () => {
 		// dot in it any more.
 		const projection = modelToolProjection(tools);
 		expect(Object.keys(projection.tools)).toEqual(["petstore__getPet"]);
-		expect(projection.pathOf("petstore__getPet")).toBe("petstore.getPet");
+		expect(
+			projection.resolveCall({ name: "petstore__getPet", input: {} }).path,
+		).toBe("petstore.getPet");
 		const view = projection.tools["petstore__getPet"] as Record<
 			string,
 			unknown

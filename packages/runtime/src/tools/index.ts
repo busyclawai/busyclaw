@@ -1,11 +1,22 @@
 // The tool subsystem's barrel — pure re-exports. Impl lives in the sibling modules:
 //   dispatch.ts       — gate registration + the model-facing ToolSet derived from the descriptors
+//   discovery.ts      — `presence: "discoverable"`: the search/execute meta-tools
 //   sources/openapi/  — the OpenAPI SOURCE (spec → governed tool defs): a pure transformation
 //   invoke/           — the invocation concern: the request plan, credential application, the
 //                       egress floor, and the provider that synthesizes executable HTTP tools
 //   registry.ts       — the governed OpenAPI registration write flow
 
-export type { ModelToolProjection, ToolExecutable } from "./dispatch";
+export {
+	DISCOVERY_TOOL_PATHS,
+	discoveryTools,
+	EXECUTE_TOOL_PATH,
+	SEARCH_TOOL_PATH,
+} from "./discovery";
+export type {
+	ModelToolProjection,
+	ResolvedToolCall,
+	ToolExecutable,
+} from "./dispatch";
 export {
 	modelToolProjection,
 	registerToolGates,

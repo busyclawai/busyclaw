@@ -32,6 +32,11 @@ const NAME_SEPARATOR = "__";
  *  decides at call time — a hidden tool is not an ungranted one. */
 export type ToolPresence = "always" | "discoverable";
 
+/** The reserved namespace euroclaw's own tools live in — the discovery meta-tools root here, so
+ *  their paths (`euroclaw.search`) project onto the `euroclaw__` prefix the context keys already
+ *  reserve. A host or plugin tool landing on one of these paths fails loud where they are minted. */
+export const EUROCLAW_TOOL_NAMESPACE = "euroclaw";
+
 /** The widest function type: every vendor's execute signature is assignable to it (its parameters
  *  are `never`), and the runtime owns the calling convention — it injects capabilities like
  *  `subInvoke` through its own blessed seam, so the descriptor deliberately types neither. */
@@ -75,7 +80,12 @@ export type ToolDescriptor<
 	 *  prefix grant would silently widen the day someone merges a tool under it. */
 	path: string;
 	description?: string;
-	presence: ToolPresence;
+	/** Absent means the AUTHOR did not say, and the door the tool arrives through decides: a host's
+	 *  hand-curated `tools` are `always` (a list written deliberately, one tool at a time), a
+	 *  plugin's are `discoverable` (a plugin can ship fifty at zero context cost). Two defaults,
+	 *  because the intent behind the two surfaces is genuinely different — stating it here would
+	 *  make one of them a lie. */
+	presence?: ToolPresence;
 	/** Stated ONCE and read three ways: the JSON Schema the provider sees, the runtime validator,
 	 *  and the authz projection. */
 	inputSchema: InputSchema;

@@ -321,6 +321,11 @@ function assertUniquePluginRoutes(plugins: readonly EuroclawPlugin[]): void {
  * records, what dispatch looks up. The model-facing name is derived from it at the provider edge and
  * translated back at the run loop's ingress, so it exists nowhere in here.
  *
+ * A plugin tool the author did not give a `presence` becomes `discoverable`: a plugin can ship fifty
+ * tools at zero context cost, and the few that matter every turn opt in with `presence: "always"`.
+ * The host's own `tools` keep the opposite default — that list is hand-curated, one tool at a time,
+ * and a host that writes a tool down means the model to have it.
+ *
  * Collisions FAIL LOUD on BOTH the path and the derived name, because they are different collisions:
  * two paths can be distinct and still project onto one name (plugin `docs` shipping `admin__publish`
  * beside a group `admin` with `publish`). Shadowing silently is the worst option available — the
@@ -370,7 +375,10 @@ function collectPluginTools(input: {
 		}
 		nameOwners.set(tool.name, tool.pluginId);
 		pathOwners.set(tool.path, tool.pluginId);
-		merged[tool.path] = tool.definition;
+		merged[tool.path] =
+			tool.definition.presence === undefined
+				? { ...tool.definition, presence: "discoverable" }
+				: tool.definition;
 	}
 	return merged;
 }
