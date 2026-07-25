@@ -20,6 +20,12 @@
 
 import type { ToolGovernance } from "../govern";
 
+/** The canonical path separator — the same one the catalog splits an address on to derive its tree. */
+const PATH_SEPARATOR = ".";
+/** The model-facing name separator. Providers accept `[A-Za-z0-9_-]` only, so the dotted path is
+ *  projected onto `__` — the same reserved-namespace marker euroclaw's context keys use. */
+const NAME_SEPARATOR = "__";
+
 /** Whether a tool sits in the model's context window from the first step (`always`) or is reached
  *  through discovery (`discoverable`). CONTEXT-WINDOW policy, NEVER an access decision: a model can
  *  emit a name it was never shown and a resumed run can carry a stale toolset, so the floor still
@@ -86,21 +92,87 @@ export type ToolDescriptor<
 };
 
 /** A descriptor before it has an address — what an authoring helper (`tool()`, `govern()`) returns.
- *  The record key it is placed under supplies the `path`: flat today (key === path); nested records
- *  flatten into dotted paths when plugins ship tools. */
+ *  The record key it is placed under supplies the `path`, unless the definition already carries one:
+ *  a nested record flattens into a dotted path whose key becomes the flattened model-facing NAME, so
+ *  key and path stop coinciding. Set by the addressing pass ({@link flattenToolTree}), never by hand. */
 export type ToolDefinition<
 	InputSchema = unknown,
 	Invocation extends ToolInvocation = ToolInvocation,
-> = Omit<ToolDescriptor<InputSchema, Invocation>, "path">;
+> = Omit<ToolDescriptor<InputSchema, Invocation>, "path"> & { path?: string };
 
-/** What the authoring surfaces speak (`RuntimeConfig.tools`, a run's resolved tools): name → definition. */
+/** What the authoring surfaces speak (`RuntimeConfig.tools`, a run's resolved tools): NAME →
+ *  definition. The key is the model-facing name — what the provider is sent, what a tool call
+ *  arrives under, and what dispatch looks up. */
 export type ToolDefinitionSet = Record<string, ToolDefinition>;
 
-/** Address a set of definitions — the one place a key becomes a `path`. Flat today; the nested-record
- *  flattening (`{ admin: { publish } }` → `admin.publish`) plugs in HERE when plugins ship tools. */
+/** Tool declarations, optionally GROUPED: a nested record is a group whose key becomes a path
+ *  segment — the same shape `endpoints()` gives api namespaces, so there is one nesting convention
+ *  across the plugin surface rather than two. */
+export type ToolTree = {
+	readonly [name: string]: ToolDefinition | ToolTree;
+};
+
+/** One addressed tool: its canonical dotted `path`, the model-facing `name` derived from it, and the
+ *  definition that was addressed. */
+export type AddressedTool = {
+	name: string;
+	path: string;
+	definition: ToolDefinition;
+};
+
+/**
+ * The model-facing NAME of a path — the derived projection, never the canonical id. Providers reject
+ * dots in a tool name, so `docs.admin.publish` is offered as `docs__admin__publish`. One-way by
+ * design: the path is what policy and grants enumerate, the name is only what the wire accepts.
+ */
+export function toolModelName(path: string): string {
+	return path.split(PATH_SEPARATOR).join(NAME_SEPARATOR);
+}
+
+// A group can legally hold a member NAMED "invocation" — it would itself be a definition or a group,
+// so its `kind` is not a string. Only the invocation TAG discriminates, the same total ruling
+// `endpoints()` makes on a callable `handler`.
+function isToolDefinition(
+	value: ToolDefinition | ToolTree,
+): value is ToolDefinition {
+	const invocation = (value as { invocation?: { kind?: unknown } }).invocation;
+	return typeof invocation?.kind === "string";
+}
+
+/**
+ * Address a tree of definitions under `root` (a plugin's id): `{ search, admin: { publish } }` on
+ * `docs` → `docs.search` and `docs.admin.publish`. The one place nesting becomes a path.
+ *
+ * Rooting is what keeps a plugin inside its own namespace — it cannot address a tool anywhere else,
+ * so plugin-vs-plugin collisions are structural rather than a matter of naming discipline.
+ */
+export function flattenToolTree(root: string, tree: ToolTree): AddressedTool[] {
+	const addressed: AddressedTool[] = [];
+	const walk = (node: ToolTree, segments: readonly string[]): void => {
+		for (const [key, value] of Object.entries(node)) {
+			const next = [...segments, key];
+			if (isToolDefinition(value)) {
+				const path = next.join(PATH_SEPARATOR);
+				addressed.push({
+					name: toolModelName(path),
+					path,
+					definition: value,
+				});
+				continue;
+			}
+			walk(value, next);
+		}
+	};
+	walk(tree, [root]);
+	return addressed;
+}
+
+/** Address a set of definitions — the one place a key becomes a `path`. A definition that was
+ *  already addressed ({@link flattenToolTree}) keeps its dotted path; everything else is flat, its
+ *  key serving as both name and path. */
 export function toolDescriptors(tools: ToolDefinitionSet): ToolDescriptor[] {
 	return Object.entries(tools).map(([name, definition]) => ({
 		...definition,
-		path: name,
+		path: definition.path ?? name,
 	}));
 }

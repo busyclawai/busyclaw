@@ -23,6 +23,7 @@ import type { EffectStore } from "../effects";
 import type { EntityField } from "../entity";
 import type { EventSink } from "../events";
 import type { Adapter } from "../storage";
+import type { ToolTree } from "../tools/descriptor";
 import type {
 	SecretDeclaration,
 	SecretProvider,
@@ -290,6 +291,22 @@ export type EuroclawPlugin<
 	 *  allowlist before any `configure` runs. The keys are OPAQUE to governance — a plugin owns what its
 	 *  annotation MEANS, the same way it owns what a `shareable` kind means. */
 	policyAnnotations?: readonly PolicyAnnotationKind[];
+	/** Tools this plugin ships — definitions, optionally GROUPED (a nested record is a group whose key
+	 *  becomes a path segment, the same shape `endpoints()` gives api namespaces). Read STATICALLY off
+	 *  the raw plugin object (like `policies`/`shareable`), because the governance floor's action model
+	 *  is built from the assembled tools BEFORE any `configure` runs — a tool the floor never saw is a
+	 *  tool that bypasses it. The plugin's id ROOTS every path (`docs.admin.publish`), so a plugin can
+	 *  only ever address tools inside its own namespace; the model-facing name is the flattened
+	 *  projection of that path (providers reject dots). A collision — with another plugin or with the
+	 *  host's own `tools`, on the path or on the flattened name — FAILS LOUD, like a duplicate api
+	 *  namespace: a silently shadowed tool would keep its caller while swapping its governance facts.
+	 *
+	 *  Every plugin tool rides at `presence: "always"` today — the whole set is in the context window
+	 *  from the first step. The eventual default is `discoverable` (a plugin can then ship fifty tools
+	 *  at zero context cost), but discovery needs the toolset to change BETWEEN STEPS, which is a
+	 *  run-loop change: until it lands, defaulting to `discoverable` would mean shipping tools no model
+	 *  can ever see. */
+	tools?: ToolTree;
 	/** Before-gates this plugin installs (decide). */
 	gates?: Gate[];
 	/** Boundary before-gates this plugin installs (decide across tool/model boundaries). */
