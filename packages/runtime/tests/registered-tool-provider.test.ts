@@ -7,7 +7,7 @@ import type {
 import { buildSecrets } from "@euroclaw/secrets";
 import { describe, expect, it } from "vitest";
 import { modelToolProjection, toolExecutor } from "../src/tools";
-import type { EgressLookup } from "../src/tools/invoke/egress";
+import { type EgressLookup, pinnedLookup } from "../src/tools/invoke/egress";
 import {
 	createRegisteredToolProvider,
 	type InvokerResponse,
@@ -103,6 +103,55 @@ describe("createRegisteredToolProvider", () => {
 		expect(calls[0]?.init.method).toBe("GET");
 		expect(result.status).toBe(200);
 		expect(result.body).toEqual({ id: 7, name: "Rex" });
+	});
+
+	// The floor resolves and vets an address, but `fetch` takes a URL: unless the socket is pinned to
+	// that address it resolves the NAME again, and the second answer is not the one that was checked
+	// (DNS rebinding — and the request carries the org credential). Regression for the decision being
+	// computed and thrown away, which left the floor's verdict describing an address never dialled.
+	it("pins the connection to the vetted address", async () => {
+		const { fn, calls } = fakeFetch(
+			() =>
+				new Response(JSON.stringify({ ok: true }), {
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider([row({})], { organizationId: "org-a" });
+		await exec(tools, "petstore.getPet", { petId: 7 });
+
+		// The hostname is untouched, so TLS SNI / certificate validation still use the real name...
+		expect(calls[0]?.url).toBe("https://api.example/v1/pets/7");
+		// ...while the connection strategy carries the pin.
+		expect(
+			(calls[0]?.init as { dispatcher?: unknown } | undefined)?.dispatcher,
+		).toBeDefined();
+	});
+
+	// The pinning rule itself, without a socket: whatever name is asked about, the answer is the one
+	// address the floor already vetted.
+	it("pinnedLookup answers the vetted address for any hostname", () => {
+		const lookup = pinnedLookup({
+			url: "https://api.example/v1",
+			pinnedAddress: "93.184.216.34",
+			family: 4,
+		});
+
+		let single: unknown[] = [];
+		lookup("attacker-rebound.example", undefined, (...args) => {
+			single = args;
+		});
+		expect(single).toEqual([null, "93.184.216.34", 4]);
+
+		let all: unknown[] = [];
+		lookup("attacker-rebound.example", { all: true }, (...args) => {
+			all = args;
+		});
+		expect(all).toEqual([null, [{ address: "93.184.216.34", family: 4 }]]);
 	});
 
 	it("a POST applies a bearer token and sends the JSON body", async () => {

@@ -2,7 +2,7 @@
 	"name": "@euroclaw/egress",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "euroclaw's outbound egress safety floor: the non-negotiable network guard beneath any policy — SSRF range rejection (loopback / private / link-local / CGNAT / unspecified, IPv4+IPv6), https-only, and resolve-once address pinning. Node-free — the caller injects the DNS resolver.",
+	"description": "euroclaw's outbound egress safety floor: the non-negotiable network guard beneath any policy \u2014 SSRF range rejection (loopback / private / link-local / CGNAT / unspecified, IPv4+IPv6), https-only, and resolve-once address pinning. The root entry is Node-free (the caller injects the DNS resolver); the ./node subpath binds node:dns and a pinned dispatcher.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
@@ -21,6 +21,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js"
 		}
 	},
 	"main": "./dist/index.js",
@@ -35,6 +39,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@euroclaw/contracts": "workspace:*",
+		"undici": "8.9.0"
 	}
 }

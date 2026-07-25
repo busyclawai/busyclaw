@@ -38,7 +38,12 @@ import { jsonSchema } from "ai";
 import { type } from "arktype";
 import { openApiBinding } from "../sources/openapi";
 import { applyCredentials } from "./credentials";
-import { assertEgressAllowed, type EgressLookup } from "./egress";
+import {
+	assertEgressAllowed,
+	type EgressDecision,
+	type EgressLookup,
+	pinnedConnection,
+} from "./egress";
 import { planHttpRequest } from "./request-plan";
 
 /** The per-run turn context the provider closes each tool over. NONE of it comes from model args or
@@ -124,16 +129,20 @@ export function createRegisteredToolProvider(
 					},
 				);
 				// The floor resolves + blocks + pins BEFORE the socket opens; a blocked target throws.
-				await assertEgressAllowed(credentialed.url, {
+				const decision = await assertEgressAllowed(credentialed.url, {
 					...(options.allowInsecure !== undefined
 						? { allowInsecure: options.allowInsecure }
 						: {}),
 					...(options.lookup !== undefined ? { lookup: options.lookup } : {}),
 				});
+				// CONSUME the decision: dial the vetted address, not the name again. A host that injects
+				// its own `fetch` owns this half of the floor — the dispatcher only reaches the built-in
+				// one — so the pin is passed and a custom impl is free to ignore it.
 				return performFetch(credentialed, _callOptions, {
 					fetchImpl,
 					timeoutMs,
 					maxResponseBytes,
+					decision,
 				});
 			};
 
@@ -169,6 +178,8 @@ type FetchDeps = {
 	fetchImpl: typeof fetch;
 	timeoutMs: number;
 	maxResponseBytes: number;
+	/** The floor's vetted resolution — the socket is pinned to it so the name is not resolved twice. */
+	decision: EgressDecision;
 };
 
 async function performFetch(
@@ -182,6 +193,8 @@ async function performFetch(
 		? AbortSignal.any([timeoutSignal, incoming])
 		: timeoutSignal;
 
+	// Valid only for THIS decision, so it is built and closed per request.
+	const pin = pinnedConnection(deps.decision);
 	let response: Response;
 	try {
 		response = await deps.fetchImpl(plan.url, {
@@ -191,8 +204,13 @@ async function performFetch(
 			// Never auto-follow redirects: a 3xx to a private host would bypass the egress floor.
 			redirect: "manual",
 			signal,
-		});
+			// Non-standard RequestInit field the built-in (undici-backed) fetch reads: the connection
+			// strategy. Carries the pin — without it the socket re-resolves the hostname and the floor's
+			// verdict describes an address the request never dialled.
+			dispatcher: pin.dispatcher,
+		} as RequestInit);
 	} catch (error) {
+		await pin.close().catch(() => undefined);
 		if (timeoutSignal.aborted) {
 			throw configurationError("registered tool request timed out", {
 				origin: plan.origin,
@@ -201,7 +219,12 @@ async function performFetch(
 		}
 		throw error;
 	}
-	return readResponse(response, deps.maxResponseBytes);
+	try {
+		return await readResponse(response, deps.maxResponseBytes);
+	} finally {
+		// The body is fully read (or the read threw) — the pooled socket has no further use.
+		await pin.close().catch(() => undefined);
+	}
 }
 
 /** Read a response body under a byte cap and parse it as DATA (JSON when the content-type says so,
