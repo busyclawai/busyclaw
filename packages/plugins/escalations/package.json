@@ -1,0 +1,49 @@
+{
+	"name": "@euroclaw/escalations",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "The escalations() plugin for euroclaw: declares the `escalate` Cedar policy annotation and routes it — a policy that says who should be asked (@escalate(\"betterauth:team_eng\")) reaches the host's onEscalate when a call parks or is denied. An observer: it changes no decision.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"directory": "packages/plugins/escalations"
+	},
+	"bugs": {
+		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/contracts": "workspace:*"
+	},
+	"devDependencies": {
+		"@euroclaw/core": "workspace:*",
+		"@euroclaw/policy-cedar": "workspace:*",
+		"@euroclaw/storage-core": "workspace:*",
+		"@euroclaw/storage-durable": "workspace:*",
+		"ai": "7.0.22",
+		"euroclaw": "workspace:*"
+	}
+}

@@ -294,6 +294,31 @@ importers:
         specifier: workspace:*
         version: link:../../euroclaw
 
+  packages/plugins/escalations:
+    dependencies:
+      '@euroclaw/contracts':
+        specifier: workspace:*
+        version: link:../../foundation/contracts
+    devDependencies:
+      '@euroclaw/core':
+        specifier: workspace:*
+        version: link:../../foundation/core
+      '@euroclaw/policy-cedar':
+        specifier: workspace:*
+        version: link:../policies/cedar
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../../storage/core
+      '@euroclaw/storage-durable':
+        specifier: workspace:*
+        version: link:../../storage/durable
+      ai:
+        specifier: 7.0.22
+        version: 7.0.22(zod@4.4.3)
+      euroclaw:
+        specifier: workspace:*
+        version: link:../../euroclaw
+
   packages/plugins/policies/better-auth:
     dependencies:
       '@euroclaw/authz':
