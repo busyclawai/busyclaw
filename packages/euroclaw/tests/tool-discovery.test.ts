@@ -214,22 +214,32 @@ const deployTool = (ran: string[]): ToolDefinition =>
 		{ access: "write" },
 	);
 
-/** The declaration is what lets an annotation leave the engine at all (the allowlist). */
+const GUIDANCE =
+	"Deploys are gated on a release manager — ask before you retry.";
+
+/** The declaration is what lets an annotation leave the engine at all (the allowlist), and the
+ *  AUDIENCE on it is what decides which reader gets it. Both are on the same rule here, which is how
+ *  they are actually written: `@escalate` names who can unblock it, `@guidance` tells the agent what
+ *  to do about it. */
 const escalationPlugin: EuroclawPlugin = {
 	id: "escalations-test",
-	policyAnnotations: [{ key: "escalate" }],
+	policyAnnotations: [
+		{ key: "escalate" },
+		{ key: "guidance", audience: "model" },
+	],
 	policies: [
 		{
 			name: "escalate:eng",
 			mode: "enforce",
 			cedar: `@escalate("betterauth:team_eng")
+@guidance("${GUIDANCE}")
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
 		},
 	],
 };
 
 describe("euroclaw__search — disclosing what the floor would say", () => {
-	it("marks a usable tool available, and names the escalation target of one that would park", async () => {
+	it("marks a usable tool available, and passes the parking one's guidance — but never the target", async () => {
 		const ran: string[] = [];
 		const seen = { results: [] as string[], offered: [] as string[] };
 		const { db, redactor } = durableRedactor();
@@ -253,15 +263,18 @@ describe("euroclaw__search — disclosing what the floor would say", () => {
 		);
 		const tools = disclosed(seen.results[0]);
 		expect(
-			tools.map((t) => [t.path, t.authorization, t.annotations?.escalate]),
+			tools.map((t) => [t.path, t.authorization, t.annotations?.guidance]),
 		).toEqual(
 			expect.arrayContaining([
 				["docs.admin.publish", "available", undefined],
-				// The target rides through VERBATIM — an opaque `<authority>:<id>` string nothing here
-				// splits on the colon or interprets, straight from the rule that WOULD permit it.
-				["docs.admin.deploy", "needs-approval", "betterauth:team_eng"],
+				// The model-audience value rides through VERBATIM, straight from the rule that WOULD
+				// permit it — written by the author for exactly this reader.
+				["docs.admin.deploy", "needs-approval", GUIDANCE],
 			]),
 		);
+		// A disclosure is a MODEL-facing door like any other, so the host's bag is not on it: the same
+		// `escalate` that reaches the after-gate is absent here, under any key.
+		expect(seen.results[0]).not.toContain("betterauth:team_eng");
 	});
 
 	it("asking is not doing: nothing is parked, and only the search itself is audited", async () => {

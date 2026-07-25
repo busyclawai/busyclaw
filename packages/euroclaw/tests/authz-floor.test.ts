@@ -5,6 +5,7 @@
 // the engine here — the engine is the assembly's; `cedar()` only contributes policy TEXT.
 
 import type { EuroclawPlugin } from "@euroclaw/contracts";
+import { MODEL_ANNOTATION_MAX_LENGTH } from "@euroclaw/contracts";
 import { createMemoryAudit } from "@euroclaw/core";
 import { cedar } from "@euroclaw/policy-cedar";
 import { runtimeRunOptionsWithCaller } from "@euroclaw/runtime";
@@ -64,6 +65,63 @@ function toolCallModel(toolName: string): V2Model {
 	};
 }
 
+/** The same, but recording every tool RESULT it is handed back — what the MODEL actually reads. */
+function resultRecordingModel(toolName: string, seen: string[]): V2Model {
+	let step = 0;
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async (options) => {
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
+			for (const message of options.prompt) {
+				if (message.role !== "tool") continue;
+				for (const part of message.content) {
+					if (part.type !== "tool-result") continue;
+					seen.push(
+						part.output.type === "text"
+							? part.output.value
+							: JSON.stringify(part.output),
+					);
+				}
+			}
+			if (step++ === 0) {
+				return {
+					content: [
+						{
+							type: "tool-call" as const,
+							toolCallId: "c1",
+							toolName,
+							input: "{}",
+						},
+					],
+					finishReason: { unified: "tool-calls" as const, raw: undefined },
+					usage,
+					warnings: [],
+				};
+			}
+			return {
+				content: [{ type: "text" as const, text: "done" }],
+				finishReason: { unified: "stop" as const, raw: undefined },
+				usage,
+				warnings: [],
+			};
+		},
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	};
+}
+
 const classedTool = (access: "read" | "write", onRun: () => void) =>
 	govern(
 		tool({
@@ -93,7 +151,10 @@ describe("createClaw authz floor (slice 0)", () => {
 			model: toolCallModel("readDoc"),
 			tools: { readDoc: classedTool("read", () => (readRan = true)) },
 		});
-		const readResult = await readClaw.api.generate({ prompt: "read", ctx: runCtx });
+		const readResult = await readClaw.api.generate({
+			prompt: "read",
+			ctx: runCtx,
+		});
 		expect(readResult.status).toBe("completed");
 		expect(readRan).toBe(true);
 
@@ -107,7 +168,10 @@ describe("createClaw authz floor (slice 0)", () => {
 			model: toolCallModel("writeDoc"),
 			tools: { writeDoc: classedTool("write", () => (writeRan = true)) },
 		});
-		const writeResult = await writeClaw.api.generate({ prompt: "write", ctx: runCtx });
+		const writeResult = await writeClaw.api.generate({
+			prompt: "write",
+			ctx: runCtx,
+		});
 		expect(writeResult.status).toBe("waiting_approval");
 		expect(writeRan).toBe(false);
 	});
@@ -128,7 +192,10 @@ describe("createClaw authz floor (slice 0)", () => {
 				}),
 			],
 		});
-		const forbidResult = await forbidClaw.api.generate({ prompt: "read", ctx: runCtx });
+		const forbidResult = await forbidClaw.api.generate({
+			prompt: "read",
+			ctx: runCtx,
+		});
 		expect(forbidResult.status).toBe("completed");
 		expect(readRan).toBe(false);
 
@@ -239,9 +306,9 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 			model: toolCallModel("readDoc"),
 			tools: { readDoc: classedTool("read", () => (readRan = true)) },
 		});
-		await expect(
-			claw.$context.runtime.generate("read", {}),
-		).rejects.toThrow(/no stamped principal/);
+		await expect(claw.$context.runtime.generate("read", {})).rejects.toThrow(
+			/no stamped principal/,
+		);
 		expect(readRan).toBe(false);
 	});
 });
@@ -335,5 +402,99 @@ permit(principal, action in Action::"writes", resource) when { context.confirmat
 			"waiting_approval",
 		);
 		expect(routed).toEqual([]);
+	});
+});
+
+// The AUDIENCE half of the same seam. Declaring a key says WHAT escapes the engine; `audience` says
+// TO WHOM — and the two readers are strangers: a host annotation is an internal id an after-gate
+// routes on, a model annotation is prose the agent that just got refused is meant to read. This
+// proves the wall in both directions on the one path where both are live at once.
+describe("policy annotations — the audience wall, end to end", () => {
+	const GUIDANCE =
+		"Salary fields need HR approval — ask the requester to route this to People Ops.";
+
+	/** A claw whose only tool is forbidden by a rule that speaks to BOTH audiences at once. */
+	const forbiddenSalaryClaw = (input: {
+		seen: string[];
+		routed: string[];
+		guidance?: string;
+	}) => {
+		const { db, redactor } = durableRedactor();
+		const plugin: EuroclawPlugin = {
+			id: "salary-policy",
+			policyAnnotations: [
+				{ key: "escalate" },
+				{ key: "guidance", audience: "model" },
+			],
+			policies: [
+				{
+					name: "salary:forbid",
+					mode: "enforce",
+					cedar: `@escalate("betterauth:team_eng")
+@guidance("${input.guidance ?? GUIDANCE}")
+forbid(principal, action == Action::"read_salary", resource);`,
+				},
+			],
+			afterGates: [
+				{
+					id: "salary-router",
+					matcher: () => true,
+					handler: (_call, _ctx, outcome) => {
+						if ("annotations" in outcome && outcome.annotations?.escalate) {
+							input.routed.push(outcome.annotations.escalate);
+						}
+					},
+				},
+			],
+		};
+		return owned({
+			database: db,
+			model: resultRecordingModel("read_salary", input.seen),
+			redaction: { redactor },
+			plugins: [plugin],
+			tools: {
+				read_salary: govern(
+					tool({
+						description: "read a salary",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => ({ salary: 1 }),
+					}),
+					{ access: "read" },
+				),
+			},
+		});
+	};
+
+	it("a DENIED call hands the model the guidance and keeps the escalation target from it", async () => {
+		const seen: string[] = [];
+		const routed: string[] = [];
+		const claw = forbiddenSalaryClaw({ seen, routed });
+
+		expect((await claw.api.generate({ prompt: "read" })).status).toBe(
+			"completed",
+		);
+		const governance = JSON.parse(seen[0] ?? "{}") as {
+			__governance?: string;
+			annotations?: Record<string, string>;
+		};
+		expect(governance.__governance).toBe("denied");
+		expect(governance.annotations).toEqual({ guidance: GUIDANCE });
+		// The wall, stated as the thing that would actually go wrong: the internal id the host routes
+		// on never appears ANYWHERE in what the model was handed — not under a different key either.
+		expect(seen[0]).not.toContain("betterauth:team_eng");
+		// …and the host lost nothing. The after-gate still gets its target, unchanged.
+		expect(routed).toEqual(["betterauth:team_eng"]);
+	});
+
+	it("a value over the bound fails the ASSEMBLY — the claw never builds", () => {
+		// The bound is enforced where policy text is indexed, which is construction. So an over-long
+		// guidance is a startup failure an author fixes, not a surprise mid-run.
+		expect(() =>
+			forbiddenSalaryClaw({
+				seen: [],
+				routed: [],
+				guidance: "x".repeat(MODEL_ANNOTATION_MAX_LENGTH + 1),
+			}),
+		).toThrow(/@guidance/);
 	});
 });

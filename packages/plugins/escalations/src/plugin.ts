@@ -3,6 +3,10 @@
 // DECLARED the key (`policyAnnotations` is an allowlist, not documentation), and this plugin is the
 // declaration plus the hand-off to the host.
 //
+// It also declares `guidance` — the same situation written for the AGENT rather than the host, which
+// is all `audience: "model"` means. That one this plugin never sees: the engine keeps the two bags
+// apart and the runtime hands the model's to the model. See {@link GUIDANCE_ANNOTATION}.
+//
 // It is an OBSERVER by construction: an after-gate cannot change permit/deny/needs-approval, and
 // nothing here tries to. Escalation routing must never become a new way for a run to die — so a
 // throwing `onEscalate` is swallowed and warned, exactly like a failing observer event sink.
@@ -25,6 +29,33 @@ import {
 
 /** The annotation key this plugin declares and consumes — what a policy writes as `@escalate("…")`. */
 export const ESCALATE_ANNOTATION = "escalate";
+
+/**
+ * The other half of the same sentence, addressed to the other reader. Beside the two facts a blocked
+ * call already carries — `reason` (why) and `@escalate` (who can unblock it, an id no agent should
+ * ever see) — `@guidance` is what to DO about it, in the policy author's own words, written for the
+ * agent that just hit the wall:
+ *
+ * ```cedar
+ * @escalate("betterauth:team_eng")
+ * @guidance("Salary fields need HR approval — ask the requester to route this to People Ops.")
+ * permit(principal, action == Action::"read_salary", resource) when { context.confirmationUsed };
+ * ```
+ *
+ * Declared here because this plugin already owns "the call did not go through — here is what to do",
+ * and the two annotations are written on the same rule. NOTHING about it is special: it is one entry
+ * in the ordinary `policyAnnotations` allowlist, and `audience: "model"` is what routes it to the
+ * agent instead of to `onEscalate`. A host that wants a different vocabulary declares its own the
+ * same way — a bare plugin object is enough, no package required:
+ *
+ * ```ts
+ * plugins: [{ id: "house-style", policyAnnotations: [{ key: "hint", audience: "model" }] }]
+ * ```
+ *
+ * The value is bounded (`MODEL_ANNOTATION_MAX_LENGTH`) and rejected at assembly if it overruns:
+ * it lands in a context window, so it is a sentence, not a document.
+ */
+export const GUIDANCE_ANNOTATION = "guidance";
 
 /**
  * One escalation, as it reaches the host: a governed call did not go through, and a policy said who
@@ -132,6 +163,9 @@ function stampsOf(
  * value leave the policy engine at all, and an after-gate is where a finished call can be read. A
  * DENY escalates as legitimately as a park — `@escalate` on a forbid means "you cannot, ask X".
  *
+ * Installing this also makes `@guidance("…")` usable — the model-audience half, which goes to the
+ * AGENT and never through `onEscalate`. See {@link GUIDANCE_ANNOTATION}.
+ *
  * What it does NOT do: persist. There is no escalation table in this slice — the host's `onEscalate`
  * IS the durability boundary. A parked call is already durable as an ApprovalRecord and a deny is
  * already in the audit chain, so a third copy would be a queue with no reader.
@@ -180,11 +214,18 @@ export function escalations(
 	};
 	return {
 		id,
-		// The ALLOWLIST. Without this line the same `@escalate("…")` is inert: the engine never lets an
-		// undeclared key out, because policy text is author-written and reaches a compliance log. No
-		// `parse` — the target is opaque by design, and a validator that throws would throw INSIDE the
-		// engine, turning a routing concern into a decision-path failure.
-		policyAnnotations: [{ key: ESCALATE_ANNOTATION }],
+		// The ALLOWLIST. Without these lines the same `@escalate("…")` is inert: the engine never lets
+		// an undeclared key out, because policy text is author-written and reaches a compliance log. No
+		// `parse` on either — the target is opaque by design, guidance is prose, and a validator that
+		// throws would throw INSIDE the engine, turning a routing concern into a decision-path failure.
+		//
+		// Two keys, two AUDIENCES: `escalate` defaults to the host (this plugin's after-gate reads it),
+		// `guidance` is declared for the model and never reaches `onEscalate` at all — the engine
+		// separates them, so neither door has to remember which is which.
+		policyAnnotations: [
+			{ key: ESCALATE_ANNOTATION },
+			{ key: GUIDANCE_ANNOTATION, audience: "model" },
+		],
 		afterGates: [gate],
 	};
 }

@@ -40,6 +40,7 @@ import type { ModelMessage, wrapLanguageModel } from "ai";
 import { type as ark } from "arktype";
 import {
 	aiSdkLoop,
+	governanceToolResult,
 	type ModelLoopVendor,
 	toolResultMessage,
 } from "./ai-sdk-loop";
@@ -1276,14 +1277,28 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				ctx,
 			);
 			// A nested needs-approval fails closed AS A VALUE — there is no durable way to park a
-			// live nested execution. Convert to a denied result with a stable reason code.
+			// live nested execution. Convert to a denied result with a stable reason code, keeping the
+			// model-audience annotations: "you cannot do this here, do X instead" is exactly what the
+			// author wrote them for, and this is the one door where a park is READ rather than parked.
 			if (result.status === "needs-approval") {
 				return {
 					status: "denied",
 					gateId: result.gateId,
 					reason: `tool "${name}" requires approval and cannot be called from nested execution`,
 					reasonCode: NESTED_APPROVAL_UNSUPPORTED,
+					...(result.modelAnnotations
+						? { modelAnnotations: result.modelAnnotations }
+						: {}),
 				};
+			}
+			// The third model-facing door, and the least obvious one: this value round-trips into the
+			// SANDBOX as JSON, and the code reading it was written by the model. So the HOST's
+			// annotation bag is dropped here for the same reason the transcript never carries it —
+			// `@escalate("betterauth:org_123")` is an id for an after-gate (which has already run, on
+			// the nested core), not something a guest script may read back out.
+			if (result.status === "denied" && result.annotations) {
+				const { annotations: _hostOnly, ...forGuest } = result;
+				return forGuest;
 			}
 			return result;
 		};
@@ -1540,11 +1555,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const output =
 			toolResult.status === "ok"
 				? await redactValue(toolResult.output, resolvedCtx)
-				: {
-						__governance: toolResult.status,
-						reason: toolResult.reason,
-						reasonCode: toolResult.reasonCode,
-					};
+				: governanceToolResult(toolResult);
 		if (toolResult.status === "ok") {
 			await emitEvent(emitCtx, {
 				durationMs: toolDurationMs,

@@ -98,11 +98,16 @@ function decide(result: PolicyResult): GateDecision {
 	const trail = result.policies?.length
 		? ` [${result.policies.join(", ")}]`
 		: "";
-	// The determining policies' DECLARED annotations ride the decision out, so an after-gate can act on
-	// them (route an escalation, feed a plugin's own queue). Omitted when there are none.
-	const annotations = result.annotations
-		? { annotations: result.annotations }
-		: {};
+	// The determining policies' DECLARED annotations ride the decision out — the HOST's bag, so an
+	// after-gate can act on them (route an escalation, feed a plugin's own queue), and the MODEL's,
+	// which the runtime hands to the agent on a blocked call. Carried together, never merged: which
+	// audience a key belongs to was settled by its declaration, back in the engine.
+	const annotations = {
+		...(result.annotations ? { annotations: result.annotations } : {}),
+		...(result.modelAnnotations
+			? { modelAnnotations: result.modelAnnotations }
+			: {}),
+	};
 	if (result.decision === "permit") return { decision: "permit" };
 	if (result.decision === "needs-approval") {
 		return {

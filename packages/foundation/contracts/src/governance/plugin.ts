@@ -165,6 +165,23 @@ export type ShareableKind = {
  */
 export type PolicyAnnotationKind = {
 	key: string;
+	/**
+	 * WHO the value is written for. Declaring already says WHAT escapes the engine; this says TO WHOM,
+	 * and the two bags a decision carries are DISJOINT — a value goes to exactly one audience:
+	 *
+	 *   - `"host"` (the default) → `annotations`, which only host code reads: an after-gate routes it,
+	 *     a plugin queues it. Values here are internal (`betterauth:org_123`) and must never be shown
+	 *     to a model, so the DEFAULT is the safe one: declaring a key can never, by itself, start
+	 *     feeding a model context.
+	 *   - `"model"` → `modelAnnotations`, which reaches the AGENT — the governance result a blocked
+	 *     call returns, and the disclosure a tool search carries. Author-written prose, addressed to
+	 *     the thing that just got refused: `@guidance("ask the requester to route this to People Ops")`.
+	 *
+	 * A model-audience value is bounded at {@link MODEL_ANNOTATION_MAX_LENGTH} — it is attacker-visible
+	 * if a transcript leaks and it spends context on every call that surfaces it. Policy authors are
+	 * trusted; "trusted" is not "unbounded".
+	 */
+	audience?: "host" | "model";
 	parse?: (raw: string) => string;
 };
 
@@ -284,12 +301,13 @@ export type EuroclawPlugin<
 	 *  scopeId }` shape to the decision and its `access_grant` rows are enforced — with ZERO new policy.
 	 *  Skills is the first consumer (its `skill` installation kind). */
 	shareable?: readonly ShareableKind[];
-	/** Cedar policy ANNOTATION keys this plugin consumes — each a `{ key, parse? }` the assembly merges
-	 *  into the one allowlist the policy engine reads. A declared key's value on the DETERMINING policies
-	 *  rides the decision out (`GateDecision`/`HandleResult.annotations`), where an after-gate acts on it.
-	 *  Read STATICALLY off the raw plugin object (like `policies`/`shareable`), so the engine knows the
-	 *  allowlist before any `configure` runs. The keys are OPAQUE to governance — a plugin owns what its
-	 *  annotation MEANS, the same way it owns what a `shareable` kind means. */
+	/** Cedar policy ANNOTATION keys this plugin consumes — each a `{ key, audience?, parse? }` the
+	 *  assembly merges into the one allowlist the policy engine reads. A declared key's value on the
+	 *  DETERMINING policies rides the decision out (`GateDecision`/`HandleResult`), on `annotations` for
+	 *  an after-gate to act on or — with `audience: "model"` — on `modelAnnotations`, which the runtime
+	 *  hands to the AGENT. Read STATICALLY off the raw plugin object (like `policies`/`shareable`), so the
+	 *  engine knows the allowlist before any `configure` runs. The keys are OPAQUE to governance — a
+	 *  plugin owns what its annotation MEANS, the same way it owns what a `shareable` kind means. */
 	policyAnnotations?: readonly PolicyAnnotationKind[];
 	/** Tools this plugin ships — definitions, optionally GROUPED (a nested record is a group whose key
 	 *  becomes a path segment, the same shape `endpoints()` gives api namespaces). Read STATICALLY off

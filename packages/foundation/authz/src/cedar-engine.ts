@@ -28,7 +28,10 @@ import type {
 	PolicyRequest,
 	PolicyResult,
 } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import {
+	configurationError,
+	MODEL_ANNOTATION_MAX_LENGTH,
+} from "@euroclaw/contracts";
 import type { CedarEngine, CedarEngineConfig } from "./cedar-types";
 
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
@@ -77,30 +80,65 @@ function namedPolicySet(
 	return out;
 }
 
+/** One policy's declared annotations, already split by the audience each key was declared for. The
+ *  split happens HERE — the index is the last place that still knows the declarations — so no
+ *  downstream door has to remember to filter, and the two bags never travel as one. */
+type AnnotationsByAudience = {
+	host: Record<string, string>;
+	model: Record<string, string>;
+};
+
 /**
  * Index each policy's DECLARED annotations by policy id, so a decision can report the metadata of the
  * rules that actually decided it. Annotations are read structurally (`policyToJson`), never by a regex
  * over source, and filtered to the keys plugins DECLARED: policy text is author-written and rides into
  * a hash-chained compliance log, so what may flow there is bounded, and an undeclared annotation is
  * inert rather than silently carried. `parse` is the declaring plugin's boundary validator.
+ *
+ * A key declared `audience: "model"` is bounded here as well as filtered: its value ends up in an
+ * agent's context, which is neither a log line nor an id, and an over-long one is REJECTED rather
+ * than truncated. This runs at CONSTRUCTION, beside the parse check below, so it fails the same way
+ * unparseable policy text does — loudly, at assembly, as the config bug it is. Truncating instead
+ * would hand a model an instruction that stops mid-clause, which is worse than no instruction.
  */
 function annotationIndex(
 	policies: Record<string, string>,
 	declared: readonly PolicyAnnotationKind[],
-): Map<string, Record<string, string>> {
-	const index = new Map<string, Record<string, string>>();
+): Map<string, AnnotationsByAudience> {
+	const index = new Map<string, AnnotationsByAudience>();
 	if (declared.length === 0) return index;
 	const byKey = new Map(declared.map((d) => [d.key, d]));
 	for (const [id, text] of Object.entries(policies)) {
 		const json = policyToJson(text);
 		if (json.type !== "success") continue;
-		const found: Record<string, string> = {};
+		const found: AnnotationsByAudience = { host: {}, model: {} };
 		for (const [key, raw] of Object.entries(json.json.annotations ?? {})) {
 			const declaration = byKey.get(key);
 			if (declaration === undefined || typeof raw !== "string") continue;
-			found[key] = declaration.parse ? declaration.parse(raw) : raw;
+			const value = declaration.parse ? declaration.parse(raw) : raw;
+			// Absent audience = "host": declaring a key must never, on its own, start feeding a model.
+			if (declaration.audience !== "model") {
+				found.host[key] = value;
+				continue;
+			}
+			if (value.length > MODEL_ANNOTATION_MAX_LENGTH) {
+				throw configurationError(
+					`policy annotation "@${key}" on "${id}" is ${value.length} characters; a model-audience annotation is limited to ${MODEL_ANNOTATION_MAX_LENGTH}`,
+					{
+						policyId: id,
+						reason:
+							"the value reaches an agent's context window — shorten it rather than relying on a truncation that would cut the instruction mid-sentence",
+					},
+				);
+			}
+			found.model[key] = value;
 		}
-		if (Object.keys(found).length > 0) index.set(id, found);
+		if (
+			Object.keys(found.host).length > 0 ||
+			Object.keys(found.model).length > 0
+		) {
+			index.set(id, found);
+		}
 	}
 	return index;
 }
@@ -124,7 +162,7 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 	// Only meaningful for a named set — plain text has no stable ids to index by.
 	const annotations =
 		typeof staticPolicies === "string"
-			? new Map<string, Record<string, string>>()
+			? new Map<string, AnnotationsByAudience>()
 			: annotationIndex(staticPolicies, config.annotations ?? []);
 	// Fail LOUD at construction for a broken policy set / schema — a config bug, not a runtime deny.
 	const parsedPolicies = checkParsePolicySet(policies);
@@ -147,19 +185,29 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 		return config.entities ?? [];
 	};
 
-	// The declared annotations of the policies that DECIDED, merged. Omitted entirely when there are
-	// none, so a decision never carries an empty bag. (A key on two determining policies: last wins —
-	// they are metadata about a decision already made, not part of it.)
+	// The declared annotations of the policies that DECIDED, merged — one bag per AUDIENCE, kept
+	// apart the whole way out. Either is omitted entirely when empty, so a decision never carries an
+	// empty bag. (A key on two determining policies: last wins — they are metadata about a decision
+	// already made, not part of it.)
 	const annotationsOf = (
 		determining: readonly string[],
-	): { annotations?: Record<string, string> } => {
+	): {
+		annotations?: Record<string, string>;
+		modelAnnotations?: Record<string, string>;
+	} => {
 		if (annotations.size === 0) return {};
-		const merged: Record<string, string> = {};
+		const host: Record<string, string> = {};
+		const model: Record<string, string> = {};
 		for (const id of determining) {
 			const found = annotations.get(id);
-			if (found !== undefined) Object.assign(merged, found);
+			if (found === undefined) continue;
+			Object.assign(host, found.host);
+			Object.assign(model, found.model);
 		}
-		return Object.keys(merged).length > 0 ? { annotations: merged } : {};
+		return {
+			...(Object.keys(host).length > 0 ? { annotations: host } : {}),
+			...(Object.keys(model).length > 0 ? { modelAnnotations: model } : {}),
+		};
 	};
 
 	// One Cedar evaluation. Never throws: a request that can't be evaluated is fail-CLOSED (deny),

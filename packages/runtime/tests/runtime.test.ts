@@ -17,6 +17,7 @@ import {
 } from "@euroclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
+import { governanceToolResult } from "../src/ai-sdk-loop";
 import {
 	createRuntime,
 	govern,
@@ -1193,5 +1194,61 @@ describe("@euroclaw/runtime", () => {
 			outputTokenDetails: {},
 			totalTokens: 4,
 		});
+	});
+});
+
+// The transcript payload a blocked call becomes — the one place author-written policy text is
+// deliberately handed to the model, and the one place the host's own metadata must not be.
+describe("governanceToolResult — what a blocked call tells the model", () => {
+	const bags = {
+		annotations: { escalate: "betterauth:team_eng" },
+		modelAnnotations: { guidance: "ask a release manager" },
+	};
+
+	it("carries the model bag under `annotations` and leaves the host bag behind", () => {
+		expect(
+			governanceToolResult({
+				status: "denied",
+				gateId: "policy",
+				reason: "no",
+				reasonCode: "DENIED",
+				...bags,
+			}),
+		).toEqual({
+			__governance: "denied",
+			reason: "no",
+			reasonCode: "DENIED",
+			// `annotations` from the MODEL's side of the wall — it never sees the other one, so the name
+			// is complete from where it is read.
+			annotations: { guidance: "ask a release manager" },
+		});
+	});
+
+	it("does the same for a needs-approval, though no runtime path reaches it with one today", () => {
+		// Worth pinning anyway: in the loop a park RETURNS (the run waits for a human) and on resume a
+		// second park throws, so the live park→model doors are the disclosure and the nested invoke.
+		// If a path ever hands a park to the model here, it must not start leaking the host's bag.
+		expect(
+			governanceToolResult({
+				status: "needs-approval",
+				gateId: "policy",
+				reason: "approval required",
+				...bags,
+			}),
+		).toMatchObject({
+			__governance: "needs-approval",
+			annotations: { guidance: "ask a release manager" },
+		});
+	});
+
+	it("omits `annotations` entirely when the policy wrote nothing for the model", () => {
+		const result = governanceToolResult({
+			status: "denied",
+			gateId: "policy",
+			reason: "no",
+			annotations: { escalate: "betterauth:team_eng" },
+		});
+		expect(result).not.toHaveProperty("annotations");
+		expect(JSON.stringify(result)).not.toContain("betterauth:team_eng");
 	});
 });

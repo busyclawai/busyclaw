@@ -126,6 +126,15 @@ const escalatingForbid = (target: string) =>
 forbid(principal, action == Action::"read_doc", resource);`,
 	});
 
+/** The same refusal, written for BOTH readers: the host is told who, the agent is told what to do. */
+const escalatingForbidWithGuidance = (target: string, guidance: string) =>
+	cedar({
+		name: "escalate:forbid",
+		policies: `@escalate("${target}")
+@guidance("${guidance}")
+forbid(principal, action == Action::"read_doc", resource);`,
+	});
+
 describe("escalations() — the escalate annotation reaches the host", () => {
 	it("a parked call routes the policy's target, verbatim", async () => {
 		const routed: Escalation[] = [];
@@ -188,6 +197,30 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 			status: "denied",
 			name: "read_doc",
 		});
+	});
+
+	it("the guidance this plugin also declares goes to the AGENT — never through onEscalate", async () => {
+		// Both keys are declared by the same plugin and written on the same rule, so this is the case
+		// that would break if `audience` were documentation rather than a wall: the router must see
+		// its own target and nothing else, while the model gets the sentence written for it.
+		const routed: Escalation[] = [];
+		const guidance = "Ask the doc owner to grant you read access first.";
+		const claw = clawWith({
+			toolName: "read_doc",
+			access: "read",
+			plugins: [
+				escalations({ onEscalate: (e) => void routed.push(e) }),
+				escalatingForbidWithGuidance("workday:dept_456", guidance),
+			],
+		});
+
+		expect((await claw.api.generate({ prompt: "read" }, caller)).status).toBe(
+			"completed",
+		);
+		expect(routed).toHaveLength(1);
+		expect(routed[0]?.target).toBe("workday:dept_456");
+		// The Escalation is the HOST's view: guidance is not part of it, under any key.
+		expect(JSON.stringify(routed[0])).not.toContain(guidance);
 	});
 
 	it("no escalate annotation → onEscalate never fires (a park, and a permitted call)", async () => {
