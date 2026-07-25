@@ -2,6 +2,9 @@
 // intended compile-time error — createClaw's cron-handler requirement is enforced in the type system.
 import type { EuroclawPlugin } from "@euroclaw/contracts";
 import { type SqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
+import { cedar } from "@euroclaw/policy-cedar";
+import { secrets } from "@euroclaw/secrets-plugin";
+import { memoryAdapter } from "@euroclaw/storage-core";
 import { describe, test } from "vitest";
 import { createClaw, type RuntimeConfig } from "../src/index";
 
@@ -43,5 +46,20 @@ describe("createClaw cronHandler requirement", () => {
 			id: "channel:telegram",
 		};
 		createClaw({ model, plugins: [webhookOnlyPlugin] });
+	});
+
+	// The regression guard for the DEFAULT flag: a factory whose return type is a bare
+	// `EuroclawPlugin` inherits the whole flag union, which `HasCronContributor` reads as "has-cron"
+	// — so installing a plugin that owns no cron at all demanded a cronHandler the host has no use
+	// for. Every shipped factory states its flag; these calls fail to compile if one stops.
+	test("a shipped plugin that contributes no cron needs no cronHandler", () => {
+		createClaw({ model, plugins: [secrets()] });
+		createClaw({ model, plugins: [secrets([], { id: "custom" })] });
+		createClaw({ model, plugins: [cedar({ policies: "" })] });
+		createClaw({
+			database: memoryAdapter(),
+			model,
+			plugins: [secrets([], { store: true })],
+		});
 	});
 });

@@ -186,7 +186,7 @@ function buildStore(options: SecretStoreOptions): {
 
 /**
  * The store path's plugin type: it contributes the personal management api (`$Api` ⇒
- * `claw.api.secrets`) and requires a database. The no-store path stays the wide {@link EuroclawPlugin}
+ * `claw.api.secrets`) and requires a database. The no-store path is the same plugin minus those two
  * (providers only, no api). Mirrors channels' registrations-vs-app-bot return split.
  */
 export type SecretsStorePlugin = EuroclawPlugin<
@@ -209,8 +209,13 @@ type StoreEnabled<Options> = Options extends { store: infer Store }
 			: true
 	: false;
 
+/** `"no-cron"` on BOTH branches, stated rather than defaulted: secrets resolves credentials and owns
+ *  no scheduled work, and the phantom's DEFAULT is the whole flag union — which createClaw reads as
+ *  "might contribute cron" and answers by demanding a `cronHandler` from every host that installs it. */
 type SecretsReturn<Options> =
-	StoreEnabled<Options> extends true ? SecretsStorePlugin : EuroclawPlugin;
+	StoreEnabled<Options> extends true
+		? SecretsStorePlugin
+		: EuroclawPlugin<"no-cron">;
 
 /**
  * `secrets(providers?, { store? })` — contributes secret providers (and the optional in-app store),
@@ -236,8 +241,9 @@ export function secrets<
 				: options.store;
 
 	if (!storeOptions) {
-		const plugin: EuroclawPlugin = {
+		const plugin: EuroclawPlugin<"no-cron"> = {
 			id: options.id ?? "euroclaw.secrets",
+			$HasCron: "no-cron",
 			secrets: { providers: [...base] },
 		};
 		return plugin as SecretsReturn<Options>;
