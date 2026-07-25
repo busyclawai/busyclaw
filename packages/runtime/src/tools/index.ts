@@ -6,6 +6,7 @@
 //                       egress floor, and the provider that synthesizes executable HTTP tools
 //   registry.ts       — the governed OpenAPI registration write flow
 
+export type { ToolAccessProbe } from "./discovery";
 export {
 	DISCOVERY_TOOL_PATHS,
 	discoveryTools,

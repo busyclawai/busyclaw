@@ -18,9 +18,20 @@
 // audit and the transcript all read the TARGET's canonical path. The `execute` descriptor below
 // carries no `access` fact (so it is not a modeled action) and its `execute` throws — being
 // dispatched at all means the ingress did not unwrap, which is a fail-closed condition, not a call.
+//
+// DISCLOSURE — what the floor would say about a hit — is answered THROUGH the chokepoint, not around
+// it. The tempting symmetry is to answer `search` at that same ingress, beside the `execute` unwrap,
+// but the two are different problems: unwrapping REWRITES an encoding and the call still goes on to
+// be decided, while answering would take a tool call out of `handleToolCall` altogether — no gates,
+// no audit row, a second door for the one thing this codebase keeps to one. The ingress has no
+// advantage to offer either: what is in hand there is the RUN's context, not the DECISION's — the
+// stamped principal and runMode are added by core's own resolution step, inside the door. So the
+// runtime hands `search` a probe CAPABILITY at the execute boundary (the seam `subInvoke` already
+// uses) and the search call stays an ordinary governed tool call.
 
 import {
 	EUROCLAW_TOOL_NAMESPACE,
+	type Outcome,
 	stateError,
 	type ToolDefinition,
 	type ToolDefinitionSet,
@@ -50,7 +61,11 @@ const SEARCH_DESCRIPTION =
 	"Find tools that are available to you but not listed above. Describe what you want to do " +
 	"(e.g. 'publish a document', 'list github issues') and this returns matching tools with their " +
 	"canonical path, what they do, and the JSON Schema of their arguments. Run one with " +
-	`${toolModelName(EXECUTE_TOOL_PATH)}.`;
+	`${toolModelName(EXECUTE_TOOL_PATH)}. A result may carry an \`authorization\` hint — ` +
+	"`available` (nothing objected), `needs-approval` (calling it pauses for a human; " +
+	"`annotations` says who to escalate to), or `conditional` (not permitted as a bare call — the " +
+	"arguments you pass may change that, so try it if it fits). The hint is ADVISORY and may be " +
+	"stale: you are authorized when you call, never here.";
 
 const EXECUTE_DESCRIPTION =
 	"Run a tool you found with search, by its canonical path. Pass the tool's own arguments as " +
@@ -58,11 +73,38 @@ const EXECUTE_DESCRIPTION =
 	"executed and recorded exactly as if it were listed above — so a denial here is a real " +
 	"denial, not a call that needs rephrasing.";
 
-/** One search hit: what the model needs to construct a call, and nothing else. */
+/**
+ * Ask what the governance floor would say about these tool paths, WITHOUT calling them — index-
+ * aligned answers. Handed to the search meta-tool by the runtime (see runtime.ts), because a
+ * decision needs the turn context and the turn context does not cross the tool-execute boundary.
+ * Absent → search discloses nothing, which is exactly what it did before.
+ */
+export type ToolAccessProbe = (
+	paths: readonly string[],
+) => Promise<readonly Outcome[]>;
+
+/**
+ * What the floor would say about calling a tool — ADVISORY, never a grant and never a refusal:
+ *
+ *   - `available`      nothing objected to a bare call.
+ *   - `needs-approval` it would park for a human; `annotations` carries the deciding rules' own
+ *                      metadata (e.g. `{ escalate: "betterauth:team_eng" }`) VERBATIM.
+ *   - `conditional`    a bare call is not permitted, but this tool takes arguments and a policy may
+ *                      condition on them, so the real call may well be. See {@link discloseTool}.
+ *
+ * A tool the probe could not decide at all carries NO hint — search states only what it can stand
+ * behind. Disclosure is never enforcement: the floor decides again at execute, on the call as it
+ * actually arrives, and that decision is the only one that governs.
+ */
+type ToolAuthorization = "available" | "needs-approval" | "conditional";
+
+/** One search hit: what the model needs to construct a call, plus what the floor would say. */
 type DiscoveredTool = {
 	path: string;
 	description: string | undefined;
 	inputSchema: unknown;
+	authorization?: ToolAuthorization;
+	annotations?: Record<string, string>;
 };
 
 /**
@@ -74,6 +116,78 @@ type DiscoveredTool = {
  */
 function inputJsonSchema(schema: unknown): unknown {
 	return asSchema(schema as Parameters<typeof asSchema>[0]).jsonSchema;
+}
+
+/**
+ * Does this tool's DECLARED interface carry arguments a decision could read? The one question that
+ * separates a probe we can stand behind from a guess: the probe asks with no arguments, so for a
+ * tool that takes none, the request it asks about is byte-for-byte the request a real call makes —
+ * every gate sees exactly what it would see, and the answer is the answer. The moment a tool
+ * declares an argument, the real call can decide differently and a bare probe can only say "not as
+ * asked". Two live mechanisms make that real: a per-tool GATE reading `call.args` (any tool), and a
+ * Cedar `when { context.args… }` rule (REGISTERED tools — a code tool's action carries no `args`,
+ * `actionInputsFromTools` leaves it undefined deliberately, so such a rule errors and is skipped for
+ * the probe and the real call alike). Deliberately asked of the DESCRIPTOR rather than of either
+ * mechanism: the runtime cannot enumerate what every gate reads, and "there are no arguments to
+ * differ over" is true whoever is doing the reading.
+ *
+ * Read off the same JSON Schema the result hands the model, so the claim is about the interface the
+ * model was told about. An `execute` envelope can smuggle arguments no schema declared (the provider
+ * edge cannot validate a routed call) — one more reason this is advisory and the floor re-decides.
+ */
+function declaresArgs(schema: unknown): boolean {
+	if (schema === null || typeof schema !== "object") return true;
+	const properties = (schema as { properties?: unknown }).properties;
+	if (properties === null || typeof properties !== "object") return false;
+	return Object.keys(properties).length > 0;
+}
+
+/**
+ * One probe answer → what a search result may honestly say. `null` OMITS the tool from the results.
+ *
+ * THE ONE THING THIS FUNCTION IS FOR: a probe evaluates a tool with no arguments, so a probe-derived
+ * "you may not use this" can be WRONG for a tool that would be permitted with the right ones. If
+ * search said no and the model believed it, a capability would silently disappear — strictly worse
+ * than the status quo, where the model tries and finds out. So a deny is NEVER reported as a deny:
+ *
+ *   - the tool takes arguments  → `conditional`. The weakest true statement: the floor does not
+ *     permit a bare call, and what you pass may change that. Keeps the capability reachable.
+ *   - the tool takes none       → OMITTED. Here the probe is exact (see {@link declaresArgs}) and the
+ *     engine has already re-asked as-if-confirmed, so this is a "no" approval cannot flip either.
+ *     Listing an unusable tool spends context and invites a denied attempt; naming it also discloses
+ *     that it EXISTS, which is itself a signal. Omitting is UX, never enforcement — the tool stays
+ *     in the run's index, `execute` still addresses it by path, and the floor still decides it.
+ *   - the probe could not decide → listed with no hint at all. A gate that threw (no stamped
+ *     principal; a gate that assumes arguments) has refused to decide, which is not a "no" — saying
+ *     nothing leaves the model exactly where it was before disclosure existed.
+ */
+function discloseTool(
+	found: DiscoveredTool,
+	outcome: Outcome | undefined,
+): DiscoveredTool | null {
+	if (outcome === undefined || outcome.status === "error") return found;
+	if (outcome.status === "ok") return { ...found, authorization: "available" };
+	// Annotations ride out VERBATIM and opaque — `<authority>:<id>` is the host's vocabulary, never
+	// split on the colon here, never interpreted. The engine reports the rules that WOULD permit once
+	// confirmed, so what the model is told to escalate to is the rule that actually gates it.
+	const annotations = outcome.annotations
+		? { annotations: outcome.annotations }
+		: {};
+	if (outcome.status === "needs-approval") {
+		return { ...found, authorization: "needs-approval", ...annotations };
+	}
+	if (!declaresArgs(found.inputSchema)) return null;
+	// No `reason`: the deny reason carries the determining-policy trail, and which rules exist is
+	// not the model's business.
+	return { ...found, authorization: "conditional", ...annotations };
+}
+
+/** The disclosure capability off the runtime's execute options. Runtime-built (the model only
+ *  authors `input`), so this is a narrowing read, not a trust decision. */
+function readAccessProbe(options: unknown): ToolAccessProbe | undefined {
+	if (options === null || typeof options !== "object") return undefined;
+	const probe = (options as { probeAccess?: unknown }).probeAccess;
+	return typeof probe === "function" ? (probe as ToolAccessProbe) : undefined;
 }
 
 /** The discoverable half of a run's tools — the set `search` searches and `execute` addresses. */
@@ -118,30 +232,54 @@ function searchTool(discoverable: ToolDefinitionSet): ToolDefinition {
 		// VISIBILITY, not authorization — the same rule the catalog carries. No `access` fact, so the
 		// floor does not model this as an action: enumerating what exists is not doing any of it.
 		//
-		// Results MAY be filtered one day (don't offer what the caller plainly cannot call — it wastes
-		// context and invites denied attempts), and that would be a UX nicety, never enforcement. The
-		// floor still decides at execute time: a tool absent from these results must not be
-		// unreachable BECAUSE it was hidden, and a tool present in them must not be callable BECAUSE
-		// it was shown. Nothing here is filtered today — a filter would have to pre-evaluate policy,
-		// and the turn context a decision needs does not cross the tool-execute boundary.
+		// Results DISCLOSE what the floor would say, and a disclosure is a UX nicety, never
+		// enforcement. The floor still decides at execute time: a tool absent from these results must
+		// not be unreachable BECAUSE it was hidden, and a tool present in them — with any hint at all —
+		// must not be callable BECAUSE it was shown. The hint is also point-in-time; policy and scopes
+		// can change before the call, which is a second reason nothing may be load-bearing on it.
 		governance: { effect: { kind: "internal", output: "none", risk: "low" } },
 		invocation: {
 			kind: "local",
-			execute: (input: { query: string; limit?: number }) => {
+			execute: async (
+				input: { query: string; limit?: number },
+				options: unknown,
+			) => {
 				const limit = Math.min(
 					Math.max(Math.trunc(input.limit ?? DEFAULT_SEARCH_LIMIT), 1),
 					MAX_SEARCH_LIMIT,
 				);
-				const tools: DiscoveredTool[] = [];
+				const found: DiscoveredTool[] = [];
 				for (const summary of catalog.search(input.query, { limit })) {
 					const descriptor = byPath.get(summary.address);
 					if (!descriptor) continue;
-					tools.push({
+					found.push({
 						path: descriptor.path,
 						description: descriptor.description,
 						inputSchema: inputJsonSchema(descriptor.inputSchema),
 					});
 				}
+				const probe = readAccessProbe(options);
+				if (!probe) return { tools: found };
+				// The PAGE is what gets probed, not the whole discoverable set: a decision per tool is
+				// cheap (in-process wasm) but not free, and a result nobody is shown is a decision
+				// nobody needed. Cost is therefore bounded by `limit`, not by how many tools exist.
+				let outcomes: readonly Outcome[];
+				try {
+					outcomes = await probe(found.map((tool) => tool.path));
+				} catch {
+					// Disclosure is ADDITIVE. It must never become a new way for a run to die, so a probe
+					// that fails outright (the context resolution behind it, say — the per-tool failures
+					// are already answers) leaves search answering exactly what it answered before.
+					return { tools: found };
+				}
+				const tools: DiscoveredTool[] = [];
+				found.forEach((tool, index) => {
+					const disclosed = discloseTool(tool, outcomes[index]);
+					// An omission can under-fill the page (the page was picked by relevance, before
+					// anyone asked the floor). A short page of usable tools beats a full one of doors
+					// that do not open.
+					if (disclosed) tools.push(disclosed);
+				});
 				return { tools };
 			},
 		},
