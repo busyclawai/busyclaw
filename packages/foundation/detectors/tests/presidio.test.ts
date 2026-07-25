@@ -287,3 +287,57 @@ describe("presidioDetector — the factory (injected fetch)", () => {
 		expect(await redactor.rehydrateValue(redacted, ctx)).toBe(text);
 	});
 });
+
+// The analyzer is a NETWORK boundary, so its body is a version contract, not a promise. These pin the
+// FAIL-CLOSED half: a shape this detector cannot read must throw, because "rows I could not parse" and
+// "no PII in this text" are the same empty array downstream — and the second one sends the text to the
+// model unredacted.
+describe("presidioDetector — the response is not trusted", () => {
+	const raw = (body: string): typeof globalThis.fetch =>
+		(async () =>
+			new Response(body, {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			})) as typeof globalThis.fetch;
+
+	it("throws when the body is not an array (an error object, not 'no PII')", async () => {
+		const detect = presidioDetector({
+			url: "http://x",
+			fetch: raw(JSON.stringify({ detail: "model not loaded" })),
+		});
+		await expect(detect("Alice lives in Berlin")).rejects.toThrow(
+			/non-array body/,
+		);
+	});
+
+	it("throws when a row is not {entity_type, start, end, score} (label drift)", async () => {
+		const detect = presidioDetector({
+			url: "http://x",
+			// `entityType` instead of `entity_type` — every row would silently drop to zero spans.
+			fetch: raw(
+				JSON.stringify([{ entityType: "PERSON", start: 0, end: 5, score: 0.9 }]),
+			),
+		});
+		await expect(detect("Alice lives in Berlin")).rejects.toThrow(
+			/response shape changed/,
+		);
+	});
+
+	it("throws on a non-finite offset or score rather than emitting a broken span", async () => {
+		const detect = presidioDetector({
+			url: "http://x",
+			fetch: raw('[{"entity_type":"PERSON","start":0,"end":5,"score":null}]'),
+		});
+		await expect(detect("Alice lives in Berlin")).rejects.toThrow(
+			/response shape changed/,
+		);
+	});
+
+	it("drops a NaN score instead of emitting a span with NaN confidence", () => {
+		// `NaN < floor` is false, so the original comparison KEPT the row and reported NaN as its
+		// confidence — a hit no threshold downstream can reason about.
+		expect(
+			presidioSpans([result("PERSON", 0, 5, Number.NaN)], "Alice lives here"),
+		).toEqual([]);
+	});
+});
