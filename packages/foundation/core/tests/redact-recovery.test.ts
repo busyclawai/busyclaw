@@ -105,27 +105,28 @@ describe("recovery of a mangled token", () => {
 });
 
 describe("recovery is fail-safe", () => {
-	it("recovers when the repair is unambiguous (one saved value)", async () => {
+	it("recovers a mangling INSIDE the books' proven radius (one edit)", async () => {
 		const store = createMemoryPiiMappingStore();
 		await seed(store, "{{pii:email:abacus-blizzard}}", "Bob", ctxA);
 		const on = createStoredRedactor({ mappings: store, recover: true });
-		// baacus -> {abacus, caucus}; only abacus-blizzard is saved → single value → recover.
-		expect(await on.rehydrateValue("{{pii:email:baacus-blizzard}}", ctxA)).toBe("Bob");
+		// abacus -> abacas is a single substitution; the books are built to a minimum pairwise distance
+		// of 3, so exactly one word can sit within one edit and the repair is provably the original.
+		expect(await on.rehydrateValue("{{pii:email:abacas-blizzard}}", ctxA)).toBe("Bob");
 	});
 
-	it("REFUSES when repairs resolve to two different values (never guesses a subject)", async () => {
+	it("REFUSES a mangling BEYOND the radius rather than snapping to a neighbour", async () => {
 		const warn = vi.fn();
 		const store = createMemoryPiiMappingStore();
-		await seed(store, "{{pii:email:abacus-blizzard}}", "Alice", ctxA);
-		await seed(store, "{{pii:email:caucus-blizzard}}", "Bob", ctxA);
+		await seed(store, "{{pii:email:abacus-blizzard}}", "Bob", ctxA);
 		const on = createStoredRedactor({ mappings: store, recover: true, warn });
 
-		// baacus -> {abacus, caucus}; both resolve to different values → ambiguous → refuse.
+		// `baacus` transposes abacus' first two letters — 2 edits under plain Levenshtein, which is
+		// outside the distance-3 books' correcting radius of 1. Past that point "nearest word" stops
+		// being "the word it came from", so the only safe answer is to leave the token alone: this
+		// recoverer is same-value-or-refuse, and a guess here rehydrates as somebody else.
 		const out = await on.rehydrateValue("see {{pii:email:baacus-blizzard}} today", ctxA);
 		expect(out).toBe("see {{pii:email:baacus-blizzard}} today"); // untouched
-		expect(out).not.toContain("Alice");
 		expect(out).not.toContain("Bob");
-		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/refused|ambiguous/));
 	});
 
 	it("does not cross the container fence even with recovery on", async () => {

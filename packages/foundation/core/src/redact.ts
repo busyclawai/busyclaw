@@ -99,7 +99,29 @@ function formatPlaceholder(kind: PiiKind, code: string): string {
 // construction: a repair is used only when it RESOLVES in-container AND is unambiguous, so recovery
 // can never invent a value or cross to another subject's.
 
-const WORD_MAX_EDITS = 2;
+// The books' unique-decoding radius, and not one edit more. Both wordlists are built to a MINIMUM
+// pairwise edit distance of 3 (measured, not assumed: 2048 words each, closest pairs `abacus`/`apache`
+// and `aaberg`/`abbey`), which corrects exactly floor((3-1)/2) = 1 edit.
+//
+// Inside radius 1 the nearest word is PROVABLY the original: if one word is within 1 edit, every other
+// is at least 3 - 1 = 2 away, so a candidate set can never hold more than one entry. Outside it there
+// is no such guarantee — at 2, a mangling of three or more edits can land uniquely nearest a DIFFERENT
+// word at distance 2 and be accepted with no tie for the caller to refuse, which for a placeholder
+// means rehydrating as another subject's value. "Same value or refuse" is this recoverer's whole
+// contract, so it now repairs only what it can prove.
+//
+// Precise about what this does NOT buy: a mangling that happens to land inside some other word's
+// radius is indistinguishable from that word at ANY tolerance, and no radius fixes it. What narrows
+// that residue is the layer above — a repair is used only if it also RESOLVES in-container, so a wrong
+// word is inert unless that token is separately saved in the same container.
+//
+// The cost is real: this is a tolerance, not a bug fix, and dropping it to 1 stops recovering
+// two-edit manglings the books could often still decode uniquely — a transposition (`abacus` →
+// `baacus`) is 2 under plain Levenshtein and no longer repairs. Damerau-Levenshtein, which would score
+// that 1, is not the answer either: measured against these books its minimum pairwise distance is only
+// 2 (`abide`/`babied`, `adela`/`adlee`), a radius of ZERO, so the metric that makes transpositions
+// cheap also makes the code non-correcting.
+const WORD_MAX_EDITS = 1;
 const RECOVER_MAX_CANDIDATES = 24;
 // Catches dropped/extra braces, spaced or `_`/`-` separators, and stray case; the identity class
 // excludes braces so a frame can never swallow a neighbouring token, and is length-bounded to boot.
@@ -536,8 +558,26 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 			for (const [k, v] of Object.entries(value)) out[k] = await walk(v, fn);
 			return out;
 		}
-		// Numbers, booleans, null, and non-plain objects (Uint8Array, Date, URL, class
-		// instances — e.g. binary parts in a model prompt) pass through untouched.
+		// Map and Set are CONTAINERS, so they are walked like the other two. They reach here as
+		// ordinary carriers of caller data, and passing them through untouched meant any string inside
+		// one crossed the model boundary in the clear while the plain object beside it was tokenized —
+		// a hole whose shape is "which container type did the caller happen to use". Keys are walked
+		// too: a Map keyed by email address is a natural thing to write and leaks exactly as readily.
+		if (value instanceof Map) {
+			const out = new Map<unknown, unknown>();
+			for (const [k, v] of value) out.set(await walk(k, fn), await walk(v, fn));
+			return out;
+		}
+		if (value instanceof Set) {
+			const out = new Set<unknown>();
+			for (const member of value) out.add(await walk(member, fn));
+			return out;
+		}
+		// Numbers, booleans, null, and non-CONTAINER objects (Uint8Array, Date, URL, class instances —
+		// e.g. binary parts in a model prompt) pass through untouched. That is deliberate: they are
+		// values, not carriers, and rebuilding one would change its type out from under the caller. It
+		// is also a KNOWN EDGE — a class instance holding a PII string is not reached, so anything
+		// crossing this boundary should be JSON-shaped rather than a bespoke carrier.
 		return value;
 	};
 
