@@ -60,9 +60,10 @@ export type AiSdkLoopInput = {
 		messages: ModelMessage[];
 	}) => Promise<string>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
-	/** The redaction seam: applied ONCE to content entering the transcript (tool outputs) and to
-	 *  event payloads. Everything downstream — model prompt, events, checkpoints, approvals —
-	 *  reads the same placeholder text. */
+	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
+	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
+	 *  approvals — reads the same placeholder text. Model output is included because a model can
+	 *  EMIT PII it was never shown, and an untokenized value is one erasure can never reach. */
 	redactValue?: <T>(value: T) => Promise<T>;
 	/** Stream the model instead of generating it whole — each step uses `streamText` and pushes
 	 *  rehydrated text deltas to `onDelta` as they arrive. The transcript still persists placeholders. */
@@ -318,7 +319,21 @@ export async function runAiSdkLoop(
 		// response.messages / toolCalls / text) — so the whole tool-governance loop below is shared.
 		// Streaming additionally pushes rehydrated text deltas to `onDelta` as the model produces them.
 		const callModel = async () => {
-			if (!input.streaming) return generateText(callParams);
+			if (!input.streaming) {
+				// Projected onto the same PLAIN shape the streaming branch returns, so the convergence
+				// below is literal. generateText resolves to a class INSTANCE, and the redactor walks
+				// only plain objects/arrays (a class instance is passed through untouched by design) —
+				// so without this projection the re-redaction below would silently no-op on the whole
+				// generate path.
+				const generated = await generateText(callParams);
+				return {
+					usage: generated.usage,
+					finishReason: generated.finishReason,
+					response: generated.response,
+					toolCalls: generated.toolCalls,
+					text: generated.text,
+				};
+			}
 			const streamed = streamText(callParams);
 			const rehydrator = createStreamRehydrator(input.rehydrateValue);
 			for await (const delta of streamed.textStream) {
@@ -350,6 +365,17 @@ export async function runAiSdkLoop(
 			});
 			throw err;
 		}
+		// Everything the loop persists downstream comes out of `res`: the transcript messages it pushes,
+		// `res.text` on the durable assistant message, the tool args a checkpoint parks for an approval,
+		// the yield checkpoint. A strict-mode model only ever SAW placeholders — but nothing stops it
+		// EMITTING raw PII it holds from training or reassembles from fragments the ingress detector
+		// missed, and a value with no mapping is one per-subject erasure can never reach. Redacted ONCE
+		// here, where streaming and generate converge and ahead of the first consumer, instead of at
+		// each persistence site (those are easy to add and easy to forget). Idempotent on the common
+		// path: placeholders already in the output are skipped, not re-tokenized. Tool args are
+		// rehydrated at the tool edge, so execution still sees the real value — only what lands at rest
+		// is tokenized.
+		res = await redact(input, res);
 		const modelDurationMs = Date.now() - modelStartedAt;
 		const stepUsage = usageFromModelResult(res.usage);
 		runUsage = addRuntimeModelUsage(runUsage, stepUsage);

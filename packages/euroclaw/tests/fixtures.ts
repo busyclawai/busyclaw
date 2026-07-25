@@ -59,6 +59,102 @@ export function textModel(
 	};
 }
 
+/**
+ * A STRICT-mode model that emits an address it was never given — the model volunteering PII it holds
+ * from training, or reassembles from fragments the ingress detector missed. The prompt is fully
+ * tokenized, so this is output-side PII with no mapping behind it.
+ */
+export function volunteersPiiModel(email: string): V2Model {
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async () => ({
+			content: [{ type: "text" as const, text: `You can reach them at ${email}` }],
+			finishReason: { unified: "stop" as const, raw: undefined },
+			usage: {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			},
+			warnings: [],
+		}),
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	};
+}
+
+/**
+ * Calls `lookup` once with no arguments, then finishes. Pairs with `lookupTool` to make PII enter a
+ * run through a tool RESULT — the path the RUNTIME redacts (and therefore the namespace the runtime
+ * mints into), as opposed to a user message, which the api has already tokenized before the run.
+ */
+export function lookupToolModel(): V2Model {
+	let step = 0;
+	const usage = {
+		inputTokens: {
+			total: 1,
+			noCache: undefined,
+			cacheRead: undefined,
+			cacheWrite: undefined,
+		},
+		outputTokens: { total: 1, text: undefined, reasoning: undefined },
+	};
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async () => {
+			if (step++ === 0) {
+				return {
+					content: [
+						{
+							type: "tool-call" as const,
+							toolCallId: "lookup-1",
+							toolName: "lookup",
+							input: "{}",
+						},
+					],
+					finishReason: { unified: "tool-calls" as const, raw: undefined },
+					usage,
+					warnings: [],
+				};
+			}
+			return {
+				content: [{ type: "text" as const, text: "done" }],
+				finishReason: { unified: "stop" as const, raw: undefined },
+				usage,
+				warnings: [],
+			};
+		},
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	};
+}
+
+/** Returns an address the run had never seen — PII born INSIDE the run, in a tool result. */
+export function lookupTool(email: string): ToolDefinition {
+	return govern(
+		tool({
+			description: "Look up a contact.",
+			inputSchema: jsonSchema<Record<string, never>>({
+				type: "object",
+				properties: {},
+			}),
+			execute: async () => ({ email }),
+		}),
+		{},
+	);
+}
+
 export function approvalToolModel(): V2Model {
 	let step = 0;
 	return {
