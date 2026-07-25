@@ -16,9 +16,13 @@ import { type Escalation, escalations } from "../src/index";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
-/** A mock model that calls `toolName` once (step 0), then answers "done" (step 1). */
+/**
+ * A mock model that calls `toolName`, then answers "done" once a result comes back. STATELESS — it
+ * reads the incoming messages rather than counting calls, because a parked run consumes exactly one
+ * model call, so a shared counter would make the SECOND run through the same claw skip the tool
+ * entirely and just answer.
+ */
 function toolCallModel(toolName: string): V2Model {
-	let step = 0;
 	const usage = {
 		inputTokens: {
 			total: 1,
@@ -33,8 +37,8 @@ function toolCallModel(toolName: string): V2Model {
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
-		doGenerate: async () =>
-			step++ === 0
+		doGenerate: async ({ prompt }) =>
+			prompt.every((message) => message.role !== "tool")
 				? {
 						content: [
 							{
@@ -272,10 +276,9 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 		});
 		claw = built;
 
-		// Through a CLAW (not an ad-hoc generate), because that is what makes the run recorded: only a
+		// Through a CLAW (not an ad-hoc generate), because that is what makes the run RECORDED: only a
 		// recorded run stamps clawId/threadId, and only a recorded run's approval checkpoint carries
-		// them back. An ad-hoc `generate` has neither side — its escalation correlates on nothing
-		// sharper than principal + tool name.
+		// them back. The run id is not part of that difference — see the ad-hoc case below.
 		const record = await built.api.createClaw({ name: "router" }, caller);
 		const thread = await built.api.createThread({ clawId: record.id }, caller);
 		const result = await built.api.sendMessage(
@@ -295,5 +298,54 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 				runId: seen?.runId,
 			},
 		});
+		// The same id at the top level, so ONE lookup answers "which approval is this escalation
+		// about" whether or not the run was recorded.
+		expect(pending[0]?.metadata).toMatchObject({ runId: seen?.runId });
+	});
+
+	// The ad-hoc half of the same question. A `generate` has no claw and no thread — legitimately, it
+	// is not a conversation — so it stamps neither, and nothing here pretends otherwise. What it DOES
+	// have is a run: the runtime mints an id for every invocation, stamps it on the gated call, and
+	// writes it onto the row a parked call leaves behind. Without that, a host holding an escalation
+	// from this path had principal + tool name and no way to reach the approval it must resolve.
+	it("an ad-hoc generate is correlatable: one runId on the escalation AND the approval", async () => {
+		const routed: Escalation[] = [];
+		const claw = clawWith({
+			toolName: "write_doc",
+			access: "write",
+			plugins: [
+				escalations({ onEscalate: (e) => void routed.push(e) }),
+				escalatingPark("betterauth:team_eng"),
+			],
+		});
+
+		// Two runs, so the join has to be exact rather than "the only pending row".
+		expect((await claw.api.generate({ prompt: "write" }, caller)).status).toBe(
+			"waiting_approval",
+		);
+		expect((await claw.api.generate({ prompt: "write" }, caller)).status).toBe(
+			"waiting_approval",
+		);
+		expect(routed).toHaveLength(2);
+
+		const pending = await claw.api.listApprovals({ status: "pending" }, caller);
+		expect(pending).toHaveLength(2);
+		for (const escalation of routed) {
+			// No claw, no thread: an ad-hoc run has neither, and inventing them would be a lie.
+			expect(escalation.clawId).toBeUndefined();
+			expect(escalation.threadId).toBeUndefined();
+			expect(escalation.runId).toBeTypeOf("string");
+			const matched = pending.filter(
+				(approval) =>
+					(approval.metadata as { runId?: string } | undefined)?.runId ===
+					escalation.runId,
+			);
+			expect(matched).toHaveLength(1);
+			expect(matched[0]?.toolName).toBe("write_doc");
+			// And no recording to fall back on — `metadata.runId` is the only join there is.
+			expect(matched[0]?.metadata).not.toHaveProperty("recording");
+		}
+		// Two runs, two ids: the id identifies the run, not the tool or the principal.
+		expect(routed[0]?.runId).not.toBe(routed[1]?.runId);
 	});
 });

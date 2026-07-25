@@ -53,13 +53,17 @@ export type Escalation = {
 	principal?: Principal;
 	/** How the run started. `autonomous` is the case that most needs routing: no human is watching it. */
 	runMode?: RunMode;
-	/** The recording identity — present only for a RECORDED run (a claw-bound `sendMessage`/engine run);
-	 *  an ad-hoc `generate` records nothing and carries none of the three. When they are here they are
-	 *  the JOIN KEY back to a parked approval: the same ids sit on the ApprovalRecord's checkpoint
-	 *  (`metadata.recording`), alongside `metadata.toolCallId`. Without them a host correlates on
-	 *  nothing sharper than principal + tool name. */
+	/** The conversation this ran in — present only for a RECORDED run (a claw-bound
+	 *  `sendMessage`/engine run). An ad-hoc `generate` has neither, and says so rather than inventing
+	 *  them. */
 	clawId?: string;
 	threadId?: string;
+	/** The JOIN KEY back to a parked approval, and the one id EVERY run has — the runtime mints one
+	 *  when a run has no engine run and no recording to be named by. The same value sits on the
+	 *  ApprovalRecord's checkpoint as `metadata.runId` (and, for a recorded run, inside
+	 *  `metadata.recording` too), so one `listApprovals` + one comparison answers "which approval is
+	 *  this escalation about" on either path. Absent only when something outside the runtime ran the
+	 *  gate. */
 	runId?: string;
 };
 

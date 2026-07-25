@@ -502,11 +502,18 @@ const runtimeModelMessage = ark({ role: "string", content: "unknown" }).narrow(
 	(value): value is ModelMessage => value.role.length > 0,
 );
 
-// The shared resume state every wait kind persists: the REDACTED transcript view plus the
-// recording identity to restore. Approval metadata adds the parked tool call; yield metadata adds
-// the next step. See docs/plans/yield-continuation-plan.md (wait taxonomy).
+// The shared resume state every wait kind persists: the REDACTED transcript view, the run's own id,
+// and the recording identity to restore. Approval metadata adds the parked tool call; yield metadata
+// adds the next step. See docs/plans/yield-continuation-plan.md (wait taxonomy).
+//
+// `runId` is the CORRELATION key, and it is here rather than only inside `recording` because an
+// ad-hoc `generate` has no recording at all — no claw, no thread — and would otherwise park a row a
+// host could tie to nothing. Every run carries one (the runtime mints it when the caller and the
+// recording both have none), and it is the same id the gated call is stamped with, so an escalation
+// and the approval it belongs to name each other. For a RECORDED run it is `recording.runId`.
 const runtimeResumeStateShape = {
 	messages: runtimeModelMessage.array(),
+	"runId?": "string | undefined",
 	"recording?": runtimeRecordingContext.or("undefined"),
 } as const;
 
@@ -534,7 +541,6 @@ export type RuntimeApprovalMetadata = typeof runtimeApprovalMetadata.infer;
 export const runtimeYieldMetadata = ark({
 	version: "'runtime.ai-sdk.yield.v1'",
 	nextStep: "number",
-	"runId?": "string | undefined",
 	...runtimeResumeStateShape,
 });
 export type RuntimeYieldMetadata = typeof runtimeYieldMetadata.infer;
@@ -954,10 +960,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			if (state.recording) {
 				resolved[CLAW_ID_CONTEXT_KEY] = state.recording.clawId;
 				resolved[THREAD_ID_CONTEXT_KEY] = state.recording.threadId;
-				if (state.recording.runId !== undefined) {
-					resolved[RUN_ID_CONTEXT_KEY] = state.recording.runId;
-				}
 			}
+			// The run's own id — the recording's when the run is recorded, else the one this invocation
+			// minted. clawId/threadId stay conditional on a recording (an ad-hoc run genuinely has
+			// neither), but a run id it always has, so an after-gate always has something to correlate
+			// on and the parked approval records the same value.
+			const runId = state.recording?.runId ?? state.runId;
+			if (runId !== undefined) resolved[RUN_ID_CONTEXT_KEY] = runId;
 			return resolved;
 		};
 		const core = createGovernance({
@@ -999,6 +1008,10 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						"runtime approval recording invalid",
 					);
 				}
+				// The join key, on every parked row — the same id the gated call was stamped with, and
+				// the same one the escalation carries. A recorded run also has it inside `recording`;
+				// an ad-hoc one has only this, which is the whole point of writing it at the top level.
+				if (state.runId !== undefined) metadata.runId = state.runId;
 				// Validate at the write boundary — a malformed checkpoint must not park an
 				// unresumable approval and surface only when a human grants it.
 				parseRuntimeApprovalMetadata(metadata);
@@ -1283,8 +1296,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		assertYieldable(options);
 		const recording = options?.[RUNTIME_RECORDING_OPTION];
 		state.recording = recording;
-		state.runId = options?.runId;
-		const emitCtx = { recording, runId: options?.runId };
+		// Every run gets an id, including an ad-hoc `generate` that has no claw and no thread to be
+		// named by. Minted LAST — a caller's durable run id wins, then the recording's (so a recorded
+		// run keeps one id, not two) — and it is what the gated call is stamped with and what a parked
+		// approval records, so the two are joinable for a run that has nothing else to join on.
+		state.runId = options?.runId ?? recording?.runId ?? newId("run");
+		const emitCtx = { recording, runId: state.runId };
 		const resolvedCtx = await resolveRunContext(ctx);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
@@ -1384,7 +1401,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 
 		const checkpoint = parseRuntimeApprovalMetadata(record.metadata);
 		const effectiveRecording = recording ?? checkpoint.recording;
-		const emitCtx = { recording: effectiveRecording, runId: options?.runId };
+		// The resumed action belongs to the run that parked it, so its id is RESTORED from the
+		// checkpoint rather than minted — the same rule resumeRun already follows for a yield. Nothing
+		// is invented when an older checkpoint carries none: a fresh id here would name a second run.
+		const effectiveRunId = options?.runId ?? checkpoint.runId;
+		const emitCtx = { recording: effectiveRecording, runId: effectiveRunId };
 		if (record.status === "denied") {
 			const text = record.reason ?? "approval denied";
 			await emitEvent(emitCtx, {
@@ -1456,7 +1477,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
 		state.approvedBy = record.decidedBy;
 		state.recording = effectiveRecording;
-		state.runId = options?.runId;
+		state.runId = effectiveRunId;
 		state.currentToolCallId = checkpoint.toolCallId;
 		state.currentToolPath = checkpoint.toolName;
 		state.currentToolInput = checkpoint.toolInput;
@@ -1545,7 +1566,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		resumeState.callerPrincipal = executingPrincipal;
 		resumeState.approvedBy = record.decidedBy;
 		resumeState.recording = effectiveRecording;
-		resumeState.runId = options?.runId;
+		resumeState.runId = effectiveRunId;
 		// Post-resume steps only — the terminal event's usage is honest about this invocation.
 		const { usage: runUsage, ...result } = await loop.generate({
 			model: selected.model,
