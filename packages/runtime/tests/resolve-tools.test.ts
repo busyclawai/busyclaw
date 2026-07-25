@@ -1,5 +1,6 @@
+import type { ToolDefinitionSet } from "@euroclaw/contracts";
 import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
-import { jsonSchema, type ToolSet, type wrapLanguageModel } from "ai";
+import { jsonSchema, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, govern } from "../src/index";
 
@@ -60,6 +61,7 @@ function callingModel(
 const recordingTool = (ran: string[], label: string) =>
 	govern(
 		{
+			description: `Record that ${label} ran.`,
 			inputSchema: jsonSchema({ type: "object", properties: {} }),
 			execute: async () => {
 				ran.push(label);
@@ -76,8 +78,8 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 	it("dispatches an organization's registered tool for that org's run", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
-		const registered: ToolSet = {
-			reg_tool: recordingTool(ran, "registered") as ToolSet[string],
+		const registered: ToolDefinitionSet = {
+			reg_tool: recordingTool(ran, "registered"),
 		};
 		const runtime = createRuntime({
 			model: callingModel("reg_tool", offered),
@@ -95,12 +97,12 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 	it("an organization with nothing registered is offered only the code tools", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
-		const registered: ToolSet = {
-			reg_tool: recordingTool(ran, "registered") as ToolSet[string],
+		const registered: ToolDefinitionSet = {
+			reg_tool: recordingTool(ran, "registered"),
 		};
 		const runtime = createRuntime({
 			model: callingModel(null, offered), // no tool call — just inspect what's offered
-			tools: { code_tool: recordingTool(ran, "code") as ToolSet[string] },
+			tools: { code_tool: recordingTool(ran, "code") },
 			organization: orgResolver,
 			resolveTools: (ctx) =>
 				ctx[ORGANIZATION_CONTEXT_KEY] === "org-a" ? registered : {},
@@ -116,10 +118,10 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		const warnings: string[] = [];
 		const runtime = createRuntime({
 			model: callingModel("shared", offered),
-			tools: { shared: recordingTool(ran, "code") as ToolSet[string] },
+			tools: { shared: recordingTool(ran, "code") },
 			organization: orgResolver,
 			resolveTools: () => ({
-				shared: recordingTool(ran, "registered") as ToolSet[string],
+				shared: recordingTool(ran, "registered"),
 			}),
 			warn: (message) => warnings.push(message),
 		});

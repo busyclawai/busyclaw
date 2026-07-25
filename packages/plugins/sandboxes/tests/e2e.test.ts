@@ -71,11 +71,14 @@ describe("@euroclaw/sandboxes run_code end-to-end", () => {
 			audit: createMemoryAudit(),
 			tools: {
 				run_code: runCodeTool({ sandbox: quickjs() }),
-				echo: tool({
-					description: "Echo.",
-					inputSchema: vSchema,
-					execute: async ({ v }) => ({ v }),
-				}),
+				echo: govern(
+					tool({
+						description: "Echo.",
+						inputSchema: vSchema,
+						execute: async ({ v }) => ({ v }),
+					}),
+					{},
+				),
 			},
 		});
 

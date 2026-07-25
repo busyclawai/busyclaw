@@ -12,8 +12,8 @@ const toSchema = jsonSchema<{ to: string }>({
 	required: ["to"],
 });
 
-describe("@euroclaw/ai tool() — authoring with the governance stamp", () => {
-	it("returns the AI-SDK tool with a euroclaw stamp; undefined facts are stripped", () => {
+describe("@euroclaw/ai tool() — authoring the canonical descriptor", () => {
+	it("returns a descriptor with first-class governance; undefined facts are stripped", () => {
 		const t = tool({
 			description: "Send an offer letter",
 			inputSchema: jsonSchema<{ candidateId: string; salary: number }>({
@@ -31,18 +31,21 @@ describe("@euroclaw/ai tool() — authoring with the governance stamp", () => {
 			audit: true,
 		});
 		expect(t.description).toBe("Send an offer letter");
-		expect(t.euroclaw).toEqual({
+		expect(t.governance).toEqual({
 			access: "write",
 			groups: ["hris:all"],
 			resource: "Candidate",
 			audit: true,
 		});
 		// no undefined keys leak into the stamp — absent means absent (fail-closed default owns it)
-		expect("gate" in t.euroclaw).toBe(false);
-		expect("effect" in t.euroclaw).toBe(false);
+		expect("gate" in t.governance).toBe(false);
+		expect("effect" in t.governance).toBe(false);
+		// the executable is behind the invocation tag: in-process code, un-storable
+		expect(t.invocation.kind).toBe("local");
+		expect(t.presence).toBe("always");
 	});
 
-	it("stamp keys never leak onto the model-facing tool", () => {
+	it("governance facts never leak onto the descriptor's top level", () => {
 		const t = tool({
 			description: "Read a record",
 			inputSchema: toSchema,
@@ -50,7 +53,7 @@ describe("@euroclaw/ai tool() — authoring with the governance stamp", () => {
 			access: "read",
 		});
 		expect("access" in t).toBe(false);
-		expect(t.euroclaw.access).toBe("read");
+		expect(t.governance.access).toBe("read");
 	});
 
 	it("the stamped gate decides at the governance chokepoint", async () => {
@@ -70,8 +73,8 @@ describe("@euroclaw/ai tool() — authoring with the governance stamp", () => {
 				return {};
 			},
 		});
-		// wire the stamp the way an adapter does: read it back and register the gate
-		const gate = t.euroclaw.gate;
+		// wire the gate the way the runtime does: read the descriptor's governance field
+		const gate = t.governance.gate;
 		if (!gate) throw new Error("expected a stamped gate");
 		core.registerGate({
 			id: "tool:send_email",
@@ -114,7 +117,7 @@ describe("standardSchema — arktype as inputSchema via the JSON-Schema bridge",
 			execute: async ({ amount }) => ({ refunded: amount }),
 			access: "write",
 		});
-		expect(t.euroclaw.access).toBe("write");
+		expect(t.governance.access).toBe("write");
 		expect(t.inputSchema).toBeDefined();
 	});
 });

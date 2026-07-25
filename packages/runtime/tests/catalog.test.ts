@@ -1,9 +1,10 @@
+import { govern } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	createToolCatalog,
 	lexicalToolDiscovery,
 	type ToolEntry,
-	toolEntriesFromToolSet,
+	toolEntriesFromTools,
 } from "../src/catalog";
 
 function e(
@@ -209,15 +210,28 @@ describe("tool catalog — construction guards", () => {
 	});
 });
 
-describe("tool catalog — ToolSet adapter", () => {
-	it("adapts a host ToolSet to flat entries (address === name), carrying schema, omitting execute", () => {
-		const entries = toolEntriesFromToolSet({
-			send_email: {
-				description: "Send an email.",
-				inputSchema: { type: "object", properties: { to: { type: "string" } } },
-				euroclaw: { effect: { risk: "high" } },
-			},
-			ping: { description: "Health check." },
+describe("tool catalog — descriptor adapter", () => {
+	it("adapts host descriptors to flat entries (address === name), carrying schema, omitting execute", () => {
+		const entries = toolEntriesFromTools({
+			send_email: govern(
+				{
+					description: "Send an email.",
+					inputSchema: {
+						type: "object",
+						properties: { to: { type: "string" } },
+					},
+					execute: async () => ({}),
+				},
+				{ effect: { risk: "high" } },
+			),
+			ping: govern(
+				{
+					description: "Health check.",
+					inputSchema: {},
+					execute: async () => ({}),
+				},
+				{},
+			),
 		});
 		expect(entries).toHaveLength(2);
 		const byName = new Map(entries.map((en) => [en.name, en]));

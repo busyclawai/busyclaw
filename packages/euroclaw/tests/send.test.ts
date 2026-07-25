@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createClaw, govern } from "../src/index";
+import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
 	durableRedactor,
@@ -70,9 +70,12 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(emailTool({ onExecute: () => ({ sent: true }) }), {
-					gate: () => ({ decision: "needs-approval" }),
-				}),
+				send_email: emailTool(
+					{ onExecute: () => ({ sent: true }) },
+					{
+						gate: () => ({ decision: "needs-approval" }),
+					},
+				),
 			},
 		});
 		const { api, agent, thread } = await createAgentThread(claw);
@@ -132,13 +135,13 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(
-					emailTool({
+				send_email: emailTool(
+					{
 						onExecute: (to) => {
 							toolSaw = to;
 							return { sent: true, to };
 						},
-					}),
+					},
 					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
@@ -200,9 +203,12 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: govern(emailTool({ onExecute: () => ({ sent: true }) }), {
-					gate: () => ({ decision: "needs-approval" }),
-				}),
+				send_email: emailTool(
+					{ onExecute: () => ({ sent: true }) },
+					{
+						gate: () => ({ decision: "needs-approval" }),
+					},
+				),
 			},
 		});
 		const { api, agent, thread } = await createAgentThread(claw);

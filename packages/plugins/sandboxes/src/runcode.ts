@@ -1,9 +1,14 @@
-// The run_code tool factory: an AI-SDK-shaped tool the host adds to createClaw/createRuntime
+// The run_code tool factory: a tool descriptor the host adds to createClaw/createRuntime
 // ({ tools }). It rides the runtime's invoker seam — its execute receives `subInvoke`, which routes
 // every tool call the sandboxed script makes through the full governance pipeline.
 
-import { govern, type HandleResult, stateError } from "@euroclaw/contracts";
-import { jsonSchema, type ToolSet, tool } from "ai";
+import {
+	govern,
+	type HandleResult,
+	stateError,
+	type ToolDefinition,
+} from "@euroclaw/contracts";
+import { jsonSchema, tool } from "ai";
 import type {
 	ExecutionContext,
 	Sandbox,
@@ -44,7 +49,9 @@ export function runCodeTool(input: {
 	 *  host supplies this resolver (e.g. mapping to a claw id it closes over, or an external S3/
 	 *  SharePoint key). Only consulted when `store` is set. */
 	volumeRef?: (options: { toolCallId: string }) => VolumeRef;
-}): ToolSet[string] {
+}): ToolDefinition {
+	// The AI SDK's `tool()` is used purely to infer `execute`'s args from the schema; `govern` then
+	// adopts the result as the canonical descriptor.
 	const theTool = tool({
 		description: input.description ?? DEFAULT_DESCRIPTION,
 		inputSchema: jsonSchema<{ code: string }>({

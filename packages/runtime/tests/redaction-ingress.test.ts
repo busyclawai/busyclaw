@@ -2,6 +2,7 @@
 // transcript, and yield checkpoints — and the middleware stays as the fail-closed egress backstop.
 // See docs/plans/redaction-coherence-plan.md (slice 2).
 import type { Detector, PiiSpan } from "@euroclaw/contracts";
+import { govern } from "@euroclaw/contracts";
 import {
 	createMemoryPiiMappingStore,
 	createStoredRedactor,
@@ -45,14 +46,17 @@ const usage = {
 };
 
 function lookupTool(result: string) {
-	return tool({
-		description: "Look up a contact.",
-		inputSchema: jsonSchema<Record<string, never>>({
-			type: "object",
-			properties: {},
+	return govern(
+		tool({
+			description: "Look up a contact.",
+			inputSchema: jsonSchema<Record<string, never>>({
+				type: "object",
+				properties: {},
+			}),
+			execute: async () => result,
 		}),
-		execute: async () => result,
-	});
+		{},
+	);
 }
 
 /** Step 0: call lookup_contact. Step 1+: echo the FIRST token visible in the prompt. */
@@ -200,9 +204,13 @@ describe("redact-at-ingress coherence", () => {
 		});
 
 		// Deadline already past → the loop parks a checkpoint at the first resumable point.
-		const yielded = await runtime.generate("email bob@x.com the offer", undefined, {
-			deadlineAt: new Date(0).toISOString(),
-		});
+		const yielded = await runtime.generate(
+			"email bob@x.com the offer",
+			undefined,
+			{
+				deadlineAt: new Date(0).toISOString(),
+			},
+		);
 		expect(yielded.status).toBe("yielded");
 		if (yielded.status !== "yielded") throw new Error("expected yield");
 

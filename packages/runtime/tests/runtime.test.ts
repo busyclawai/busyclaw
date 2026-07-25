@@ -146,18 +146,21 @@ describe("@euroclaw/runtime", () => {
 			redactor: createMemoryRedactor(emailDetector),
 			audit: createMemoryAudit(),
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async ({ to }) => {
+							toolSaw = to;
+							return { sent: true };
+						},
 					}),
-					execute: async ({ to }) => {
-						toolSaw = to;
-						return { sent: true };
-					},
-				}),
+					{},
+				),
 			},
 		});
 
@@ -184,7 +187,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		await expect(runtime.generate("hello")).rejects.toThrow(/audit unavailable/);
+		await expect(runtime.generate("hello")).rejects.toThrow(
+			/audit unavailable/,
+		);
 	});
 
 	it("emits typed run lifecycle events and awaits sinks", async () => {
@@ -302,17 +307,20 @@ describe("@euroclaw/runtime", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async ({ to }) => {
+							throw new Error(`cannot email ${to}`);
+						},
 					}),
-					execute: async ({ to }) => {
-						throw new Error(`cannot email ${to}`);
-					},
-				}),
+					{},
+				),
 			},
 		});
 
@@ -537,16 +545,22 @@ describe("@euroclaw/runtime", () => {
 				},
 			},
 			tools: {
-				a: tool({
-					description: "A.",
-					inputSchema: jsonSchema({ type: "object" }),
-					execute: async () => ({}),
-				}),
-				b: tool({
-					description: "B.",
-					inputSchema: jsonSchema({ type: "object" }),
-					execute: async () => ({}),
-				}),
+				a: govern(
+					tool({
+						description: "A.",
+						inputSchema: jsonSchema({ type: "object" }),
+						execute: async () => ({}),
+					}),
+					{},
+				),
+				b: govern(
+					tool({
+						description: "B.",
+						inputSchema: jsonSchema({ type: "object" }),
+						execute: async () => ({}),
+					}),
+					{},
+				),
 			},
 		});
 
@@ -589,7 +603,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		expect(waiting.status).toBe("waiting_approval");
 		if (waiting.status !== "waiting_approval") {
 			throw new Error("expected runtime to wait for approval");
@@ -668,7 +684,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -748,7 +766,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -789,7 +809,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -811,18 +833,21 @@ describe("@euroclaw/runtime", () => {
 			model: scriptedModel({ prompt: "" }),
 			effectStore: createEffectStore(memoryAdapter()),
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async () => {
+							toolRuns++;
+							return { sent: true };
+						},
 					}),
-					execute: async () => {
-						toolRuns++;
-						return { sent: true };
-					},
-				}),
+					{},
+				),
 			},
 		});
 
@@ -860,7 +885,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -907,7 +934,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -947,18 +976,23 @@ describe("@euroclaw/runtime", () => {
 				model: scriptedModel({ prompt: "" }),
 				plugins: [capture],
 				tools: {
-					send_email: tool({
-						description: "Send an email.",
-						inputSchema: jsonSchema<{ to: string }>({
-							type: "object",
-							properties: { to: { type: "string" } },
-							required: ["to"],
+					send_email: govern(
+						tool({
+							description: "Send an email.",
+							inputSchema: jsonSchema<{ to: string }>({
+								type: "object",
+								properties: { to: { type: "string" } },
+								required: ["to"],
+							}),
+							execute: async () => ({ sent: true }),
 						}),
-						execute: async () => ({ sent: true }),
-					}),
+						{},
+					),
 				},
 			});
-		await makeRuntime().generate("do it", undefined, { runMode: "interactive" });
+		await makeRuntime().generate("do it", undefined, {
+			runMode: "interactive",
+		});
 		await makeRuntime().generate("do it"); // no runMode → fail-closed default
 		expect(seen).toEqual(["interactive", "autonomous"]);
 	});
@@ -969,15 +1003,18 @@ describe("@euroclaw/runtime", () => {
 			model: scriptedModel({ prompt: "" }),
 			events: { emit: (event) => events.push(event) },
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async () => ({ sent: true }),
 					}),
-					execute: async () => ({ sent: true }),
-				}),
+					{},
+				),
 			},
 		});
 
@@ -1025,7 +1062,9 @@ describe("@euroclaw/runtime", () => {
 			events: { emit: (event) => events.push(event) },
 		});
 
-		await expect(runtime.generate("hello")).rejects.toThrow(/provider rejected/);
+		await expect(runtime.generate("hello")).rejects.toThrow(
+			/provider rejected/,
+		);
 
 		const failed = events.find((event) => event.type === "model.failed");
 		if (failed?.type !== "model.failed") {
@@ -1044,15 +1083,18 @@ describe("@euroclaw/runtime", () => {
 			model: scriptedModel({ prompt: "" }),
 			events: { emit: (event) => events.push(event) },
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async () => ({ sent: true }),
 					}),
-					execute: async () => ({ sent: true }),
-				}),
+					{},
+				),
 			},
 		});
 
@@ -1095,7 +1137,9 @@ describe("@euroclaw/runtime", () => {
 			},
 		});
 
-		const waiting = await runtime.generate("email alice@personal.com the offer");
+		const waiting = await runtime.generate(
+			"email alice@personal.com the offer",
+		);
 		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
 			throw new Error("expected runtime to wait for approval");
 		}
@@ -1119,15 +1163,18 @@ describe("@euroclaw/runtime", () => {
 			model: scriptedModel({ prompt: "" }),
 			events: { emit: (event) => events.push(event) },
 			tools: {
-				send_email: tool({
-					description: "Send an email.",
-					inputSchema: jsonSchema<{ to: string }>({
-						type: "object",
-						properties: { to: { type: "string" } },
-						required: ["to"],
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async () => ({ sent: true }),
 					}),
-					execute: async () => ({ sent: true }),
-				}),
+					{},
+				),
 			},
 		});
 

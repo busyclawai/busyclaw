@@ -7,8 +7,11 @@
 // is blocked by the floor.
 
 import { cedarPolicyPlugin } from "@euroclaw/authz";
-import type { JsonObject, Secrets } from "@euroclaw/contracts";
-import { buildSecrets } from "@euroclaw/secrets";
+import type {
+	JsonObject,
+	Secrets,
+	ToolDefinitionSet,
+} from "@euroclaw/contracts";
 import {
 	createRegisteredToolProvider,
 	createRuntime,
@@ -17,7 +20,9 @@ import {
 	normalizeOrigin,
 	type RuntimeModel,
 	runtimeRunOptionsWithCaller,
+	toolExecutor,
 } from "@euroclaw/runtime";
+import { buildSecrets } from "@euroclaw/secrets";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createRegistryStores } from "@euroclaw/storage-durable";
 import { describe, expect, it } from "vitest";
@@ -25,6 +30,14 @@ import {
 	assembleOrgActions,
 	serverForActionFromRegisteredTools,
 } from "../src/index";
+
+/** Drive a synthesized tool the way the chokepoint does — through its invocation's executor. */
+const invoke = (tools: ToolDefinitionSet, name: string, args: JsonObject) => {
+	const tool = tools[name];
+	const execute = tool && toolExecutor(tool);
+	if (!execute) throw new Error(`no executable tool "${name}"`);
+	return execute(args, {});
+};
 
 const petstore = (server = "https://petstore.example/v1"): JsonObject => ({
 	openapi: "3.1.0",
@@ -228,12 +241,9 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			fetch: fakeFetch(() => new Response("{}")).fn,
 		});
 		// Drive the synthesized tool directly — the invoker must refuse rather than send unauthenticated.
-		const tools = provider(rows, { organizationId: "org-a" }) as Record<
-			string,
-			{ execute: (a: unknown, o: unknown) => Promise<unknown> }
-		>;
+		const tools = provider(rows, { organizationId: "org-a" });
 		await expect(
-			tools["petstore.getPet"]?.execute({ petId: "7" }, {}),
+			invoke(tools, "petstore.getPet", { petId: "7" }),
 		).rejects.toMatchObject({
 			code: "EUROCLAW_CONFIGURATION_ERROR",
 			details: { source: "petstore" },
@@ -265,12 +275,9 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			server: "https://10.0.0.1/v1", // a private IP literal — the floor blocks it without DNS
 		});
 		expect(normalizeOrigin("https://10.0.0.1/v1")).toBe("https://10.0.0.1");
-		const tools = provider(rows, { organizationId: "org-a" }) as Record<
-			string,
-			{ execute: (a: unknown, o: unknown) => Promise<unknown> }
-		>;
+		const tools = provider(rows, { organizationId: "org-a" });
 		await expect(
-			tools["petstore.getPet"]?.execute({ petId: "7" }, {}),
+			invoke(tools, "petstore.getPet", { petId: "7" }),
 		).rejects.toThrow(/disallowed address/);
 	});
 });

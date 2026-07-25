@@ -1,3 +1,4 @@
+import { govern } from "@euroclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
 import { createRunCheckpointStore } from "@euroclaw/storage-durable";
 import { jsonSchema, tool } from "ai";
@@ -76,19 +77,22 @@ describe("createClaw deadline slicing", () => {
 			model: multiStepModel(2),
 			redaction: { redactor },
 			tools: {
-				ping: tool({
-					description: "Ping.",
-					inputSchema: jsonSchema<{ n: number }>({
-						type: "object",
-						properties: { n: { type: "number" } },
-						required: ["n"],
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async ({ n }) => {
+							toolRuns++;
+							clock += 100_000; // every tool call burns past the 50s soft deadline
+							return { pong: n };
+						},
 					}),
-					execute: async ({ n }) => {
-						toolRuns++;
-						clock += 100_000; // every tool call burns past the 50s soft deadline
-						return { pong: n };
-					},
-				}),
+					{},
+				),
 			},
 		});
 		const cronTask = claw.$context.plugins?.find(
@@ -178,15 +182,18 @@ describe("createClaw deadline slicing", () => {
 			model: multiStepModel(2),
 			redaction: { redactor },
 			tools: {
-				ping: tool({
-					description: "Ping.",
-					inputSchema: jsonSchema<{ n: number }>({
-						type: "object",
-						properties: { n: { type: "number" } },
-						required: ["n"],
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async ({ n }) => ({ pong: n }), // fast tool — clock never moves
 					}),
-					execute: async ({ n }) => ({ pong: n }), // fast tool — clock never moves
-				}),
+					{},
+				),
 			},
 		});
 		const cronTask = claw.$context.plugins?.find(

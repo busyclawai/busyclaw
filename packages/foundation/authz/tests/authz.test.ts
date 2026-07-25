@@ -6,7 +6,11 @@ import type {
 } from "@euroclaw/contracts";
 import { govern } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { buildAuthzModel, createPolicyPlugin } from "../src/index";
+import {
+	actionInputsFromTools,
+	buildAuthzModel,
+	createPolicyPlugin,
+} from "../src/index";
 
 // Unit-level: exercises the gate the plugin contributes directly (the full pipeline path is
 // covered by @euroclaw/policy-cedar's integration tests through createGovernance).
@@ -169,20 +173,16 @@ describe("buildAuthzModel — facts in, canonical model out", () => {
 	});
 
 	it("stamped facts flow through; the access group is derived and deduped", () => {
-		const stamped = govern(
-			{},
-			{
-				access: "read",
-				groups: ["hris:all", "reads"],
-				resource: "Candidate",
-				audit: true,
-			},
-		);
 		const model = buildAuthzModel([
 			{
 				id: "hris.readEmployee",
 				source: "domain",
-				governance: stamped.euroclaw,
+				governance: {
+					access: "read",
+					groups: ["hris:all", "reads"],
+					resource: "Candidate",
+					audit: true,
+				},
 			},
 		]);
 		const action = model.actions[0];
@@ -193,6 +193,47 @@ describe("buildAuthzModel — facts in, canonical model out", () => {
 			audit: true,
 			source: "domain",
 		});
+	});
+
+	it("a descriptor feeds the model directly — path is the id, governance read as a field", () => {
+		const descriptor = {
+			// authz is vendor-NEUTRAL: a descriptor's inputSchema is opaque to it, so a plain JSON
+			// Schema object stands in for whatever an adapter bridged.
+			...govern(
+				{
+					description: "Read an employee record.",
+					inputSchema: { type: "object" },
+					execute: async () => 0,
+				},
+				{ access: "read", groups: ["hris:all"], resource: "Candidate" },
+			),
+			path: "hris.readEmployee",
+		};
+		const model = buildAuthzModel(actionInputsFromTools([descriptor]));
+		expect(model.actions).toMatchObject([
+			{
+				id: "hris.readEmployee",
+				access: "read",
+				groups: ["hris:all", "reads"],
+				resourceType: "Candidate",
+				source: "tool",
+			},
+		]);
+	});
+
+	it("a tool declaring NO access class is not a policy-modeled action", () => {
+		const descriptor = {
+			...govern(
+				{
+					description: "Send an email.",
+					inputSchema: { type: "object" },
+					execute: async () => 0,
+				},
+				{ effect: { kind: "external" } },
+			),
+			path: "send_email",
+		};
+		expect(actionInputsFromTools([descriptor])).toEqual([]);
 	});
 
 	it("projected args ride along untouched", () => {

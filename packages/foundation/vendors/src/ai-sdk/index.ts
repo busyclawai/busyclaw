@@ -5,14 +5,16 @@
  * See THIRD_PARTY_NOTICES.md.
  */
 
-// @euroclaw/vendors/ai-sdk — euroclaw's `tool()`: the AI-SDK tool helper with governance attached
-// at authoring time. One definition carries both surfaces: the model-facing tool (description/
-// inputSchema/execute, input inference preserved) and the euroclaw stamp (gate/effect/invoker +
-// the authz-model facts access/groups/resource/audit — what the OpenAPI/MCP generators derive
-// from specs, an author declares here). `govern()` remains the ADOPTION path for tools you didn't
-// author (and the escape hatch for exotic AI-SDK fields: streaming hooks, provider-defined
-// tools); both produce the identical stamped shape, read back by the runtime's validated
-// `toolGovernance()` reader.
+// @euroclaw/vendors/ai-sdk — euroclaw's `tool()`: authoring, in one definition, the canonical
+// ToolDescriptor. It carries the model-facing surface (description/inputSchema, input inference
+// preserved), the executable (as a `local` invocation), and governance as a FIRST-CLASS field
+// (gate/effect/invoker + the authz-model facts access/groups/resource/audit — what the OpenAPI/MCP
+// generators derive from specs, an author declares here). `govern()` remains the ADOPTION path for
+// tools you didn't author; both produce the identical descriptor.
+//
+// This module is where the AI SDK stops being canonical. It is a schema BRIDGE (author in arktype
+// or zod, ship the JSON Schema a provider accepts) — not the definition of what a tool is. The
+// AI-SDK `ToolSet` the model sees is derived from descriptors downstream, in the runtime.
 //
 // Multi-schema `inputSchema` follows the Elysia pattern (elysia src/types.ts
 // StandardSchemaV1Like / UnwrapSchema): the schema is captured as its own generic and the input
@@ -33,6 +35,7 @@ import {
 	type JsonSchemaSource,
 	type StandardResult,
 	type StandardSchemaV1Like,
+	type ToolDefinition,
 	type ToolGovernance,
 } from "@euroclaw/contracts";
 import {
@@ -59,31 +62,29 @@ export type ToolInput<S> =
 			? T
 			: never;
 
-/** The shape `tool()` constructs — plain and honest, no AI-SDK conditional variants. It is
- *  structurally assignable to the AI SDK's `Tool` (asserted by a type test), so it drops into
- *  any `ToolSet`. euroclaw tools are always executable: the chokepoint requires `execute`. */
-export type AuthoredTool<I, O> = {
-	description?: string;
-	inputSchema: SdkSchema<I>;
-	// CONTEXT = unknown: euroclaw tools are context-agnostic — the runtime injects capabilities
-	// (subInvoke) through its own blessed seam, never through the AI SDK toolsContext channel.
-	execute: ToolExecuteFunction<I, O, unknown>;
-};
-
-/** A tool carrying its governance stamp — what euroclaw's `tool()` returns. */
-export type GovernedTool<T = AuthoredTool<unknown, unknown>> = T & {
-	euroclaw: ToolGovernance;
-};
+/** What `tool()` returns: the canonical descriptor, narrowed to this vendor — an AI-SDK schema and
+ *  a `local` invocation whose closure keeps the input/output inference from the schema. euroclaw
+ *  tools are always executable: the chokepoint requires an executable invocation.
+ *
+ *  CONTEXT = unknown on the executable: euroclaw tools are context-agnostic — the runtime injects
+ *  capabilities (subInvoke) through its own blessed seam, never the AI SDK toolsContext channel. */
+export type AuthoredTool<I, O> = ToolDefinition<
+	SdkSchema<I>,
+	{ kind: "local"; execute: ToolExecuteFunction<I, O, unknown> }
+>;
 
 export function tool<const S extends ToolSchemaLike, OUTPUT>(
 	definition: {
-		description?: string;
+		/** REQUIRED. The description is the tool's interface to the model — an undescribed tool gets
+		 *  mis-selected, and it is unreachable through catalog search. Absent is a bug, not a default. */
+		description: string;
 		inputSchema: S;
 		execute: ToolExecuteFunction<ToolInput<S>, OUTPUT, unknown>;
 	} & ToolGovernance,
-): GovernedTool<AuthoredTool<ToolInput<S>, OUTPUT>> {
-	// Split the stamp off the AI-SDK definition; drop undefined facts so the stamp stays clean
-	// (an absent `access` must read as absent — the model builder's fail-closed default owns it).
+): AuthoredTool<ToolInput<S>, OUTPUT> {
+	// Split the governance facts off the model-facing definition; drop undefined facts so the stamp
+	// stays clean (an absent `access` must read as absent — the model builder's fail-closed default
+	// owns it). `govern` then assembles the descriptor: the same adoption path a foreign tool takes.
 	const { gate, effect, invoker, access, groups, resource, audit, ...rest } =
 		definition;
 	return govern(
@@ -161,9 +162,14 @@ function toValidation<T>(
 export type {
 	JsonSchemaSource,
 	StandardSchemaV1Like,
+	ToolDefinition,
+	ToolDefinitionSet,
+	ToolDescriptor,
 	ToolEffectPolicy,
 	ToolGate,
 	ToolGovernance,
+	ToolInvocation,
+	ToolPresence,
 } from "@euroclaw/contracts";
 export { govern, hasToJsonSchema, isStandardSchema } from "@euroclaw/contracts";
 export type { TextDeltaStream } from "@euroclaw/contracts";

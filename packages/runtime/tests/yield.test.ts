@@ -1,4 +1,5 @@
 import type { Detector, PiiSpan } from "@euroclaw/contracts";
+import { govern } from "@euroclaw/contracts";
 import { createStoredRedactor } from "@euroclaw/core";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import {
@@ -97,26 +98,33 @@ describe("runtime yield & resume", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			tools: {
-				ping: tool({
-					description: "Ping.",
-					inputSchema: jsonSchema<{ n: number }>({
-						type: "object",
-						properties: { n: { type: "number" } },
-						required: ["n"],
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async ({ n }) => {
+							toolRuns++;
+							clock += 100_000; // each tool call burns past the soft deadline
+							return { pong: n };
+						},
 					}),
-					execute: async ({ n }) => {
-						toolRuns++;
-						clock += 100_000; // each tool call burns past the soft deadline
-						return { pong: n };
-					},
-				}),
+					{},
+				),
 			},
 		});
 
-		const first = await runtime.generate("email alice@personal.com", undefined, {
-			deadlineAt: iso(50_000),
-			runId: "run-1",
-		});
+		const first = await runtime.generate(
+			"email alice@personal.com",
+			undefined,
+			{
+				deadlineAt: iso(50_000),
+				runId: "run-1",
+			},
+		);
 		expect(first.status).toBe("yielded");
 		if (first.status !== "yielded") throw new Error("expected yield");
 		expect(first.steps).toBe(1);
@@ -171,18 +179,21 @@ describe("runtime yield & resume", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			tools: {
-				ping: tool({
-					description: "Ping.",
-					inputSchema: jsonSchema<{ n: number }>({
-						type: "object",
-						properties: { n: { type: "number" } },
-						required: ["n"],
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async () => {
+							clock += 100_000;
+							return { pong: true };
+						},
 					}),
-					execute: async () => {
-						clock += 100_000;
-						return { pong: true };
-					},
-				}),
+					{},
+				),
 			},
 		});
 
@@ -223,18 +234,21 @@ describe("runtime yield & resume", () => {
 				mappings: createPiiMappingStore(db),
 			}),
 			tools: {
-				ping: tool({
-					description: "Ping.",
-					inputSchema: jsonSchema<{ n: number }>({
-						type: "object",
-						properties: { n: { type: "number" } },
-						required: ["n"],
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async () => {
+							clock += 100_000;
+							return { pong: true };
+						},
 					}),
-					execute: async () => {
-						clock += 100_000;
-						return { pong: true };
-					},
-				}),
+					{},
+				),
 			},
 		});
 

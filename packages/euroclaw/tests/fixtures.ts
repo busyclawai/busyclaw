@@ -1,8 +1,14 @@
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
+import type {
+	Detector,
+	PiiSpan,
+	ToolDefinition,
+	ToolGovernance,
+} from "@euroclaw/contracts";
+import { govern } from "@euroclaw/contracts";
 import { createStoredRedactor } from "@euroclaw/core";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { createPiiMappingStore } from "@euroclaw/storage-durable";
-import { jsonSchema, type Tool, tool, type wrapLanguageModel } from "ai";
+import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { createClaw } from "../src/index";
 
 export type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -101,20 +107,26 @@ export function approvalToolModel(): V2Model {
 	};
 }
 
-export function emailTool(input: {
-	onExecute: (to: string) => unknown | Promise<unknown>;
+export function emailTool(
+	input: {
+		onExecute: (to: string) => unknown | Promise<unknown>;
+	},
+	governance: ToolGovernance = {},
 	// Explicit annotation: the inferred type reaches into `ai` internals that aren't exported
 	// (non-portable under vitest typecheck on v7).
-}): Tool<{ to: string }, unknown> {
-	return tool({
-		description: "Send email.",
-		inputSchema: jsonSchema<{ to: string }>({
-			type: "object",
-			properties: { to: { type: "string" } },
-			required: ["to"],
+): ToolDefinition {
+	return govern(
+		tool({
+			description: "Send email.",
+			inputSchema: jsonSchema<{ to: string }>({
+				type: "object",
+				properties: { to: { type: "string" } },
+				required: ["to"],
+			}),
+			execute: async ({ to }) => input.onExecute(to),
 		}),
-		execute: async ({ to }) => input.onExecute(to),
-	});
+		governance,
+	);
 }
 
 export function durableRedactor(db = memoryAdapter()) {
