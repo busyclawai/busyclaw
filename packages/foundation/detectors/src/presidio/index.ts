@@ -60,6 +60,44 @@ export function codePointToUtf16(text: string, codePointIndex: number): number {
 	return units;
 }
 
+/**
+ * The same conversion for MANY indices in ONE walk. Calling `codePointToUtf16` per offset rescans
+ * the text from zero every time, so a long document with many hits costs O(rows × length) — the
+ * analyzer's own recall turns into the redaction path's slowdown, on the synchronous-to-the-caller
+ * ingress route. Sorting the wanted indices and walking once is O(length + rows log rows), with the
+ * identical surrogate handling and the identical clamp at both ends.
+ */
+function utf16OffsetsFor(
+	text: string,
+	codePointIndices: readonly number[],
+): ReadonlyMap<number, number> {
+	const wanted = [...new Set(codePointIndices)].sort((a, b) => a - b);
+	const out = new Map<number, number>();
+	let i = 0;
+	// Everything at or below zero clamps to the start.
+	for (; i < wanted.length; i++) {
+		const want = wanted[i];
+		if (want === undefined || want > 0) break;
+		out.set(want, 0);
+	}
+	let codePoints = 0;
+	let units = 0;
+	for (const char of text) {
+		while (i < wanted.length && wanted[i] === codePoints) {
+			out.set(codePoints, units);
+			i++;
+		}
+		units += char.length;
+		codePoints += 1;
+	}
+	// Anything still unresolved sits at or past the end — clamp to the full length.
+	for (; i < wanted.length; i++) {
+		const want = wanted[i];
+		if (want !== undefined) out.set(want, units);
+	}
+	return out;
+}
+
 /** One row of Presidio's /analyze response (snake_case, as the service emits it). */
 export type PresidioResult = {
 	entity_type: string;
@@ -91,13 +129,27 @@ export function presidioSpans(
 ): PiiSpan[] {
 	const scoreFloor = options.scoreFloor ?? DEFAULT_SCORE_FLOOR;
 	const entityMap = options.entityMap ?? presidioDefaultEntityMap;
-	const spans: PiiSpan[] = [];
+	// Keep only the rows that will actually become spans, then convert every surviving offset in one
+	// pass over the text (see utf16OffsetsFor).
+	const kept: { row: PresidioResult; kind: PiiKind }[] = [];
 	for (const row of results) {
 		const kind = presidioKindOf(row.entity_type, entityMap);
 		if (kind === null) continue; // unmapped (incl. DATE_TIME)
-		if (row.score < scoreFloor) continue; // noise
-		const start = codePointToUtf16(text, row.start);
-		const end = codePointToUtf16(text, row.end);
+		// Written as "not at or above the floor" so a NaN score is DROPPED rather than kept: `NaN <
+		// floor` is false, so the original comparison let a garbage score through and then reported it
+		// as the span's confidence.
+		if (!(row.score >= scoreFloor)) continue; // noise, or not a usable score
+		kept.push({ row, kind });
+	}
+	const offsets = utf16OffsetsFor(
+		text,
+		kept.flatMap(({ row }) => [row.start, row.end]),
+	);
+	const spans: PiiSpan[] = [];
+	for (const { row, kind } of kept) {
+		const start = offsets.get(row.start);
+		const end = offsets.get(row.end);
+		if (start === undefined || end === undefined) continue;
 		if (start >= end) continue; // defensive: a degenerate or reversed span
 		spans.push({
 			start,
@@ -109,6 +161,45 @@ export function presidioSpans(
 		});
 	}
 	return spans;
+}
+
+/**
+ * The analyzer's body is an untrusted NETWORK boundary and its shape is a version contract, so it is
+ * checked rather than cast.
+ *
+ * The cast this replaces was the dangerous kind: a drifted or hostile body (a `{detail: …}` error
+ * object, a rename of `entity_type`, an HTML error page parsed as JSON) produced rows nothing could
+ * read, every one was skipped, and the detector returned `[]` — indistinguishable downstream from a
+ * clean "no PII in this text". The redaction then passes the text through untouched. A detector must
+ * fail CLOSED, which for a shape it cannot read means throwing.
+ */
+function assertPresidioRows(body: unknown): readonly PresidioResult[] {
+	if (!Array.isArray(body)) {
+		throw new Error(
+			"presidio /analyze returned a non-array body — refusing to read it as 'no PII found'",
+		);
+	}
+	for (const row of body) {
+		if (row === null || typeof row !== "object") {
+			throw new Error("presidio /analyze returned a non-object row");
+		}
+		const candidate = row as Record<string, unknown>;
+		const { entity_type: entityType, start, end, score } = candidate;
+		if (
+			typeof entityType !== "string" ||
+			typeof start !== "number" ||
+			typeof end !== "number" ||
+			typeof score !== "number" ||
+			!Number.isFinite(start) ||
+			!Number.isFinite(end) ||
+			!Number.isFinite(score)
+		) {
+			throw new Error(
+				"presidio /analyze returned a row that is not {entity_type, start, end, score} — the analyzer's response shape changed",
+			);
+		}
+	}
+	return body as readonly PresidioResult[];
 }
 
 export type PresidioOptions = {
@@ -123,9 +214,16 @@ export type PresidioOptions = {
 	entityMap?: Readonly<Record<string, PiiKind>>;
 	/** Presidio has no native auth; a baked gate can check `X-Api-Key`. Omit → no header. */
 	apiKey?: string;
+	/** Per-request deadline. The redaction path waits on this call, so an analyzer that accepts the
+	 *  connection and then stalls would hold the caller for as long as the ambient fetch allows —
+	 *  which on some runtimes is forever. Default 10 s; the abort surfaces as a throw, so the
+	 *  detector still fails CLOSED. */
+	timeoutMs?: number;
 	/** Injectable transport (tests, custom agents/retry). Default the global `fetch`. */
 	fetch?: typeof globalThis.fetch;
 };
+
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * Build a Presidio-backed {@link Detector}. FAIL-CLOSED: a non-ok response throws, so a Presidio
@@ -138,6 +236,7 @@ export function presidioDetector(options: PresidioOptions): Detector {
 	const entityMap = options.entityMap ?? presidioDefaultEntityMap;
 	const doFetch = options.fetch ?? globalThis.fetch;
 	const endpoint = `${options.url}/analyze`;
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
 	return async (text) => {
 		if (text.trim() === "") return []; // nothing to analyze; skip the round-trip
@@ -150,6 +249,7 @@ export function presidioDetector(options: PresidioOptions): Detector {
 					: {}),
 			},
 			body: JSON.stringify({ text, language }),
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (!response.ok) {
 			const detail = await response.text().catch(() => "");
@@ -157,7 +257,7 @@ export function presidioDetector(options: PresidioOptions): Detector {
 				`presidio /analyze failed: HTTP ${response.status} ${detail.slice(0, 200)}`,
 			);
 		}
-		const rows = (await response.json()) as PresidioResult[];
+		const rows = assertPresidioRows(await response.json());
 		return presidioSpans(rows, text, { scoreFloor, entityMap });
 	};
 }
