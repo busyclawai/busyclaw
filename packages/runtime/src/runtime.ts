@@ -78,6 +78,8 @@ import {
 	type ModelToolProjection,
 	modelToolProjection,
 	registerToolGates,
+	SEARCH_TOOL_PATH,
+	type ToolAccessProbe,
 	toolExecutor,
 } from "./tools";
 
@@ -1037,6 +1039,30 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				// Governance is a descriptor FIELD — nothing to read back, nothing to re-validate.
 				const stamp = tool.governance;
 				const isInvokerTool = stamp.invoker === true;
+				// `search` DISCLOSES what the floor would say about each hit, so the model learns
+				// "this needs approval, escalate to X" before it spends a turn discovering it. That is a
+				// DECISION, which needs the turn context — and the turn context does not cross the
+				// tool-execute boundary. So the runtime hands the capability across instead of the
+				// context, exactly the seam `subInvoke` uses, and only to euroclaw's own meta-tool: a
+				// host tool can never claim that reserved path (`withDiscovery` throws, the per-run
+				// merge skips), so this is least authority, not a well-known option name.
+				//
+				// Before-gates only — no tool runs, no after-gate fires, so a search audits nothing,
+				// parks nothing and changes nothing. `_ctx` is core's OWN resolved context; handing it
+				// back through the front door means it is stripped and re-stamped by the same trusted
+				// assembly rather than trusted as it stands. That costs one extra identity/membership
+				// resolution per search and keeps the rule that nobody hands core a pre-trusted context.
+				//
+				// Annotated (not inferred) and unconditional: `core` is being defined by this very
+				// factory call, so a closure whose return type TypeScript has to infer from `core` is
+				// circular — `ToolAccessProbe` breaks the cycle, and a union with `undefined` would put
+				// it back.
+				const isDiscoverySearch = call.name === SEARCH_TOOL_PATH;
+				const probeAccess: ToolAccessProbe = (paths) =>
+					core.checkToolCalls(
+						paths.map((name) => ({ name, args: {} })),
+						_ctx,
+					);
 				// An invoker tool is BRAIN, not edge: it runs untrusted model-authored code, so its args
 				// must stay redacted (placeholders reach the guest). A normal tool is the trusted edge and
 				// rehydrates. Nested calls the guest makes are re-redacted on the way back (nested runTool
@@ -1053,6 +1079,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						messages: state.currentMessages,
 						abortSignal,
 						...(isInvokerTool ? { subInvoke } : {}),
+						...(isDiscoverySearch ? { probeAccess } : {}),
 					});
 				const effectPolicy = stamp.effect;
 				const outputMode = effectOutputMode(effectPolicy);

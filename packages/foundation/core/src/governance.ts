@@ -113,6 +113,27 @@ export type Governance<Config extends GovernanceConfig = GovernanceConfig> = {
 		ctx?: Context<Config>,
 	) => Promise<HandleResult>;
 	/**
+	 * Decide tool calls WITHOUT running them — the tool-side sibling of {@link checkModelBoundary},
+	 * and the substrate for DISCLOSURE (telling the agent what the floor would say before it spends a
+	 * turn finding out). Before-gates only, through the very same code path a real call takes: no
+	 * tool runs, and NO AFTER-GATE fires, so nothing is audited, nothing is parked, nothing is
+	 * recorded. Asking is not doing.
+	 *
+	 * ADVISORY, NEVER AUTHORIZATION. An answer here is a decision about the call as ASKED, and a
+	 * caller who only has a tool name asks with no arguments — while a gate may read them. It is also
+	 * point-in-time: policy and scopes can change before the call. Nothing may act on this; the real
+	 * call is decided again, by these same gates, and that decision is the only one that governs.
+	 *
+	 * BATCHED because the turn context resolves ONCE for the whole set — a disclosure over a page of
+	 * tools must not re-run the host's identity/membership resolution per tool. Results are index-
+	 * aligned with `calls`. A gate that throws on a call it cannot decide answers `error` for that
+	 * call alone and never fails the batch: refusing to decide is not a denial.
+	 */
+	checkToolCalls: (
+		calls: readonly ToolCall[],
+		ctx?: Context<Config>,
+	) => Promise<readonly Outcome[]>;
+	/**
 	 * Continue an approved tool call: atomically consume the approval (single-use) and re-run the
 	 * stored call, bypassing the gate that demanded approval. Every other gate + audit still fire.
 	 * Returns the governed result, or `null` if the approval isn't consumable (absent / not granted /
@@ -314,6 +335,52 @@ export function createGovernance<const Config extends GovernanceConfig>(
 		return null;
 	}
 
+	// The tool before-gates, in order — the DECISION half of the pipeline, factored out so the
+	// disclosure probe (`checkToolCalls`) and a real call cannot drift apart: one implementation, so
+	// "what the floor would say" is literally what the floor says. Null when nothing objected.
+	async function runToolBeforeGates(
+		call: ToolCall,
+		ctx: Record<string, unknown>,
+		bypassGateId?: string,
+	): Promise<Extract<
+		HandleResult,
+		{ status: "denied" | "needs-approval" }
+	> | null> {
+		for (const gate of before) {
+			if (gate.id === bypassGateId) continue; // pre-approved → skip this gate exactly once
+			if (!gate.matcher(call, ctx)) continue;
+			const verdict = gateDecision(await gate.handler(call, ctx));
+			if (verdict instanceof type.errors) {
+				throw validationError(
+					`gate "${gate.id}" returned an invalid decision`,
+					verdict.summary,
+					{ gateId: gate.id },
+				);
+			}
+			if (verdict.decision === "deny") {
+				return {
+					status: "denied",
+					gateId: gate.id,
+					reason: resolveReason(verdict),
+					reasonCode: verdict.reasonCode,
+					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+				};
+			}
+			if (verdict.decision === "needs-approval") {
+				// The pipeline only DECIDES. Persisting the pending approval (when a store is configured)
+				// is an observer's job — the approvalGate after-gate, same as audit.
+				return {
+					status: "needs-approval",
+					gateId: gate.id,
+					reason: resolveReason(verdict),
+					reasonCode: verdict.reasonCode,
+					...(verdict.annotations ? { annotations: verdict.annotations } : {}),
+				};
+			}
+		}
+		return null;
+	}
+
 	// The governed pipeline over an ALREADY-REDACTED call: boundary-gates → tool-gates → tool → after-gates.
 	// `handleToolCall` feeds it a freshly-redacted call; `continueRun` feeds it the stored call
 	// and passes `bypassGateId` to skip (exactly once) the gate that demanded approval.
@@ -333,39 +400,10 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				outcome = boundaryOutcome;
 				return boundaryOutcome;
 			}
-			for (const gate of before) {
-				if (gate.id === bypassGateId) continue; // pre-approved → skip this gate exactly once
-				if (!gate.matcher(call, ctx)) continue;
-				const verdict = gateDecision(await gate.handler(call, ctx));
-				if (verdict instanceof type.errors) {
-					throw validationError(
-						`gate "${gate.id}" returned an invalid decision`,
-						verdict.summary,
-						{ gateId: gate.id },
-					);
-				}
-				if (verdict.decision === "deny") {
-					outcome = {
-						status: "denied",
-						gateId: gate.id,
-						reason: resolveReason(verdict),
-						reasonCode: verdict.reasonCode,
-						...(verdict.annotations ? { annotations: verdict.annotations } : {}),
-					};
-					return outcome;
-				}
-				if (verdict.decision === "needs-approval") {
-					// The pipeline only DECIDES. Persisting the pending approval (when a store is configured)
-					// is an observer's job — the approvalGate after-gate, same as audit.
-					outcome = {
-						status: "needs-approval",
-						gateId: gate.id,
-						reason: resolveReason(verdict),
-						reasonCode: verdict.reasonCode,
-						...(verdict.annotations ? { annotations: verdict.annotations } : {}),
-					};
-					return outcome;
-				}
+			const gateOutcome = await runToolBeforeGates(call, ctx, bypassGateId);
+			if (gateOutcome) {
+				outcome = gateOutcome;
+				return gateOutcome;
 			}
 			// Permitted → run the tool. PII rehydrated *inside* the boundary only.
 			const output = await runTool(call, ctx, {
@@ -487,6 +525,51 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			);
 			// Permitted → ok (the caller streams the model); otherwise the gate's deny/needs-approval.
 			return boundaryOutcome ?? { status: "ok", output: undefined };
+		},
+
+		async checkToolCalls(rawCalls, ctxInput) {
+			// ONE resolution for the whole batch — see the doc comment: a page of disclosures must not
+			// cost a page of identity/membership lookups.
+			const ctx = await resolveCtx(ctxInput);
+			const outcomes: Outcome[] = [];
+			for (const rawCall of rawCalls) {
+				try {
+					const valid = toolCall(rawCall);
+					if (valid instanceof type.errors) {
+						throw validationError("invalid tool call", valid.summary);
+					}
+					// Redacted exactly as a real call is, so a gate reading args sees what it always sees.
+					const args = redactionOn
+						? await redactor.redactValue(valid.args, redactionContextFrom(ctx))
+						: valid.args;
+					const call: ToolCall = { name: valid.name, args };
+					const boundaryOutcome = await runBoundaryBeforeGates(
+						toolBoundaryCall(call),
+						ctx,
+						{ allowApproval: true },
+					);
+					outcomes.push(
+						boundaryOutcome ??
+							(await runToolBeforeGates(call, ctx)) ?? {
+								status: "ok",
+								output: undefined,
+							},
+					);
+				} catch (err) {
+					// A gate that throws has not denied anything — it declined to decide (a fail-closed
+					// mapper with no stamped principal, a gate that assumes arguments this probe has
+					// none of). Report that as itself: a caller may not read it as a "no", and the batch
+					// carries on so one brittle gate cannot blank a whole disclosure.
+					const rawReason = err instanceof Error ? err.message : String(err);
+					outcomes.push({
+						status: "error",
+						reason: redactionOn
+							? await redactor.redactValue(rawReason, redactionContextFrom(ctx))
+							: rawReason,
+					});
+				}
+			}
+			return outcomes;
 		},
 
 		async handleToolCall(rawCall, ctxInput) {

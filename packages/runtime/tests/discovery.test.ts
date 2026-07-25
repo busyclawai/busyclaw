@@ -9,10 +9,12 @@ import { discoveryTools, modelToolProjection } from "../src/tools";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
-/** A model that records what it was offered, emits one call, then answers. */
+/** A model that records what it was offered, emits one call, then answers. `results` (optional)
+ *  collects the tool RESULTS it is handed back, for a test that reads what a tool actually said. */
 function callingModel(
 	call: { name: string; input?: string } | null,
 	offered: { names: string[] },
+	results?: string[],
 ): V2Model {
 	let step = 0;
 	return {
@@ -24,6 +26,16 @@ function callingModel(
 			offered.names = (options.tools ?? []).map(
 				(t) => (t as { name: string }).name,
 			);
+			for (const message of options.prompt) {
+				if (message.role !== "tool") continue;
+				for (const part of message.content) {
+					if (part.type !== "tool-result") continue;
+					const output = part.output;
+					results?.push(
+						output.type === "text" ? output.value : JSON.stringify(output),
+					);
+				}
+			}
 			const usage = {
 				inputTokens: {
 					total: 1,
@@ -59,6 +71,15 @@ function callingModel(
 			throw new Error("stream not used");
 		},
 	};
+}
+
+/** A model that searches once and collects what the search result actually said. */
+function searchingModel(query: string, results: string[]): V2Model {
+	return callingModel(
+		{ name: "euroclaw__search", input: JSON.stringify({ query }) },
+		{ names: [] },
+		results,
+	);
 }
 
 const recordingTool = (
@@ -208,5 +229,72 @@ describe("discovery — the provider edge", () => {
 		});
 		expect((await runtime.generate("go")).status).toBe("completed");
 		expect(ran).toEqual(["publish"]);
+	});
+});
+
+describe("discovery — search discloses what the floor would say", () => {
+	const searched = (results: readonly string[]) =>
+		(
+			JSON.parse(results[0] ?? "{}") as {
+				tools?: { path: string; authorization?: string }[];
+			}
+		).tools ?? [];
+
+	it("reports the gates that actually exist — a bare runtime objects to nothing", async () => {
+		// No policy engine here at all (the Cedar floor is the CLAW's assembly, not the runtime's), so
+		// the honest answer is `available`: the disclosure describes the gates this run has, never an
+		// idea of what governance ought to be.
+		const ran: string[] = [];
+		const results: string[] = [];
+		const runtime = createRuntime({
+			model: searchingModel("publish", results),
+			tools: {
+				"docs.admin.publish": recordingTool(ran, "publish", "discoverable"),
+			},
+		});
+		await runtime.generate("go");
+		expect(searched(results)).toEqual([
+			expect.objectContaining({
+				path: "docs.admin.publish",
+				authorization: "available",
+			}),
+		]);
+	});
+
+	it("a gate that refuses to decide leaves the tool listed with NO hint at all", async () => {
+		// The probe asks with no arguments; this gate assumes it has some and throws. That is not a
+		// denial and must never be shown as one — the tool is listed exactly as it was before
+		// disclosure existed, and the model is free to try it.
+		const results: string[] = [];
+		const runtime = createRuntime({
+			model: searchingModel("publish", results),
+			tools: {
+				"docs.admin.publish": govern(
+					{
+						description: "Publish a document.",
+						inputSchema: jsonSchema<{ id: string }>({
+							type: "object",
+							properties: { id: { type: "string" } },
+							required: ["id"],
+						}),
+						execute: async () => ({ published: true }),
+					},
+					{
+						access: "read",
+						gate: (call) => {
+							if (typeof call.args.id !== "string") {
+								throw new Error("id is required");
+							}
+							return { decision: "permit" };
+						},
+					},
+					{ presence: "discoverable" },
+				),
+			},
+		});
+		await runtime.generate("go");
+		const [disclosed] = searched(results);
+		expect(disclosed?.path).toBe("docs.admin.publish");
+		expect(disclosed?.authorization).toBeUndefined();
 	});
 });

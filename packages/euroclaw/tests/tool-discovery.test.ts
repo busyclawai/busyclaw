@@ -29,11 +29,15 @@ const search = (query: string): WireCall => ({
 	input: JSON.stringify({ query }),
 });
 
-/** A model that emits one call, records the RESULT it gets back, then answers. */
+/** A model that plays its calls one per step, recording each RESULT it gets back, then answers.
+ *  A list is how "search, then call what it disclosed" is expressed as one turn. */
 function callingModel(
-	call: WireCall,
+	script: WireCall | readonly WireCall[],
 	seen: { results: string[]; offered: string[] },
 ): V2Model {
+	const calls = Array.isArray(script)
+		? (script as readonly WireCall[])
+		: [script as WireCall];
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -63,12 +67,14 @@ function callingModel(
 				},
 				outputTokens: { total: 1, text: undefined, reasoning: undefined },
 			};
-			if (step++ === 0) {
+			const call = calls[step];
+			if (call !== undefined) {
+				step++;
 				return {
 					content: [
 						{
 							type: "tool-call" as const,
-							toolCallId: "c1",
+							toolCallId: `c${step}`,
 							toolName: call.name,
 							input: call.input ?? "{}",
 						},
@@ -131,10 +137,16 @@ describe("euroclaw__search — what is there, and what it takes", () => {
 			"completed",
 		);
 		const result = JSON.parse(seen.results[0] ?? "{}") as {
-			tools: { path: string; description: string; inputSchema: unknown }[];
+			tools: {
+				path: string;
+				description: string;
+				inputSchema: unknown;
+				authorization?: string;
+			}[];
 		};
 		// Enough to construct the call the model has to make next — and nothing else. The path is
 		// the canonical id, because that is what `execute` addresses and what policy enumerates.
+		// Plus what the floor would say: this one is a read, and the floor runs reads.
 		expect(result.tools).toEqual([
 			{
 				path: "docs.admin.publish",
@@ -144,6 +156,7 @@ describe("euroclaw__search — what is there, and what it takes", () => {
 					properties: { id: { type: "string" } },
 					required: ["id"],
 				},
+				authorization: "available",
 			},
 		]);
 	});
@@ -170,6 +183,232 @@ describe("euroclaw__search — what is there, and what it takes", () => {
 			"euroclaw__execute",
 			"euroclaw__search",
 			"publishDoc",
+		]);
+	});
+});
+
+type Disclosed = {
+	path: string;
+	authorization?: string;
+	annotations?: Record<string, string>;
+};
+
+const disclosed = (raw: string | undefined): Disclosed[] =>
+	(JSON.parse(raw ?? "{}") as { tools?: Disclosed[] }).tools ?? [];
+
+/** An argument-less WRITE: the floor forbids an unconfirmed autonomous write but WOULD permit it
+ *  once confirmed, so the probe answers needs-approval — the escalation case. */
+const deployTool = (ran: string[]): ToolDefinition =>
+	govern(
+		tool({
+			description: "Deploy the docs site.",
+			inputSchema: jsonSchema<Record<string, never>>({
+				type: "object",
+				properties: {},
+			}),
+			execute: async () => {
+				ran.push("deploy");
+				return { deployed: true };
+			},
+		}),
+		{ access: "write" },
+	);
+
+/** The declaration is what lets an annotation leave the engine at all (the allowlist). */
+const escalationPlugin: EuroclawPlugin = {
+	id: "escalations-test",
+	policyAnnotations: [{ key: "escalate" }],
+	policies: [
+		{
+			name: "escalate:eng",
+			mode: "enforce",
+			cedar: `@escalate("betterauth:team_eng")
+permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
+		},
+	],
+};
+
+describe("euroclaw__search — disclosing what the floor would say", () => {
+	it("marks a usable tool available, and names the escalation target of one that would park", async () => {
+		const ran: string[] = [];
+		const seen = { results: [] as string[], offered: [] as string[] };
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: callingModel(search("docs"), seen),
+			plugins: [
+				{
+					id: "docs",
+					tools: {
+						admin: { publish: publishTool(ran), deploy: deployTool(ran) },
+					},
+				},
+				escalationPlugin,
+			],
+		});
+
+		expect((await claw.api.generate({ prompt: "go" })).status).toBe(
+			"completed",
+		);
+		const tools = disclosed(seen.results[0]);
+		expect(
+			tools.map((t) => [t.path, t.authorization, t.annotations?.escalate]),
+		).toEqual(
+			expect.arrayContaining([
+				["docs.admin.publish", "available", undefined],
+				// The target rides through VERBATIM — an opaque `<authority>:<id>` string nothing here
+				// splits on the colon or interprets, straight from the rule that WOULD permit it.
+				["docs.admin.deploy", "needs-approval", "betterauth:team_eng"],
+			]),
+		);
+	});
+
+	it("asking is not doing: nothing is parked, and only the search itself is audited", async () => {
+		const ran: string[] = [];
+		const audit = createMemoryAudit();
+		const seen = { results: [] as string[], offered: [] as string[] };
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			audit,
+			model: callingModel(search("docs"), seen),
+			plugins: [
+				{
+					id: "docs",
+					tools: {
+						admin: { publish: publishTool(ran), deploy: deployTool(ran) },
+					},
+				},
+				escalationPlugin,
+			],
+		});
+
+		await claw.api.generate({ prompt: "go" });
+		// The probe runs before-gates only — no tool, and no AFTER-gate, which is where the audit row
+		// and the parked approval are written. A disclosure that parked an approval for every write it
+		// described would be a decision, not a description.
+		expect(await claw.$context.approvals?.list({ status: "pending" })).toEqual(
+			[],
+		);
+		// …and the search call itself is still governed like any other tool call: one door, one row.
+		expect(
+			audit
+				.entries()
+				.filter((e) => e.boundary === "tool")
+				.map((e) => e.name),
+		).toEqual(["euroclaw.search"]);
+		expect(ran).toEqual([]);
+	});
+
+	it("a deny the arguments could flip is `conditional`, and the real call goes through", async () => {
+		// THE TRAP. The probe asks with NO arguments, and this rule reads one. Reported as a denial,
+		// the model would write the tool off; reported as `conditional`, it tries — and the floor,
+		// which is the only thing that decides, permits the call it actually makes.
+		const shipped: string[] = [];
+		const seen = { results: [] as string[], offered: [] as string[] };
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: callingModel(
+				[search("ship"), viaExecute("docs.ship", { env: "staging" })],
+				seen,
+			),
+			plugins: [
+				{
+					id: "docs",
+					tools: {
+						ship: govern(
+							tool({
+								description: "Ship the docs site to an environment.",
+								inputSchema: jsonSchema<{ env: string }>({
+									type: "object",
+									properties: { env: { type: "string" } },
+									required: ["env"],
+								}),
+								execute: async ({ env }) => {
+									shipped.push(env);
+									return { shipped: env };
+								},
+							}),
+							{
+								access: "read",
+								// A gate reading `call.args` is the arg-sensitive decision a CODE tool
+								// actually has: the floor builds no Cedar `context.args` for host tools
+								// (`actionInputsFromTools` leaves `args` undefined on purpose), so a
+								// `when { context.args… }` rule there would error and be skipped — in the
+								// probe and in the real call alike. Registered tools DO carry a projected
+								// `context.args`, and that is where a Cedar arg-condition bites the same way.
+								gate: (call) =>
+									call.args.env === "staging"
+										? { decision: "permit" }
+										: { decision: "deny", reason: "environment not permitted" },
+							},
+						),
+					},
+				},
+			],
+		});
+
+		expect((await claw.api.generate({ prompt: "go" })).status).toBe(
+			"completed",
+		);
+		expect(
+			disclosed(seen.results[0]).map((t) => [t.path, t.authorization]),
+		).toEqual([["docs.ship", "conditional"]]);
+		expect(shipped).toEqual(["staging"]);
+	});
+
+	it("a tool left OUT of the results is still decided by the floor when called anyway", async () => {
+		// THE INVARIANT. `docs.purge` takes no arguments, so the probe's deny is exact and search omits
+		// it — but omitting is UX, never enforcement. The model names it anyway (a stale page, a lucky
+		// guess, a resumed run) and the FLOOR denies it: the disclosure was never what stopped it.
+		const ran: string[] = [];
+		const audit = createMemoryAudit();
+		const seen = { results: [] as string[], offered: [] as string[] };
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			audit,
+			model: callingModel([search("purge"), viaExecute("docs.purge")], seen),
+			plugins: [
+				{
+					id: "docs",
+					tools: {
+						purge: govern(
+							tool({
+								description: "Purge the docs cache.",
+								inputSchema: jsonSchema<Record<string, never>>({
+									type: "object",
+									properties: {},
+								}),
+								execute: async () => {
+									ran.push("purge");
+									return { purged: true };
+								},
+							}),
+							{ access: "read" },
+						),
+					},
+				},
+				cedar({
+					policies: `forbid(principal, action == Action::"docs.purge", resource);`,
+				}),
+			],
+		});
+
+		expect((await claw.api.generate({ prompt: "go" })).status).toBe(
+			"completed",
+		);
+		expect(disclosed(seen.results[0])).toEqual([]);
+		expect(ran).toEqual([]);
+		const toolEntries = audit.entries().filter((e) => e.boundary === "tool");
+		expect(toolEntries.map((e) => [e.name, e.status])).toEqual([
+			["euroclaw.search", "ok"],
+			["docs.purge", "denied"],
 		]);
 	});
 });
