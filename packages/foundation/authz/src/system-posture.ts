@@ -15,7 +15,8 @@ import type { NamedPolicies } from "./policy-bundle";
 // Depends on runMode ALWAYS being present in the request context — guaranteed two ways: the runtime
 // stamps `euroclaw__runMode` on every gated call (default "autonomous"), and the policy-cedar mapCall
 // defaults `context.runMode` to "autonomous" when absent. Both matter because cedar-wasm ERRORS on an
-// absent optional access (even under a `has` guard, verified 4.11.1) → an erroring forbid is SILENTLY
+// absent BASE — `context.runMode` when unstamped (a `has`-guarded access over a PRESENT base does
+// not error; re-verified 4.11.1) → an erroring forbid is SILENTLY
 // SKIPPED. With runMode guaranteed present, an unknown/autonomous mode reads as "must confirm"
 // (fail-closed) and only a known-interactive run relaxes.
 // A NAMED set (rule name → cedar), not one blob: the name is what the determining-policy trail reports
