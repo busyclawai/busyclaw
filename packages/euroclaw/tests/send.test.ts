@@ -4,7 +4,10 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	lookupTool,
+	lookupToolModel,
 	textModel,
+	volunteersPiiModel,
 	withPrincipal,
 } from "./fixtures";
 
@@ -417,5 +420,122 @@ describe("createClaw send", () => {
 					message.includes("plugin.demo") && message.includes("observer down"),
 			),
 		).toBe(true);
+	});
+
+	// Model OUTPUT is an untrusted PII source in its own right. On the strict path the model only ever
+	// saw placeholders, so it is tempting to treat what comes back as already-clean — but a model can
+	// volunteer an address from training, or reassemble one from fragments the ingress detector missed.
+	// That value has no mapping, so `forgetSubject` can never reach it: it would sit in the transcript
+	// (and checkpoints, and approval metadata) as permanent, unerasable cleartext.
+	it("tokenizes PII the model itself volunteers (strict mode)", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: volunteersPiiModel("carol@leak.example"),
+			redaction: { redactor },
+		});
+		const { api, agent, thread } = await createAgentThread(claw);
+
+		await api.sendMessage({
+			clawId: agent.id,
+			message: "who should I contact?",
+			runId: "run-volunteered",
+			threadId: thread.id,
+		});
+
+		// The durable assistant message must carry a placeholder, never the address itself.
+		const messages = await api.listMessages({ threadId: thread.id });
+		const persisted = JSON.stringify(messages);
+		expect(persisted).not.toContain("carol@leak.example");
+		expect(persisted).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
+
+		// ...and it is a real mapping, not a blind scrub: the read-side view resolves it back.
+		const revealed = await api.listMessages({
+			threadId: thread.id,
+			view: "original",
+		});
+		expect(JSON.stringify(revealed)).toContain("carol@leak.example");
+	});
+
+	// The run's redaction CONTAINER is a fence, not a label. This exercises the namespace the RUNTIME
+	// mints into — PII born INSIDE a run, in a tool RESULT — which is the half the api never touches
+	// (a user message is already tokenized, in the claw's container, before the run starts).
+	//
+	// Unstamped, the runtime redacted with NO container, so every run of every claw minted into one
+	// global namespace and claw A's token resolved to cleartext at claw B's tool edge. Nothing throws
+	// when that happens — the tool simply receives another tenant's real address — so it is asserted.
+	it("does not rehydrate another claw's run-minted placeholder (container isolation)", async () => {
+		const { db, redactor } = durableRedactor();
+		let sawInB = "";
+
+		// Claw A: the address is born in a tool result, so the RUNTIME mints its mapping.
+		const clawA = createClaw({
+			database: db,
+			model: lookupToolModel(),
+			redaction: { redactor },
+			tools: { lookup: lookupTool("bob@corp.example") },
+		});
+		const apiA = withPrincipal(clawA, ACTOR).api;
+		const agentA = await apiA.createClaw({
+			id: "claw-a",
+			createdBy: ACTOR,
+			name: "A",
+		});
+		const threadA = await apiA.createThread({
+			id: "thread-a",
+			clawId: agentA.id,
+			title: "A",
+		});
+		await apiA.sendMessage({
+			clawId: agentA.id,
+			message: "who is the contact?",
+			runId: "run-a",
+			threadId: threadA.id,
+		});
+
+		// The tool RESULT as persisted — tokenized at rest, which is the whole point. This mapping was
+		// minted by the runtime (the address never passed through the api), so it is the one that used
+		// to land in the global container.
+		const persistedA = JSON.stringify(
+			await apiA.listToolResults({ runId: "run-a", toolCallId: "lookup-1" }),
+		);
+		expect(persistedA).not.toContain("bob@corp.example");
+		const token = persistedA.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0];
+		expect(token).toBeDefined();
+
+		// Claw B replays claw A's token. A different container ⇒ out of reach: the tool must receive
+		// the placeholder verbatim, never the other claw's real address.
+		const clawB = createClaw({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			tools: {
+				send_email: emailTool({
+					onExecute: (to) => {
+						sawInB = to;
+						return { sent: true, to };
+					},
+				}),
+			},
+		});
+		const apiB = withPrincipal(clawB, ACTOR).api;
+		const agentB = await apiB.createClaw({
+			id: "claw-b",
+			createdBy: ACTOR,
+			name: "B",
+		});
+		const threadB = await apiB.createThread({
+			id: "thread-b",
+			clawId: agentB.id,
+			title: "B",
+		});
+		await apiB.sendMessage({
+			clawId: agentB.id,
+			message: `email ${token}`,
+			threadId: threadB.id,
+		});
+
+		expect(sawInB).not.toBe("bob@corp.example");
+		expect(sawInB).toBe(token);
 	});
 });
