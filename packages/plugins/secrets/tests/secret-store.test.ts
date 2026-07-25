@@ -345,8 +345,126 @@ describe("encryption at rest", () => {
 		// the documented encoding: hex, 12-byte nonce + ciphertext + 16-byte GCM tag ⇒ ≥ 56 hex chars
 		expect(sealed).toMatch(/^[0-9a-f]+$/);
 		expect(sealed.length).toBeGreaterThanOrEqual(56);
-		// and it is EXACTLY the sealed form — the same-key cipher opens it back to the plaintext
-		expect(await cipherFor(TEST_KEY).open(sealed)).toBe("plain-secret");
+		// and it is EXACTLY the sealed form — the same-key cipher, given the row's own binding, opens
+		// it back to the plaintext
+		expect(
+			await cipherFor(TEST_KEY).open(sealed, {
+				scope: "personal",
+				scopeId: "user:alice",
+				name: "AT_REST",
+			}),
+		).toBe("plain-secret");
+	});
+
+	// The binding, from the outside: a sealed value is not portable. Someone able to write the value
+	// column but NOT holding the master key — SQL injection, a backup restored into the wrong tenant,
+	// an app bug addressing the wrong row — cannot move one row's secret into another and have it
+	// resolve. Without AAD every one of these decrypts happily: the key is right and the tag is valid.
+	describe("a sealed value is bound to its row", () => {
+		const sealFor = async (
+			scope: string,
+			scopeId: string,
+			name: string,
+			value: string,
+		) => cipherFor(TEST_KEY).seal(value, { scope, scopeId, name });
+
+		it("refuses to open under another tenant's boundary", async () => {
+			const sealed = await sealFor(
+				"organization",
+				"org-a",
+				"STRIPE_KEY",
+				"sk_live_a",
+			);
+			await expect(
+				cipherFor(TEST_KEY).open(sealed, {
+					scope: "organization",
+					scopeId: "org-b",
+					name: "STRIPE_KEY",
+				}),
+			).rejects.toThrow(/cannot decrypt stored secret/);
+		});
+
+		it("refuses to open under another secret's name", async () => {
+			const sealed = await sealFor(
+				"personal",
+				"user:alice",
+				"STRIPE_KEY",
+				"sk_live_a",
+			);
+			await expect(
+				cipherFor(TEST_KEY).open(sealed, {
+					scope: "personal",
+					scopeId: "user:alice",
+					name: "WEBHOOK_URL",
+				}),
+			).rejects.toThrow(/cannot decrypt stored secret/);
+		});
+
+		it("refuses to open under another scope kind", async () => {
+			const sealed = await sealFor("personal", "org-a", "TOKEN", "t");
+			await expect(
+				cipherFor(TEST_KEY).open(sealed, {
+					scope: "organization",
+					scopeId: "org-a",
+					name: "TOKEN",
+				}),
+			).rejects.toThrow(/cannot decrypt stored secret/);
+		});
+
+		// The parts are encoded as an array, not concatenated: ("a","bc") and ("ab","c") must not
+		// collide into the same AAD, or a relocation between two such rows would silently verify.
+		it("does not confuse boundaries that would concatenate alike", async () => {
+			const sealed = await sealFor("personal", "a", "bc", "v");
+			await expect(
+				cipherFor(TEST_KEY).open(sealed, {
+					scope: "personal",
+					scopeId: "ab",
+					name: "c",
+				}),
+			).rejects.toThrow(/cannot decrypt stored secret/);
+		});
+
+		// End to end through the real surfaces: a blob physically relocated in the database does not
+		// resolve as the victim row's secret.
+		it("a value relocated between rows in the database does not resolve", async () => {
+			const { db, provider, store } = connectedStore();
+			await store.set({
+				name: "SHARED_NAME",
+				value: "alice-secret",
+				createdBy: "user:alice",
+			});
+			await store.set({
+				name: "SHARED_NAME",
+				value: "bob-secret",
+				createdBy: "user:bob",
+			});
+
+			const aliceRow = (await db.findOne({
+				model: "stored_secret",
+				where: [
+					{ field: "scope", value: "personal" },
+					{ field: "scopeId", value: "user:alice", connector: "AND" },
+					{ field: "name", value: "SHARED_NAME", connector: "AND" },
+				],
+			})) as { value?: string } | null;
+			if (!aliceRow?.value) throw new Error("expected alice's sealed value");
+
+			// The out-of-band write the app APIs never expose: alice's ciphertext into bob's row.
+			await db.update({
+				model: "stored_secret",
+				where: [
+					{ field: "scope", value: "personal" },
+					{ field: "scopeId", value: "user:bob", connector: "AND" },
+					{ field: "name", value: "SHARED_NAME", connector: "AND" },
+				],
+				update: { value: aliceRow.value },
+			});
+
+			// Bob's read fails loud instead of returning alice's secret.
+			await expect(
+				provider.get("SHARED_NAME", { principal: "user:bob" }),
+			).rejects.toThrow(/cannot decrypt stored secret/);
+		});
 	});
 
 	it("an unresolvable master key with rows present fails loud — never ciphertext, never null", async () => {
