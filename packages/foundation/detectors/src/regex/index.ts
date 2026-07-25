@@ -13,8 +13,14 @@
 import type { Detector, PiiSpan } from "@euroclaw/contracts";
 
 // Pragmatic, not RFC 5321 — the RFC grammar matches things no message contains and misses nothing
-// one does.
-const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+// one does. Every quantifier is BOUNDED and the domain labels exclude `.` (dots arrive only via the
+// explicit separators): the earlier `[A-Za-z0-9.-]+\.` overlapped its own separator, so an adversarial
+// run like `a@` + `a.`×n backtracked quadratically and stalled the event loop — and this detector is
+// SYNCHRONOUS on the ingress redaction path, so one crafted message denied service to every concurrent
+// request. The bounds are the real limits (64 local part, 63 per DNS label, 24 TLD), so nothing a
+// message actually carries stops matching.
+const EMAIL =
+	/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}/g;
 // A digit run with phone punctuation, bounded by digits. The digit gate below does the real
 // filtering; this only proposes candidates.
 const PHONE_CANDIDATE = /\+?\d[\d\s().\-/]{4,}\d/g;
