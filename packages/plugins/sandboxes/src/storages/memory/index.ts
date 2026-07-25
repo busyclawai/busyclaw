@@ -20,7 +20,9 @@ function cloneValue(value: VolumeNode): VolumeNode {
 }
 
 function cloneTree(tree: VolumeTree): VolumeTree {
-	const out: VolumeTree = {};
+	// Null-prototype for the same reason `extractTree` mints one: the keys are guest-authored file
+	// names, so cloning a persisted tree back in must not re-open the `__proto__` assignment sink.
+	const out: VolumeTree = Object.create(null);
 	for (const [key, value] of Object.entries(tree)) {
 		out[key] = cloneValue(value);
 	}

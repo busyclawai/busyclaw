@@ -83,7 +83,12 @@ function treeByteSize(node: unknown): number {
 // both, then rebuild the nested NestedDirectoryJSON shape the store round-trips as a VolumeTree.
 function extractTree(vol: Volume): VolumeTree {
 	const flat = vol.toJSON();
-	const tree: VolumeTree = {};
+	// NULL-PROTOTYPE nodes, every level. The path segments below are GUEST-authored, so a guest that
+	// writes `/__proto__/x` would otherwise walk `node["__proto__"]` onto Object.prototype and pollute
+	// the HOST realm for the whole process — a sandbox escape by assignment. With no prototype the
+	// same write lands as an ordinary own property, so the hostile name is contained rather than
+	// special, and a file genuinely called `__proto__` still round-trips.
+	const tree: VolumeTree = Object.create(null);
 	for (const [path, content] of Object.entries(flat)) {
 		if (path === "/node_modules" || path.startsWith("/node_modules/")) continue;
 		if (content === null) continue; // empty-directory sentinel (e.g. the wrapper's /src)
@@ -102,7 +107,7 @@ function extractTree(vol: Volume): VolumeTree {
 			) {
 				node = next;
 			} else {
-				const created: VolumeTree = {};
+				const created: VolumeTree = Object.create(null);
 				node[seg] = created;
 				node = created;
 			}

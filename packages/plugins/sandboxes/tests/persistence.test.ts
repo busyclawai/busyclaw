@@ -267,4 +267,37 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 		// An unknown ref is a fresh, empty volume — not an error.
 		expect(await store.load("unknown")).toEqual({});
 	});
+
+	// T8 — the tree is built from GUEST-authored path segments, so a guest that writes `/__proto__/x`
+	// must not reach the HOST's Object.prototype. The escape is by plain assignment (walking
+	// `node["__proto__"]` lands on the prototype object itself), it corrupts every object in the
+	// process, and nothing throws when it happens — so it is asserted on the host side directly.
+	it("T8: a guest path named __proto__ cannot pollute the host prototype", async () => {
+		const { fsTree } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: `const fs = await import("node:fs");
+				fs.mkdirSync("/__proto__", { recursive: true });
+				fs.writeFileSync("/__proto__/polluted", "PWNED");
+				return "ok";`,
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		// The host realm is untouched: no stray property arrived on Object.prototype.
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+		expect(Object.prototype).not.toHaveProperty("polluted");
+
+		// ...and the hostile name is contained as ordinary DATA — the file still round-trips.
+		const proto = fsTree?.__proto__ as VolumeTree | undefined;
+		expect(proto?.polluted).toBe("PWNED");
+
+		// The same holds through the store's clone path (load/save re-walk the same guest keys).
+		const store = memoryVolumeStore();
+		await store.save("t8", fsTree ?? {});
+		const reloaded = await store.load("t8");
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+		expect((reloaded.__proto__ as VolumeTree | undefined)?.polluted).toBe(
+			"PWNED",
+		);
+	}, 30000);
 });
