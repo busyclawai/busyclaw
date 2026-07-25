@@ -189,12 +189,15 @@ export function cedarEngine(config: CedarEngineConfig): CedarEngine {
 					error: answer.errors.map((e) => e.message).join("; "),
 				};
 			}
-			// NB: cedar-wasm populates `diagnostics.errors` even for a `has`-guarded, short-circuited
-			// optional-attribute access (the standard idiom for optional context facts) — the DECISION
-			// is still correct. So we must NOT blanket-deny on `diagnostics.errors`: that would break
-			// every correct `has`-guarded policy (verified against 4.11.1). Policies that must fail
-			// closed on an unknown fact express it structurally with `unless { … has x … }` (see
-			// @euroclaw/authz SYSTEM_POSTURE), so an erroring branch makes the forbid APPLY, not vanish.
+			// NB: a policy that ERRORS is SKIPPED, and cedar-wasm reports it in `diagnostics.errors`
+			// while the DECISION stays correct — so we must NOT blanket-deny on `diagnostics.errors`.
+			// What actually errors is reaching an ABSENT BASE (`context.args` when the request carries no
+			// `args` key, `context.runMode` when unstamped) — NOT a `has`-guarded access, which
+			// short-circuits cleanly with zero errors when the base is present (re-verified 4.11.1; an
+			// earlier note here claimed the opposite and was wrong). The consequence is unchanged and is
+			// why bases are always stamped: a skipped policy is a permit that fails to fire, or a forbid
+			// that VANISHES. Policies that must fail closed on an unknown fact say so structurally with
+			// `unless { … has x … }` (see SYSTEM_POSTURE), so an erroring branch makes the forbid APPLY.
 			return {
 				allow: answer.response.decision === "allow",
 				policies: answer.response.diagnostics.reason,
