@@ -82,23 +82,48 @@ describe("@euroclaw/storage-prisma — Where → Prisma where", () => {
 });
 
 // Real behavioral coverage against a generated Prisma client + SQLite (prisma generate + db push).
+//
+// These need a GENERATED client — `prisma generate` writes it into `node_modules/.prisma`, and this
+// package's `pretest` deliberately runs `db push --skip-generate`. So a fresh checkout or a git
+// worktree that has never generated one cannot run them, and `new PrismaClient()` throws in
+// `beforeAll` — failing the suite for a missing precondition rather than a real defect. Skip instead,
+// and say so out loud so a skip is never mistaken for a pass. The pure `toWhere` tests above need no
+// client and always run.
+//
+// `EUROCLAW_REQUIRE_PRISMA=1` turns the skip back into a failure — set it wherever these MUST run (CI),
+// so the escape hatch can't quietly hide a genuinely broken client.
 let prisma: PrismaClient;
+const prismaClient = (() => {
+	try {
+		return new PrismaClient();
+	} catch (error) {
+		if (process.env.EUROCLAW_REQUIRE_PRISMA === "1") throw error;
+		console.warn(
+			"@euroclaw/storage-prisma: SKIPPING the real-client suite — no generated Prisma client (run `prisma generate`). Set EUROCLAW_REQUIRE_PRISMA=1 to make this a failure.",
+		);
+		return undefined;
+	}
+})();
 
 beforeAll(() => {
-	prisma = new PrismaClient();
+	if (prismaClient) prisma = prismaClient;
 });
 
 afterAll(async () => {
-	await prisma.$disconnect();
+	if (prismaClient) await prismaClient.$disconnect();
 });
 
 afterEach(async () => {
+	// Module-level, so it also runs after the client-less `toWhere` tests — bail when there is no client.
+	if (!prismaClient) return;
 	await prisma.token.deleteMany();
 	await prisma.audit.deleteMany();
 	await prisma.approval.deleteMany();
 });
 
-describe("@euroclaw/storage-prisma — adapter against real Prisma (SQLite)", () => {
+describe.skipIf(prismaClient === undefined)(
+	"@euroclaw/storage-prisma — adapter against real Prisma (SQLite)",
+	() => {
 	const a = () => prismaAdapter(prisma as unknown as PrismaLike);
 
 	it("create + findOne by a where clause", async () => {
