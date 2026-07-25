@@ -23,10 +23,14 @@ import { type } from "arktype";
 /**
  * A policy plugin that declares the per-request context (`Ctx`) it needs — folded onto the
  * claw's `run(prompt, ctx)`. The `& { $InferContext }` is what surfaces (and requires) that ctx.
+ *
+ * `"no-cron"` is stated, not defaulted: a policy plugin is a gate and nothing else, and the phantom's
+ * DEFAULT is the whole flag union — which createClaw reads as "might contribute cron" and answers by
+ * demanding a `cronHandler` from every host that installs one.
  */
 export type PolicyPlugin<
 	Ctx extends Record<string, unknown> = Record<string, never>,
-> = EuroclawPlugin & {
+> = EuroclawPlugin<"no-cron"> & {
 	$InferContext: Ctx;
 };
 
