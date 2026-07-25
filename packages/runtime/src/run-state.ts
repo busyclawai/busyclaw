@@ -27,7 +27,10 @@ export type RunState = {
 	currentApprovalWaitId?: string;
 	currentEffectId?: string;
 	runInstanceId?: string;
-	/** Durable run identity (engine run id) — stable across attempts and yield slices. */
+	/** The run's identity — the engine run id when it has one (stable across attempts and yield
+	 *  slices), otherwise minted per invocation, because an ad-hoc `generate` still has to be
+	 *  correlatable: it is stamped as `euroclaw__runId` on every gated call and written onto the
+	 *  approval a parked call leaves behind, which is the only join a claw-less run has. */
 	runId?: string;
 	/** How this run was triggered — stamped into every gated call's context as `euroclaw__runMode`
 	 *  (spoof-proof: the runtime sets it from the ENTRY POINT, never the model/caller). Defaults to
