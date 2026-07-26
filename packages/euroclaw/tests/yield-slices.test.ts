@@ -103,7 +103,6 @@ describe("createClaw deadline slicing", () => {
 
 		const run = await claw.api.startRun({
 			prompt: "email alice@personal.com",
-			run: { principal: "user:alice" },
 		});
 
 		// Invocation 1: slice runs step 0, yields, and the drain stops claiming past the budget.
@@ -111,7 +110,7 @@ describe("createClaw deadline slicing", () => {
 		expect(first).toMatchObject({ processed: 1, status: "idle" });
 		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read the run AS its principal.
 		await expect(
-			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+			claw.api.getRun({ id: run.id }, { principal: "user:actor-1" }),
 		).resolves.toMatchObject({
 			status: "queued",
 		});
@@ -129,7 +128,7 @@ describe("createClaw deadline slicing", () => {
 		expect(third).toMatchObject({ processed: 1, status: "idle" });
 
 		await expect(
-			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+			claw.api.getRun({ id: run.id }, { principal: "user:actor-1" }),
 		).resolves.toMatchObject({
 			status: "completed",
 			principal: "user:alice",
@@ -138,7 +137,7 @@ describe("createClaw deadline slicing", () => {
 
 		const events = await claw.api.listRunEvents(
 			{ runId: run.id },
-			{ principal: "user:alice" },
+			{ principal: "user:actor-1" },
 		);
 		expect(events.map((event) => event.type)).toEqual([
 			"run.started",
