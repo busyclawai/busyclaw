@@ -1,34 +1,22 @@
 // The claw this app is built around — assembled ONCE per server process.
 //
 // Next.js re-evaluates route modules on every edit in dev, so a plain module-level `createClaw`
-// would mint a new runtime (and a new in-memory PII vault, and a new approval store) on every
-// recompile — placeholders minted before the reload would stop resolving. Caching on `globalThis`
-// is the standard Next escape hatch and it is load-bearing here, not a micro-optimisation.
+// would mint a new runtime (and a new connection pool) on every recompile. Caching on `globalThis`
+// is the standard Next escape hatch, and it is load-bearing rather than a micro-optimisation: a new
+// pool per recompile leaks sockets against Neon's connection limit.
+//
+// State lives in Postgres now, so a fresh process is no longer a fresh world — PII placeholders,
+// transcripts and approvals all survive a restart, which is what makes the demo filmable and what
+// makes it deployable to a serverless host at all.
 
-import { regexDetector } from "@euroclaw/detectors/regex";
-import { memoryAdapter } from "@euroclaw/storage-core";
 import { createClaw } from "euroclaw";
-import { resolveModel } from "./model";
+import { appConnectionString, clawConfig } from "./euroclaw-config";
+
+/** The same object `euroclaw db migrate` reads, so the schema it migrates is the schema this runs. */
+export const config = clawConfig(appConnectionString());
 
 function assembleClaw() {
-	return createClaw({
-		model: resolveModel(),
-
-		// The host's database. `memoryAdapter()` keeps the demo one `pnpm dev` away from running:
-		// there is no migration CLI yet, so a SQL adapter would mean hand-writing DDL for the whole
-		// schema. It is a real adapter — the durable stores, the PII vault and the approval records
-		// all go through it — it just forgets everything when the process dies.
-		database: memoryAdapter(),
-
-		// Redaction ARMED, over the regex detector. This is what makes the chat interesting with no
-		// tools wired yet: type an email or an IBAN and the model never receives it — it receives a
-		// placeholder, and the streamed answer is rehydrated on the way back to the reader.
-		redaction: [regexDetector],
-
-		// The PEP is default-enforce. Every call below therefore has to name a caller; the HTTP door
-		// gets one from `resolveCaller` (app/api/euroclaw/[...all]/route.ts), the in-process chat
-		// route passes `{ principal }` directly.
-	});
+	return createClaw(config);
 }
 
 export type DemoClaw = ReturnType<typeof assembleClaw>;

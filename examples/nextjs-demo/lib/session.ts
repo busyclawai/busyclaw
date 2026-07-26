@@ -27,17 +27,20 @@ export const SESSION_COOKIE = "euroclaw_demo_user";
 
 export const DEFAULT_USER: DemoUser = DEMO_USERS[0] as DemoUser;
 
-export function userById(id: string | undefined): DemoUser {
-	if (id === undefined) return DEFAULT_USER;
-	return DEMO_USERS.find((u) => u.id === id) ?? DEFAULT_USER;
+/** A known demo user, or `undefined` for anything unrecognised — including nothing at all. */
+export function userById(id: string | undefined): DemoUser | undefined {
+	if (id === undefined) return undefined;
+	return DEMO_USERS.find((u) => u.id === id);
 }
 
 export function principalOf(user: DemoUser): Principal {
 	return `user:${user.id}` as Principal;
 }
 
-/** Read the demo user off a raw Request's Cookie header. */
-export function DEMO_ONLY_readPrincipal(request: Request): DemoUser {
+/** Read the demo user off a raw Request's Cookie header. `undefined` when there is no valid one. */
+export function DEMO_ONLY_readPrincipal(
+	request: Request,
+): DemoUser | undefined {
 	const header = request.headers.get("cookie") ?? "";
 	const match = header
 		.split(";")
@@ -47,10 +50,16 @@ export function DEMO_ONLY_readPrincipal(request: Request): DemoUser {
 }
 
 /**
- * What `toNextJsHandler` is wired with. Returning `undefined` here is what a real unauthenticated
- * request looks like — and euroclaw fails CLOSED on it (403), rather than falling back to some
- * ambient identity. Worth seeing once in the demo: clear the cookie and the api stops answering.
+ * What `toNextJsHandler` is wired with.
+ *
+ * No cookie means `undefined`, NOT a default user. Falling back to one would make the identity seam
+ * look like it works while never actually being exercised — every request would arrive as somebody,
+ * and the fail-closed path would be dead code nobody ever saw run. Returning `undefined` is what a
+ * real unauthenticated request looks like, and euroclaw answers it with a 403.
+ *
+ * Worth trying once: clear the cookie and the whole api stops answering.
  */
-export function resolveCaller(request: Request): ClawApiCaller {
-	return { principal: principalOf(DEMO_ONLY_readPrincipal(request)) };
+export function resolveCaller(request: Request): ClawApiCaller | undefined {
+	const user = DEMO_ONLY_readPrincipal(request);
+	return user === undefined ? undefined : { principal: principalOf(user) };
 }
