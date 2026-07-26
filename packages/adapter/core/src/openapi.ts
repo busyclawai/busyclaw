@@ -5,7 +5,11 @@
 // it embeds JSON Schema natively — arktype's toJsonSchema() output drops in without a 3.0 downcast.
 // Webhook routes (plugin.routes) are provider-shaped ingress, not product api — not documented.
 
-import type { EndpointInputSchema, EndpointRoute } from "@euroclaw/contracts";
+import type {
+	EndpointHttpMethod,
+	EndpointInputSchema,
+	EndpointRoute,
+} from "@euroclaw/contracts";
 import { docOf } from "@euroclaw/contracts";
 import type { JsonSchema } from "arktype";
 import type { Claw } from "euroclaw";
@@ -59,7 +63,13 @@ export type ClawOpenApiOperation = {
 export type ClawOpenApiDocument = {
 	openapi: "3.1.0";
 	info: { title: string; version: string; description?: string };
-	paths: Record<string, Partial<Record<"get" | "post", ClawOpenApiOperation>>>;
+	/** One entry per declared verb, keyed as OpenAPI wants it (lowercased). Derived from
+	 *  {@link EndpointHttpMethod} rather than a hand-written pair, so widening the verbs a route may
+	 *  declare cannot leave the generated document behind. */
+	paths: Record<
+		string,
+		Partial<Record<Lowercase<EndpointHttpMethod>, ClawOpenApiOperation>>
+	>;
 	components: {
 		responses: {
 			Error: {
@@ -141,7 +151,7 @@ function successEnvelopeSchema(output: unknown): ClawOpenApiSchema {
 function buildOperation(input: {
 	operationId: string;
 	path: string;
-	method: "GET" | "POST";
+	method: EndpointHttpMethod;
 	input: EndpointInputSchema;
 	summary?: string;
 	output?: EndpointRoute["output"];
@@ -201,11 +211,14 @@ export function clawOpenApi(
 	const paths: ClawOpenApiDocument["paths"] = {};
 	const add = (
 		path: string,
-		method: "GET" | "POST",
+		method: EndpointHttpMethod,
 		operation: ClawOpenApiOperation,
 	): void => {
 		const item = paths[path] ?? {};
-		item[method === "GET" ? "get" : "post"] = operation;
+		// OpenAPI keys a path item by the LOWERCASED verb. Derived rather than mapped through a
+		// two-case ternary, so a route declaring PUT/PATCH/DELETE lands under its own key instead of
+		// being silently filed as a POST.
+		item[method.toLowerCase() as Lowercase<EndpointHttpMethod>] = operation;
 		paths[path] = item;
 	};
 	for (const route of clawApiRouteList) {

@@ -16,6 +16,7 @@
 // `getMessage` resolves the message rather than something else convenient. That is what the boot-time
 // coverage walk and the cross-principal tests are for.
 
+import type { EndpointHttpMethod } from "./endpoints";
 import type { ClawApiCaller } from "./principal";
 
 /** An action's required permission level, ordered `read < use < manage`.
@@ -82,7 +83,7 @@ export type RouteDefinition<In = never, Out = unknown> = {
 	readonly output?: RouteOutputSchema;
 	readonly authz: RouteAuthz;
 	readonly handler: (input: In, ctx: AuthzContext) => Out | Promise<Out>;
-	readonly method?: "GET" | "POST";
+	readonly method?: EndpointHttpMethod;
 	readonly description?: string;
 };
 
@@ -115,7 +116,7 @@ export interface RouteBuilder<In, Out, Authorized extends boolean> {
 	): RouteBuilder<In, S["infer"], Authorized>;
 
 	/** Verb override; absent ⇒ the shared `get*`/`list*` → GET rule applied to the record key. */
-	method(method: "GET" | "POST"): RouteBuilder<In, Out, Authorized>;
+	method(method: EndpointHttpMethod): RouteBuilder<In, Out, Authorized>;
 
 	/** Operation summary for the OpenAPI generator. */
 	description(text: string): RouteBuilder<In, Out, Authorized>;
@@ -151,7 +152,7 @@ type RouteState = {
 	input?: RouteInputSchema;
 	output?: RouteOutputSchema;
 	authz?: RouteAuthz;
-	method?: "GET" | "POST";
+	method?: EndpointHttpMethod;
 	description?: string;
 };
 
@@ -165,7 +166,7 @@ type RouteState = {
 type BuilderRuntime = {
 	input: (schema: RouteInputSchema) => BuilderRuntime;
 	output: (schema: RouteOutputSchema) => BuilderRuntime;
-	method: (method: "GET" | "POST") => BuilderRuntime;
+	method: (method: EndpointHttpMethod) => BuilderRuntime;
 	description: (text: string) => BuilderRuntime;
 	authz: (
 		level: RouteLevel | null,
