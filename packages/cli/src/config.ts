@@ -22,6 +22,34 @@ import type { SchemaDeclaration } from "@euroclaw/contracts";
 import { getEuroclawTables } from "euroclaw";
 import { createJiti } from "jiti";
 
+/**
+ * Env files loaded before the config module runs, later entries winning.
+ *
+ * A config's `database` is almost always built from `process.env` — that is where a connection
+ * string belongs. But the CLI is not the app: nothing has loaded `.env` by the time jiti imports
+ * the module, so without this the config sees `undefined` and reports "no database" while the app
+ * itself works fine. Better Auth loads the same two files for the same reason.
+ */
+const ENV_FILES = [".env", ".env.local"];
+
+function loadEnvFiles(cwd: string, note: (message: string) => void): void {
+	for (const name of ENV_FILES) {
+		const path = resolve(cwd, name);
+		if (!existsSync(path)) continue;
+		try {
+			// Node's own loader — no dotenv dependency. It does not overwrite variables already set,
+			// so a real environment (CI, a shell export) still wins over a checked-out file.
+			process.loadEnvFile(path);
+			note(`env      ${path}`);
+		} catch {
+			// A malformed env file is the host's to fix, and it may not even be the one that matters.
+			note(`env      ${path} could not be parsed — skipped`);
+		}
+	}
+}
+
+export { loadEnvFiles };
+
 /** The schema-contributing subset of a ClawConfig — what the tables projection reads. */
 export type LoadedConfig = {
 	plugins?: readonly unknown[];

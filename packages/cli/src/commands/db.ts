@@ -14,7 +14,12 @@ import {
 	planMigrations,
 	resolveKyselyDatabase,
 } from "@euroclaw/storage-kysely";
-import { findConfigPath, type LoadedSchema, loadSchema } from "../config.js";
+import {
+	findConfigPath,
+	type LoadedSchema,
+	loadEnvFiles,
+	loadSchema,
+} from "../config.js";
 import {
 	DEFAULT_OUTPUT,
 	type DrizzleProvider,
@@ -85,6 +90,8 @@ function assertDialect(value: string): MigrationDialect {
 
 async function read(options: DbCommandOptions): Promise<LoadedSchema> {
 	const cwd = process.cwd();
+	// Before the config module runs — it almost certainly reads a connection string off process.env.
+	loadEnvFiles(cwd, (message) => console.log(message));
 	const configPath = findConfigPath(cwd, options.config);
 	const loaded = await loadSchema(configPath);
 	console.log(
