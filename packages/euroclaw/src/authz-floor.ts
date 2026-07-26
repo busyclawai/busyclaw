@@ -5,12 +5,12 @@
 // SOURCES whose slices merge UNDER the sealed floor (`forbid` > `permit`) — a source can narrow or
 // widen, but never remove the floor's un-removable forbids.
 //
-// slice-0 SCOPE: the floor governs the actions in its MODEL — built from the STATIC `tools` that
-// declare an `access` class (read/write). A tool that declares no access class is NOT a policy-modeled
-// action: the floor's gate matcher skips it, so its own gate (or nothing, as before)
-// still governs it — the existing per-tool chokepoint is untouched. Per-org registered-tool + stored
-// policy-slice routing (the `createOrgPolicyRouter` composition) is a later slice; this floor delivers
-// zero-config governance for host-declared tools.
+// SCOPE: the floor gate sees EVERY tool call, and the model classifies them. A static tool that
+// declares no `access` class is modeled as a WRITE (confirmation interactively, refusal autonomously);
+// an action the model does not contain at all reaches Cedar and is denied, because no policy can name
+// it. Both are deliberate — the floor previously matched only modeled actions, which turned a missing
+// stamp into an ungoverned tool. Per-org registered-tool + stored policy-slice routing (the
+// `createOrgPolicyRouter` composition) is a later slice.
 
 import {
 	actionInputsFromTools,
@@ -84,20 +84,25 @@ export function buildFloorPolicyPlugin(input: {
 			})
 		: live;
 
-	// 4. The always-on gate — SEALED (the floor can't be removed or redefined) and matching only the
-	//    MODELED actions. deny-by-default applies WITHIN the modeled set; an unmodeled tool call skips
-	//    the floor entirely, preserving its own gate (or ungoverned) behaviour.
+	// 4. The always-on gate — SEALED (the floor can't be removed or redefined) and matching EVERY tool
+	//    call. It used to match only the modeled actions, which made "absent from the model" mean
+	//    "skip the floor": the two cheapest mistakes in the system — forgetting an access stamp, and
+	//    registering a tool after the static model was compiled — both landed on ungoverned execution.
+	//    Deny-by-default is worth nothing if not-being-asked is reachable.
+	//
+	//    An action the model does not declare now reaches Cedar and is REFUSED there: no policy can
+	//    name it, so nothing permits it, and the sealed posture's default is deny. That is the fallback
+	//    rule — unknown means no, never "no matching gate, therefore continue". A host that wants a
+	//    dynamic tool to run must put it in the model, not omit it from the question.
 	//
 	//    `call.name` IS the action id here: the model-facing wire name is translated back to the
 	//    canonical path at the run loop's ingress, so the floor — like dispatch, the audit and every
 	//    gate — only ever sees paths. It used to need an index to reconcile the two, which put a
 	//    second id inside the governance layer; moving the translation to the edge deleted it.
-	const modeled = new Set(model.actions.map((action) => action.id));
 	const mapCall = cedarMapCall({ model });
 	return createPolicyPlugin({
 		engine,
 		mapCall,
-		matcher: (call: ToolCall) => modeled.has(call.name),
 		id: FLOOR_POLICY_ID,
 		sealed: true,
 	});

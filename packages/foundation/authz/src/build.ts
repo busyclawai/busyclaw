@@ -34,24 +34,26 @@ export type AuthzActionInput = {
  * shape-specific reconcilers (one unwrapping the AI-SDK `euroclaw` passenger, one unwrapping a
  * storage row), each re-validating what the other had just validated.
  *
- * A tool with NO declared access class is skipped: it is not a policy-modeled action, so the floor's
- * matcher must not claim it (its own gate, or nothing, still governs it — exactly as before).
+ * EVERY descriptor becomes an action, including one with no declared access class — {@link
+ * buildAuthzModel} classes those as WRITE. This used to `continue` past them, on the reasoning that an
+ * unstamped tool "is not a policy-modeled action, so the floor's matcher must not claim it (its own
+ * gate, OR NOTHING, still governs it)". That last clause was the hole: omission from the model is what
+ * made the floor's matcher skip the call, so the cheapest possible mistake — forgetting a stamp —
+ * silently produced an ungoverned tool. A missing access class is now the LOUDEST classification
+ * rather than the absent one: under the seeded posture a write needs confirmation interactively and is
+ * refused autonomously, so an unstamped tool announces itself the first time it is called.
+ *
  * `args` is deliberately not derived from `inputSchema` here: an AI-SDK schema object is not a JSON
  * Schema, and projecting host tools' args into policy is a change of behaviour, not of shape.
  */
 export function actionInputsFromTools(
 	descriptors: readonly ToolDescriptor[],
 ): AuthzActionInput[] {
-	const inputs: AuthzActionInput[] = [];
-	for (const descriptor of descriptors) {
-		if (descriptor.governance.access === undefined) continue;
-		inputs.push({
-			id: descriptor.path,
-			source: "tool",
-			governance: descriptor.governance,
-		});
-	}
-	return inputs;
+	return descriptors.map((descriptor) => ({
+		id: descriptor.path,
+		source: "tool" as const,
+		governance: descriptor.governance,
+	}));
 }
 
 export type BuildAuthzModelOptions = {
