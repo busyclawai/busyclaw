@@ -4,6 +4,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	floorPermitsWrites,
 	lookupTool,
 	lookupToolModel,
 	textModel,
@@ -274,6 +275,10 @@ describe("createClaw send", () => {
 		const claw = createClaw({
 			database: db,
 			model: approvalToolModel(),
+			// This one is about PERSISTENCE — the call and result rows a completed tool leaves behind —
+			// so the write has to actually complete. Its siblings above assert the approval wait itself
+			// and must NOT take this exemption.
+			plugins: [floorPermitsWrites],
 			redaction: { redactor },
 			tools: {
 				send_email: emailTool({
