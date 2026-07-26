@@ -5,7 +5,7 @@
 // bare document (no envelope).
 
 import type { EuroclawPluginConfigureContext } from "@euroclaw/contracts";
-import { endpoints } from "@euroclaw/contracts";
+import { endpoints, route } from "@euroclaw/contracts";
 import { secrets, storedSecretModels } from "@euroclaw/secrets-plugin";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { type } from "arktype";
@@ -30,19 +30,24 @@ function secretsApiOverMemory() {
 
 const skillPackageView = type({ digest: "string", "version?": "string" });
 
+// These fixtures exercise route MOUNTING and OpenAPI generation, not the authz gate — but a route is
+// unbuildable without an authz declaration, so they take the caller-only escape and say why.
+const FIXTURE =
+	"an adapter fixture — routing and document generation, not authorization";
+
 /** A hand-built namespace with a NESTED group + declared output — the skills shape without the
  *  weight of a full createClaw assembly. */
 function skillsNamespace() {
 	return endpoints({
 		packages: {
-			create: {
-				input: type({ name: "string" }),
-				output: skillPackageView,
-				description: "Create a skill package",
-				handler: async (input: { name: string }) => ({
+			create: route
+				.input(type({ name: "string" }))
+				.output(skillPackageView)
+				.description("Create a skill package")
+				.authz(null, FIXTURE)
+				.handler(async (input: { name: string }) => ({
 					digest: `sha256:${input.name}`,
-				}),
-			},
+				})),
 		},
 	});
 }
@@ -51,19 +56,23 @@ function skillsNamespace() {
  *  text on the input, a doc-only output, and a describe()-only read for the fallback arm. */
 function docsNamespace() {
 	return endpoints({
-		create: {
-			input: type({ name: "string" })
-				.describe("a docs create request")
-				.configure({ euroclaw: { doc: "Create a documented thing." } }),
-			output: type({ id: "string" }).configure({
-				euroclaw: { doc: "The created thing." },
-			}),
-			handler: async (input: { name: string }) => ({ id: input.name }),
-		},
-		get: {
-			input: type({ id: "string" }).describe("a docs get request"),
-			handler: async (input: { id: string }) => ({ id: input.id }),
-		},
+		create: route
+			.input(
+				type({ name: "string" })
+					.describe("a docs create request")
+					.configure({ euroclaw: { doc: "Create a documented thing." } }),
+			)
+			.output(
+				type({ id: "string" }).configure({
+					euroclaw: { doc: "The created thing." },
+				}),
+			)
+			.authz(null, FIXTURE)
+			.handler(async (input: { name: string }) => ({ id: input.name })),
+		get: route
+			.input(type({ id: "string" }).describe("a docs get request"))
+			.authz(null, FIXTURE)
+			.handler(async (input: { id: string }) => ({ id: input.id })),
 	});
 }
 

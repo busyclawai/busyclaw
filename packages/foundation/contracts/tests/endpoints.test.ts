@@ -11,6 +11,7 @@ import {
 	endpointHttpMethod,
 	endpointRoutesOf,
 	endpoints,
+	route,
 	toKebabCase,
 } from "../src/index";
 
@@ -41,12 +42,17 @@ describe("endpointHttpMethod — the one name→verb rule", () => {
 	});
 });
 
+// Every route needs an authz declaration to be buildable at all; these fixtures are exercising the
+// collector, not the gate, so they take the caller-only escape with a reason that says as much.
+const FIXTURE =
+	"a collector fixture — the gate itself is pinned in route-gate.test-d.ts";
+const stub = <T>(handler: (input: { value: string }) => T) =>
+	route.input(echoInput).authz(null, FIXTURE).handler(handler);
+
 describe("endpoints() — callable namespace + route metadata", () => {
 	it("exposes each handler AS the namespace method (identity, no wrapper)", async () => {
 		const set = async (input: { value: string }) => `set:${input.value}`;
-		const ns = endpoints({
-			set: { input: echoInput, handler: set },
-		});
+		const ns = endpoints({ set: stub(set) });
 
 		expect(ns.set).toBe(set);
 		await expect(ns.set({ value: "x" })).resolves.toBe("set:x");
@@ -54,10 +60,14 @@ describe("endpoints() — callable namespace + route metadata", () => {
 
 	it("derives kebab paths and verbs from method names; a method override wins", () => {
 		const ns = endpoints({
-			set: { input: echoInput, handler: () => "set" },
-			listRows: { input: echoInput, handler: () => [] },
-			getByKey: { input: echoInput, handler: () => null },
-			catalog: { input: echoInput, handler: () => [], method: "GET" },
+			set: stub(() => "set"),
+			listRows: stub(() => []),
+			getByKey: stub(() => null),
+			catalog: route
+				.input(echoInput)
+				.method("GET")
+				.authz(null, FIXTURE)
+				.handler(() => []),
 		});
 
 		expect(endpointRoutesOf(ns)).toEqual([
@@ -82,10 +92,10 @@ describe("endpoints() — callable namespace + route metadata", () => {
 
 	it("flattens nested groups into multi-segment paths and navigable objects", async () => {
 		const ns = endpoints({
-			install: { input: echoInput, handler: () => "installed" },
+			install: stub(() => "installed"),
 			packages: {
-				create: { input: echoInput, handler: async () => "created" },
-				getByDigest: { input: echoInput, handler: () => null },
+				create: stub(async () => "created"),
+				getByDigest: stub(() => null),
 			},
 		});
 
@@ -104,11 +114,11 @@ describe("endpoints() — callable namespace + route metadata", () => {
 
 	it("carries the input schema and description in metadata for the boundary/OpenAPI slices", () => {
 		const ns = endpoints({
-			set: {
-				input: echoInput,
-				handler: () => "ok",
-				description: "Upsert a value",
-			},
+			set: route
+				.input(echoInput)
+				.description("Upsert a value")
+				.authz(null, FIXTURE)
+				.handler(() => "ok"),
 		});
 
 		const routes = endpointRoutesOf(ns);
@@ -120,12 +130,12 @@ describe("endpoints() — callable namespace + route metadata", () => {
 	it("carries the declared output schema in metadata AS-IS, and only when declared", () => {
 		const echoOutput = type({ echoed: "string" });
 		const ns = endpoints({
-			set: {
-				input: echoInput,
-				output: echoOutput,
-				handler: () => ({ echoed: "ok" }),
-			},
-			delete: { input: echoInput, handler: () => undefined },
+			set: route
+				.input(echoInput)
+				.output(echoOutput)
+				.authz(null, FIXTURE)
+				.handler(() => ({ echoed: "ok" })),
+			delete: stub(() => undefined),
 		});
 
 		const routes = endpointRoutesOf(ns);
@@ -136,9 +146,7 @@ describe("endpoints() — callable namespace + route metadata", () => {
 	});
 
 	it("keeps the metadata non-enumerable: the namespace shape is api-identical and a spread drops it", () => {
-		const ns = endpoints({
-			set: { input: echoInput, handler: () => "ok" },
-		});
+		const ns = endpoints({ set: stub(() => "ok") });
 
 		expect(Object.keys(ns)).toEqual(["set"]);
 		const descriptor = Object.getOwnPropertyDescriptor(ns, ENDPOINTS_METADATA);
@@ -154,11 +162,40 @@ describe("endpoints() — callable namespace + route metadata", () => {
 	});
 
 	it("fails loud at declaration when a definition has no input schema", () => {
-		expect(() => endpoints({ set: { handler: () => "ok" } } as never)).toThrow(
-			EuroclawError,
-		);
-		expect(() => endpoints({ set: { handler: () => "ok" } } as never)).toThrow(
+		const noInput = { handler: () => "ok", authz: { mode: "caller" } };
+		expect(() => endpoints({ set: noInput } as never)).toThrow(EuroclawError);
+		expect(() => endpoints({ set: noInput } as never)).toThrow(
 			/no input schema/,
 		);
+	});
+
+	// The builder cannot produce an unauthorized route — `.handler()` is unreachable until `.authz()`
+	// runs. A hand-rolled object literal can still reach the collector, though, and that is exactly the
+	// state the whole mechanism exists to make impossible, so it must not be collected as "no check".
+	it("fails loud at declaration when a definition declares no authz", () => {
+		const noAuthz = { input: echoInput, handler: () => "ok" };
+		expect(() => endpoints({ set: noAuthz } as never)).toThrow(EuroclawError);
+		expect(() => endpoints({ set: noAuthz } as never)).toThrow(
+			/declares no authz/,
+		);
+	});
+
+	// The reason a caller-only route gave is not decoration: it rides into the route table so the boot
+	// coverage walk can enumerate every route authorizing against nothing shared, with its stated why.
+	it("carries each route's authz declaration into the metadata", () => {
+		const ns = endpoints({
+			mine: stub(() => "ok"),
+			theirs: route
+				.input(echoInput)
+				.authz("read", (i) => ({ kind: "widget", id: i.value }))
+				.handler(() => "ok"),
+		});
+
+		const routes = endpointRoutesOf(ns);
+		expect(routes?.[0]?.authz).toEqual({ mode: "caller", reason: FIXTURE });
+		expect(routes?.[1]?.authz).toMatchObject({
+			mode: "resource",
+			level: "read",
+		});
 	});
 });
