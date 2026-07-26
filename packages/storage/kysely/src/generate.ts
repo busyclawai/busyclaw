@@ -35,7 +35,9 @@ const TS_TYPE: Record<KyselyTypeDialect, Record<FieldType, string>> = {
 		boolean: "boolean",
 		// Read as Date, written as either — the shape ColumnType exists for.
 		date: "ColumnType<Date, Date | string, Date | string>",
-		json: "unknown",
+		// The column is TEXT and the storage layer owns the serialization, so what comes back is
+		// the JSON string — not a parsed value. Same on both dialects for that reason.
+		json: "string",
 	},
 	sqlite: {
 		string: "string",

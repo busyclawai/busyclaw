@@ -64,7 +64,9 @@ const ACCEPTED: Record<
 		],
 		boolean: ["bool", "boolean"],
 		date: ["timestamptz", "timestamp", "timestamp with time zone", "date"],
-		json: ["json", "jsonb"],
+		// NOT json/jsonb — see EMITTED below. A native JSON column here is genuine drift: the
+		// adapter would get a parsed object back and refuse it, so reporting it is the point.
+		json: ["text", "character varying", "varchar"],
 	},
 	sqlite: {
 		string: ["text"],
@@ -82,7 +84,11 @@ const EMITTED: Record<MigrationDialect, Record<FieldType, ColumnDataType>> = {
 		number: "double precision",
 		boolean: "boolean",
 		date: "timestamptz",
-		json: "jsonb",
+		// TEXT, deliberately, not jsonb. euroclaw's storage layer serializes a `json` field itself
+		// (schema-adapter's `json: "string"` mode, which is what createClaw uses) and demands the
+		// serialized string back on read. A jsonb column makes `pg` return a parsed object, and
+		// decoding then throws — the column type has to match who owns the serialization.
+		json: "text",
 	},
 	sqlite: {
 		string: "text",

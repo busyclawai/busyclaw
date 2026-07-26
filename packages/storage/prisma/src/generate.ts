@@ -25,7 +25,10 @@ const SCALAR: Record<FieldType, string> = {
 	number: "Float",
 	boolean: "Boolean",
 	date: "DateTime",
-	json: "Json",
+	// String, not Json: euroclaw's storage layer serializes a `json` field itself and expects the
+	// serialized string back, so a Prisma `Json` column — which hands back a parsed value — breaks
+	// decoding.
+	json: "String",
 };
 
 /** snake_case → PascalCase, the Prisma model convention (`@@map` keeps the physical name). */

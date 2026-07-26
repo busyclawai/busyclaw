@@ -53,7 +53,9 @@ describe("generateDrizzleSchema", () => {
 		const code = generateDrizzleSchema({ schema: SCHEMA, provider: "pg" });
 		expect(code).toContain("import {");
 		expect(code).toContain('} from "drizzle-orm/pg-core";');
-		expect(code).toContain('context: jsonb("context").notNull()');
+		// TEXT, not jsonb — the storage layer serializes json fields itself.
+		expect(code).toContain('context: text("context").notNull()');
+		expect(code).not.toContain("jsonb");
 		expect(code).toContain(
 			'createdAt: timestamp("createdAt", { withTimezone: true }).notNull()',
 		);
@@ -71,7 +73,9 @@ describe("generateDrizzleSchema", () => {
 		expect(code).toContain(
 			'archived: integer("archived", { mode: "boolean" })',
 		);
-		expect(code).toContain('context: text("context", { mode: "json" })');
+		// No mode:"json" either — that would make Drizzle parse what the adapter wants raw.
+		expect(code).toContain('context: text("context")');
+		expect(code).not.toContain('mode: "json"');
 		expect(code).toContain("sqliteTable(");
 	});
 
