@@ -393,6 +393,7 @@ export {
 	piiKind,
 	piiKindValues,
 	piiMapping,
+	piiContainer,
 	piiMappingEntity,
 	piiMappingFields,
 	piiMappingSchema,
@@ -441,7 +442,12 @@ export {
 } from "./run-checkpoint";
 // ── the opaque access boundary every scope-keyed core row carries ──
 export type { ScopeRef } from "./scope";
-export { scopeFields } from "./scope";
+export {
+	isReservedScope,
+	RESERVED_SCOPE_PREFIX,
+	scopeFields,
+	UNCONTAINED,
+} from "./scope";
 // ── standard-schema interop: accept any standard-schema library without depending on one ──────
 export type {
 	JsonSchemaSource,

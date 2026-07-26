@@ -97,9 +97,8 @@ Prisma schema is a *snapshot* of current truth, so it overwrites in place.
 - **`number` becomes `double precision` / `real` / `Float`.** The declaration has one numeric type,
   so there is no integer/bigint distinction to carry; floating point is the only lossless choice for
   a type that also has to hold confidence scores.
-- **`pii_mapping` and `pii_subject` declare no primary key.** Their real key is
-  `(placeholder, scope, scopeId)`, but `scope`/`scopeId` are nullable while the container-less
-  redaction state exists, and a primary key cannot contain NULL — see the note in
-  `contracts/src/governance/redact.ts`. SQL creates them keyless; Prisma, which requires every model
-  to carry an identifier, gets them as `@@ignore`, so euroclaw's PII vault cannot run on Prisma until
-  that key exists.
+- **A table with no declared primary key still generates.** SQL creates it keyless; Prisma, which
+  requires every model to carry an identifier, gets `@@ignore` and a warning — the model is absent
+  from the generated client. No core table is in that state (the PII vault's
+  `(placeholder, scope, scopeId)` key is declared), but a plugin may declare one, so the escape hatch
+  stays rather than failing the generate.

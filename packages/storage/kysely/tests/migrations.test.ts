@@ -4,7 +4,8 @@
 // The load-bearing properties, in order of how much damage getting them wrong would do:
 //   1. it is ADDITIVE — a second run is a no-op, and an existing column is never retyped;
 //   2. a declared composite primary key comes out as one composite key, not several;
-//   3. a table with no `primaryKey` field still gets created (pii_mapping is real and has none);
+//   3. a table with no `primaryKey` field still gets created (no core table is keyless now that the
+//      PII vault declares its container, but a plugin may declare one);
 //   4. reference order — a table is created after the table it points at.
 
 import Database from "better-sqlite3";
@@ -163,9 +164,9 @@ describe("planMigrations", () => {
 		await expect(composite.runMigrations()).resolves.toBeUndefined();
 	});
 
-	it("creates a table that declares NO primary key (pii_mapping's real shape today)", async () => {
+	it("creates a table that declares NO primary key", async () => {
 		const keyless = await plan({
-			pii_mapping: {
+			plugin_scratch: {
 				fields: {
 					placeholder: { type: "string", required: true, index: true },
 					scope: { type: "string", index: true },

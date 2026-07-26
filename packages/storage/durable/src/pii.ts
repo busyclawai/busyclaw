@@ -2,6 +2,7 @@ import type { Adapter } from "@euroclaw/contracts";
 import {
 	type PiiMapping,
 	type PiiMappingStore,
+	piiContainer,
 	piiMappingFields,
 	piiSubjectFields,
 } from "@euroclaw/contracts";
@@ -17,46 +18,56 @@ export type PiiMappingStoreOptions = {
 type MappingWhere = EntityWhere<typeof piiMappingFields>;
 type SubjectWhere = EntityWhere<typeof piiSubjectFields>;
 
-/** The exact-row predicate for an upsert: the placeholder plus its container. */
-function mappingWhere(mapping: PiiMapping): MappingWhere[] {
-	const where: MappingWhere[] = [
-		{ field: "placeholder", value: mapping.placeholder },
+// Every predicate below names BOTH halves of the container unconditionally. That is the point of the
+// columns being required: while they were optional these clauses were built conditionally, so a row
+// with no container produced a where of `placeholder` alone — which matches the namesake token in
+// every OTHER container. Word-code placeholders are collision-minted per container, so namesakes are
+// expected rather than rare.
+//
+// `deleteForSubject` was the reachable consequence: erasing an uncontained subject deleted contained
+// mappings that happened to share a token, destroying an unrelated claw's ability to rehydrate. The
+// save path was already narrower by luck rather than design — `sameContainer` rejected the cross-
+// container match before `mappingWhere` was ever reached, so the update never fired — but it was one
+// refactor away from the same failure. An unconditional clause cannot widen either way.
+
+/** The exact-row predicate: the placeholder plus its whole container — the composite primary key. */
+function mappingWhere(row: {
+	placeholder: string;
+	scope: string;
+	scopeId: string;
+}): MappingWhere[] {
+	return [
+		{ field: "placeholder", value: row.placeholder },
+		{ field: "scope", value: row.scope, connector: "AND" },
+		{ field: "scopeId", value: row.scopeId, connector: "AND" },
 	];
-	if (mapping.scope !== undefined) {
-		where.push({ field: "scope", value: mapping.scope, connector: "AND" });
-	}
-	if (mapping.scopeId !== undefined) {
-		where.push({ field: "scopeId", value: mapping.scopeId, connector: "AND" });
-	}
-	return where;
 }
 
 /** A junction predicate scoped to one container — the placeholder is unique only within it, so
  *  erasure must never reach a namesake mapping in another container. */
 function subjectContainerWhere(row: {
 	placeholder: string;
-	scope?: string;
-	scopeId?: string;
+	scope: string;
+	scopeId: string;
 }): SubjectWhere[] {
-	const where: SubjectWhere[] = [
+	return [
 		{ field: "placeholder", value: row.placeholder },
+		{ field: "scope", value: row.scope, connector: "AND" },
+		{ field: "scopeId", value: row.scopeId, connector: "AND" },
 	];
-	if (row.scope !== undefined) {
-		where.push({ field: "scope", value: row.scope, connector: "AND" });
-	}
-	if (row.scopeId !== undefined) {
-		where.push({ field: "scopeId", value: row.scopeId, connector: "AND" });
-	}
-	return where;
 }
 
-/** Containment: a placeholder rehydrates only within the same (scope, scopeId) container. The decode
- *  normalizes SQL NULL columns to absent, which is what the === comparison expects. */
+/** Containment: a placeholder rehydrates only within the same (scope, scopeId) container. A context
+ *  with no container — or only half of one — resolves to UNCONTAINED, so it can only ever match rows
+ *  written by an equally context-less redaction. */
 function sameContainer(
 	mapping: PiiMapping,
 	ctx: Parameters<PiiMappingStore["resolve"]>[1],
 ): boolean {
-	return mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
+	const container = piiContainer(ctx);
+	return (
+		mapping.scope === container.scope && mapping.scopeId === container.scopeId
+	);
 }
 
 export function createPiiMappingStore(
@@ -147,31 +158,13 @@ export function createPiiMappingStore(
 			});
 			const seen = new Set<string>();
 			for (const row of subjectRows) {
-				const key = JSON.stringify([
-					row.placeholder,
-					row.scope ?? null,
-					row.scopeId ?? null,
-				]);
+				const key = JSON.stringify([row.placeholder, row.scope, row.scopeId]);
 				if (seen.has(key)) continue;
 				seen.add(key);
-				const mappingErase: MappingWhere[] = [
-					{ field: "placeholder", value: row.placeholder },
-				];
-				if (row.scope !== undefined) {
-					mappingErase.push({
-						field: "scope",
-						value: row.scope,
-						connector: "AND",
-					});
-				}
-				if (row.scopeId !== undefined) {
-					mappingErase.push({
-						field: "scopeId",
-						value: row.scopeId,
-						connector: "AND",
-					});
-				}
-				await db.deleteMany({ model: "pii_mapping", where: mappingErase });
+				await db.deleteMany({
+					model: "pii_mapping",
+					where: mappingWhere(row),
+				});
 				await db.deleteMany({
 					model: "pii_subject",
 					where: subjectContainerWhere(row),

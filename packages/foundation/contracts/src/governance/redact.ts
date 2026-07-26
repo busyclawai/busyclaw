@@ -6,6 +6,7 @@
 import { type } from "arktype";
 import type { EntityRecord } from "../entity";
 import { entity, field } from "../entity";
+import { type ScopeRef, UNCONTAINED } from "../scope";
 import {
 	SCOPE_CONTEXT_KEY,
 	SCOPE_ID_CONTEXT_KEY,
@@ -47,16 +48,21 @@ export type PiiSpan = typeof piiSpan.infer;
 export const piiSpans = piiSpan.array();
 export type PiiSpans = typeof piiSpans.infer;
 
-// NO `primaryKey` here, deliberately. The real key is the TRIPLE (placeholder, scope, scopeId) —
-// a placeholder is unique only within its container (see createMemoryPiiMappingStore) — but a
-// primary key cannot contain NULL, and `scope`/`scopeId` are optional because a context-less
-// redaction genuinely has no container. Declaring the composite key therefore has to wait for that
-// null container to stop being representable (making both required, with a sentinel for the
-// container-less case), which is the same change that would close the erasure gap the cleanroom
-// brief flags in §7. Until then these two tables carry indexes and no uniqueness constraint, and
-// the migration emitter leaves them primary-keyless rather than inventing a key.
+// The key is the TRIPLE (placeholder, scope, scopeId): a placeholder is unique only within its
+// container (word-code tokens are far lower-entropy than the old 128-bit hex, and are collision-minted
+// PER CONTAINER — so the same token in two containers is expected, not a clash). Declaring it as the
+// composite primary key was blocked while `scope`/`scopeId` were optional, because a key column cannot
+// be NULL. They are now required, with `UNCONTAINED` standing in for the context-less redaction that
+// genuinely has no container.
+//
+// That is a correctness fix, not only a schema tidy. While the columns were nullable, the durable
+// store built its container clauses CONDITIONALLY — an uncontained row produced a where of
+// `placeholder` alone, which matches the namesake token in every other container. Erasing an
+// uncontained subject therefore deleted contained mappings belonging to other claws, destroying their
+// rehydration. Required columns make the predicate unconditional, so the container is always part of
+// the question. This is the erasure gap the cleanroom brief flags in §7.
 export const piiMappingFields = {
-	placeholder: field.string({ required: true, index: true }),
+	placeholder: field.string({ required: true, index: true, primaryKey: true }),
 	original: field.string({ required: true, pii: "contains" }),
 	// Dedup index: keyed hash of (kind, original) — what makes placeholders deterministic per
 	// (value, kind, container). KEYED (never a bare hash) so low-entropy PII can't be
@@ -67,10 +73,10 @@ export const piiMappingFields = {
 	kind: field.enum(piiKindValues, { required: true, index: true }),
 	// Containment: the (scope, scopeId) container this was redacted in — `claw:<clawId>` today,
 	// `memory:<kbId>` / `task:<taskId>` later. A placeholder rehydrates ONLY within the same
-	// container. Optional (a context-less redaction has no container). `scopeId` is a unique entity
-	// id, so the container implies its boundary — pii carries NO organizationId, ever.
-	scope: field.string({ index: true }),
-	scopeId: field.string({ index: true }),
+	// container. `scopeId` is a unique entity id, so the container implies its boundary — pii
+	// carries NO organizationId, ever. Normalize a context into one with `piiContainer`.
+	scope: field.string({ required: true, index: true, primaryKey: true }),
+	scopeId: field.string({ required: true, index: true, primaryKey: true }),
 	createdAt: field.string({ required: true }),
 } as const;
 
@@ -87,11 +93,15 @@ export const piiMappingSchema = piiMappingEntity.storage;
 // placeholder is only unique WITHIN a container (word-code tokens are lower-entropy than the old
 // 128-bit hex), so erasure must delete the mapping in the RIGHT container — never a namesake token in
 // another one.
+// All four columns are the key: a subject is linked to a placeholder in a container at most once, and
+// the junction is a SET, not a log — re-saving a deterministic placeholder must not accumulate rows.
+// The stores already de-duplicated by reading first; the constraint makes that a property of the table
+// rather than of every caller remembering to check.
 export const piiSubjectFields = {
-	placeholder: field.string({ required: true, index: true }),
-	subjectId: field.string({ required: true, index: true }),
-	scope: field.string({ index: true }),
-	scopeId: field.string({ index: true }),
+	placeholder: field.string({ required: true, index: true, primaryKey: true }),
+	subjectId: field.string({ required: true, index: true, primaryKey: true }),
+	scope: field.string({ required: true, index: true, primaryKey: true }),
+	scopeId: field.string({ required: true, index: true, primaryKey: true }),
 } as const;
 
 export const piiSubjectEntity = entity("pii_subject", piiSubjectFields);
@@ -134,6 +144,23 @@ export type RedactionContext = typeof redactionContext.infer;
 
 export const rehydrationContext = redactionContext;
 export type RehydrationContext = typeof rehydrationContext.infer;
+
+/**
+ * The container a redaction or rehydration acts in, normalized to a whole {@link ScopeRef}. Every
+ * store goes through this — it is the ONE place the absent container becomes a value, so mint, lookup,
+ * dedup and erasure cannot disagree about which bucket a context-less call lands in.
+ *
+ * BOTH halves must be present to count. A half-named container (`{ scope: "claw" }` with no `scopeId`)
+ * used to form its own bucket — distinct from the fully-absent one and from every real claw — so a
+ * placeholder minted under one was rehydratable only by a caller who repeated the identical mistake.
+ * Collapsing a partial context to {@link UNCONTAINED} makes the absent case exactly one bucket rather
+ * than an open family of near-misses.
+ */
+export function piiContainer(ctx?: RehydrationContext): ScopeRef {
+	return ctx?.scope !== undefined && ctx.scopeId !== undefined
+		? { scope: ctx.scope, scopeId: ctx.scopeId }
+		: UNCONTAINED;
+}
 
 export function redactionContextFrom(
 	ctx: TurnContext,
