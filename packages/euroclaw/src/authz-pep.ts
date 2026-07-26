@@ -33,17 +33,18 @@ import {
 	type EuroclawPlugin,
 	endpointRoutesOf,
 	errorMessage,
-	SYSTEM_ANONYMOUS,
 	type LooseResourceBinding,
 	type PolicySourceSlice,
 	type RouteAuthz,
 	type ShareableLoaderContext,
 	type ShareableResource,
+	SYSTEM_ANONYMOUS,
 } from "@euroclaw/contracts";
 import {
 	type ClawApiCaller,
 	type ClawApiMethod,
 	clawApiRouteList,
+	NON_ROUTED_API_AUTHZ,
 	PROVIDER_TOOL_CALL_SEPARATOR,
 } from "./api";
 
@@ -94,6 +95,51 @@ export const CORE_API_CREATE_METHODS: readonly ClawApiMethod[] =
  * absent from the `creates` group has no permit to match, so it would deny universally. `secrets.set`
  * failed exactly that way when only core's list was passed.
  */
+/** One route that authorizes against nothing shared, with the reason it gave. */
+export type CallerOnlyRoute = { method: string; reason: string };
+
+/**
+ * The BOOT-TIME backstop for the type gate — quickhr's `assertAuthzCoverage`, applied to the assembled
+ * api. Walks every callable method and refuses to boot if any lacks an authz declaration, listing the
+ * offenders.
+ *
+ * The types already make omission impossible for anything built the intended way: core's `satisfies`
+ * pins a declaration per method, and the route builder will not surrender `.handler()` without one. What
+ * this catches is the surface those guarantees do not cover — a plugin contributing a PLAIN OBJECT of
+ * functions instead of an `endpoints()` namespace. That is legal (a plain contribution simply is not
+ * routable), and every one of its methods would deny at first call. A list at boot is a better way to
+ * learn that than a denial in production.
+ *
+ * Returns the caller-only routes so the assembly can answer the question this whole change started
+ * from: which methods authorize against nothing but the caller, and why each one says that is alright.
+ */
+export function assertAuthzCoverage(api: Record<string, unknown>): {
+	callerOnly: CallerOnlyRoute[];
+} {
+	const declared = collectRouteAuthz(api);
+	const undeclared = enumerateApiMethodIds(api).filter(
+		(method) => !declared.has(method),
+	);
+	if (undeclared.length > 0) {
+		throw configurationError(
+			`${undeclared.length} api method(s) declare no authorization`,
+			{
+				methods: undeclared.join(", "),
+				reason:
+					"build plugin api namespaces with `endpoints()` over `route.input(…).authz(…).handler(…)` — a plain object of functions carries no route metadata, so the PEP cannot decide those methods and would deny every call",
+			},
+		);
+	}
+	const callerOnly: CallerOnlyRoute[] = [];
+	for (const [method, authz] of declared) {
+		if (authz.mode === "caller")
+			callerOnly.push({ method, reason: authz.reason });
+	}
+	return {
+		callerOnly: callerOnly.sort((a, b) => a.method.localeCompare(b.method)),
+	};
+}
+
 export function callerOnlyMethodIds(api: Record<string, unknown>): string[] {
 	return [...collectRouteAuthz(api)]
 		.filter(([, authz]) => authz.mode === "caller")
@@ -125,7 +171,6 @@ const CORE_RESOURCE_KINDS = new Set([
 	"providerToolCall",
 	"run",
 ]);
-
 
 // `personalScope(principal)` lived here: it returned a resource whose `createdBy` WAS the caller, and
 // the loader fell back to it whenever a method declared no binding. That is the whole vulnerability in
@@ -201,8 +246,14 @@ export function buildResourceRegistry(input: {
 					grantParents: [{ kind: "claw", id: row.clawId }],
 				};
 			};
-		registry.set("message", ownedByClaw((id) => clawsStore.messages.get(id)));
-		registry.set("toolCall", ownedByClaw((id) => clawsStore.toolCalls.get(id)));
+		registry.set(
+			"message",
+			ownedByClaw((id) => clawsStore.messages.get(id)),
+		);
+		registry.set(
+			"toolCall",
+			ownedByClaw((id) => clawsStore.toolCalls.get(id)),
+		);
 		registry.set(
 			"toolResult",
 			ownedByClaw((id) => clawsStore.toolResults.get(id)),
@@ -224,7 +275,9 @@ export function buildResourceRegistry(input: {
 		registry.set(
 			"providerToolCall",
 			ownedByClaw(async (composite) => {
-				const [runId, toolCallId] = composite.split(PROVIDER_TOOL_CALL_SEPARATOR);
+				const [runId, toolCallId] = composite.split(
+					PROVIDER_TOOL_CALL_SEPARATOR,
+				);
 				if (runId === undefined || toolCallId === undefined) return null;
 				return clawsStore.toolCalls.getByToolCallId({ runId, toolCallId });
 			}),
@@ -278,6 +331,11 @@ function collectRouteAuthz(
 	const declared = new Map<string, RouteAuthz>();
 	for (const route of clawApiRouteList) {
 		declared.set(route.apiMethod, route.authz);
+	}
+	// Methods that are governed but not wire-routed (`stream`). Kept in the same map so the PEP has ONE
+	// view of what every method authorizes against, routed or not.
+	for (const [method, authz] of Object.entries(NON_ROUTED_API_AUTHZ)) {
+		declared.set(method, authz as RouteAuthz);
 	}
 	const visit = (ns: Record<string, unknown>, prefix: string): void => {
 		for (const route of endpointRoutesOf(ns) ?? []) {

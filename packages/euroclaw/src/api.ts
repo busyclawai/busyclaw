@@ -979,6 +979,27 @@ export const clawApiRoutes = {
 	readonly [Method in ClawApiMethod]: ClawApiRouteDefinition<Method>;
 };
 
+/**
+ * Authz for the api methods that are NOT wire routes. `stream` is the only one: it returns a live
+ * stream rather than an RPC envelope, so it is `Exclude`d from `ClawApiMethod` and therefore invisible
+ * to the route table's `satisfies` — which is exactly how it ended up with no declaration at all, and
+ * silently authorized itself through the old caller-owned fallback.
+ *
+ * The mapped type below is the fix: its keys are DERIVED as `keyof ClawApi` minus the routed methods,
+ * so excluding another method from the wire surface makes this map fail to compile until it is
+ * declared here too. A method can leave the route table; it cannot leave the authz model.
+ */
+export const NON_ROUTED_API_AUTHZ = {
+	// The streaming twin of `generate` — ad-hoc, mints no durable row, runs as the caller.
+	stream: callerOnly(
+		"an ad-hoc stream mints no durable row and runs as the caller — the streaming twin of generate",
+	),
+} satisfies {
+	readonly [Method in Exclude<keyof ClawApi, ClawApiMethod>]: ApiRouteAuthz<
+		ClawApiMethodInput<Method & ClawApiMethod>
+	>;
+};
+
 // The route table's keys are `ClawApiMethod` (the `satisfies` above); this pins the shared contracts
 // name list to real api methods — the direction the old `.map(CLAW_API_METHOD_NAMES)` used to enforce.
 // Together they prove `CLAW_API_METHOD_NAMES` === `ClawApiMethod`, so a drifted wire name cannot ship.

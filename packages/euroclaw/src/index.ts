@@ -53,6 +53,7 @@ import {
 import { buildFloorPolicyPlugin } from "./authz-floor";
 import {
 	type AppAuthzConfig,
+	assertAuthzCoverage,
 	buildApiPolicyEngine,
 	callerOnlyMethodIds,
 	enumerateApiMethodIds,
@@ -862,6 +863,10 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		...baseApi,
 		...createPluginApi({ baseApi, context, plugins }),
 	} as Record<string, unknown>;
+	// Refuse to boot on a method the PEP could not decide. The type gate covers everything built the
+	// intended way; this covers what it cannot see — a plugin handing over a plain object of functions,
+	// whose methods carry no route metadata and would deny at first call instead of at assembly.
+	assertAuthzCoverage(mergedApi);
 	const apiEngine = buildApiPolicyEngine({
 		methodIds: enumerateApiMethodIds(mergedApi),
 		createMethodIds: callerOnlyMethodIds(mergedApi),
