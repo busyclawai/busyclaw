@@ -26,10 +26,10 @@ import {
 	type EuroclawPlugin,
 	type PolicyEngine,
 	type PolicySourceSlice,
-	type ToolCall,
 	type ToolDefinitionSet,
 	toolDescriptors,
 } from "@euroclaw/contracts";
+import { discoveryTools } from "@euroclaw/runtime";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
 export const FLOOR_POLICY_ID = "policy:floor";
@@ -46,11 +46,21 @@ export function buildFloorPolicyPlugin(input: {
 	plugins: readonly EuroclawPlugin[];
 	warn?: (message: string) => void;
 }): EuroclawPlugin {
-	// 1. The floor's action model — the STATIC tools that declare an access class. Descriptors carry
-	//    governance as a typed field, so this is a projection, not a re-validation: a tool with no
-	//    `access` simply isn't a policy-modeled action and drops out.
+	// 1. The floor's action model — every tool the run can reach, classified. Descriptors carry
+	//    governance as a typed field, so this is a projection, not a re-validation.
+	//
+	//    The host's tools are not the whole set. The runtime injects its own always-on meta-tools
+	//    (`euroclaw.search`, `euroclaw.execute`) into the same chokepoint, and once the floor gate
+	//    stopped skipping unmodeled calls, anything the model does not contain is DENIED. Omitting
+	//    them here would therefore have refused discovery itself — search returning nothing, not
+	//    because policy said so but because the assembly never told the model those tools exist.
+	//    They are added from the same `discoveryTools` the runtime will build, so the two cannot
+	//    drift: it derives them from the tool set, and returns nothing when none are discoverable.
+	const tools = input.tools ?? {};
 	const model = buildAuthzModel(
-		actionInputsFromTools(toolDescriptors(input.tools ?? {})),
+		actionInputsFromTools(
+			toolDescriptors({ ...tools, ...discoveryTools(tools) }),
+		),
 	);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({

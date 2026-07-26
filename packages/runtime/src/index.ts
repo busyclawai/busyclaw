@@ -80,6 +80,11 @@ export type {
 export {
 	createRegisteredToolProvider,
 	createSpecRegistry,
+	// The runtime's own always-on meta-tools. Exported so the ASSEMBLY can put them in the floor's
+	// action model: the runtime injects them into the same chokepoint the floor gates, and an action
+	// the model does not contain is denied — so a model built only from host tools would refuse
+	// discovery. One function, so the set the floor models and the set the runtime injects are the same.
+	discoveryTools,
 	normalizeOrigin,
 	planEgress,
 	REGISTER_OPENAPI_SPEC_ACTION,

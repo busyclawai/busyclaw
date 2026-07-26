@@ -230,15 +230,21 @@ function searchTool(discoverable: ToolDefinitionSet): ToolDefinition {
 			},
 			required: ["query"],
 		}),
-		// VISIBILITY, not authorization — the same rule the catalog carries. No `access` fact, so the
-		// floor does not model this as an action: enumerating what exists is not doing any of it.
+		// VISIBILITY, not authorization — the same rule the catalog carries. Enumerating what exists is
+		// not doing any of it, so this is a READ. It used to carry no `access` at all, on the reasoning
+		// that the floor then would not model it; that stopped being a way to say "unmodeled" once
+		// omission became the WRITE default, and an unstamped search would have been gated — turning
+		// discovery itself into an approval prompt.
 		//
 		// Results DISCLOSE what the floor would say, and a disclosure is a UX nicety, never
 		// enforcement. The floor still decides at execute time: a tool absent from these results must
 		// not be unreachable BECAUSE it was hidden, and a tool present in them — with any hint at all —
 		// must not be callable BECAUSE it was shown. The hint is also point-in-time; policy and scopes
 		// can change before the call, which is a second reason nothing may be load-bearing on it.
-		governance: { effect: { kind: "internal", output: "none", risk: "low" } },
+		governance: {
+			access: "read",
+			effect: { kind: "internal", output: "none", risk: "low" },
+		},
 		invocation: {
 			kind: "local",
 			execute: async (
@@ -308,10 +314,18 @@ function executeTool(): ToolDefinition {
 			},
 			required: ["path"],
 		}),
-		// No `access` fact ON PURPOSE: the floor must not model this as an action. What gets decided
-		// is the TARGET, resolved at ingress — a policy that could permit "execute" would be a permit
-		// for everything reachable through it.
-		governance: {},
+		// WRITE — and the reason is worth stating, because the obvious reading is that this should not
+		// be modeled at all. What gets decided for a well-formed routed call is the TARGET: `resolveCall`
+		// unwraps the envelope at ingress, so past that line the loop cannot tell a routed call from a
+		// direct one and the floor never sees this path. A policy permitting "euroclaw.execute" is
+		// therefore INERT for real routing — it cannot become a permit for everything reachable through
+		// the router, which is the hazard the old "no access fact" comment was guarding against.
+		//
+		// The only calls that arrive here as themselves are MALFORMED envelopes naming no usable target.
+		// Those must fail closed, and write is the classification that makes them do so under the seeded
+		// posture. Leaving it unstamped would have meant the same thing by accident; stating it means
+		// the next reader does not have to reconstruct why.
+		governance: { access: "write" },
 		invocation: {
 			kind: "local",
 			execute: () => {
