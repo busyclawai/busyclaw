@@ -408,6 +408,18 @@ export {
 	redactionContextFrom,
 	rehydrationContext,
 } from "./governance/redact";
+// ── governance: the type-gated route builder (.input/.output/.authz/.handler) ──
+export type {
+	AuthzContext,
+	AuthzTarget,
+	RouteAuthz,
+	RouteBuilder,
+	RouteDefinition,
+	RouteInputSchema,
+	RouteLevel,
+	RouteOutputSchema,
+} from "./governance/route";
+export { route } from "./governance/route";
 // ── governance: the co-located app-authz resource binding (base api route defs + plugin endpoints) ──
 export type {
 	LooseResourceBinding,
