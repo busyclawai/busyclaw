@@ -15,6 +15,7 @@
 import { type } from "arktype";
 import type { EntityInput, EntityRecord } from "../entity";
 import { entity, field } from "../entity";
+import type { RouteLevel } from "../governance/route";
 
 /** A grant's permission LEVEL — the SAME ordered vocabulary the api decision compares against
  *  (`read < use < manage`). `read` sees, `use` runs/invokes, `manage` mutates/administers/RE-SHARES
@@ -26,6 +27,19 @@ export type AccessGrantPermission =
 	(typeof accessGrantPermissionValues)[number];
 /** The permission-level arktype — the boundary validator the share api parses caller input through. */
 export const accessGrantPermission = type("'read' | 'use' | 'manage'");
+
+// The route builder's `RouteLevel` spells this union out rather than importing it — it has to stay a
+// leaf for the client's wire allowlist (importing this module would pull `entity.ts` into the closure).
+// One vocabulary is load-bearing: a grant row's `permission` is compared against the level an action
+// requires, so a third value on either side would compare against nothing. Assert mutual assignability
+// here, where the wire allowlist does not reach, so drift is a compile error rather than a silent hole.
+type _LevelVocabularyIsOne = [AccessGrantPermission] extends [RouteLevel]
+	? [RouteLevel] extends [AccessGrantPermission]
+		? true
+		: never
+	: never;
+const _levelsAgree: _LevelVocabularyIsOne = true;
+void _levelsAgree;
 
 /**
  * The BOUNDARY validator for a grantee ref — `public`, or a tagged `<authority>:<id>`.
@@ -141,9 +155,7 @@ export function grantReaches(
 ): boolean {
 	if (grant.principalRef === "public") return true;
 	if (grant.principalRef === principal) return true;
-	return scopes.some(
-		(m) => `${m.scope}:${m.scopeId}` === grant.principalRef,
-	);
+	return scopes.some((m) => `${m.scope}:${m.scopeId}` === grant.principalRef);
 }
 
 /** Does a HELD level satisfy a REQUIRED one under the `read < use < manage` order (the SAME order the

@@ -16,12 +16,16 @@
 // `getMessage` resolves the message rather than something else convenient. That is what the boot-time
 // coverage walk and the cross-principal tests are for.
 
-import type { AccessGrantPermission } from "../authz/grant";
 import type { ClawApiCaller } from "./principal";
 
-/** An action's required permission level, ordered `read < use < manage`. Aliases the grant level so
- *  the store, the grant row, and the route's requirement are one vocabulary. */
-export type RouteLevel = AccessGrantPermission;
+/** An action's required permission level, ordered `read < use < manage`.
+ *
+ *  Written out here rather than aliased from `AccessGrantPermission` so this module stays a LEAF. The
+ *  client's wire allowlist requires every transitively-reachable wire module to carry no arktype doc
+ *  metadata, and importing the grant module would drag entity.ts into that closure. The two must stay
+ *  one vocabulary all the same, so authz/grant.ts carries a compile-time assertion that they are the
+ *  identical union — divergence is a type error there, not a silent second scale. */
+export type RouteLevel = "read" | "use" | "manage";
 
 /**
  * What a route's authz resolver returns — the thing the call is authorized AGAINST.
@@ -69,13 +73,15 @@ export type RouteAuthz =
 	  }
 	| { readonly mode: "caller"; readonly reason: string };
 
-/** A built route — what `.handler()` returns and `endpoints()` collects. The NAME is not here: it comes
- *  from the record key the route is declared under, so it is written exactly once. */
-export type RouteDefinition = {
+/** A built route — what `.handler()` returns and `endpoints()` collects. Generic in the handler's INPUT
+ *  and OUTPUT so the collector can rebuild a typed namespace from a record of these; erasing them here
+ *  would erase them from `claw.api`. The NAME is not here: it comes from the record key the route is
+ *  declared under, so it is written exactly once. */
+export type RouteDefinition<In = never, Out = unknown> = {
 	readonly input: RouteInputSchema;
 	readonly output?: RouteOutputSchema;
 	readonly authz: RouteAuthz;
-	readonly handler: (input: never, ctx: AuthzContext) => unknown;
+	readonly handler: (input: In, ctx: AuthzContext) => Out | Promise<Out>;
 	readonly method?: "GET" | "POST";
 	readonly description?: string;
 };
@@ -132,11 +138,12 @@ export interface RouteBuilder<In, Out, Authorized extends boolean> {
 	 */
 	authz(level: null, reason: string): RouteBuilder<In, Out, true>;
 
-	/** Attach the handler and build the route. Unreachable until `.authz()` has run. */
+	/** Attach the handler and build the route. Unreachable until `.authz()` has run. With no `.output()`
+	 *  the return type is INFERRED from the handler; with one, it is pinned to the schema. */
 	handler: [Authorized] extends [true]
 		? [Out] extends [Unset]
-			? <R>(handler: Handler<In, R>) => RouteDefinition
-			: (handler: Handler<In, Out>) => RouteDefinition
+			? <R>(handler: Handler<In, R>) => RouteDefinition<In, Awaited<R>>
+			: (handler: Handler<In, Out>) => RouteDefinition<In, Out>
 		: RequireAuthz;
 }
 

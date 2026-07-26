@@ -8,7 +8,8 @@
 // the defs, call `endpoints()` once), never on built namespaces.
 
 import { configurationError } from "@euroclaw/errors";
-import type { LooseResourceBinding, ResourceBinding } from "./resource-binding";
+import type { ClawApiCaller } from "./principal";
+import type { RouteAuthz, RouteDefinition } from "./route";
 
 /** Routed endpoints are RPC-shaped: reads ride GET (input in the query), everything else POST. */
 export type EndpointHttpMethod = "GET" | "POST";
@@ -26,71 +27,39 @@ export type EndpointOutputSchema = {
 	readonly infer: unknown;
 };
 
-export type EndpointDefinition = {
-	/** Validates at the HTTP boundary ONLY: the adapter route parses+validates and hands the handler
-	 *  the validated value. In-process calls go straight into the handler, schema untouched. */
-	input: EndpointInputSchema;
-	handler: (input: never) => unknown;
-	/** Verb override for the exceptions; absent ⇒ the shared `get*`/`list*` → GET name rule. */
-	method?: EndpointHttpMethod;
-	/** Operation summary for the OpenAPI generator — carried in metadata. */
-	description?: string;
-	/** Declared response schema: pins the handler's return type (see {@link ValidateEndpointOutputs})
-	 *  and documents the OpenAPI 200 `data`. Carried in metadata; never runtime-validated. */
-	output?: EndpointOutputSchema;
-	/** The co-located app-authz resource binding — the plugin-extensible analog of the base api's route
-	 *  binding. Typed LOOSELY here (any string key); {@link ValidateEndpointResources} tightens `idKey`/
-	 *  `kindKey` to this def's handler INPUT keys at the `endpoints()` call, so a wrong key won't compile.
-	 *  Carried into the {@link EndpointRoute} metadata; the PEP reads it to resolve the resource. Absent ⇒
-	 *  the method is not resource-anchored (personal scope). */
-	resource?: LooseResourceBinding;
-};
+/** A definition is a route BUILT by `route.…​.handler()`. The builder owns input/output typing and the
+ *  authz gate; this module only collects. */
+export type EndpointDefinition = RouteDefinition<never, unknown>;
 
-/** A record of definitions, optionally grouped: a nested record is a GROUP whose key becomes a path
+/** A record of built routes, optionally grouped: a nested record is a GROUP whose key becomes a path
  *  segment, so a namespace can mirror shapes like `skills.packages.create` → `/packages/create`. */
 export type EndpointDefinitions = {
-	readonly [name: string]: EndpointDefinition | EndpointDefinitions;
+	// biome-ignore lint/suspicious/noExplicitAny: a route's In/Out vary per entry; `any` here is the
+	// only way to accept a heterogeneous record without erasing each entry's own types, which
+	// `InferEndpoints` reads back below.
+	readonly [name: string]: RouteDefinition<any, any> | EndpointDefinitions;
 };
 
-/** The callable namespace `endpoints()` returns: every definition's handler exposed AS-IS (the
- *  unchanged in-process path), groups mirrored as nested plain objects. */
+/**
+ * The callable namespace `endpoints()` returns. Each route becomes `(input, caller?) => Promise<Out>`
+ * — the signature a CONSUMER sees. The stored handler's second parameter is the {@link AuthzContext},
+ * not the caller: the PEP builds that context per call (it needs the policy engine, which does not
+ * exist at definition time) and substitutes it when it wraps the namespace. So this type describes the
+ * governed method, which is the only one ever exposed — the same arrangement the route table already
+ * relies on to keep one door.
+ */
 export type InferEndpoints<Defs> = {
-	[K in keyof Defs]: Defs[K] extends {
-		handler: infer Handler extends (...args: never[]) => unknown;
-	}
-		? Handler
+	[K in keyof Defs]: Defs[K] extends RouteDefinition<infer In, infer Out>
+		? (input: In, caller?: ClawApiCaller) => Promise<Out>
 		: InferEndpoints<Defs[K]>;
 };
 
-/** The type-level half of `output`: a definition that declares an output schema must have a handler
- *  returning that schema's inferred type (sync or promised) — `endpoints()` intersects its argument
- *  with this, so a drifted return shape fails to compile at the definition. Without `output` the
- *  handler return stays free (`unknown` imposes nothing). Purely a compile-time pin — the schema is
- *  never run against the result (see {@link EndpointOutputSchema}). */
-export type ValidateEndpointOutputs<Defs> = {
-	[K in keyof Defs]: Defs[K] extends { handler: (input: never) => unknown }
-		? Defs[K] extends { output: infer Output extends EndpointOutputSchema }
-			? {
-					handler: (input: never) => Output["infer"] | Promise<Output["infer"]>;
-				}
-			: unknown
-		: ValidateEndpointOutputs<Defs[K]>;
-};
-
-/** The type-level half of `resource`: a definition that declares a resource binding must use `idKey`
- *  (and `kindKey`) that are keys of the handler's INPUT — `endpoints()` intersects its argument with
- *  this, so a binding pointing at a non-existent input field fails to compile at the definition. Without
- *  `resource` the def is unconstrained (`unknown` imposes nothing). Compile-time only; the co-located
- *  binding is READ by the app-authz PEP, never run. */
-export type ValidateEndpointResources<Defs> = {
-	[K in keyof Defs]: Defs[K] extends {
-		handler: infer Handler extends (...args: never[]) => unknown;
-	}
-		? Defs[K] extends { resource: LooseResourceBinding }
-			? { resource: ResourceBinding<Parameters<Handler>[0]> }
-			: unknown
-		: ValidateEndpointResources<Defs[K]>;
-};
+// `ValidateEndpointOutputs` and `ValidateEndpointResources` used to live here: two mapped types that
+// intersected the argument of `endpoints()` to pin each handler's return to its declared `output` and
+// each resource binding's keys to its handler's input. The route builder now does both jobs at the
+// point of declaration — `.output()` pins the return, `.authz()`'s resolver is typed from `.input()` —
+// so a validator that re-derives them from a finished record is a second source of truth with nothing
+// left to say. This module went back to being a collector.
 
 /** One declared route, PATH-RELATIVE to its namespace mount (the adapter prefixes the api key). */
 export type EndpointRoute = {
@@ -100,12 +69,15 @@ export type EndpointRoute = {
 	path: `/${string}`;
 	method: EndpointHttpMethod;
 	input: EndpointInputSchema;
-	handler: (input: never) => unknown;
+	handler: EndpointDefinition["handler"];
 	description?: string;
 	/** The declared response schema as passed — documentation + typing only, never run. */
 	output?: EndpointOutputSchema;
-	/** The co-located app-authz resource binding as declared — read by the PEP loader, never run. */
-	resource?: LooseResourceBinding;
+	/** How this route resolves its authorization, as declared by `.authz()`. REQUIRED: a route with no
+	 *  authz cannot be built, so a route table entry always carries one. The PEP evaluates it before the
+	 *  handler runs; the boot-time coverage walk reads it to enumerate every route that authorizes
+	 *  against nothing but the caller, together with the reason each one gave. */
+	authz: RouteAuthz;
 };
 
 /**
@@ -165,6 +137,16 @@ function buildNamespace(
 					endpoint: [...names, name].join("."),
 				});
 			}
+			// The builder cannot produce a route without an authz, but a hand-rolled object literal can
+			// reach here. Refuse at declaration: this is the exact state the whole mechanism exists to
+			// make impossible, and it must not degrade into "no check".
+			if (value.authz === undefined) {
+				throw configurationError("euroclaw endpoint declares no authz", {
+					endpoint: [...names, name].join("."),
+					reason:
+						"build routes with `route.input(…).authz(…).handler(…)` — a route must say what it authorizes against",
+				});
+			}
 			namespace[name] = value.handler;
 			routes.push({
 				name: [...names, name].join("."),
@@ -172,15 +154,14 @@ function buildNamespace(
 				method: value.method ?? endpointHttpMethod(name),
 				input: value.input,
 				handler: value.handler,
+				// Read by the PEP before the handler runs, and by the boot coverage walk.
+				authz: value.authz,
 				...(value.description !== undefined
 					? { description: value.description }
 					: {}),
 				// Carried for the OpenAPI generator only — the route handler never validates against it
 				// (outputs are trusted server code; arktype guards boundaries, not our own returns).
 				...(value.output !== undefined ? { output: value.output } : {}),
-				// The app-authz resource binding rides along so the PEP can read a plugin method's binding
-				// off the re-attached route metadata — the plugin-side of the co-located loader registry.
-				...(value.resource !== undefined ? { resource: value.resource } : {}),
 			});
 		} else {
 			namespace[name] = buildNamespace(value, [...names, name], path, routes);
@@ -190,16 +171,16 @@ function buildNamespace(
 }
 
 /**
- * Declare a plugin api namespace: `{ input, handler, method?, description?, output?, resource? }` per
- * method, nested records as groups. Returns the CALLABLE namespace (methods are the handlers,
- * identity-preserved) with the flattened {@link EndpointRoute} table attached non-enumerably under
- * {@link ENDPOINTS_METADATA} — read it with {@link endpointRoutesOf}. The
- * {@link ValidateEndpointOutputs} intersection pins each handler's return to its declared `output`
- * schema at compile time; {@link ValidateEndpointResources} pins each declared `resource` binding's
- * `idKey`/`kindKey` to the handler's input keys.
+ * Collect a namespace from routes built with `route.input(…).output(…).authz(…).handler(…)`, nested
+ * records as groups. Returns the CALLABLE namespace (methods are the handlers, identity-preserved) with
+ * the flattened {@link EndpointRoute} table attached non-enumerably under {@link ENDPOINTS_METADATA} —
+ * read it with {@link endpointRoutesOf}.
+ *
+ * The NAME of each route is the record key, written once. Typing and the authz gate belong to the
+ * builder; this function only collects, which is why it no longer takes validator intersections.
  */
 export function endpoints<const Defs extends EndpointDefinitions>(
-	defs: Defs & ValidateEndpointOutputs<Defs> & ValidateEndpointResources<Defs>,
+	defs: Defs,
 ): InferEndpoints<Defs> {
 	const routes: EndpointRoute[] = [];
 	const namespace = buildNamespace(defs, [], [], routes);

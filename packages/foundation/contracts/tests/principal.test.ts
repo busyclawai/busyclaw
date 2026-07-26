@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	EuroclawError,
-	parsePrincipal,
 	type Principal,
+	parsePrincipal,
 	SYSTEM_ANONYMOUS,
 	SYSTEM_CRON,
 	systemPrincipal,

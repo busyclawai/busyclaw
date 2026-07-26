@@ -2,7 +2,7 @@ import type {
 	EuroclawPlugin,
 	EuroclawPluginConfigureContext,
 } from "@euroclaw/contracts";
-import { endpoints } from "@euroclaw/contracts";
+import { endpoints, route } from "@euroclaw/contracts";
 import { secrets, storedSecretModels } from "@euroclaw/secrets-plugin";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { type } from "arktype";
@@ -480,10 +480,13 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 	it("mounts a namespace nested in a plain object wrapper at its full kebab key path", async () => {
 		const registrations = endpoints({
-			getByKey: {
-				input: type({ key: "string" }),
-				handler: async ({ key }: { key: string }) => ({ key }),
-			},
+			getByKey: route
+				.input(type({ key: "string" }))
+				.authz(
+					null,
+					"an adapter fixture — this test pins route mounting, not authorization",
+				)
+				.handler(async ({ key }: { key: string }) => ({ key })),
 		});
 		const claw = {
 			api: { channels: { registrations } },

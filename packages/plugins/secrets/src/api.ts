@@ -1,4 +1,10 @@
-import { asPrincipal, endpoints, validationError } from "@euroclaw/contracts";
+import type { ClawApiCaller } from "@euroclaw/contracts";
+import {
+	asPrincipal,
+	endpoints,
+	route,
+	validationError,
+} from "@euroclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
@@ -102,8 +108,11 @@ function assertListSecretInput(input: unknown): ListSecretInput {
 	return valid;
 }
 
-/** The out-of-band app-authz caller the PEP threads as the 2nd argument — the SOLE identity path. */
-export type SecretsCaller = { principal?: string };
+/** The out-of-band app-authz caller the PEP threads as the 2nd argument — the SOLE identity path. An
+ *  ALIAS of the shared {@link ClawApiCaller} rather than a local `{ principal?: string }`: the local
+ *  shape was structurally wider (a bare string where the protocol carries a branded `Principal`), so a
+ *  namespace built from the route collector could not satisfy it. */
+export type SecretsCaller = ClawApiCaller;
 
 /** The `claw.api.secrets.*` management methods (present only on the store path). Every method keys
  *  strictly to the CALLER's `(personal, principal)` boundary — the owner rides in the 2nd `caller`
@@ -129,24 +138,11 @@ export type SecretsPluginApi = {
 	readonly secrets: SecretsManagementApi;
 };
 
-/**
- * The governed owner of the row: the app-authz caller principal — the SOLE identity path (the owner is
- * NEVER read from the input body, so a caller can only ever touch their own rows;
- * docs/plans/stamped-fields.md, #3). Fails loud when the caller is absent — a secret row must have an
- * owner, and keying an owner-less secret to a shared fallback would let unauthenticated callers collide
- * on one credential boundary. The PEP's actor floor already guarantees a caller for a governed in-process
- * call; this backstops the raw HTTP route, which the adapter-ingress identity seam does not yet reach.
- */
-function ownerFrom(caller: SecretsCaller | undefined): string {
-	const raw = caller?.principal;
-	if (raw === undefined) {
-		throw validationError(
-			"secret input invalid",
-			"no owner principal — pass the app-authz caller `{ principal }` (the 2nd argument)",
-		);
-	}
-	return raw;
-}
+// `ownerFrom(caller)` lived here: it read `caller?.principal` and threw when absent, backstopping the
+// raw HTTP route the identity seam did not reach. The route builder hands each handler an
+// `AuthzContext` whose `principal` is guaranteed present and non-blank — the actor floor runs before the
+// handler is entered — so the check has moved to the one place that cannot be bypassed, and a local
+// re-derivation of it would now be the only path that could disagree.
 
 /**
  * Build the management api over the store's lazy guard — a DECLARED `endpoints()` namespace, so the
@@ -158,52 +154,54 @@ function ownerFrom(caller: SecretsCaller | undefined): string {
 export function createSecretsManagementApi(
 	requireStore: () => StoredSecretsStore,
 ): SecretsManagementApi {
+	// Every method here is caller-keyed by CONSTRUCTION: the boundary is `(personal, caller)` and the
+	// caller never names a target, so there is no shared row to resolve and nothing an id could point at.
+	// That is what `.authz(null, …)` states, and the reason rides into the route metadata so the boot
+	// coverage walk can list it among the routes that authorize against nothing shared.
+	const CALLER_KEYED =
+		"a secret row is keyed by (personal, caller) — the input never names a target, so there is no other principal's row to reach";
 	return endpoints({
-		set: {
-			input: setSecretInput,
-			handler: async (
-				input: SetSecretInput,
-				caller?: SecretsCaller,
-			): Promise<StoredSecretView> => {
-				const valid = assertSetSecretInput(input);
-				// Structural scoping: personal:owner, always. Both `createdBy` and the personal boundary
-				// key are the caller — the caller never names a target — and `asPrincipal` re-establishes
-				// the brand the `createdBy` stamp column carries. `kind` is the store's to write.
-				const owner = asPrincipal(ownerFrom(caller));
-				const record = await requireStore().set({
-					name: valid.name,
-					value: valid.value,
-					createdBy: owner,
-					scope: "personal",
-					scopeId: owner,
-				});
-				return toView(record);
-			},
-		},
-		delete: {
-			input: deleteSecretInput,
-			handler: async (
-				input: DeleteSecretInput,
-				caller?: SecretsCaller,
-			): Promise<void> => {
+		set: route
+			.input(setSecretInput)
+			.authz(null, CALLER_KEYED)
+			.handler(
+				async (input: SetSecretInput, authz): Promise<StoredSecretView> => {
+					const valid = assertSetSecretInput(input);
+					// Structural scoping: personal:owner, always. Both `createdBy` and the personal boundary
+					// key are the caller — the caller never names a target — and `asPrincipal` re-establishes
+					// the brand the `createdBy` stamp column carries. `kind` is the store's to write.
+					const owner = asPrincipal(authz.principal);
+					const record = await requireStore().set({
+						name: valid.name,
+						value: valid.value,
+						createdBy: owner,
+						scope: "personal",
+						scopeId: owner,
+					});
+					return toView(record);
+				},
+			),
+		delete: route
+			.input(deleteSecretInput)
+			.authz(null, CALLER_KEYED)
+			.handler(async (input: DeleteSecretInput, authz): Promise<void> => {
 				const valid = assertDeleteSecretInput(input);
-				const owner = ownerFrom(caller);
 				// Keys on the owner boundary, so it must match `set`'s scopeId.
-				await requireStore().delete("personal", owner, valid.name);
-			},
-		},
-		list: {
-			input: listSecretInput,
-			handler: async (
-				input: ListSecretInput,
-				caller?: SecretsCaller,
-			): Promise<StoredSecretView[]> => {
-				assertListSecretInput(input);
-				const owner = ownerFrom(caller);
-				// Reads the owner boundary the rows were written under.
-				const records = await requireStore().list("personal", owner);
-				return records.map(toView);
-			},
-		},
+				await requireStore().delete("personal", authz.principal, valid.name);
+			}),
+		list: route
+			.input(listSecretInput)
+			.authz(null, CALLER_KEYED)
+			.handler(
+				async (input: ListSecretInput, authz): Promise<StoredSecretView[]> => {
+					assertListSecretInput(input);
+					// Reads the owner boundary the rows were written under.
+					const records = await requireStore().list(
+						"personal",
+						authz.principal,
+					);
+					return records.map(toView);
+				},
+			),
 	});
 }

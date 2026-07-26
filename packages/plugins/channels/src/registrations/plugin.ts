@@ -3,12 +3,14 @@ import {
 	type BindConversationThreadInput,
 	bindConversationClawInput,
 	bindConversationThreadInput,
+	type ClawApiCaller,
 	configurationError,
 	type EuroclawPluginConfigureContext,
 	type EuroclawPluginRuntime,
 	type EuroclawRoute,
 	type EuroclawRouteContext,
 	endpoints,
+	route,
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
@@ -35,21 +37,42 @@ import {
 	type RegisterChannelRegistrationInput,
 } from "./store";
 
-/** The api namespace registrations mode exposes on `claw.api.channels.registrations`. */
+// Registration rows carry no owner and no access boundary, so there is nothing for a resolver to load:
+// `get`/`getByKey`/`list`/`revoke` reach any tenant's registration by id or by (provider, endpointKey),
+// and the records they return still contain the bot token and webhook secret. This states that plainly
+// instead of leaving it implied by an absent binding — the reason rides into the route metadata, so the
+// boot coverage walk lists these among the routes authorizing against nothing shared. Closing it needs
+// owner/scope columns stamped from the caller and credentials moved behind the secret store, which is a
+// schema change tracked as the channel-registration hardening work, not something a resolver can fix.
+const UNOWNED_REGISTRATIONS =
+	"KNOWN GAP: registration rows have no owner or scope column yet, so any caller reaches any tenant's registration and the returned record still carries its credentials";
+
+/** The api namespace registrations mode exposes on `claw.api.channels.registrations`. Every method
+ *  takes the out-of-band app-authz caller as its 2nd argument, the same shape the rest of `claw.api`
+ *  uses. `list` takes its filter POSITIONALLY REQUIRED (pass `{}` for "everything visible") because a
+ *  governed method's first parameter is its validated input — an omitted one would have nothing for the
+ *  boundary schema to check. */
 export type ChannelRegistrationsApi = {
 	/** Register (or re-register: rotate + re-activate) a user's bot — the sso register analog. */
 	register: (
 		input: RegisterChannelRegistrationInput,
+		caller?: ClawApiCaller,
 	) => Promise<ChannelRegistrationRecord>;
-	get: (input: { id: string }) => Promise<ChannelRegistrationRecord | null>;
+	get: (
+		input: { id: string },
+		caller?: ClawApiCaller,
+	) => Promise<ChannelRegistrationRecord | null>;
 	getByKey: (
 		input: ChannelRegistrationLookup,
+		caller?: ClawApiCaller,
 	) => Promise<ChannelRegistrationRecord | null>;
 	list: (
-		filter?: ChannelRegistrationListFilter,
+		filter: ChannelRegistrationListFilter,
+		caller?: ClawApiCaller,
 	) => Promise<ChannelRegistrationRecord[]>;
 	revoke: (
 		input: ChannelRegistrationLookup,
+		caller?: ClawApiCaller,
 	) => Promise<ChannelRegistrationRecord | null>;
 };
 
@@ -299,29 +322,32 @@ export function buildRegistrationsPlugin(
 			api: () => ({
 				channels: {
 					registrations: endpoints({
-						register: {
-							input: registerChannelRegistrationInput,
-							handler: register,
-						},
-						get: {
-							input: registrationIdInput,
-							handler: ({ id }: { id: string }) => requireStore().get(id),
-						},
-						getByKey: {
-							input: channelRegistrationLookupInput,
-							handler: (input: ChannelRegistrationLookup) =>
+						register: route
+							.input(registerChannelRegistrationInput)
+							.authz(null, UNOWNED_REGISTRATIONS)
+							.handler(register),
+						get: route
+							.input(registrationIdInput)
+							.authz(null, UNOWNED_REGISTRATIONS)
+							.handler(({ id }: { id: string }) => requireStore().get(id)),
+						getByKey: route
+							.input(channelRegistrationLookupInput)
+							.authz(null, UNOWNED_REGISTRATIONS)
+							.handler((input: ChannelRegistrationLookup) =>
 								requireStore().getByKey(input),
-						},
-						list: {
-							input: listChannelRegistrationsInput,
-							handler: (filter?: ChannelRegistrationListFilter) =>
+							),
+						list: route
+							.input(listChannelRegistrationsInput)
+							.authz(null, UNOWNED_REGISTRATIONS)
+							.handler((filter?: ChannelRegistrationListFilter) =>
 								requireStore().list(filter),
-						},
-						revoke: {
-							input: channelRegistrationLookupInput,
-							handler: (input: ChannelRegistrationLookup) =>
+							),
+						revoke: route
+							.input(channelRegistrationLookupInput)
+							.authz(null, UNOWNED_REGISTRATIONS)
+							.handler((input: ChannelRegistrationLookup) =>
 								requireStore().revoke(input),
-						},
+							),
 					}),
 				},
 			}),

@@ -11,17 +11,19 @@
 
 import {
 	API_ACCESS_BASELINE,
-	type PrincipalScope,
 	type ApiPermissionLevel,
 	type ApiResourceShape,
 	type CedarEngine,
 	cedarApiEngine,
 	decideApiCall,
 	loadPolicyBundle,
+	type PrincipalScope,
 } from "@euroclaw/authz";
 import {
 	type AccessGrantStore,
 	type Adapter,
+	type AuthzContext,
+	type AuthzTarget,
 	authorizationError,
 	type ClawRunReadModel,
 	type ClawsStore,
@@ -30,8 +32,10 @@ import {
 	type EndpointRoute,
 	type EuroclawPlugin,
 	endpointRoutesOf,
+	errorMessage,
 	type LooseResourceBinding,
 	type PolicySourceSlice,
+	type RouteAuthz,
 	type ShareableLoaderContext,
 	type ShareableResource,
 } from "@euroclaw/contracts";
@@ -266,12 +270,25 @@ function collectResourceBindings(
 			bindings.set(route.apiMethod, route.resource);
 		}
 	}
+	return bindings;
+}
+
+/**
+ * Collect the declared {@link RouteAuthz} of every route-built method, keyed by the dotted method id the
+ * PEP wraps. This is the successor to the static `resource` binding above: a route says what it
+ * authorizes against with a typed RESOLVER over its own input, which the PEP evaluates per call. A
+ * method that appears here takes the route path; anything left over is a core method still on the legacy
+ * binding table.
+ */
+function collectRouteAuthz(
+	api: Record<string, unknown>,
+): Map<string, RouteAuthz> {
+	const declared = new Map<string, RouteAuthz>();
 	const visit = (ns: Record<string, unknown>, prefix: string): void => {
 		for (const route of endpointRoutesOf(ns) ?? []) {
-			if (route.resource !== undefined) {
-				const id = prefix ? `${prefix}.${route.name}` : route.name;
-				bindings.set(id, route.resource);
-			}
+			// A route `name` is relative to its namespace mount, so it prefixes.
+			const id = prefix ? `${prefix}.${route.name}` : route.name;
+			declared.set(id, route.authz);
 		}
 		for (const [key, value] of Object.entries(ns)) {
 			if (value !== null && typeof value === "object") {
@@ -283,7 +300,7 @@ function collectResourceBindings(
 		}
 	};
 	visit(api, "");
-	return bindings;
+	return declared;
 }
 
 /**
@@ -301,11 +318,14 @@ function resourceLoaderFor(input: {
 	registry: Map<string, ResourceLoader>;
 	bindings: Map<string, LooseResourceBinding>;
 	grantStore: AccessGrantStore | undefined;
-}): (
-	method: string,
-	methodInput: unknown,
-	principal: string | undefined,
-) => Promise<ApiResourceShape> {
+}): {
+	byBinding: (
+		method: string,
+		methodInput: unknown,
+		principal: string | undefined,
+	) => Promise<ApiResourceShape>;
+	byTarget: (target: AuthzTarget) => Promise<ApiResourceShape>;
+} {
 	const { registry, bindings, grantStore } = input;
 
 	const loadShape = async (
@@ -336,7 +356,20 @@ function resourceLoaderFor(input: {
 		};
 	};
 
-	return async (method, methodInput, principal) => {
+	// The shape for a target a ROUTE resolved. Two cases, and neither can degrade into "the caller owns
+	// it": a `{kind,id}` loads the row (absent → DENY_SHAPE), and a `{scope,scopeId}` renders the boundary
+	// with NO `createdBy`, so the owner rule is structurally false and only verified scope membership —
+	// resolved out of band, never from the request — can permit.
+	const byTarget = async (target: AuthzTarget): Promise<ApiResourceShape> =>
+		"kind" in target
+			? loadShape(target.kind, target.id)
+			: { scope: target.scope, scopeId: target.scopeId, grants: [] };
+
+	const byBinding = async (
+		method: string,
+		methodInput: unknown,
+		principal: string | undefined,
+	): Promise<ApiResourceShape> => {
 		const binding = bindings.get(method);
 		// No binding — the method is not resource-anchored: the caller's own personal scope.
 		if (binding === undefined) return personalScope(principal);
@@ -358,6 +391,8 @@ function resourceLoaderFor(input: {
 		if (id === undefined) return DENY_SHAPE;
 		return loadShape(binding.kind, id);
 	};
+
+	return { byBinding, byTarget };
 }
 
 /**
@@ -455,6 +490,9 @@ export function governApi(input: {
 	});
 	// The co-located bindings — read off each method's own def (core route defs + plugin endpoints defs).
 	const bindings = collectResourceBindings(input.api);
+	// What each ROUTE-built method declared via `.authz(...)`. Present ⇒ the route path below; absent ⇒
+	// a core method still on the legacy binding table.
+	const routeAuthz = collectRouteAuthz(input.api);
 	const loadResource = resourceLoaderFor({
 		registry,
 		bindings,
@@ -464,10 +502,114 @@ export function governApi(input: {
 	const unsafeOpen = input.appAuthz?.unsafeOpen === true;
 	const shadow = input.appAuthz?.posture === "shadow";
 
+	/** Run one decision and convert a non-permit into the typed error (or a shadow warning). */
+	const enforce = async (spec: {
+		method: string;
+		level: ApiPermissionLevel;
+		principal: string;
+		resource: ApiResourceShape;
+	}): Promise<void> => {
+		const result = await decideApiCall({
+			engine: input.engine,
+			method: spec.method,
+			level: spec.level,
+			principal: spec.principal,
+			resource: spec.resource,
+			scopes: await resolvePrincipalScopes(spec.principal),
+		});
+		if (result.decision === "permit") return;
+		const message = `app-authz denied ${spec.method}: ${result.reason ?? "no policy permits this call"}`;
+		if (shadow) {
+			input.warn(`euroclaw app-authz shadow: would deny — ${message}`);
+			return;
+		}
+		throw authorizationError(message, {
+			method: spec.method,
+			decision: result.decision,
+		});
+	};
+
+	/**
+	 * The ACTOR FLOOR, run before any handler is entered. Every route path guarantees its handler a
+	 * present, non-blank principal, which is why {@link AuthzContext.principal} is a plain string and no
+	 * handler re-derives it. `decideApiCall` enforces the same floor for the legacy path.
+	 */
+	const requirePrincipal = (
+		method: string,
+		caller: ClawApiCaller | undefined,
+	): string => {
+		const principal = caller?.principal;
+		if (principal === undefined || principal.trim() === "") {
+			throw authorizationError(
+				`app-authz denied ${method}: requires a caller principal (actor floor)`,
+				{ method, decision: "deny" },
+			);
+		}
+		return principal;
+	};
+
 	const wrapMethod = (
 		method: string,
 		fn: (...args: unknown[]) => unknown,
 	): ((...args: unknown[]) => unknown) => {
+		const declared = routeAuthz.get(method);
+		if (declared !== undefined) {
+			// ── the ROUTE path ──────────────────────────────────────────────────────────────────────────
+			// The route said what it authorizes against. Resolve it, decide, then hand the handler an
+			// AuthzContext IN PLACE OF the raw caller — the handler's second parameter is the context, so
+			// an additional mid-flight check needs no extra plumbing and cannot be skipped by accident.
+			return async (...args: unknown[]) => {
+				const caller = (args[1] ?? undefined) as ClawApiCaller | undefined;
+				const domainInput = args[0];
+				const principal = unsafeOpen
+					? (caller?.principal ?? "")
+					: requirePrincipal(method, caller);
+				const check = async (
+					level: ApiPermissionLevel,
+					target: AuthzTarget,
+				): Promise<void> => {
+					if (unsafeOpen) return;
+					await enforce({
+						method,
+						level,
+						principal,
+						resource: await loadResource.byTarget(target),
+					});
+				};
+				if (!unsafeOpen && declared.mode === "resource") {
+					// A resolver that throws must DENY, not escape as an unrelated 500 that a caller could
+					// mistake for a permitted call that merely failed.
+					let target: AuthzTarget;
+					try {
+						target = await declared.resolve(domainInput as never);
+					} catch (error) {
+						throw authorizationError(
+							`app-authz denied ${method}: could not resolve the resource to authorize against`,
+							{ method, decision: "deny", reason: errorMessage(error) },
+						);
+					}
+					await enforce({
+						method,
+						level: declared.level,
+						principal,
+						resource: await loadResource.byTarget(target),
+					});
+				}
+				// `mode: "caller"` has nothing to resolve — the actor floor above IS its whole check, and
+				// the reason it gave is carried in the route metadata for the coverage walk to report.
+				const ctx: AuthzContext = {
+					caller: caller ?? {},
+					principal,
+					check,
+				};
+				return fn(domainInput, ctx);
+			};
+		}
+
+		// ── the LEGACY binding path ───────────────────────────────────────────────────────────────────
+		// Core methods that have not been converted to routes yet. Unchanged behaviour, including the
+		// `personalScope` fallback for an unbound method — the hole this whole change exists to close, and
+		// it stays open exactly until each core method carries its own `.authz(...)`.
 		return async (...args: unknown[]) => {
 			// The caller rides at index 1 (beside the single domain input at index 0) — the WithCaller
 			// contract. Missing → the actor floor denies. All args pass through to the method, so a
@@ -480,7 +622,7 @@ export function governApi(input: {
 			const isCreate = CREATE_SET.has(method);
 			const resource = isCreate
 				? { grants: [] }
-				: await loadResource(method, args[0], principal);
+				: await loadResource.byBinding(method, args[0], principal);
 			const scopes =
 				principal !== undefined ? await resolvePrincipalScopes(principal) : [];
 			const result = await decideApiCall({
@@ -517,7 +659,10 @@ export function governApi(input: {
 		for (const [key, value] of Object.entries(ns)) {
 			const id = prefix ? `${prefix}.${key}` : key;
 			if (typeof value === "function") {
-				const wrapped = wrapMethod(id, value as (...args: unknown[]) => unknown);
+				const wrapped = wrapMethod(
+					id,
+					value as (...args: unknown[]) => unknown,
+				);
 				governedByOriginal.set(value, wrapped);
 				out[key] = wrapped;
 			} else if (value !== null && typeof value === "object") {

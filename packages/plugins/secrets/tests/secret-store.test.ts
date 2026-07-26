@@ -681,20 +681,28 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		).toBeNull();
 	});
 
-	it("a call with no caller fails loud — the owner is the caller argument, never the body", async () => {
-		const { api } = connectedStore();
+	it("a call with no identity writes nothing — the owner is never inferable from the body", async () => {
+		const { api, store } = connectedStore();
 		if (!api) throw new Error("expected the store path to expose an api");
-		const validationFailed = { code: "EUROCLAW_VALIDATION_FAILED" };
-		// A personal secret must have an owner, and the owner is the app-authz caller (arg 2) — NEVER the
-		// input body (docs/plans/stamped-fields.md, #3). With no caller every method fails loud rather than
-		// keying a row to an anonymous or forged owner; the input can no longer carry a `principal` at all.
-		await expect(api.set({ name: "X", value: "v" })).rejects.toMatchObject(
-			validationFailed,
-		);
-		await expect(api.list({})).rejects.toMatchObject(validationFailed);
-		await expect(api.delete({ name: "X" })).rejects.toMatchObject(
-			validationFailed,
-		);
+		// A personal secret must have an owner, and the owner comes from the app-authz identity passed
+		// beside the input — NEVER the input body (docs/plans/stamped-fields.md, #3). The input cannot
+		// carry a `principal` at all, so with no identity there is nothing to key a row to and the call
+		// must fail rather than invent an anonymous owner that later callers would collide on.
+		//
+		// WHERE THE CHECK LIVES: the actor floor is the PEP's, not this handler's. `route.…​.handler()`
+		// hands every handler an AuthzContext whose `principal` is already guaranteed present and
+		// non-blank, which is why the handler reads it directly instead of re-deriving it — a local
+		// re-derivation would be the only path that could disagree with the floor. The governed property
+		// (`secrets.set` over HTTP with no resolved caller → 403, with one → 200) is pinned in euroclaw's
+		// plugin-endpoint governance tests, where a real assembled claw exists to enforce it.
+		//
+		// What this test pins is the LOCAL half: reaching the raw handler without an identity throws and,
+		// crucially, leaves no row behind.
+		await expect(api.set({ name: "X", value: "v" })).rejects.toThrow();
+		await expect(api.list({})).rejects.toThrow();
+		await expect(api.delete({ name: "X" })).rejects.toThrow();
+		expect(await store.list("personal", "")).toEqual([]);
+		expect(await store.list("personal", "undefined")).toEqual([]);
 	});
 
 	it("is a DECLARED endpoints() namespace — route metadata rides the same callable api", () => {
