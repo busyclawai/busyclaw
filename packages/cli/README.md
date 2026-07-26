@@ -44,6 +44,15 @@ build step is needed.
 | `sql` | the DDL that reconciles a live database, diffed | `euroclaw db migrate` |
 | `drizzle` | a Drizzle schema module (`--provider pg\|sqlite`) | `drizzle-kit` |
 | `prisma` | Prisma models, without your `datasource`/`generator` blocks | `prisma migrate` |
+| `kysely` | the `Database` interface + row types (`--dialect`) | — (types only) |
+
+`kysely` is the one target that is not about migrating. It gives a Kysely user what the other two
+ORMs hand out for free: types to query through. `kysely-codegen` derives those by introspecting a
+live database; deriving them from the declaration instead needs no connection and cannot drift from
+what the runtime validates. Hand the result to `new Kysely<Database>({ … })`.
+
+An adapter reporting `kysely` infers `sql`, not `kysely` — the tables have to exist before anything
+can query them, so ask for types as a deliberate second step.
 
 `drizzle` and `prisma` print the **whole** schema and never connect — so they work in CI with no
 database and no credentials. Only `sql` diffs, because nothing else owns migration history for a raw
@@ -66,8 +75,10 @@ step.
 | | |
 |---|---|
 | `-c, --config <path>` | the config module, if it isn't in a searched location |
-| `-d, --dialect <postgres\|sqlite>` | inferred from a pg Pool or better-sqlite3 Database; required for a bare Kysely instance or Dialect, which carry no tag |
-| `-o, --output <path>` | where `generate` writes (default `euroclaw.sql`) |
+| `-d, --dialect <postgres\|sqlite>` | inferred from a pg Pool or better-sqlite3 Database; required for a bare Kysely instance or Dialect, and for `--target kysely` |
+| `-t, --target <target>` | `sql` \| `drizzle` \| `prisma` \| `kysely` — inferred from your adapter |
+| `-p, --provider <pg\|sqlite>` | required for `--target drizzle` |
+| `-o, --output <path>` | where `generate` writes (one default file per target) |
 | `-y, --yes` | skip `migrate`'s confirmation |
 
 ## Known limits

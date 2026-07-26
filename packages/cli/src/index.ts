@@ -23,12 +23,17 @@ const db = program
 	.description("schema for the tables your euroclaw config declares");
 
 db.command("generate")
-	.description("emit the schema your config declares (sql | drizzle | prisma)")
+	.description(
+		"emit the schema your config declares (sql | drizzle | prisma | kysely)",
+	)
 	.option("-c, --config <path>", "path to the euroclaw config module")
-	.option("-o, --output <path>", "where to write (default depends on --target)")
+	.option(
+		"-o, --output <path>",
+		"where to write (sql accumulates in ./euroclaw_migrations/)",
+	)
 	.option(
 		"-t, --target <target>",
-		"sql | drizzle | prisma (inferred from your adapter)",
+		"sql | drizzle | prisma | kysely (inferred from your adapter)",
 	)
 	.option(
 		"-p, --provider <provider>",
@@ -36,7 +41,7 @@ db.command("generate")
 	)
 	.option(
 		"-d, --dialect <dialect>",
-		"postgres | sqlite for --target sql (inferred when possible)",
+		"postgres | sqlite — for --target sql (inferred when possible) and --target kysely",
 	)
 	.action(async (options: DbCommandOptions) => {
 		await dbGenerate(options);

@@ -342,6 +342,11 @@ export function kyselyAdapter(database: KyselyDatabase): Adapter {
 	};
 }
 
+// The TYPES generator — SchemaDeclaration → the Kysely `Database` interface, for a host that wants
+// to query euroclaw's tables directly. Derived from the declaration rather than introspected from a
+// live database (what kysely-codegen does), so it needs no connection and cannot drift.
+export type { KyselyTypeDialect, KyselyTypesOptions } from "./generate";
+export { generateKyselyTypes } from "./generate";
 // The migration emitter — SchemaDeclaration → DDL, over the same Kysely instance this adapter
 // drives. Lives beside the adapter because DDL is dialect work; consumed by @euroclaw/cli.
 export type {

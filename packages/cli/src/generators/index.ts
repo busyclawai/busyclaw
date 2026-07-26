@@ -17,15 +17,25 @@ import {
 	type DrizzleProvider,
 	generateDrizzleSchema,
 } from "@euroclaw/storage-drizzle";
+import {
+	generateKyselyTypes,
+	type KyselyTypeDialect,
+} from "@euroclaw/storage-kysely";
 import { generatePrismaSchema } from "@euroclaw/storage-prisma";
 
 export type { DrizzleProvider } from "@euroclaw/storage-drizzle";
 
 /** What `db generate` can emit. */
-export const GENERATE_TARGETS = ["sql", "drizzle", "prisma"] as const;
+export const GENERATE_TARGETS = ["sql", "drizzle", "prisma", "kysely"] as const;
 export type GenerateTarget = (typeof GENERATE_TARGETS)[number];
 
-/** Adapter id (as reported by a storage adapter's `id`) → the target that fits it. */
+/**
+ * Adapter id (as reported by a storage adapter's `id`) → the target that fits it.
+ *
+ * A Kysely setup infers `sql`, not `kysely`: the tables have to exist before anything can query
+ * them, so the migration is the need you have first. `--target kysely` is the deliberate second
+ * step — ask for the row types once the schema is in place.
+ */
 export const TARGET_FOR_ADAPTER: Readonly<Record<string, GenerateTarget>> = {
 	drizzle: "drizzle",
 	kysely: "sql",
@@ -37,6 +47,7 @@ export const DEFAULT_OUTPUT: Readonly<Record<GenerateTarget, string>> = {
 	sql: "euroclaw.sql",
 	drizzle: "euroclaw-schema.ts",
 	prisma: "euroclaw.prisma",
+	kysely: "euroclaw-db.ts",
 };
 
 /** Targets that print the whole schema without connecting to anything. A type predicate, so a
@@ -51,12 +62,24 @@ export function generateOffline(input: {
 	target: Exclude<GenerateTarget, "sql">;
 	schema: SchemaDeclaration;
 	provider?: DrizzleProvider;
+	dialect?: KyselyTypeDialect;
 	warn?: (message: string) => void;
 }): string {
 	if (input.target === "prisma") {
 		return generatePrismaSchema({
 			schema: input.schema,
 			...(input.warn !== undefined ? { warn: input.warn } : {}),
+		});
+	}
+	if (input.target === "kysely") {
+		if (input.dialect === undefined) {
+			throw new Error(
+				"kysely types need a dialect — a boolean reads back as `boolean` on postgres and `number` on sqlite, and a date as `Date` or `string`. Pass --dialect postgres|sqlite.",
+			);
+		}
+		return generateKyselyTypes({
+			schema: input.schema,
+			dialect: input.dialect,
 		});
 	}
 	if (input.provider === undefined) {
