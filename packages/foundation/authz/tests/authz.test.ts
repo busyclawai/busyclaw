@@ -221,7 +221,11 @@ describe("buildAuthzModel — facts in, canonical model out", () => {
 		]);
 	});
 
-	it("a tool declaring NO access class is not a policy-modeled action", () => {
+	it("a tool declaring NO access class is modeled as a WRITE, never omitted", () => {
+		// This asserted the opposite until the floor stopped matching on model membership. Omission was
+		// never neutral: being absent from the model is what made the floor's gate skip the call, so a
+		// forgotten `access` stamp — the single cheapest mistake available — produced a tool that
+		// executed with no governance at all. `send_email` is the case that makes it concrete.
 		const descriptor = {
 			...govern(
 				{
@@ -233,7 +237,15 @@ describe("buildAuthzModel — facts in, canonical model out", () => {
 			),
 			path: "send_email",
 		};
-		expect(actionInputsFromTools([descriptor])).toEqual([]);
+
+		expect(actionInputsFromTools([descriptor])).toHaveLength(1);
+		// Write is the fail-closed reading of "unstated": under the seeded posture it needs confirmation
+		// interactively and is refused autonomously, so an unstamped tool announces itself on first use.
+		expect(
+			buildAuthzModel(actionInputsFromTools([descriptor])).actions,
+		).toMatchObject([
+			{ id: "send_email", access: "write", groups: ["writes"] },
+		]);
 	});
 
 	it("projected args ride along untouched", () => {
