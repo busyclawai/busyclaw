@@ -439,3 +439,9 @@ export function drizzleAdapter(
 
 	return adapter;
 }
+
+// The schema GENERATOR — SchemaDeclaration → a Drizzle schema module. Beside the adapter because
+// its column helpers and import paths are Drizzle's; `euroclaw db generate --target drizzle`
+// dispatches here. Emits only; drizzle-kit owns the migration.
+export type { DrizzleGenerateOptions } from "./generate";
+export { generateDrizzleSchema } from "./generate";

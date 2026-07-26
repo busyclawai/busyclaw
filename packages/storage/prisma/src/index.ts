@@ -208,3 +208,9 @@ export function prismaAdapter(prisma: PrismaLike): Adapter {
 		},
 	};
 }
+
+// The schema GENERATOR — SchemaDeclaration → Prisma models. Beside the adapter because its syntax
+// and its rules (every model needs an identifier) are Prisma's; `euroclaw db generate --target
+// prisma` dispatches here. Emits only; `prisma migrate` owns the migration.
+export type { PrismaGenerateOptions } from "./generate";
+export { generatePrismaSchema } from "./generate";
