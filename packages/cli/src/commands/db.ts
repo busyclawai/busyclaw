@@ -7,8 +7,8 @@
 //
 // `generate` writes a schema and touches nothing. `migrate` applies it, and is SQL-only.
 
-import { writeFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	type MigrationDialect,
 	planMigrations,
@@ -168,15 +168,38 @@ function describe(plan: Prepared["plan"], dialect: MigrationDialect): void {
 	}
 }
 
+/** Where SQL accumulates when `--output` is not given. */
+const MIGRATIONS_DIR = "euroclaw_migrations";
+
+/**
+ * SQL goes to a NEW timestamped file each run; every other target overwrites one file.
+ *
+ * The asymmetry is the artifacts', not a preference. A Drizzle schema module or a Prisma model set
+ * is a snapshot — the current truth, regenerated wholesale, and two of them are not a history. A SQL
+ * plan is a DELTA against whatever the database looked like when it ran, so the files ARE the
+ * history: ordered, reviewable in a diff, and applied once each. Overwriting one of those would
+ * discard the record of what already shipped. Same shape `@better-auth/cli` writes.
+ */
 function write(
 	target: GenerateTarget,
 	contents: string,
 	output?: string,
+	stamp?: string,
 ): void {
-	const name = output ?? DEFAULT_OUTPUT[target];
+	const name =
+		output ??
+		(target === "sql"
+			? join(MIGRATIONS_DIR, `${stamp ?? "migration"}.sql`)
+			: DEFAULT_OUTPUT[target]);
 	const path = isAbsolute(name) ? name : resolve(process.cwd(), name);
+	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, contents, "utf8");
 	console.log(`\nwrote ${path}`);
+}
+
+/** A filename-safe UTC stamp — sorts lexicographically, which is also chronologically. */
+function timestamp(): string {
+	return new Date().toISOString().replace(/[:.]/g, "-").replace(/Z$/, "");
 }
 
 /** Emit the schema. Never writes to the database. */
@@ -208,7 +231,7 @@ export async function dbGenerate(options: DbCommandOptions): Promise<void> {
 	const { plan, dialect } = await prepare(options, loaded);
 	describe(plan, dialect);
 	if (plan.isEmpty) return;
-	write(target, plan.compileMigrations(), options.output);
+	write(target, plan.compileMigrations(), options.output, timestamp());
 }
 
 /** Apply the plan to the live database. Additive only — nothing is dropped or retyped. */

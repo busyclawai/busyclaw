@@ -65,7 +65,12 @@ renamed, or retyped — a column whose type has drifted from the declaration is 
 alone, because silently rewriting a live column's type is how data disappears.
 
 **Idempotent.** A second run against an unchanged database plans nothing, so it is safe in a deploy
-step.
+step — and writes no file, so the migrations directory gains an entry only when something changed.
+
+**SQL accumulates; schemas are replaced.** `--target sql` writes a new timestamped file under
+`./euroclaw_migrations/`, because each one is a *delta* against the database as it was — the files
+are the history, and overwriting one would discard the record of what already shipped. A Drizzle or
+Prisma schema is a *snapshot* of current truth, so it overwrites in place.
 
 **It asks first.** `migrate` prompts unless you pass `--yes`, and a non-interactive shell answers
 *no* — a migration that ran because nobody was there to decline is not one anyone approved.
@@ -78,7 +83,7 @@ step.
 | `-d, --dialect <postgres\|sqlite>` | inferred from a pg Pool or better-sqlite3 Database; required for a bare Kysely instance or Dialect, and for `--target kysely` |
 | `-t, --target <target>` | `sql` \| `drizzle` \| `prisma` \| `kysely` — inferred from your adapter |
 | `-p, --provider <pg\|sqlite>` | required for `--target drizzle` |
-| `-o, --output <path>` | where `generate` writes (one default file per target) |
+| `-o, --output <path>` | where `generate` writes (default: `./euroclaw_migrations/<stamp>.sql` for sql, one file per target otherwise) |
 | `-y, --yes` | skip `migrate`'s confirmation |
 
 ## Known limits
