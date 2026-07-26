@@ -47,10 +47,28 @@ export async function POST(request: Request): Promise<Response> {
 		});
 	}
 
+	// This route is hand-written, so it owns the check the mounted adapter does for every other
+	// method — no session, no run. Skipping it here would leave one door open beside a locked one.
+	const user = DEMO_ONLY_readPrincipal(request);
+	if (user === undefined) {
+		return new Response(JSON.stringify({ error: "not authenticated" }), {
+			status: 403,
+			headers: { "content-type": "application/json" },
+		});
+	}
+
 	// The in-process door: identity rides as the out-of-band caller argument, exactly as the HTTP
 	// adapter passes it for every other method.
-	const principal = principalOf(DEMO_ONLY_readPrincipal(request));
-	const stream = claw.api.stream({ prompt }, { principal });
+	//
+	// AWAITED, even though `ClawApi` types `stream` as returning the RuntimeStream directly. The
+	// app-authz PEP wraps every api method in an async function, so under the default enforcing
+	// posture this actually hands back a Promise of it — the declared type is a lie there. Awaiting
+	// is correct either way: a non-thenable awaits to itself, so this works whether or not the PEP
+	// is in the way. (A product bug, not a demo one — worth fixing in the PEP or the type.)
+	const stream = await claw.api.stream(
+		{ prompt },
+		{ principal: principalOf(user) },
+	);
 
 	return toUIMessageStreamResponse(stream);
 }

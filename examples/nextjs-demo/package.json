@@ -10,7 +10,9 @@
 		"build": "next build",
 		"dev": "next dev --port 4000",
 		"start": "next start --port 4000",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"db:migrate": "euroclaw db migrate",
+		"db:generate": "euroclaw db generate"
 	},
 	"dependencies": {
 		"@ai-sdk/azure": "4.0.18",
@@ -25,12 +27,15 @@
 		"ai": "7.0.22",
 		"euroclaw": "workspace:*",
 		"next": "16.2.12",
+		"pg": "8.22.0",
 		"react": "19.2.7",
 		"react-dom": "19.2.7"
 	},
 	"devDependencies": {
+		"@euroclaw/cli": "workspace:*",
 		"@tailwindcss/postcss": "4.3.3",
 		"@types/node": "26.1.1",
+		"@types/pg": "8.20.0",
 		"@types/react": "19.2.17",
 		"@types/react-dom": "19.2.3",
 		"tailwindcss": "4.3.3",
