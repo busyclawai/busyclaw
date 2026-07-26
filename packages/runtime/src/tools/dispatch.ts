@@ -9,7 +9,11 @@
 // (storage rows, spec extraction).
 
 import type { ToolDefinition, ToolDefinitionSet } from "@euroclaw/contracts";
-import { configurationError, toolModelName } from "@euroclaw/contracts";
+import {
+	configurationError,
+	stateError,
+	toolModelName,
+} from "@euroclaw/contracts";
 import type { Governance } from "@euroclaw/core";
 import type { ToolSet } from "ai";
 import { EXECUTE_TOOL_PATH, readExecuteEnvelope } from "./discovery";
@@ -126,9 +130,21 @@ export function modelToolProjection(
 			// minted it resolves `euroclaw__execute` to nothing, and the call fails closed at dispatch
 			// like any other name nobody declared.
 			if (path !== EXECUTE_TOOL_PATH) return { path, args: call.input };
-			// An envelope that names no usable target stays on the meta-tool, whose executable fails
-			// closed — never a guess at what the model meant.
-			return readExecuteEnvelope(call.input) ?? { path, args: call.input };
+			// An envelope that names no usable target is a broken ENCODING, not a call — so it is
+			// refused here rather than passed on as a call to the meta-tool. It used to be passed on,
+			// relying on the meta-tool's own executable to throw; that worked only while the floor
+			// skipped unmodeled actions, because otherwise the gate reaches `euroclaw.execute` first
+			// and answers a question this file exists to make sure is never asked. Refusing at the
+			// ingress keeps `execute` out of every decision, and keeps the diagnostic — "you named no
+			// target" is a different fact from "you may not do that", and the model needs the first.
+			const envelope = readExecuteEnvelope(call.input);
+			if (envelope === null) {
+				throw stateError(
+					`${EXECUTE_TOOL_PATH} needs the canonical \`path\` of a tool available in this run`,
+					{ toolName: EXECUTE_TOOL_PATH },
+				);
+			}
+			return envelope;
 		},
 	};
 }

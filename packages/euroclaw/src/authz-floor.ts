@@ -29,7 +29,7 @@ import {
 	type ToolDefinitionSet,
 	toolDescriptors,
 } from "@euroclaw/contracts";
-import { discoveryTools } from "@euroclaw/runtime";
+import { discoveryTools, EXECUTE_TOOL_PATH } from "@euroclaw/runtime";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
 export const FLOOR_POLICY_ID = "policy:floor";
@@ -56,11 +56,17 @@ export function buildFloorPolicyPlugin(input: {
 	//    because policy said so but because the assembly never told the model those tools exist.
 	//    They are added from the same `discoveryTools` the runtime will build, so the two cannot
 	//    drift: it derives them from the tool set, and returns nothing when none are discoverable.
+	//
+	//    `euroclaw.execute` is the ONE deliberate exclusion. It is a wire ENCODING of a call, not a
+	//    tool: the ingress unwraps it and the floor decides the target, so modeling it would create a
+	//    policy-nameable action whose single permit unlocks everything reachable through the router —
+	//    the hazard discovery.ts exists to prevent. It cannot reach the gate either, because the
+	//    ingress now refuses an envelope it cannot unwrap. Absent from the model, so denied if it ever
+	//    does.
 	const tools = input.tools ?? {};
+	const { [EXECUTE_TOOL_PATH]: _routed, ...meta } = discoveryTools(tools);
 	const model = buildAuthzModel(
-		actionInputsFromTools(
-			toolDescriptors({ ...tools, ...discoveryTools(tools) }),
-		),
+		actionInputsFromTools(toolDescriptors({ ...tools, ...meta })),
 	);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({

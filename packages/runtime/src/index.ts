@@ -80,11 +80,13 @@ export type {
 export {
 	createRegisteredToolProvider,
 	createSpecRegistry,
-	// The runtime's own always-on meta-tools. Exported so the ASSEMBLY can put them in the floor's
-	// action model: the runtime injects them into the same chokepoint the floor gates, and an action
-	// the model does not contain is denied — so a model built only from host tools would refuse
-	// discovery. One function, so the set the floor models and the set the runtime injects are the same.
+	// The runtime's own always-on meta-tools, and the one path the floor must NOT model. Exported so
+	// the ASSEMBLY can build its action model from the same set the runtime injects: both feed one
+	// chokepoint, and an action the model does not contain is denied — so a model built from host tools
+	// alone would refuse discovery itself. `EXECUTE_TOOL_PATH` rides along because excluding it is part
+	// of that contract, not an assembly-side opinion (see discovery.ts's header).
 	discoveryTools,
+	EXECUTE_TOOL_PATH,
 	normalizeOrigin,
 	planEgress,
 	REGISTER_OPENAPI_SPEC_ACTION,
