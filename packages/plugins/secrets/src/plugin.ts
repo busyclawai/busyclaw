@@ -88,7 +88,7 @@ async function materialOf(
  * provider.
  *
  * `get(name, ctx)` walks the context's OWN boundaries nearest-first, one exact single-scope lookup per
- * rung: `(personal, ctx.principal)` → miss → `(organization, ctx.organizationId)` → miss → `null`
+ * rung: `(personal, ctx.principal)` → miss → `(ctx.scope, ctx.scopeId)` → miss → `null`
  * (fall-through to the deployment chain). `tier: "data"` puts it BEFORE env/vault in the chain (data
  * beats config). The plugin is BOTH provider and consumer: it serves rows AND resolves its own master
  * key through the `context.secrets` reader captured at configure (lazily, at first use) — the bootstrap
@@ -160,13 +160,13 @@ function buildStore(options: SecretStoreOptions): {
 			}
 			// team rung: ResolveContext carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,
 			// but nothing threads it into secret resolution) — insert `(team, ctx.team)` here when it does.
-			if (ctx.organizationId !== undefined) {
-				const orgWide = await rows.get(
-					"organization",
-					ctx.organizationId,
-					name,
-				);
-				if (orgWide) return materialOf(orgWide, cipher);
+			//
+			// The config-scope rung reads the run's opaque `(scope, scopeId)` pair. BOTH halves or neither: a
+			// label with no id (or an id with no label) names no boundary, and falling back to matching one
+			// half would resolve another scope's credential.
+			if (ctx.scope !== undefined && ctx.scopeId !== undefined) {
+				const scopeWide = await rows.get(ctx.scope, ctx.scopeId, name);
+				if (scopeWide) return materialOf(scopeWide, cipher);
 			}
 			return null;
 		},

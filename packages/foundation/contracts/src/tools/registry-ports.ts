@@ -2,6 +2,7 @@
 // kept apart from the entity/schema declarations in ./registry. Ports are types only; the impls
 // live in @euroclaw/storage-durable (createRegistryStores).
 
+import type { ScopeRef } from "../scope";
 import type {
 	FactsOverlayRecord,
 	FactsOverlayUpsert,
@@ -12,28 +13,24 @@ import type {
 	SpecRegistrationUpsert,
 } from "./registry";
 
-/** Persists the raw registration per (organizationId, source); re-registration replaces the row. */
+/** Persists the raw registration per `(scope, scopeId, source)`; re-registration replaces the row. */
 export type SpecRegistrationStore = {
-	/** Replace-by-(organizationId, source): update the existing row or create a fresh one. */
+	/** Replace-by-`(scope, scopeId, source)`: update the existing row or create a fresh one. */
 	upsert: (input: SpecRegistrationUpsert) => Promise<SpecRegistrationRecord>;
 	get: (
-		organizationId: string,
+		ref: ScopeRef,
 		source: string,
 	) => Promise<SpecRegistrationRecord | null>;
-	listByOrganization: (
-		organizationId: string,
-	) => Promise<SpecRegistrationRecord[]>;
+	listForScope: (ref: ScopeRef) => Promise<SpecRegistrationRecord[]>;
 };
 
 /** The extracted operation rows; the registration diff creates/updates/deletes by address. */
 export type RegisteredToolStore = {
 	listBySource: (
-		organizationId: string,
+		ref: ScopeRef,
 		source: string,
 	) => Promise<RegisteredToolRecord[]>;
-	listByOrganization: (
-		organizationId: string,
-	) => Promise<RegisteredToolRecord[]>;
+	listForScope: (ref: ScopeRef) => Promise<RegisteredToolRecord[]>;
 	create: (input: RegisteredToolCreate) => Promise<RegisteredToolRecord>;
 	update: (
 		id: string,
@@ -42,9 +39,9 @@ export type RegisteredToolStore = {
 	deleteById: (id: string) => Promise<void>;
 };
 
-/** The customer facts overlay; replace-by-(organizationId, actionId). */
+/** The customer facts overlay; replace-by-`(scope, scopeId, actionId)`. */
 export type FactsOverlayStore = {
-	listByOrganization: (organizationId: string) => Promise<FactsOverlayRecord[]>;
+	listForScope: (ref: ScopeRef) => Promise<FactsOverlayRecord[]>;
 	upsert: (input: FactsOverlayUpsert) => Promise<FactsOverlayRecord>;
 	deleteById: (id: string) => Promise<void>;
 };

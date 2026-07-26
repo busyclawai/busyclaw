@@ -60,7 +60,7 @@ export const piiMappingFields = {
 	// Containment: the (scope, scopeId) container this was redacted in — `claw:<clawId>` today,
 	// `memory:<kbId>` / `task:<taskId>` later. A placeholder rehydrates ONLY within the same
 	// container. Optional (a context-less redaction has no container). `scopeId` is a unique entity
-	// id, so the container implies its tenant — pii carries NO organizationId, ever.
+	// id, so the container implies its boundary — pii carries NO organizationId, ever.
 	scope: field.string({ index: true }),
 	scopeId: field.string({ index: true }),
 	createdAt: field.string({ required: true }),

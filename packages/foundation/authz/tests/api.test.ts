@@ -9,10 +9,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	API_ACCESS_BASELINE,
-	type PrincipalScope,
 	type ApiResourceShape,
 	cedarApiEngine,
 	decideApiCall,
+	type PrincipalScope,
 } from "../src/index";
 
 // The api engine's live policy set: the generic baseline (owner ∪ scope ∪ grant + create-permit) — the
@@ -168,9 +168,7 @@ describe("decideApiCall — scope-membership (generic, stubbed, leveled Cedar `i
 					level: "manage",
 					principal: BOB,
 					resource: aliceClaw,
-					scopes: [
-						{ scope: "team", scopeId: "team-eng", level: "manage" },
-					],
+					scopes: [{ scope: "team", scopeId: "team-eng", level: "manage" }],
 				})
 			).decision,
 		).toBe("permit");

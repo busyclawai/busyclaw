@@ -6,11 +6,14 @@ import type {
 import { describe, expect, it } from "vitest";
 import { createOrgPolicyRouter } from "../src/index";
 
-const req = (organizationId?: string): PolicyRequest => ({
+const req = (scopeId?: string): PolicyRequest => ({
 	principal: { type: "User", id: "alice" },
 	action: { type: "Action", id: "x" },
 	resource: { type: "Tool", id: "x" },
-	context: organizationId !== undefined ? { organizationId } : {},
+	context:
+		scopeId !== undefined
+			? { configScope: "organization", configScopeId: scopeId }
+			: {},
 });
 
 /** A fake engine that tags its decision so a test can tell which bundle answered. */
@@ -93,11 +96,11 @@ describe("createOrgPolicyRouter", () => {
 		const seen: (string | undefined)[] = [];
 		const router = createOrgPolicyRouter({
 			maxBundles: 2,
-			keyFor: (org) => org ?? "system",
-			engineFor: (org) => {
+			keyFor: (ref) => ref?.scopeId ?? "system",
+			engineFor: (ref) => {
 				builds++;
-				seen.push(org);
-				return taggedEngine(org ?? "system");
+				seen.push(ref?.scopeId);
+				return taggedEngine(ref?.scopeId ?? "system");
 			},
 		});
 		await router.authorize(req("a")); // build a
@@ -111,19 +114,20 @@ describe("createOrgPolicyRouter", () => {
 		expect(builds).toBe(4);
 	});
 
-	it("routes an absent organizationId to the undefined (system) bundle", async () => {
-		// A non-string organizationId can't reach the router: the PARC request schema types it
+	it("routes an absent config scope to the undefined (system) bundle", async () => {
+		// A non-string config-scope key can't reach the router: the PARC request schema types it
 		// (contracts authz/request.ts) and createPolicyPlugin validates every request at the gate.
-		const orgs: (string | undefined)[] = [];
+		const seen: (unknown | undefined)[] = [];
 		const router = createOrgPolicyRouter({
-			keyFor: (org) => org ?? "system",
-			engineFor: (org) => {
-				orgs.push(org);
+			keyFor: (ref) => ref?.scopeId ?? "system",
+			engineFor: (ref) => {
+				seen.push(ref);
 				return taggedEngine("system");
 			},
 		});
 		await router.authorize(req());
-		expect(orgs).toEqual([undefined]);
+		// Neither half present ⇒ no config scope at all, not a half-formed ref.
+		expect(seen).toEqual([undefined]);
 	});
 
 	it("passes the resolved engine's decision through verbatim", async () => {
@@ -133,7 +137,7 @@ describe("createOrgPolicyRouter", () => {
 			policies: ["p1"],
 		};
 		const router = createOrgPolicyRouter({
-			keyFor: (org) => org ?? "system",
+			keyFor: (ref) => ref?.scopeId ?? "system",
 			engineFor: () => ({ authorize: () => decision }),
 		});
 		expect(await router.authorize(req("org-a"))).toEqual(decision);

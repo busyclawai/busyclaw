@@ -136,13 +136,14 @@ describe("buildSecrets — the one-door resolver", () => {
 			},
 		};
 		await buildSecrets([spy]).get("CANON", {
-			organizationId: "org_1",
+			scope: "organization",
+			scopeId: "org_1",
 			principal: "user_1",
 		});
 		expect(calls).toEqual([
 			{
 				ref: "backend-key",
-				ctx: { organizationId: "org_1", principal: "user_1" },
+				ctx: { scope: "organization", scopeId: "org_1", principal: "user_1" },
 			},
 		]);
 	});
@@ -274,11 +275,14 @@ describe("secrets.with — a pre-bound reader", () => {
 			},
 		};
 		const bound = buildSecrets([spy]).with({
-			organizationId: "org",
+			scope: "organization",
+			scopeId: "org",
 			principal: "alice",
 		});
 		await bound.get("X", { principal: "bob" });
-		expect(calls).toEqual([{ organizationId: "org", principal: "bob" }]);
+		expect(calls).toEqual([
+			{ scope: "organization", scopeId: "org", principal: "bob" },
+		]);
 	});
 
 	it("pre-binds ctx onto require too", async () => {

@@ -463,7 +463,7 @@ describe("createClaw send", () => {
 	//
 	// Unstamped, the runtime redacted with NO container, so every run of every claw minted into one
 	// global namespace and claw A's token resolved to cleartext at claw B's tool edge. Nothing throws
-	// when that happens — the tool simply receives another tenant's real address — so it is asserted.
+	// when that happens — the tool simply receives another scope's real address — so it is asserted.
 	it("does not rehydrate another claw's run-minted placeholder (container isolation)", async () => {
 		const { db, redactor } = durableRedactor();
 		let sawInB = "";

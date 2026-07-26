@@ -1,5 +1,5 @@
 import type { ToolDefinitionSet } from "@euroclaw/contracts";
-import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
+import { CONFIG_SCOPE_ID_CONTEXT_KEY } from "@euroclaw/contracts";
 import { jsonSchema, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, govern } from "../src/index";
@@ -71,11 +71,13 @@ const recordingTool = (ran: string[], label: string) =>
 		{ access: "read" },
 	);
 
-const orgResolver = (ctx: Record<string, unknown>) =>
-	typeof ctx.org === "string" ? ctx.org : undefined;
+const scopeResolver = (ctx: Record<string, unknown>) =>
+	typeof ctx.org === "string"
+		? { scope: "organization", scopeId: ctx.org }
+		: undefined;
 
-describe("runtime resolveTools — per-organization tool resolution", () => {
-	it("dispatches an organization's registered tool for that org's run", async () => {
+describe("runtime resolveTools — per-scope tool resolution", () => {
+	it("dispatches a scope's registered tool for that scope's run", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
 		const registered: ToolDefinitionSet = {
@@ -84,9 +86,9 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		const runtime = createRuntime({
 			model: callingModel("reg_tool", offered),
 			tools: {},
-			organization: orgResolver,
+			configScope: scopeResolver,
 			resolveTools: (ctx) =>
-				ctx[ORGANIZATION_CONTEXT_KEY] === "org-a" ? registered : {},
+				ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] === "org-a" ? registered : {},
 		});
 		const result = await runtime.generate("go", { org: "org-a" });
 		expect(result.status).toBe("completed");
@@ -94,7 +96,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		expect(offered.names).toContain("reg_tool");
 	});
 
-	it("an organization with nothing registered is offered only the code tools", async () => {
+	it("a scope with nothing registered is offered only the code tools", async () => {
 		const ran: string[] = [];
 		const offered = { names: [] as string[] };
 		const registered: ToolDefinitionSet = {
@@ -103,9 +105,9 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		const runtime = createRuntime({
 			model: callingModel(null, offered), // no tool call — just inspect what's offered
 			tools: { code_tool: recordingTool(ran, "code") },
-			organization: orgResolver,
+			configScope: scopeResolver,
 			resolveTools: (ctx) =>
-				ctx[ORGANIZATION_CONTEXT_KEY] === "org-a" ? registered : {},
+				ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] === "org-a" ? registered : {},
 		});
 		await runtime.generate("go", { org: "org-b" });
 		expect(offered.names).toContain("code_tool");
@@ -119,7 +121,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		const runtime = createRuntime({
 			model: callingModel("shared", offered),
 			tools: { shared: recordingTool(ran, "code") },
-			organization: orgResolver,
+			configScope: scopeResolver,
 			resolveTools: () => ({
 				shared: recordingTool(ran, "registered"),
 			}),
@@ -144,7 +146,7 @@ describe("runtime resolveTools — per-organization tool resolution", () => {
 		const runtime = createRuntime({
 			model: callingModel("a__b", offered),
 			tools: { a__b: recordingTool(ran, "code") },
-			organization: orgResolver,
+			configScope: scopeResolver,
 			resolveTools: () => ({ "a.b": recordingTool(ran, "registered") }),
 			warn: (message) => warnings.push(message),
 		});

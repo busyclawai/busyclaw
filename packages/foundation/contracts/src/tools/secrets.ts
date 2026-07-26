@@ -18,7 +18,13 @@ export type SecretMaterial =
 /** Context a resolution may narrow on — the org whose binding to use, the acting principal for a
  *  per-user credential. Optional and extensible on purpose: a new fact must never be a breaking
  *  signature change. */
-export type ResolveContext = { organizationId?: string; principal?: Principal };
+export type ResolveContext = {
+	/** The run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary, not an organization id: an
+	 *  organization is a plugin, so core cannot name one kind of boundary in a resolution key. */
+	scope?: string;
+	scopeId?: string;
+	principal?: Principal;
+};
 
 /** A secret backend (Executor's `CredentialProvider`): where values actually live. euroclaw lists
  *  these as deployment infra and resolves through them — it never holds the value itself. */

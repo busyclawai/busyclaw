@@ -5,6 +5,7 @@
 // shadow slices exist, and the host wraps two engines with createShadowPolicyEngine. No shadow slices
 // ⇒ no candidate ⇒ the live engine is used directly.
 
+import type { ScopeRef } from "@euroclaw/contracts";
 import { configurationError } from "@euroclaw/contracts";
 
 export type PolicySliceLike = {
@@ -63,7 +64,7 @@ export function loadPolicyBundle(input: {
 }
 
 /**
- * The org's bundle identity for the policy router — `${organizationId}:${changeCount}`, or the shared
+ * The boundary's bundle identity for the policy router — `${scope}:${scopeId}:${changeCount}`, or the shared
  * `"system"` bundle when the org is uncustomized (changeCount 0) or absent. `changeCount` is
  * count(authz_change) for the org: the log is APPEND-ONLY, so the count strictly increases and no two
  * authz states share a key — SOUND under add/edit/DELETE (a delete APPENDS an event, bumping the
@@ -71,11 +72,11 @@ export function loadPolicyBundle(input: {
  * bundle). The router reads one cheap `count()` per decision and calls this.
  */
 export function authzBundleKey(input: {
-	organizationId: string | undefined;
+	configScope: ScopeRef | undefined;
 	changeCount: number;
 }): string {
-	if (input.organizationId === undefined || input.changeCount === 0) {
+	if (input.configScope === undefined || input.changeCount === 0) {
 		return "system";
 	}
-	return `${input.organizationId}:${input.changeCount}`;
+	return `${input.configScope.scope}:${input.configScope.scopeId}:${input.changeCount}`;
 }

@@ -156,12 +156,16 @@ async function setup(options: {
 	const stores = createRegistryStores(memoryAdapter());
 	const registry = createSpecRegistry(stores);
 	await registry.registerOpenApiSpec({
-		organizationId: "org-a",
+		scope: "organization",
+		scopeId: "org-a",
 		source: "petstore",
 		document: petstore(options.server),
 		registeredBy: "user:alice",
 	});
-	const rows = await stores.registeredTools.listByOrganization("org-a");
+	const rows = await stores.registeredTools.listForScope({
+		scope: "organization",
+		scopeId: "org-a",
+	});
 	const { model } = assembleOrgActions({ registeredTools: rows });
 
 	const provider = createRegisteredToolProvider({
@@ -179,10 +183,13 @@ async function setup(options: {
 				serverForAction: serverForActionFromRegisteredTools(rows),
 			}),
 		],
-		organization: (ctx) => (typeof ctx.org === "string" ? ctx.org : undefined),
+		configScope: (ctx) =>
+			typeof ctx.org === "string"
+				? { scope: "organization", scopeId: ctx.org }
+				: undefined,
 		resolveTools: async (ctx) =>
-			ctx.euroclaw__organizationId === "org-a"
-				? provider(rows, { organizationId: "org-a" })
+			ctx.euroclaw__configScopeId === "org-a"
+				? provider(rows, { scope: "organization", scopeId: "org-a" })
 				: {},
 	});
 	return { runtime, rows, provider, stores };
@@ -243,7 +250,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			fetch: fakeFetch(() => new Response("{}")).fn,
 		});
 		// Drive the synthesized tool directly — the invoker must refuse rather than send unauthenticated.
-		const tools = provider(rows, { organizationId: "org-a" });
+		const tools = provider(rows, { scope: "organization", scopeId: "org-a" });
 		await expect(
 			invoke(tools, "petstore.getPet", { petId: "7" }),
 		).rejects.toMatchObject({
@@ -277,7 +284,7 @@ describe("invoker blueprint (composed slice 6a)", () => {
 			server: "https://10.0.0.1/v1", // a private IP literal — the floor blocks it without DNS
 		});
 		expect(normalizeOrigin("https://10.0.0.1/v1")).toBe("https://10.0.0.1");
-		const tools = provider(rows, { organizationId: "org-a" });
+		const tools = provider(rows, { scope: "organization", scopeId: "org-a" });
 		await expect(
 			invoke(tools, "petstore.getPet", { petId: "7" }),
 		).rejects.toThrow(/disallowed address/);

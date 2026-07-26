@@ -71,7 +71,9 @@ export function volunteersPiiModel(email: string): V2Model {
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async () => ({
-			content: [{ type: "text" as const, text: `You can reach them at ${email}` }],
+			content: [
+				{ type: "text" as const, text: `You can reach them at ${email}` },
+			],
 			finishReason: { unified: "stop" as const, raw: undefined },
 			usage: {
 				inputTokens: {

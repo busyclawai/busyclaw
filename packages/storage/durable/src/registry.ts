@@ -10,13 +10,13 @@
 // policy_slice upsert AND delete — APPENDS an authz_change (createSpecRegistry appends the
 // spec_registered event). Append-only ⇒ count() is monotonic ⇒ authzBundleKey is sound under delete.
 //
-// Replace semantics: spec_registration replaces in place per (organizationId, source) — all its
-// mutable columns are re-set, id/createdAt preserved. facts_overlay replaces per (organizationId,
+// Replace semantics: spec_registration replaces in place per (scope, scopeId, source) — all its
+// mutable columns are re-set, id/createdAt preserved. facts_overlay replaces per (scope, scopeId,
 // actionId) by delete-then-create, because a replace must CLEAR optional facts an earlier override
 // set (a partial update can only add, and a nulled JSON column would fail the record schema on
 // read-back) — a fresh row is the honest "the override was replaced".
 
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter, ScopeRef } from "@euroclaw/contracts";
 import {
 	type AuthzChangeAppend,
 	type AuthzChangeStore,
@@ -71,7 +71,7 @@ const CHANGE_MODEL = "authz_change";
 const newId = (): string => bytesToHex(randomBytes(16));
 
 // Literal-preserving Where helpers: the entity layer types each clause's field against the model's
-// own columns, so the const generic keeps "organizationId" a literal instead of widening to string.
+// own columns, so the const generic keeps "scope"/"scopeId" a literal instead of widening to string.
 const whereEq = <const F extends string>(field: F, value: string) => ({
 	field,
 	value,
@@ -81,6 +81,11 @@ const andEq = <const F extends string>(field: F, value: string) => ({
 	value,
 	connector: "AND" as const,
 });
+
+/** The clauses that pin a row to one opaque access boundary. ALWAYS BOTH — matching `scopeId` alone
+ *  would collide across labels, so `(team, acme)` could read `(organization, acme)`'s rows. */
+const inScope = (ref: ScopeRef) =>
+	[whereEq("scope", ref.scope), andEq("scopeId", ref.scopeId)] as const;
 
 /** Back the three registry ports with a storage Adapter. */
 export function createRegistryStores(
@@ -145,10 +150,7 @@ export function createRegistryStores(
 			const valid = validateSpecInput(input);
 			const existing = await db.findOne({
 				model: SPEC_MODEL,
-				where: [
-					whereEq("organizationId", valid.organizationId),
-					andEq("source", valid.source),
-				],
+				where: [...inScope(valid), andEq("source", valid.source)],
 			});
 			const stamp = now();
 			if (existing) {
@@ -176,39 +178,33 @@ export function createRegistryStores(
 			});
 		},
 
-		async get(organizationId, source) {
+		async get(ref, source) {
 			return db.findOne({
 				model: SPEC_MODEL,
-				where: [
-					whereEq("organizationId", organizationId),
-					andEq("source", source),
-				],
+				where: [...inScope(ref), andEq("source", source)],
 			});
 		},
 
-		async listByOrganization(organizationId) {
+		async listForScope(ref) {
 			return db.findMany({
 				model: SPEC_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 			});
 		},
 	};
 
 	const registeredTools: RegisteredToolStore = {
-		async listBySource(organizationId, source) {
+		async listBySource(ref, source) {
 			return db.findMany({
 				model: TOOL_MODEL,
-				where: [
-					whereEq("organizationId", organizationId),
-					andEq("source", source),
-				],
+				where: [...inScope(ref), andEq("source", source)],
 			});
 		},
 
-		async listByOrganization(organizationId) {
+		async listForScope(ref) {
 			return db.findMany({
 				model: TOOL_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 			});
 		},
 
@@ -239,10 +235,10 @@ export function createRegistryStores(
 	};
 
 	const factsOverlay: FactsOverlayStore = {
-		async listByOrganization(organizationId) {
+		async listForScope(ref) {
 			return db.findMany({
 				model: OVERLAY_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 			});
 		},
 
@@ -251,10 +247,7 @@ export function createRegistryStores(
 			// Replace: drop any prior override for this (org, actionId), then write the new one whole.
 			await db.delete({
 				model: OVERLAY_MODEL,
-				where: [
-					whereEq("organizationId", valid.organizationId),
-					andEq("actionId", valid.actionId),
-				],
+				where: [...inScope(valid), andEq("actionId", valid.actionId)],
 			});
 			const stamp = now();
 			const record = await db.create({
@@ -262,7 +255,8 @@ export function createRegistryStores(
 				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 			});
 			await authzChanges.append({
-				organizationId: valid.organizationId,
+				scope: valid.scope,
+				scopeId: valid.scopeId,
 				kind: "overlay_changed",
 				summary: { actionId: valid.actionId },
 				by: valid.updatedBy,
@@ -283,7 +277,8 @@ export function createRegistryStores(
 			});
 			if (existing) {
 				await authzChanges.append({
-					organizationId: existing.organizationId,
+					scope: existing.scope,
+					scopeId: existing.scopeId,
 					kind: "overlay_changed",
 					// `by` is the row's last actor — deleteById(id) carries no acting principal itself.
 					summary: { actionId: existing.actionId, deleted: true },
@@ -306,31 +301,31 @@ export function createRegistryStores(
 			});
 		},
 
-		async count(organizationId) {
+		async count(ref) {
 			return db.count({
 				model: CHANGE_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 			});
 		},
 
-		async listByOrganization(organizationId) {
+		async listForScope(ref) {
 			return db.findMany({
 				model: CHANGE_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 				sortBy: { field: "at", direction: "asc" },
 			});
 		},
 	};
 
-	// A customer's Cedar policy slices; upsert REPLACES in place per (organizationId, name) — id +
+	// A customer's Cedar policy slices; upsert REPLACES in place per (scope, scopeId, name) — id +
 	// createdAt preserved, updatedAt bumped (all fields required, so nothing to clear; the in-place
 	// replace mirrors spec_registration). Every mutation (upsert AND delete) appends to the authz
 	// change log, so the router's `count`-keyed version bumps and the edit takes effect next decision.
 	const policySlices: PolicySliceStore = {
-		async listByOrganization(organizationId) {
+		async listForScope(ref) {
 			return db.findMany({
 				model: POLICY_MODEL,
-				where: [whereEq("organizationId", organizationId)],
+				where: [...inScope(ref)],
 			});
 		},
 
@@ -338,10 +333,7 @@ export function createRegistryStores(
 			const valid = validatePolicyInput(input);
 			const existing = await db.findOne({
 				model: POLICY_MODEL,
-				where: [
-					whereEq("organizationId", valid.organizationId),
-					andEq("name", valid.name),
-				],
+				where: [...inScope(valid), andEq("name", valid.name)],
 			});
 			const stamp = now();
 			let record: Awaited<ReturnType<PolicySliceStore["upsert"]>>;
@@ -371,7 +363,8 @@ export function createRegistryStores(
 			}
 			// Append after the write succeeds — a failed write must never bump the router's version.
 			await authzChanges.append({
-				organizationId: valid.organizationId,
+				scope: valid.scope,
+				scopeId: valid.scopeId,
 				kind: "policy_changed",
 				summary: { slice: valid.name },
 				by: valid.updatedBy,
@@ -379,22 +372,23 @@ export function createRegistryStores(
 			return record;
 		},
 
-		async delete(organizationId, id) {
-			// Org-scoped: find AND delete by (organizationId, id), so a caller in one org can never
-			// remove another org's slice by id. A delete APPENDS a change event (keeping the count
+		async delete(ref, id) {
+			// Scope-keyed: find AND delete by (ref, id), so a caller in one boundary can never
+			// remove another boundary's slice by id. A delete APPENDS a change event (keeping the count
 			// monotonic) — read first for the org, skip the append when the row was absent (a no-op
 			// must not bump the count).
 			const existing = await db.findOne({
 				model: POLICY_MODEL,
-				where: [whereEq("organizationId", organizationId), andEq("id", id)],
+				where: [...inScope(ref), andEq("id", id)],
 			});
 			if (!existing) return;
 			await db.delete({
 				model: POLICY_MODEL,
-				where: [whereEq("organizationId", organizationId), andEq("id", id)],
+				where: [...inScope(ref), andEq("id", id)],
 			});
 			await authzChanges.append({
-				organizationId: existing.organizationId,
+				scope: existing.scope,
+				scopeId: existing.scopeId,
 				kind: "policy_changed",
 				// `by` is the row's last actor — delete carries no acting principal itself.
 				summary: { slice: existing.name, deleted: true },

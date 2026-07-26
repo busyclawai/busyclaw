@@ -1,12 +1,12 @@
 // The tool-registry entities — the durable side of the authz blueprint (slice 5). RULED: the tool
 // registry is PRODUCT, not a plugin, so these are contracts entities merged into CORE_TABLES,
 // siblings of approvals/run_checkpoint. Three rows describe an organization's uploaded surface:
-//   spec_registration — one per (organizationId, source): the raw uploaded document (claim-check
+//   spec_registration — one per (scope, scopeId, source): the raw uploaded document (claim-check
 //     blob), the registrant, the extraction report, and the content version the model built from.
 //   registered_tool   — one per extracted operation: its schema/facts/binding + a per-row content
 //     version. `governance` is stored as opaque JSON and re-validated through `toolGovernance` at
 //     model-assembly time (never trusted blindly on read).
-//   facts_overlay     — one per (organizationId, actionId) override: overlay-wins facts a customer
+//   facts_overlay     — one per (scope, scopeId, actionId) override: overlay-wins facts a customer
 //     lays over the derived model (loosenings reported, not silently applied).
 // Impl lives in @euroclaw/storage-durable (stores) and @euroclaw/runtime (registration flow); this
 // module holds only the entity declarations, arktype record/input schemas, and the derived record/
@@ -15,6 +15,7 @@
 import { type } from "arktype";
 import type { EntityInput, EntityRecord, EntityUpdateInput } from "../entity";
 import { entity, field } from "../entity";
+import { scopeFields } from "../scope";
 import { toolGovernance } from "../govern";
 import { sourceDiagnostic } from "./source";
 
@@ -28,15 +29,11 @@ export const specRegistrationReport = type({
 	warnings: sourceDiagnostic.array(),
 });
 
-// ── spec_registration — one row per (organizationId, source); re-registration REPLACES it ──────
+// ── spec_registration — one row per (scope, scopeId, source); re-registration REPLACES it ──────
 
 export const specRegistrationFields = {
 	id: field.string({ required: true, unique: true, immutable: true }),
-	organizationId: field.string({
-		required: true,
-		index: true,
-		immutable: true,
-	}),
+	...scopeFields,
 	// The slug, also the address prefix (`<source>.<tool>`).
 	source: field.string({ required: true, index: true, immutable: true }),
 	// The raw uploaded document — claim-check style; may carry PII the spec's examples embed.
@@ -77,11 +74,7 @@ export const specRegistrationSchema = specRegistrationEntity.storage;
 
 export const registeredToolFields = {
 	id: field.string({ required: true, unique: true, immutable: true }),
-	organizationId: field.string({
-		required: true,
-		index: true,
-		immutable: true,
-	}),
+	...scopeFields,
 	source: field.string({ required: true, index: true, immutable: true }),
 	// The extractor's tool name.
 	name: field.string({ required: true }),
@@ -128,15 +121,11 @@ export type RegisteredToolPatch = EntityUpdateInput<
 /** The storage schema backing the RegisteredToolStore. */
 export const registeredToolSchema = registeredToolEntity.storage;
 
-// ── facts_overlay — one row per (organizationId, actionId) override ─────────────────────────────
+// ── facts_overlay — one row per (scope, scopeId, actionId) override ─────────────────────────────
 
 export const factsOverlayFields = {
 	id: field.string({ required: true, unique: true, immutable: true }),
-	organizationId: field.string({
-		required: true,
-		index: true,
-		immutable: true,
-	}),
+	...scopeFields,
 	// Matches an action id (dotted for registered tools, bare for domain verbs / code tools).
 	actionId: field.string({ required: true, index: true }),
 	// Validated as the ActionAccess enum in the record schema (stored as a string column).

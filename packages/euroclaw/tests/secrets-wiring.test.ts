@@ -134,12 +134,16 @@ async function registeredPetstore() {
 	const stores = createRegistryStores(memoryAdapter());
 	const registry = createSpecRegistry(stores);
 	await registry.registerOpenApiSpec({
-		organizationId: "org-a",
+		scope: "organization",
+		scopeId: "org-a",
 		source: "petstore",
 		document: petstore(),
 		registeredBy: "user:alice",
 	});
-	const rows = await stores.registeredTools.listByOrganization("org-a");
+	const rows = await stores.registeredTools.listForScope({
+		scope: "organization",
+		scopeId: "org-a",
+	});
 	const { model } = assembleOrgActions({ registeredTools: rows });
 	const policyPlugin = cedarPolicyPlugin({
 		model,
@@ -178,8 +182,10 @@ describe("secrets assembly wiring (createClaw)", () => {
 		const claw = createClaw({
 			model: getPetModel("7"),
 			stores: { registry: stores },
-			organization: (ctx) =>
-				typeof ctx.org === "string" ? ctx.org : undefined,
+			configScope: (ctx) =>
+				typeof ctx.org === "string"
+					? { scope: "organization", scopeId: ctx.org }
+					: undefined,
 			plugins: [policyPlugin],
 			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
@@ -203,8 +209,10 @@ describe("secrets assembly wiring (createClaw)", () => {
 		const claw = createClaw({
 			model: getPetModel("7"),
 			stores: { registry: stores },
-			organization: (ctx) =>
-				typeof ctx.org === "string" ? ctx.org : undefined,
+			configScope: (ctx) =>
+				typeof ctx.org === "string"
+					? { scope: "organization", scopeId: ctx.org }
+					: undefined,
 			plugins: [policyPlugin],
 		});
 

@@ -285,37 +285,50 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	getEffect: (input: { id: string }) => ReturnType<EffectStore["get"]>;
 
 	// Tool registry (product): register an OpenAPI spec as governed tools, and read the assembled
-	// per-organization action vocabulary the policy router compiles against.
-	// `registeredBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md, #5-family);
-	// `organizationId` stays caller-supplied for now (its stamping needs `organization()`, out of scope).
+	// per-SCOPE action vocabulary the policy router compiles against.
+	// `registeredBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md, #5-family).
+	//
+	// The boundary is the opaque `(scope, scopeId)` pair, NOT an `organizationId`: an organization is a
+	// PLUGIN, so core cannot have a column named for one kind of boundary. The request NAMES the
+	// boundary it wants to act in; the PEP authorizes that against verified membership before the
+	// handler runs, so naming one you do not belong to resolves nothing and denies. That is what makes
+	// a caller-supplied boundary key safe here — it is a lookup key, never authority.
 	registerOpenApiSpec: (input: {
 		source: string;
 		document: JsonObject;
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 	}) => Promise<SpecRegistrationReport>;
 	listRegisteredTools: (input: {
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 		source?: string;
 	}) => Promise<RegisteredToolRecord[]>;
-	listActions: (input: { organizationId: string }) => Promise<ActionView[]>;
+	listActions: (input: {
+		scope: string;
+		scopeId: string;
+	}) => Promise<ActionView[]>;
 
 	// Customer policy slices (slice 6b): a customer's own Cedar policies, each enforce|shadow|off,
-	// merged over the code-owned system posture. Edits append to the authz change log → the org
+	// merged over the code-owned system posture. Edits append to the authz change log → the policy
 	// router rebuilds on the next decision. euroclaw stays engine-agnostic — it stores the slices; the
 	// host composes createOrgPolicyRouter with a cedar engineFor (see the policy-slice E2E).
-	// `updatedBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md); `organizationId`
-	// stays caller-supplied until `organization()` lands (out of scope).
+	// `updatedBy` is SERVER-STAMPED from `{ principal }` (docs/plans/stamped-fields.md); the boundary is
+	// named by the request and authorized by membership, as above.
 	putPolicySlice: (input: {
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 		name: string;
 		cedar: string;
 		mode: "enforce" | "shadow" | "off";
 	}) => Promise<PolicySliceRecord>;
 	listPolicySlices: (input: {
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 	}) => Promise<PolicySliceRecord[]>;
 	deletePolicySlice: (input: {
-		organizationId: string;
+		scope: string;
+		scopeId: string;
 		id: string;
 	}) => Promise<void>;
 
@@ -417,7 +430,7 @@ const engineRunMetadataInput = ark({
 	}),
 	"team?": ark("string | undefined").configure({
 		euroclaw: {
-			doc: "Team/tenant tag carried on the durable run for attribution.",
+			doc: "Team/boundary tag carried on the durable run for attribution.",
 		},
 	}),
 });
@@ -590,7 +603,16 @@ const registerOpenApiSpecInput = ark({
 			doc: "The full OpenAPI spec as JSON; size-capped and parsed into governed per-tool records (rejected unless OpenAPI 3.x).",
 		},
 	}),
-	organizationId: "string",
+	scope: ark("string").configure({
+		euroclaw: {
+			doc: "Access-boundary KIND, opaque to core ('organization'/'team' mean something to plugins, not here). With scopeId it names the boundary this call acts in — a lookup key the PEP authorizes against verified membership, never authority in itself.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
+		},
+	}),
 	// No `registeredBy`: the registrant is stamped from the authenticated caller `{ principal }` in the
 	// handler (docs/plans/stamped-fields.md), never caller-supplied.
 	source: ark("string").configure({
@@ -600,17 +622,31 @@ const registerOpenApiSpecInput = ark({
 	}),
 });
 const listRegisteredToolsInput = ark({
-	organizationId: "string",
+	scope: ark("string").configure({
+		euroclaw: {
+			doc: "Access-boundary KIND, opaque to core ('organization'/'team' mean something to plugins, not here). With scopeId it names the boundary this call acts in — a lookup key the PEP authorizes against verified membership, never authority in itself.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
+		},
+	}),
 	"source?": ark("string | undefined").configure({
 		euroclaw: {
-			doc: "Optional source filter — present narrows to that source, absent lists the whole org.",
+			doc: "Optional source filter — present narrows to that source, absent lists the whole boundary.",
 		},
 	}),
 });
 const listActionsInput = ark({
-	organizationId: ark("string").configure({
+	scope: ark("string").configure({
 		euroclaw: {
-			doc: "The tenant whose assembled action vocabulary is returned — the base register-spec action plus registered tools merged with the facts overlay, i.e. what the policy router compiles against.",
+			doc: "Access-boundary KIND, opaque to core. With scopeId it names the boundary whose assembled action vocabulary is returned — the base register-spec action plus registered tools merged with the facts overlay, i.e. what the policy router compiles against.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
 		},
 	}),
 });
@@ -627,18 +663,43 @@ const putPolicySliceInput = ark({
 	}),
 	name: ark("string").configure({
 		euroclaw: {
-			doc: "Upsert key within the org — `putPolicySlice` upserts by (organization, name), not create-only.",
+			doc: "Upsert key within the boundary — `putPolicySlice` upserts by (scope, scopeId, name), not create-only.",
 		},
 	}),
-	organizationId: "string",
+	scope: ark("string").configure({
+		euroclaw: {
+			doc: "Access-boundary KIND, opaque to core ('organization'/'team' mean something to plugins, not here). With scopeId it names the boundary this call acts in — a lookup key the PEP authorizes against verified membership, never authority in itself.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
+		},
+	}),
 	// No `updatedBy`: the editor identity is stamped from the authenticated caller `{ principal }` in the
 	// handler (docs/plans/stamped-fields.md), never caller-supplied.
 });
-const listPolicySlicesInput = ark({ organizationId: "string" });
-const deletePolicySliceInput = ark({
-	organizationId: ark("string").configure({
+const listPolicySlicesInput = ark({
+	scope: ark("string").configure({
 		euroclaw: {
-			doc: "Scopes the delete — keyed by (organizationId, id), so a slice is only removable within its owning org.",
+			doc: "Access-boundary KIND, opaque to core ('organization'/'team' mean something to plugins, not here). With scopeId it names the boundary this call acts in — a lookup key the PEP authorizes against verified membership, never authority in itself.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
+		},
+	}),
+});
+const deletePolicySliceInput = ark({
+	scope: ark("string").configure({
+		euroclaw: {
+			doc: "Access-boundary KIND, opaque to core. With scopeId it scopes the delete — keyed by (scope, scopeId, id), so a slice is only removable within its owning boundary.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		euroclaw: {
+			doc: "The access boundary's id. Naming a boundary the caller does not belong to resolves no membership and denies.",
 		},
 	}),
 	id: "string",
@@ -1252,21 +1313,23 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getEffect: ({ id }) => requireEffects(context.effects).get(id),
 
 		// `registeredBy` is stamped from the authenticated caller `{ principal }`, never caller input
-		// (docs/plans/stamped-fields.md). `organizationId` stays caller-supplied until `organization()`.
+		// (docs/plans/stamped-fields.md). The `(scope, scopeId)` pair IS caller-supplied, and safely so:
+		// it only NAMES which boundary to act in, and the PEP authorizes it against verified membership
+		// before the handler runs. Naming a boundary you do not belong to resolves nothing and denies.
 		registerOpenApiSpec: (args, caller?: ClawApiCaller) =>
 			createSpecRegistry(registry()).registerOpenApiSpec({
 				...args,
 				registeredBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
-		listRegisteredTools: ({ organizationId, source }) =>
+		listRegisteredTools: ({ scope, scopeId, source }) =>
 			source !== undefined
-				? registry().registeredTools.listBySource(organizationId, source)
-				: registry().registeredTools.listByOrganization(organizationId),
-		async listActions({ organizationId }) {
+				? registry().registeredTools.listBySource({ scope, scopeId }, source)
+				: registry().registeredTools.listForScope({ scope, scopeId }),
+		async listActions({ scope, scopeId }) {
 			const stores = registry();
 			const [registeredTools, overlay] = await Promise.all([
-				stores.registeredTools.listByOrganization(organizationId),
-				stores.factsOverlay.listByOrganization(organizationId),
+				stores.registeredTools.listForScope({ scope, scopeId }),
+				stores.factsOverlay.listForScope({ scope, scopeId }),
 			]);
 			return assembleOrgActions({
 				base: [REGISTER_OPENAPI_SPEC_ACTION],
@@ -1276,16 +1339,17 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		// `updatedBy` is stamped from the authenticated caller `{ principal }`, never caller input
-		// (docs/plans/stamped-fields.md). `organizationId` stays caller-supplied until `organization()`.
+		// (docs/plans/stamped-fields.md); the boundary is named by the request and authorized by
+		// membership, as above.
 		putPolicySlice: (args, caller?: ClawApiCaller) =>
 			registry().policySlices.upsert({
 				...args,
 				updatedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
-		listPolicySlices: ({ organizationId }) =>
-			registry().policySlices.listByOrganization(organizationId),
-		deletePolicySlice: ({ organizationId, id }) =>
-			registry().policySlices.delete(organizationId, id),
+		listPolicySlices: ({ scope, scopeId }) =>
+			registry().policySlices.listForScope({ scope, scopeId }),
+		deletePolicySlice: ({ scope, scopeId, id }) =>
+			registry().policySlices.delete({ scope, scopeId }, id),
 
 		startRun: (args) => {
 			assertNoReservedContext(args.ctx);

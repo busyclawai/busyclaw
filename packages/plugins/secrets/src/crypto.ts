@@ -13,8 +13,8 @@
 // Every seal is BOUND to the row it belongs to, as GCM additional authenticated data (authenticated,
 // not encrypted). Without it a sealed value is portable: the blob says nothing about where it came
 // from, so anyone able to write the value column — SQL injection, a backup restored into the wrong
-// tenant, a rogue DBA, an app bug addressing the wrong row — can copy one tenant's sealed secret into
-// another tenant's row and the reader decrypts it happily, because the key is right and the tag is
+// boundary, a rogue DBA, an app bug addressing the wrong row — can copy one boundary's sealed secret into
+// another scope's row and the reader decrypts it happily, because the key is right and the tag is
 // valid. The binding makes the ciphertext refuse to open anywhere but its own row.
 //
 // The binding is the RESOLUTION KEY `(scope, scopeId, name)`, deliberately not the row `id`. The
@@ -26,7 +26,7 @@
 //
 // Scope of the guarantee, honestly: this defends DB write WITHOUT key access. Anyone holding the
 // master key can re-seal any value under any binding, and AAD does not pretend otherwise — it is the
-// cheap version of per-tenant keys, not a replacement.
+// cheap version of per-boundary keys, not a replacement.
 //
 // PRE-ALPHA HARD CUT: a value sealed before this binding existed is byte-identical to a bound one, so
 // `open` cannot tell them apart and there is no legacy path — accepting one would be a permanent

@@ -38,14 +38,14 @@ import {
 } from "./store";
 
 // Registration rows carry no owner and no access boundary, so there is nothing for a resolver to load:
-// `get`/`getByKey`/`list`/`revoke` reach any tenant's registration by id or by (provider, endpointKey),
+// `get`/`getByKey`/`list`/`revoke` reach any boundary's registration by id or by (provider, endpointKey),
 // and the records they return still contain the bot token and webhook secret. This states that plainly
 // instead of leaving it implied by an absent binding — the reason rides into the route metadata, so the
 // boot coverage walk lists these among the routes authorizing against nothing shared. Closing it needs
 // owner/scope columns stamped from the caller and credentials moved behind the secret store, which is a
 // schema change tracked as the channel-registration hardening work, not something a resolver can fix.
 const UNOWNED_REGISTRATIONS =
-	"KNOWN GAP: registration rows have no owner or scope column yet, so any caller reaches any tenant's registration and the returned record still carries its credentials";
+	"KNOWN GAP: registration rows have no owner or scope column yet, so any caller reaches any boundary's registration and the returned record still carries its credentials";
 
 /** The api namespace registrations mode exposes on `claw.api.channels.registrations`. Every method
  *  takes the out-of-band app-authz caller as its 2nd argument, the same shape the rest of `claw.api`

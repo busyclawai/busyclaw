@@ -13,7 +13,11 @@ import { planEgress } from "../src/index";
 // will, in slice 3) — a permit-all engine, an empty reader, and minimal stamped facts suffice.
 const policy: PolicyEngine = { authorize: () => ({ decision: "permit" }) };
 const secrets: Secrets = buildSecrets([]);
-const facts: StampedFacts = { organizationId: "org_1", runMode: "autonomous" };
+const facts: StampedFacts = {
+	scope: "organization",
+	scopeId: "org_1",
+	runMode: "autonomous",
+};
 
 // A fake governed outbound — proves an interceptor plan carries through whatever `buildOutbound`
 // returns WITHOUT the compiler inspecting it. Slice 3 replaces this with the real

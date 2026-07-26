@@ -101,7 +101,7 @@ export function cedarMapCall(
 					"the run has no authenticated identity (euroclaw__principal is unset) — fail closed",
 			});
 		}
-		// The runtime-stamped facts (role/team from membership, clawId/runMode/organizationId from the
+		// The runtime-stamped facts (role/team from membership, clawId/runMode/boundary pair from the
 		// runtime — spoof-proof: caller euroclaw__ keys are stripped upstream), read through the ONE
 		// typed contracts reader. A garbage stamp is a host config bug: fail loud here, never silently
 		// unstamped.

@@ -11,7 +11,7 @@
 // closure-captured inside the executor — never descriptor fields. `modelToolProjection` is an
 // allowlist projection, so neither the binding nor anything else can reach the model regardless.
 //
-//   • organizationId/principal come from the per-run CONTEXT passed to the provider (the turn's trusted
+//   • the config-scope pair and principal come from the per-run CONTEXT passed to the provider (the turn's trusted
 //     org + principal), NOT from the AI-SDK execute options — those carry no turn context.
 //
 // Governance rides through typed: the registry column is schema-first (`field.json(toolGovernance)`),
@@ -49,7 +49,8 @@ import { planHttpRequest } from "./request-plan";
 /** The per-run turn context the provider closes each tool over. NONE of it comes from model args or
  *  the AI-SDK execute options (which carry no turn context) — it is the run's trusted org + principal. */
 export type RegisteredToolContext = {
-	organizationId: string;
+	scope: string;
+	scopeId: string;
 	principal?: string;
 };
 
@@ -63,7 +64,7 @@ export type InvokerResponse = {
 
 export type RegisteredToolProviderOptions = {
 	/** The one-door reader the invoker resolves each registration's credential through
-	 *  (`secrets.get(source, { organizationId, principal })`). */
+	 *  (`secrets.get(source, { scope, scopeId, principal })`). */
 	secrets: Secrets;
 	/** Injected for tests; defaults to the platform global `fetch`. */
 	fetch?: typeof fetch;
@@ -123,7 +124,8 @@ export function createRegisteredToolProvider(
 					binding,
 					options.secrets,
 					{
-						organizationId: context.organizationId,
+						scope: context.scope,
+		scopeId: context.scopeId,
 						source: row.source,
 						principal: context.principal,
 					},

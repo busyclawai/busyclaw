@@ -55,7 +55,7 @@ import {
 	composeContext,
 	type IdentityResolver,
 	type MembershipResolver,
-	type OrganizationResolver,
+	type ConfigScopeResolver,
 } from "./context";
 import {
 	createRuntimeEvent,
@@ -223,7 +223,7 @@ export type RuntimeConfig = {
 	 *  compiler checks, not a passenger inside the AI-SDK type. The record key is each tool's PATH
 	 *  (its canonical id); the model-facing `ToolSet`, keyed by the flattened wire name, is derived. */
 	tools?: ToolDefinitionSet;
-	/** Resolve extra tools for THIS run (an organization's registered tools) from the resolved turn
+	/** Resolve extra tools for THIS run (a boundary's registered tools) from the resolved turn
 	 *  context, merged over the static `tools` ONCE per run. Code tools win collisions — a
 	 *  host tool is never shadowed by a registered upload; a colliding registered tool is skipped,
 	 *  never silently substituted. Registrations are rare and decisions hot, so the merge is per-run,
@@ -233,7 +233,7 @@ export type RuntimeConfig = {
 	) => ToolDefinitionSet | Promise<ToolDefinitionSet>;
 	system?: string;
 	redactor?: Redactor;
-	organization?: OrganizationResolver;
+	configScope?: ConfigScopeResolver;
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
 	audit?: AuditSink;
@@ -759,7 +759,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const resolveContext = composeContext({
 		identity: config.identity,
 		membership: config.membership,
-		organization: config.organization,
+		configScope: config.configScope,
 	});
 	// The run's tool set, plus the discovery meta-tools when anything in it is `discoverable`. They
 	// are ordinary descriptors from here on — dispatched, gate-registered and catalogued through the

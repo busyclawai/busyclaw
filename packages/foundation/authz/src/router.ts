@@ -13,18 +13,17 @@
 import type {
 	PolicyEngine,
 	PolicyEngineCapabilities,
+	ScopeRef,
 } from "@euroclaw/contracts";
 
 export type OrgPolicyRouterConfig = {
 	/** Bundle identity. MUST uniquely identify EVERY input of the bundle — model version,
-	 *  policy-set version, AND the entity source. Orgs may share a key (and thus a bundle) ONLY
-	 *  when all three are identical (the "system" bundle for uncustomized orgs). */
-	keyFor: (organizationId: string | undefined) => string | Promise<string>;
-	/** Build the compiled bundle for an organization (e.g. buildAuthzModel(rows) → cedar({model,
+	 *  policy-set version, AND the entity source. Scopes may share a key (and thus a bundle) ONLY
+	 *  when all three are identical (the "system" bundle for uncustomized scopes). */
+	keyFor: (boundary: ScopeRef | undefined) => string | Promise<string>;
+	/** Build the compiled bundle for a config scope (e.g. buildAuthzModel(rows) → cedar({model,
 	 *  policies, entities})). Called once per distinct key; cached. */
-	engineFor: (
-		organizationId: string | undefined,
-	) => PolicyEngine | Promise<PolicyEngine>;
+	engineFor: (boundary: ScopeRef | undefined) => PolicyEngine | Promise<PolicyEngine>;
 	capabilities?: PolicyEngineCapabilities;
 	/** LRU size. Default 64. */
 	maxBundles?: number;
@@ -32,7 +31,7 @@ export type OrgPolicyRouterConfig = {
 
 const DEFAULT_MAX_BUNDLES = 64;
 
-/** Resolve each decision to its organization's content-addressed bundle and delegate. */
+/** Resolve each decision to its scope's content-addressed bundle and delegate. */
 export function createOrgPolicyRouter(
 	config: OrgPolicyRouterConfig,
 ): PolicyEngine {
@@ -43,9 +42,16 @@ export function createOrgPolicyRouter(
 	return {
 		capabilities: config.capabilities,
 		async authorize(req) {
-			// Typed by the PARC contract (validated at the gate) — no duck-probing.
-			const organizationId = req.context.organizationId;
-			const key = await config.keyFor(organizationId);
+			// Typed by the PARC contract (validated at the gate) — no duck-probing. BOTH halves or no
+			// boundary: half a key names no boundary, and routing on it would hand this decision another
+			// boundary's compiled policy bundle.
+			const scope = req.context.configScope;
+			const scopeId = req.context.configScopeId;
+			const boundary =
+				typeof scope === "string" && typeof scopeId === "string"
+					? { scope, scopeId }
+					: undefined;
+			const key = await config.keyFor(boundary);
 
 			const cached = cache.get(key);
 			let pending: Promise<PolicyEngine>;
@@ -56,7 +62,7 @@ export function createOrgPolicyRouter(
 				pending = cached;
 			} else {
 				pending = Promise.resolve().then(() =>
-					config.engineFor(organizationId),
+					config.engineFor(boundary),
 				);
 				cache.set(key, pending);
 				// A failed build must not poison the cache — evict it so the next decision retries.

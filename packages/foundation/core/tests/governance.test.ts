@@ -133,7 +133,9 @@ describe("euroclaw governance — the neutral pipeline", () => {
 		// the audit log saw only a TOKEN — PII never crossed into persistence
 		const entries = audit.entries();
 		expect(entries).toHaveLength(1);
-		expect(entries.at(0)?.payload.to).toMatch(/^\{\{pii:[a-z]+:[a-z0-9-]+\}\}$/);
+		expect(entries.at(0)?.payload.to).toMatch(
+			/^\{\{pii:[a-z]+:[a-z0-9-]+\}\}$/,
+		);
 		expect(JSON.stringify(entries)).not.toContain("alice@personal.com");
 	});
 
@@ -743,9 +745,9 @@ describe("euroclaw governance — durable approval continuation", () => {
 		expect(pending.toolName).toBe("send_rejection");
 
 		// 2. a human grants it
-		expect((await store.grant(pending.id, userPrincipal("alice")))?.status).toBe(
-			"approved",
-		);
+		expect(
+			(await store.grant(pending.id, userPrincipal("alice")))?.status,
+		).toBe("approved");
 
 		// 3. resume → the exact call runs, the oversight gate bypassed
 		const r2 = await ec.continueRun(pending.id);

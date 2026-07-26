@@ -85,37 +85,60 @@ describe("loadPolicyBundle", () => {
 
 describe("authzBundleKey", () => {
 	it("count 0 ⇒ the shared 'system' bundle (an uncustomized org)", () => {
-		expect(authzBundleKey({ organizationId: "org-a", changeCount: 0 })).toBe(
+		expect(
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-a" },
+				changeCount: 0,
+			}),
+		).toBe("system");
+	});
+
+	it("an absent config scope ⇒ 'system'", () => {
+		expect(authzBundleKey({ configScope: undefined, changeCount: 5 })).toBe(
 			"system",
 		);
 	});
 
-	it("an absent organizationId ⇒ 'system'", () => {
-		expect(authzBundleKey({ organizationId: undefined, changeCount: 5 })).toBe(
-			"system",
-		);
-	});
-
-	it("a positive count ⇒ `org:count`", () => {
-		expect(authzBundleKey({ organizationId: "org-a", changeCount: 3 })).toBe(
-			"org-a:3",
-		);
+	it("a positive count ⇒ `scope:scopeId:count`", () => {
+		expect(
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-a" },
+				changeCount: 3,
+			}),
+		).toBe("organization:org-a:3");
 	});
 
 	it("the same count ⇒ the same key (a cache hit); a bump ⇒ a new key (rebuild)", () => {
-		const at3 = authzBundleKey({ organizationId: "org-a", changeCount: 3 });
-		expect(authzBundleKey({ organizationId: "org-a", changeCount: 3 })).toBe(
-			at3,
-		);
+		const at3 = authzBundleKey({
+			configScope: { scope: "organization", scopeId: "org-a" },
+			changeCount: 3,
+		});
+		expect(
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-a" },
+				changeCount: 3,
+			}),
+		).toBe(at3);
 		// A delete or edit APPENDS to the log → the count bumps → a distinct key → the router rebuilds.
 		expect(
-			authzBundleKey({ organizationId: "org-a", changeCount: 4 }),
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-a" },
+				changeCount: 4,
+			}),
 		).not.toBe(at3);
 	});
 
-	it("org isolation: different orgs at the same count get different keys", () => {
+	it("scope isolation: different boundarys at the same count get different keys", () => {
 		expect(
-			authzBundleKey({ organizationId: "org-a", changeCount: 2 }),
-		).not.toBe(authzBundleKey({ organizationId: "org-b", changeCount: 2 }));
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-a" },
+				changeCount: 2,
+			}),
+		).not.toBe(
+			authzBundleKey({
+				configScope: { scope: "organization", scopeId: "org-b" },
+				changeCount: 2,
+			}),
+		);
 	});
 });

@@ -32,7 +32,8 @@ const anySecret = (value: string): Secrets =>
 function row(overrides: Partial<RegisteredToolRecord>): RegisteredToolRecord {
 	return {
 		id: "rt_1",
-		organizationId: "org-a",
+		scope: "organization",
+		scopeId: "org-a",
 		source: "petstore",
 		name: "getPet",
 		address: "petstore.getPet",
@@ -97,7 +98,10 @@ describe("createRegisteredToolProvider", () => {
 			fetch: fn,
 			lookup: publicLookup,
 		});
-		const tools = provider([row({})], { organizationId: "org-a" });
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		const result = await exec(tools, "petstore.getPet", { petId: 7 });
 		expect(calls[0]?.url).toBe("https://api.example/v1/pets/7");
 		expect(calls[0]?.init.method).toBe("GET");
@@ -121,7 +125,10 @@ describe("createRegisteredToolProvider", () => {
 			fetch: fn,
 			lookup: publicLookup,
 		});
-		const tools = provider([row({})], { organizationId: "org-a" });
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		await exec(tools, "petstore.getPet", { petId: 7 });
 
 		// The hostname is untouched, so TLS SNI / certificate validation still use the real name...
@@ -190,7 +197,7 @@ describe("createRegisteredToolProvider", () => {
 					},
 				}),
 			],
-			{ organizationId: "org-a" },
+			{ scope: "organization", scopeId: "org-a" },
 		);
 		const result = await exec(tools, "petstore.addPet", { name: "Rex" });
 		expect(calls[0]?.init.method).toBe("POST");
@@ -208,7 +215,10 @@ describe("createRegisteredToolProvider", () => {
 			fetch: fn,
 			lookup: publicLookup,
 		});
-		const tools = provider([row({})], { organizationId: "org-a" });
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		const result = await exec(tools, "petstore.getPet", { petId: 7 });
 		expect(result.status).toBe(404);
 		expect(result.body).toBe("not found");
@@ -231,7 +241,7 @@ describe("createRegisteredToolProvider", () => {
 					},
 				}),
 			],
-			{ organizationId: "org-a" },
+			{ scope: "organization", scopeId: "org-a" },
 		);
 		await expect(exec(tools, "petstore.getPet", {})).rejects.toThrow(
 			/disallowed address/,
@@ -255,7 +265,10 @@ describe("createRegisteredToolProvider", () => {
 			lookup: publicLookup,
 			timeoutMs: 10,
 		});
-		const tools = provider([row({})], { organizationId: "org-a" });
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		await expect(exec(tools, "petstore.getPet", { petId: 7 })).rejects.toThrow(
 			/timed out/,
 		);
@@ -269,7 +282,10 @@ describe("createRegisteredToolProvider", () => {
 			lookup: publicLookup,
 			maxResponseBytes: 1000,
 		});
-		const tools = provider([row({})], { organizationId: "org-a" });
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		await expect(exec(tools, "petstore.getPet", { petId: 7 })).rejects.toThrow(
 			/size cap/,
 		);
@@ -294,7 +310,7 @@ describe("createRegisteredToolProvider", () => {
 					},
 				}),
 			],
-			{ organizationId: "org-a" },
+			{ scope: "organization", scopeId: "org-a" },
 		);
 		// A registered tool is addressed by its dotted PATH and offered under the SAME flattened
 		// wire name a plugin tool gets — one naming scheme, so nothing reaches a provider with a
@@ -318,9 +334,10 @@ describe("createRegisteredToolProvider", () => {
 
 	it("a row becomes a `binding` tool — the declarative binding rides in the descriptor", () => {
 		const provider = createRegisteredToolProvider({ secrets: noSecrets });
-		const tool = provider([row({})], { organizationId: "org-a" })[
-			"petstore.getPet"
-		];
+		const tool = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		})["petstore.getPet"];
 		// The tag is the line SSOT cannot erase: this tool exists as DATA (a row), so it is storable
 		// and its outbound target is describable — unlike a host closure, which is neither.
 		expect(tool?.invocation.kind).toBe("binding");

@@ -76,8 +76,10 @@ describe("stamped identity fields are absent from every write input", () => {
 	test("registry / policy-slice — registeredBy / updatedBy are stamped, never input", () => {
 		expectTypeOf<RegisterSpecInput>().not.toHaveProperty("registeredBy");
 		expectTypeOf<PutPolicySliceInput>().not.toHaveProperty("updatedBy");
-		// organizationId stays caller-supplied for now (its stamping awaits organization())
-		expectTypeOf<RegisterSpecInput>().toHaveProperty("organizationId");
+		// The (scope, scopeId) pair IS caller-supplied, and safely so: it only NAMES the boundary to act
+		// in, and the PEP authorizes that against verified membership before the handler runs.
+		expectTypeOf<RegisterSpecInput>().toHaveProperty("scope");
+		expectTypeOf<RegisterSpecInput>().toHaveProperty("scopeId");
 	});
 
 	test("bindConversation — a registration's claw defaults cannot carry createdBy (#14)", () => {
