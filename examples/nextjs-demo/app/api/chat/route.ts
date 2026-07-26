@@ -4,7 +4,7 @@
 // different transport, so euroclaw declines to guess one for you). The host writes that route, and
 // it is this short, because both halves already exist:
 //
-//   claw.api.stream(...)          → { textStream, result }, deltas ALREADY rehydrated reader-facing
+//   await claw.api.stream(...)    → { textStream, result }, deltas ALREADY rehydrated reader-facing
 //   toUIMessageStreamResponse(…)  → that stream framed as the SSE protocol useChat consumes
 //
 // What the reader sees is not what the model saw. Ingress redaction tokenizes the prompt before it
@@ -60,11 +60,8 @@ export async function POST(request: Request): Promise<Response> {
 	// The in-process door: identity rides as the out-of-band caller argument, exactly as the HTTP
 	// adapter passes it for every other method.
 	//
-	// AWAITED, even though `ClawApi` types `stream` as returning the RuntimeStream directly. The
-	// app-authz PEP wraps every api method in an async function, so under the default enforcing
-	// posture this actually hands back a Promise of it — the declared type is a lie there. Awaiting
-	// is correct either way: a non-thenable awaits to itself, so this works whether or not the PEP
-	// is in the way. (A product bug, not a demo one — worth fixing in the PEP or the type.)
+	// Awaited: `stream` resolves to the stream rather than returning it, because authorizing is
+	// asynchronous and a denial must hand back nothing at all.
 	const stream = await claw.api.stream(
 		{ prompt },
 		{ principal: principalOf(user) },
