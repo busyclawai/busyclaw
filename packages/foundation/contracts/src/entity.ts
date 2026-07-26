@@ -468,6 +468,7 @@ export function entity<const Fields extends Record<string, EntityField>>(
 					{
 						type: field.type,
 						required: field.required,
+						primaryKey: field.primaryKey,
 						unique: field.unique,
 						index: field.index,
 						references: field.references,

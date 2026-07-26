@@ -138,6 +138,21 @@ export type FieldType = "string" | "number" | "boolean" | "date" | "json";
 export type FieldAttribute = {
 	type: FieldType;
 	required?: boolean;
+	/**
+	 * This column is part of the table's PRIMARY KEY. MIGRATION-ONLY metadata, like `pii` and
+	 * `retention` — adapters neither read nor enforce it; the database does.
+	 *
+	 * Marking SEVERAL fields in one table is how a COMPOSITE key is declared, and the key's column
+	 * order is their declaration order. That is deliberate rather than a one-per-table rule: not
+	 * every euroclaw table is keyed by a synthetic `id`, and a key that can only be single-column
+	 * would have to be expressed somewhere other than the field it belongs to.
+	 *
+	 * A primary key already implies uniqueness and an index, so `unique`/`index` beside it are
+	 * redundant — the emitter drops them rather than writing a second constraint over the same
+	 * columns. Every primary-key column is NOT NULL by definition, so a nullable field cannot carry
+	 * this flag (SQL forbids it, and the emitter refuses it rather than emitting invalid DDL).
+	 */
+	primaryKey?: boolean;
 	unique?: boolean;
 	index?: boolean;
 	references?: { model: string; field: string };
@@ -159,3 +174,47 @@ export type TableSchema = {
 
 /** A plugin declares the tables it needs: `{ audit: { fields: { … } } } satisfies SchemaDeclaration`. */
 export type SchemaDeclaration = Record<string, TableSchema>;
+
+/**
+ * Tables ordered so a referenced table always precedes the table referencing it.
+ *
+ * Here, beside {@link isWhereGroup} and {@link sortByList}, for the same reason those are: a pure
+ * function over a type this module owns, needed by EVERY storage adapter that emits a schema. SQL
+ * must create a table before one that references it; a Drizzle schema names an earlier `const`; a
+ * Prisma relation needs its target declared. Deriving the order from the declared `references`
+ * keeps it from drifting the way a hand-maintained ordering number would.
+ *
+ * A reference cycle throws rather than deadlocking — it is a schema bug, and a silent partial order
+ * would surface later as an unresolvable foreign key.
+ */
+export function tableOrder(schema: SchemaDeclaration): string[] {
+	const models = Object.keys(schema);
+	const known = new Set(models);
+	const ordered: string[] = [];
+	const state = new Map<string, "visiting" | "done">();
+
+	const visit = (model: string, trail: readonly string[]): void => {
+		const current = state.get(model);
+		if (current === "done") return;
+		if (current === "visiting") {
+			throw new Error(
+				`circular table references: ${[...trail, model].join(" → ")}`,
+			);
+		}
+		state.set(model, "visiting");
+		const table = schema[model];
+		for (const field of Object.values(table?.fields ?? {})) {
+			const target = field.references?.model;
+			// A reference to a table outside this declaration (a host's own) is left to the host —
+			// we cannot order what we were not given.
+			if (target !== undefined && target !== model && known.has(target)) {
+				visit(target, [...trail, model]);
+			}
+		}
+		state.set(model, "done");
+		ordered.push(model);
+	};
+
+	for (const model of models) visit(model, []);
+	return ordered;
+}
