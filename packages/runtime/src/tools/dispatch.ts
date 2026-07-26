@@ -70,6 +70,11 @@ export type ModelToolProjection = {
 		name: string;
 		input: unknown;
 	}) => ResolvedToolCall;
+	/** Does this run have a tool at that canonical path? Includes the DISCOVERABLE half — hiding a
+	 *  tool from the context window is UX, and must never become the reason a call it can legitimately
+	 *  reach reads as nonexistent. The loop asks before the gate, so "no such tool" stays a distinct
+	 *  answer from "not permitted". */
+	readonly hasPath: (path: string) => boolean;
 };
 
 /**
@@ -120,9 +125,11 @@ export function modelToolProjection(
 			inputSchema: tool.inputSchema,
 		};
 	}
+	const paths = new Set(Object.keys(tools));
 	return {
 		// The entries above ARE a ToolSet's shape; the record type only widened building them.
 		tools: projected as ToolSet,
+		hasPath: (path) => paths.has(path),
 		resolveCall: (call) => {
 			const path = pathByModelName.get(call.name) ?? call.name;
 			// Unwrapping happens only when THIS run's set actually contains the meta-tool — the same

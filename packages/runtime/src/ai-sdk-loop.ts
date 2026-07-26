@@ -38,6 +38,17 @@ export type AiSdkLoopInput = {
 		path: string;
 		args: unknown;
 	};
+	/**
+	 * Does this run have a tool at that canonical path? Checked BEFORE the governance chokepoint, so a
+	 * name nothing declared is answered "no such tool" rather than "not permitted".
+	 *
+	 * The two used to be the same event by accident: an unmodeled action skipped the floor and fell
+	 * through to dispatch, which raised the crisp error. With every call gated, the floor answers first
+	 * and denies a path it has no action for — safe, but it tells a model that named a tool wrongly
+	 * that it lacks permission, which is the one message guaranteed to make it stop rather than fix the
+	 * call. Existence is not an authorization question; it is asked first.
+	 */
+	knownToolPath?: (path: string) => boolean;
 	system?: string;
 	/** Arrives ALREADY redacted (the caller redacts at ingress) — the loop never re-redacts it. */
 	prompt?: string;
@@ -449,6 +460,12 @@ export async function runAiSdkLoop(
 				type: "tool.called",
 			});
 			const toolStartedAt = Date.now();
+			// Before the gate: a tool this run does not have is not a decision to make.
+			if (input.knownToolPath && !input.knownToolPath(toolPath)) {
+				throw stateError(`euroclaw: no executable tool "${toolPath}"`, {
+					toolName: toolPath,
+				});
+			}
 			let result: Awaited<ReturnType<Governance["handleToolCall"]>>;
 			try {
 				result = await input.core.handleToolCall(

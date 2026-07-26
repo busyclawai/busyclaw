@@ -131,7 +131,7 @@ describe("createClaw deadline slicing", () => {
 			claw.api.getRun({ id: run.id }, { principal: "user:actor-1" }),
 		).resolves.toMatchObject({
 			status: "completed",
-			principal: "user:alice",
+			principal: "user:actor-1",
 		});
 		expect(toolRuns).toBe(2); // each step executed exactly once across all slices
 
