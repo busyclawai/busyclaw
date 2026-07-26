@@ -15,9 +15,15 @@
 // the run loop's tool-call ingress unwraps it exactly where it already translates the flattened wire
 // name back to a path (see `modelToolProjection`). Past that line nothing knows the call arrived
 // wrapped: the floor decision, the per-tool gate, the approval checkpoint, the effect claim, the
-// audit and the transcript all read the TARGET's canonical path. The `execute` descriptor below
-// carries no `access` fact (so it is not a modeled action) and its `execute` throws — being
-// dispatched at all means the ingress did not unwrap, which is a fail-closed condition, not a call.
+// audit and the transcript all read the TARGET's canonical path.
+//
+// HOW that constraint is held changed once the floor stopped skipping unmodeled calls. It used to
+// rest on omission — the `execute` descriptor carried no `access` fact, so it was not a modeled
+// action, so the floor's matcher passed it by. Omission now means WRITE, and a matcher that skips is
+// exactly the hole that let an unstamped tool run ungoverned. So the guarantee moved to the ingress:
+// `resolveCall` REFUSES an envelope it cannot unwrap, before any gate runs, and `buildFloorPolicyPlugin`
+// leaves this one path out of the model. `execute` therefore never reaches a decision — neither as
+// itself nor as a policy-nameable action.
 //
 // DISCLOSURE — what the floor would say about a hit — is answered THROUGH the chokepoint, not around
 // it. The tempting symmetry is to answer `search` at that same ingress, beside the `execute` unwrap,
@@ -314,18 +320,16 @@ function executeTool(): ToolDefinition {
 			},
 			required: ["path"],
 		}),
-		// WRITE — and the reason is worth stating, because the obvious reading is that this should not
-		// be modeled at all. What gets decided for a well-formed routed call is the TARGET: `resolveCall`
-		// unwraps the envelope at ingress, so past that line the loop cannot tell a routed call from a
-		// direct one and the floor never sees this path. A policy permitting "euroclaw.execute" is
-		// therefore INERT for real routing — it cannot become a permit for everything reachable through
-		// the router, which is the hazard the old "no access fact" comment was guarding against.
+		// No `access` fact, and — unlike every other tool — this one is kept OUT of the floor's action
+		// model on purpose (see the header, and `buildFloorPolicyPlugin`). If the floor could decide on
+		// "execute", one permit would unlock every discoverable tool at once.
 		//
-		// The only calls that arrive here as themselves are MALFORMED envelopes naming no usable target.
-		// Those must fail closed, and write is the classification that makes them do so under the seeded
-		// posture. Leaving it unstamped would have meant the same thing by accident; stating it means
-		// the next reader does not have to reconstruct why.
-		governance: { access: "write" },
+		// That used to be achieved by omission: unstamped meant unmodeled meant unmatched. Omission now
+		// means WRITE, so the guarantee is carried differently — the ingress refuses a malformed
+		// envelope before any gate runs, so this path never reaches a decision at all. Being dispatched
+		// remains a fail-closed condition rather than a call, and the throw below is the backstop for a
+		// caller that bypassed the ingress.
+		governance: {},
 		invocation: {
 			kind: "local",
 			execute: () => {

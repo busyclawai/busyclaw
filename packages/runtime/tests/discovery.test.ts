@@ -198,18 +198,20 @@ describe("discovery — the provider edge", () => {
 				input: { path: "docs.admin.publish", args: { id: "d1" } },
 			}),
 		).toEqual({ path: "docs.admin.publish", args: { id: "d1" } });
-		// An envelope with no usable target stays on the meta-tool, whose executable fails closed —
-		// the resolver never guesses a target.
-		expect(
-			projection.resolveCall({ name: "euroclaw__execute", input: { args: {} } })
-				.path,
-		).toBe("euroclaw.execute");
-		expect(
-			projection.resolveCall({
-				name: "euroclaw__execute",
-				input: { path: "euroclaw.execute" },
-			}).path,
-		).toBe("euroclaw.execute");
+		// An envelope with no usable target is REFUSED here — the resolver never guesses a target, and
+		// no longer passes the call through to the meta-tool for its executable to reject.
+		//
+		// Where it fails moved for a governance reason. Passing it through relied on the floor skipping
+		// unmodeled actions; once the floor gates every call, `euroclaw.execute` would reach a policy
+		// decision — the one thing discovery.ts exists to prevent, because a permit naming it would
+		// unlock every discoverable tool at once. Refusing the broken ENCODING at the ingress keeps the
+		// meta-tool out of every decision, and keeps the two facts distinct: "you named no target" is
+		// not "you may not do that", and only the first tells the model how to fix its call.
+		for (const input of [{ args: {} }, { path: "euroclaw.execute" }]) {
+			expect(() =>
+				projection.resolveCall({ name: "euroclaw__execute", input }),
+			).toThrow(/needs the canonical `path`/);
+		}
 	});
 
 	it("dispatches a routed call — the target runs with the target's args", async () => {
