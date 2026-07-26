@@ -95,7 +95,10 @@ describe("createClaw engine", () => {
 			"startRun",
 			"work",
 		]);
-		expect(Object.keys(claw).sort()).toEqual(["$context", "api"]);
+		// `$tables` is the migration CLI's door — the merged SchemaDeclaration this claw expects to
+		// exist, computed lazily on first read. It joins `$context` as an escape hatch, not product
+		// api: protocol adapters still speak `claw.api.*` only.
+		expect(Object.keys(claw).sort()).toEqual(["$context", "$tables", "api"]);
 		expect(Object.keys(claw.api).sort()).toEqual([
 			"appendMessage",
 			"archiveClaw",

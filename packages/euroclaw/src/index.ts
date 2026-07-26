@@ -1,8 +1,14 @@
-import type { ClawEngineFactory, ClawEngineHandle } from "@euroclaw/contracts";
+import type {
+	ClawEngineFactory,
+	ClawEngineHandle,
+	SchemaDeclaration,
+} from "@euroclaw/contracts";
 import {
 	type Adapter,
 	type AuditSink,
 	type ClawsStore,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	configurationError,
 	type EffectStore,
 	type EuroclawCronFlag,
@@ -11,8 +17,6 @@ import {
 	errorMessage,
 	flattenToolTree,
 	type InferPluginApi,
-	CONFIG_SCOPE_CONTEXT_KEY,
-	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
 	type Secrets,
@@ -66,7 +70,11 @@ import {
 	withImmutableRedaction,
 } from "./redaction";
 import { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
-import { collectModelFields, getEuroclawModels } from "./tables";
+import {
+	collectModelFields,
+	getEuroclawModels,
+	getEuroclawTables,
+} from "./tables";
 
 export type {
 	BindConversationClawInput,
@@ -247,6 +255,18 @@ export type Claw<Config extends RuntimeConfig = RuntimeConfig> = {
 	// The app-authz PEP appends the out-of-band caller context to every governed method (flat core +
 	// nested plugin), so `claw.api.getClaw({ id }, { principal })` — identity beside the domain input.
 	readonly api: WithCaller<ClawApi<Config> & InferPluginApi<Config>>;
+	/**
+	 * The durable tables this assembled claw expects to exist — core models plus everything its
+	 * plugins and its own `schema`/`redaction` contribute, already merged.
+	 *
+	 * Here so `euroclaw db generate|migrate` can point at the module a host ALREADY has (the one
+	 * exporting its claw) instead of demanding a second export of the raw config. Better Auth solves
+	 * the same problem by keeping `options` on the instance; this exposes the finished DECLARATION
+	 * rather than the config, because the config also holds the model client and whatever was passed
+	 * as `database` — and a migration tool needs none of that. Table and column metadata is the whole
+	 * requirement, and it is not sensitive.
+	 */
+	readonly $tables: SchemaDeclaration;
 	readonly $context: ClawContext<Config> & {
 		readonly audit?: AuditSink;
 		readonly approvals: Runtime<Config>["approvals"];
@@ -872,8 +892,25 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		});
 	}
 
+	// Derived from the SAME merged field maps as `models` above (getEuroclawTables projects what
+	// getEuroclawModels merges), so what the CLI migrates and what the entity adapter validates
+	// cannot disagree — there is one declaration and two projections of it.
+	//
+	// LAZY, and that is not an optimisation detail: the projection re-runs `entity()` per model,
+	// which compiles an arktype validator each time. Computing it eagerly put a full second schema
+	// materialization inside every createClaw — including every test that assembles one — for a
+	// value only the migration CLI ever reads. Memoized, so the CLI still pays it once.
+	let tables: SchemaDeclaration | undefined;
 	return {
 		$context: context,
+		get $tables(): SchemaDeclaration {
+			tables ??= getEuroclawTables({
+				schema: config.schema,
+				plugins: pluginList,
+				redaction: config.redaction,
+			});
+			return tables;
+		},
 		api,
 	};
 }

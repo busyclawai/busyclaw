@@ -46,6 +46,24 @@ back here.
     public API). `kyselyAdapter`'s raw-driver intake (duck-typing a better-sqlite3 `Database` /
      `pg` `Pool` / Kysely `Dialect` and wrapping it in Kysely) follows the approach of Better Auth's
      `packages/kysely-adapter/src/dialect.ts` (`createKyselyAdapter` / `getKyselyDatabaseType`).
+  - `packages/storage/kysely/src/migrations.ts` / `packages/cli/src/` — the schema-migration
+    emitter and its CLI, modeled on Better Auth's `getMigrations`
+    (`packages/better-auth/src/db/get-migration.ts`) and `@better-auth/cli`'s `generate` /
+    `migrate` commands. Adapted (patterns, not copied code): the introspect → diff →
+    create-only-what's-missing shape, the split between a LOOSE type map for matching existing
+    columns and an EXACT one for emitting new ones, the warn-on-drift/never-auto-alter rule, and
+    deferring index creation until every referenced table exists. euroclaw's differs where its
+    schema does: primary keys are declared per field (`field.primaryKey`, composable into a
+    composite key) instead of an implicit `id` column, and table ordering is derived from the
+    declared `references` rather than a hand-maintained `order` number.
+  - `packages/storage/drizzle/src/generate.ts` / `packages/storage/prisma/src/generate.ts` and the
+    `packages/cli/src/generators/` dispatch — the per-adapter schema generators, following Better
+    Auth's `packages/cli/src/generators/` (its `adapters` dispatch table keyed on the adapter's own
+    `id`, and the rule that `migrate` stays Kysely-only while each ORM gets a schema file in its own
+    language). euroclaw keeps each generator inside the storage package that owns the dialect rather
+    than in the CLI, and handles two cases Better Auth's never meet: composite primary keys, and a
+    table with no key at all (emitted `@@ignore` for Prisma, which requires every model to carry an
+    identifier).
   > Note: under MIT, reusing patterns/APIs (as here) requires **no** attribution —
   > ideas and APIs aren't copyrightable. These files are listed as a courtesy. If we
   > later copy *verbatim* code, switch the header to "copied from" and say so here.
