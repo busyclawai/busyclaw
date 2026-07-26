@@ -33,8 +33,10 @@ import {
 	type EuroclawPlugin,
 	endpointRoutesOf,
 	errorMessage,
+	isReservedScope,
 	type LooseResourceBinding,
 	type PolicySourceSlice,
+	RESERVED_SCOPE_PREFIX,
 	type RouteAuthz,
 	type ShareableLoaderContext,
 	type ShareableResource,
@@ -531,7 +533,25 @@ export function governApi(input: {
 		registry,
 		grantStore: input.grantStore,
 	});
-	const resolvePrincipalScopes = input.resolvePrincipalScopes ?? (() => []);
+	const hostScopes = input.resolvePrincipalScopes ?? (() => []);
+	// The host's resolver is the one place membership enters the decision, so it is a trust boundary
+	// even though the host is trusted code. Core reserves the `euroclaw:` scope prefix for containers it
+	// mints to stand in for the ABSENCE of a boundary — a resolver returning one would be claiming
+	// membership of "belongs to nothing", turning the sentinel into a skeleton key over every row that
+	// carries it. Drop it and say so: a host emitting a reserved scope has a bug, and silently honouring
+	// it would be the worst way to find out.
+	const resolvePrincipalScopes = async (
+		principal: string,
+	): Promise<readonly PrincipalScope[]> => {
+		const scopes = await hostScopes(principal);
+		const allowed = scopes.filter((scope) => !isReservedScope(scope.scope));
+		if (allowed.length !== scopes.length) {
+			input.warn(
+				`euroclaw app-authz: resolvePrincipalScopes returned ${scopes.length - allowed.length} reserved "${RESERVED_SCOPE_PREFIX}" scope(s) for ${principal} — ignored (core reserves that prefix; membership of it is never resolvable)`,
+			);
+		}
+		return allowed;
+	};
 	const unsafeOpen = input.appAuthz?.unsafeOpen === true;
 	const shadow = input.appAuthz?.posture === "shadow";
 

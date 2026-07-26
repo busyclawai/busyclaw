@@ -47,6 +47,7 @@ function govern(opts: {
 	runs?: ClawRunReadModel;
 	grantStore?: AccessGrantStore;
 	resolvePrincipalScopes?: (principal: string) => readonly PrincipalScope[];
+	warn?: (message: string) => void;
 }): Governed {
 	return governApi({
 		api,
@@ -58,7 +59,7 @@ function govern(opts: {
 		plugins: [],
 		resolvePrincipalScopes: opts.resolvePrincipalScopes ?? (() => []),
 		appAuthz: undefined,
-		warn: () => {},
+		warn: opts.warn ?? (() => {}),
 	}) as unknown as Governed;
 }
 
@@ -143,6 +144,35 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 		await expect(
 			governed.getClaw({ id: "claw-1" }, { principal: CAROL }),
 		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+	});
+
+	it("a reserved euroclaw: scope from the host resolver is ignored, not honoured", async () => {
+		// UNCONTAINED and its siblings are containers core mints to stand in for the ABSENCE of a
+		// boundary. Nobody can belong to one — so a host resolver claiming that membership, whether by
+		// bug or by a compromised org plugin, must not become a key to every row core parked there.
+		// The grant below is the trap: a matching-looking labelled grant that must stay dormant.
+		const rows = new Map<string, AccessGrant[]>([
+			[
+				"claw:claw-1",
+				[{ principalRef: "euroclaw:uncontained:-", level: "manage" }],
+			],
+		]);
+		const warnings: string[] = [];
+		const governed = govern({
+			clawsStore,
+			grantStore: grantStoreWith(rows),
+			warn: (message) => warnings.push(message),
+			resolvePrincipalScopes: () => [
+				{ scope: "euroclaw:uncontained", scopeId: "-", level: "manage" },
+			],
+		});
+
+		await expect(
+			governed.getClaw({ id: "claw-1" }, { principal: STRANGER }),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+		// Dropped LOUDLY — a host emitting a reserved scope has a bug, and silence is the worst way to
+		// learn about it.
+		expect(warnings.join(" ")).toMatch(/reserved "euroclaw:" scope/);
 	});
 
 	it("grants are DATA: an insert/delete flips the decision while the api bundle is byte-identical", async () => {
