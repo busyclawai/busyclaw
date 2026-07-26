@@ -161,7 +161,6 @@ describe("createClaw engine", () => {
 			tools: {
 				send_email: emailTool(
 					{ onExecute: (to) => ({ sent: true, to }) },
-					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});

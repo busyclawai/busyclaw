@@ -33,7 +33,6 @@ describe("createClaw approvals", () => {
 							return { sent: true, to };
 						},
 					},
-					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});

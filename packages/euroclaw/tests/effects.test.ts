@@ -18,7 +18,6 @@ describe("createClaw effects", () => {
 			tools: {
 				send_email: emailTool(
 					{ onExecute: (to) => ({ sent: true, recipient: to }) },
-					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});
@@ -52,7 +51,6 @@ describe("createClaw effects", () => {
 				send_email: emailTool(
 					{ onExecute: (to) => ({ sent: true, recipient: to }) },
 					{
-						gate: () => ({ decision: "needs-approval" }),
 						effect: { output: "full" },
 					},
 				),
@@ -92,7 +90,6 @@ describe("createClaw effects", () => {
 						},
 					},
 					{
-						gate: () => ({ decision: "needs-approval" }),
 						effect: { idempotency: "none" },
 					},
 				),
@@ -167,7 +164,6 @@ describe("createClaw effects", () => {
 						},
 					},
 					{
-						gate: () => ({ decision: "needs-approval" }),
 						effect: { idempotency: "none" },
 					},
 				),
