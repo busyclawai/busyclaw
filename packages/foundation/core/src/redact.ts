@@ -10,6 +10,7 @@ import {
 	type PiiMapping,
 	type PiiMappingStore,
 	type PiiSpan,
+	piiContainer,
 	piiMapping,
 	piiSpans,
 	type RedactionContext,
@@ -17,6 +18,7 @@ import {
 	type RehydrationContext,
 	redactionContext,
 	rehydrationContext,
+	type ScopeRef,
 } from "@euroclaw/contracts";
 import { validationError } from "@euroclaw/errors";
 import { hmac } from "@noble/hashes/hmac.js";
@@ -215,16 +217,20 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 	// clobbers. Subjects are a separate index for erasure only.
 	const byKey = new Map<string, PiiMapping>();
 	const subjectToKeys = new Map<string, Set<string>>();
-	const containerKey = (
-		scope: string | undefined,
-		scopeId: string | undefined,
-		placeholder: string,
-	): string => JSON.stringify([scope ?? null, scopeId ?? null, placeholder]);
+	// A whole container, never two independently-optional halves: `piiContainer` has already collapsed
+	// the absent and half-absent cases to UNCONTAINED, so there is no `?? null` to get wrong here and
+	// no way for a write and a read to disagree about which bucket "no context" means.
+	const containerKey = (container: ScopeRef, placeholder: string): string =>
+		JSON.stringify([container.scope, container.scopeId, placeholder]);
 	const sameContainer = (
 		mapping: PiiMapping,
 		ctx?: RehydrationContext,
-	): boolean =>
-		mapping.scope === ctx?.scope && mapping.scopeId === ctx?.scopeId;
+	): boolean => {
+		const container = piiContainer(ctx);
+		return (
+			mapping.scope === container.scope && mapping.scopeId === container.scopeId
+		);
+	};
 	return {
 		durable: false,
 		save(mapping, subjectIds) {
@@ -232,7 +238,7 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			if (valid instanceof type.errors) {
 				throw validationError("invalid PII mapping", valid.summary);
 			}
-			const key = containerKey(valid.scope, valid.scopeId, valid.placeholder);
+			const key = containerKey(valid, valid.placeholder);
 			byKey.set(key, valid);
 			for (const subjectId of subjectIds ?? []) {
 				let set = subjectToKeys.get(subjectId);
@@ -245,9 +251,7 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 		},
 		resolve(placeholder, ctx) {
 			// The container is baked into the key, so a foreign placeholder simply misses.
-			const mapping = byKey.get(
-				containerKey(ctx?.scope, ctx?.scopeId, placeholder),
-			);
+			const mapping = byKey.get(containerKey(piiContainer(ctx), placeholder));
 			return mapping?.original ?? null;
 		},
 		findByHash(originalHash, ctx) {
@@ -439,8 +443,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 						original: span.value,
 						originalHash,
 						kind: span.kind,
-						scope: ctx?.scope,
-						scopeId: ctx?.scopeId,
+						...piiContainer(ctx),
 						createdAt: now(),
 					},
 					ctx?.subjectIds,

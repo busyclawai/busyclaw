@@ -2,7 +2,11 @@
 // emitted code, and on the two things easiest to get quietly wrong: declaration ORDER and COMPOSITE
 // primary keys, which euroclaw has and Better Auth's generators never see.
 
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import {
+	piiMappingSchema,
+	piiSubjectSchema,
+	type SchemaDeclaration,
+} from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { generatePrismaSchema } from "../src/generate";
 
@@ -81,9 +85,32 @@ describe("generatePrismaSchema", () => {
 	});
 });
 
+describe("prisma — the real PII vault schema", () => {
+	// The PII tables were the reason this generator needed a keyless escape hatch at all: their key is
+	// (placeholder, scope, scopeId), and while the container columns were nullable it could not be
+	// declared, so both models came out `@@ignore` — absent from the Prisma client, which meant
+	// euroclaw's PII vault could not run on Prisma. Making the container required unblocked it, and
+	// this is the test that says so rather than a README paragraph nobody re-reads.
+	it("emits both PII models with a real composite key and no @@ignore", () => {
+		const warnings: string[] = [];
+		const code = generatePrismaSchema({
+			schema: { ...piiMappingSchema, ...piiSubjectSchema },
+			warn: (message) => warnings.push(message),
+		});
+
+		expect(code).toContain("@@id([placeholder, scope, scopeId])");
+		expect(code).toContain("@@id([placeholder, subjectId, scope, scopeId])");
+		expect(code).not.toContain("@@ignore");
+		expect(warnings).toEqual([]);
+		// Key columns must be non-nullable or Prisma rejects the @@id.
+		expect(code).not.toMatch(/\bscope\s+String\?/);
+		expect(code).not.toMatch(/\bscopeId\s+String\?/);
+	});
+});
+
 describe("prisma — models with no declared key", () => {
-	// Prisma refuses to validate a schema containing a model with no @id/@@id/@@unique. euroclaw has
-	// exactly that today (pii_mapping), so the generator must not emit a file prisma will reject.
+	// No core table is in this state any more, but the escape hatch stays covered: a PLUGIN may declare
+	// a keyless table, and the generator must emit a file prisma will still validate.
 	const keyless: SchemaDeclaration = {
 		pii_subject: {
 			fields: {
