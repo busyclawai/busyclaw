@@ -47,6 +47,14 @@ export type PiiSpan = typeof piiSpan.infer;
 export const piiSpans = piiSpan.array();
 export type PiiSpans = typeof piiSpans.infer;
 
+// NO `primaryKey` here, deliberately. The real key is the TRIPLE (placeholder, scope, scopeId) —
+// a placeholder is unique only within its container (see createMemoryPiiMappingStore) — but a
+// primary key cannot contain NULL, and `scope`/`scopeId` are optional because a context-less
+// redaction genuinely has no container. Declaring the composite key therefore has to wait for that
+// null container to stop being representable (making both required, with a sentinel for the
+// container-less case), which is the same change that would close the erasure gap the cleanroom
+// brief flags in §7. Until then these two tables carry indexes and no uniqueness constraint, and
+// the migration emitter leaves them primary-keyless rather than inventing a key.
 export const piiMappingFields = {
 	placeholder: field.string({ required: true, index: true }),
 	original: field.string({ required: true, pii: "contains" }),

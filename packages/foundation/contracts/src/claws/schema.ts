@@ -50,7 +50,12 @@ export const checkpointKind = type(
 );
 
 export const clawFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	// A claw is a SHAREABLE agent resource. `createdBy` is immutable — who made it (accountability,
 	// erasure attribution). The access boundary `(scope, scopeId)` is MUTABLE — a claw can be re-shared
 	// over its life (created personal, promoted org-wide). `scope` is an OPAQUE string the core never
@@ -87,7 +92,12 @@ export const threadFields = {
 	// A thread's access is its claw's — transitive via `clawId`, no own scope columns (same as
 	// messages/tool_calls are descendants). Identity is fixed at create; only status and the message
 	// cursor advance.
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	clawId: field.string({
 		required: true,
 		index: true,
@@ -109,7 +119,7 @@ export const threadFields = {
 } as const;
 
 export const messageFields = {
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	clawId: field.string({
 		required: true,
 		index: true,
@@ -151,7 +161,12 @@ export const toolCallFields = {
 	// A tool call's identity and inputs are fixed once proposed; only its progression (status →
 	// approval → effect) changes. So everything but status/approvalId/effectId is immutable, and the
 	// update patch derives to exactly those three.
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	clawId: field.string({
 		required: true,
 		index: true,
@@ -192,7 +207,7 @@ export const toolCallFields = {
 } as const;
 
 export const toolResultFields = {
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	clawId: field.string({
 		required: true,
 		index: true,
@@ -226,7 +241,7 @@ export const toolResultFields = {
 } as const;
 
 export const checkpointFields = {
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	runId: field.string({ required: true, index: true }),
 	clawId: field.string({
 		required: true,
@@ -256,7 +271,7 @@ export const conversationBindingFields = {
 	// the key): the BOT scopes external conversation ids — telegram DM chat ids repeat across bots — so
 	// the natural key is (provider, endpointKey, externalConversationId). Whose data a conversation is
 	// lives on the claw the binding points at (its createdBy/scope), not here.
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	provider: field.string({ required: true, index: true }),
 	endpointKey: field.string({ required: true, index: true }),
 	// External identifiers are pseudonymous personal data (a chat/user id addresses a person), and

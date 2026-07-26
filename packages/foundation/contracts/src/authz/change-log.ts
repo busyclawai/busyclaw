@@ -19,7 +19,12 @@ import { scopeFields } from "../scope";
 // ── authz_change — append-only; scoped by (scope, scopeId), its count is the bundle version ────────
 
 export const authzChangeFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	...scopeFields,
 	kind: field.enum(["spec_registered", "overlay_changed", "policy_changed"], {
 		required: true,

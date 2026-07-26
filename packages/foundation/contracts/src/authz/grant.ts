@@ -76,7 +76,12 @@ export const accessGrantPrincipalRef = type("string").narrow((value, ctx) => {
 // ── access_grant — one immutable row per (resourceKind, resourceId, principalRef, permission) ────────
 
 export const accessGrantFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	// The OPAQUE resource-kind label (`"claw"`/`"thread"`/`"skill"`/…) — never interpreted by core,
 	// exactly like `scope`. With resourceId it is the hot-path lookup the PEP reads per governed call.
 	resourceKind: field.string({ required: true, index: true, immutable: true }),

@@ -15,8 +15,8 @@
 import { type } from "arktype";
 import type { EntityInput, EntityRecord, EntityUpdateInput } from "../entity";
 import { entity, field } from "../entity";
-import { scopeFields } from "../scope";
 import { toolGovernance } from "../govern";
+import { scopeFields } from "../scope";
 import { sourceDiagnostic } from "./source";
 
 // What one registration did — the diff's outcome (addresses touched) plus the extractor's
@@ -32,7 +32,12 @@ export const specRegistrationReport = type({
 // ── spec_registration — one row per (scope, scopeId, source); re-registration REPLACES it ──────
 
 export const specRegistrationFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	...scopeFields,
 	// The slug, also the address prefix (`<source>.<tool>`).
 	source: field.string({ required: true, index: true, immutable: true }),
@@ -73,7 +78,12 @@ export const specRegistrationSchema = specRegistrationEntity.storage;
 // ── registered_tool — one row per extracted operation ──────────────────────────────────────────
 
 export const registeredToolFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	...scopeFields,
 	source: field.string({ required: true, index: true, immutable: true }),
 	// The extractor's tool name.
@@ -124,7 +134,12 @@ export const registeredToolSchema = registeredToolEntity.storage;
 // ── facts_overlay — one row per (scope, scopeId, actionId) override ─────────────────────────────
 
 export const factsOverlayFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	...scopeFields,
 	// Matches an action id (dotted for registered tools, bare for domain verbs / code tools).
 	actionId: field.string({ required: true, index: true }),

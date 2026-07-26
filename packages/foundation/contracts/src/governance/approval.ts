@@ -25,7 +25,12 @@ export type ApprovalStatus = (typeof approvalStatusValues)[number];
 export const approvalFields = {
 	// The request being decided (gate, tool, args, context, expiry) is fixed at create; only the
 	// decision fields (status, decidedBy, reason) change.
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	status: field.enum(approvalStatusValues, { required: true }),
 	gateId: field.string({ required: true, immutable: true }),
 	toolName: field.string({ required: true, index: true, immutable: true }),

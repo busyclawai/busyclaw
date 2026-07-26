@@ -14,7 +14,12 @@ export type RunCheckpointStatus = (typeof runCheckpointStatusValues)[number];
 
 export const runCheckpointFields = {
 	// Identity + resume state are fixed at create; the single-use consumption is the only transition.
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	status: field.enum(runCheckpointStatusValues, {
 		required: true,
 		index: true,

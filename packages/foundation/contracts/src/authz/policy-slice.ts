@@ -18,7 +18,12 @@ import { scopeFields } from "../scope";
 // ── policy_slice — one row per (scope, scopeId, name); upsert REPLACES in place ─────────────────
 
 export const policySliceFields = {
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	...scopeFields,
 	// A human label AND the stable slice id within the org — upsert replaces by (scope, scopeId, name).
 	// Indexed like its siblings facts_overlay.actionId / spec_registration.source (the by-name lookup).

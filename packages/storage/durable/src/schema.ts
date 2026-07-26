@@ -14,7 +14,7 @@ import {
 } from "@euroclaw/contracts";
 
 export const teamMemberEntity = entity("team_member", {
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	team: field.string({ required: true, index: true }),
 	userId: field.string({ required: true, index: true }),
 	role: field.string({ required: true }),
@@ -22,7 +22,7 @@ export const teamMemberEntity = entity("team_member", {
 } as const);
 
 export const teamInviteEntity = entity("team_invite", {
-	id: field.string({ required: true, unique: true }),
+	id: field.string({ required: true, primaryKey: true, unique: true }),
 	team: field.string({ required: true, index: true }),
 	email: field.string({ required: true, pii: "possible" }),
 	role: field.string({ required: true }),

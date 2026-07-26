@@ -26,7 +26,12 @@ export type EffectCompensation = typeof effectCompensation.infer;
 export const effectFields = {
 	// The effect's identity — what tool ran with what input — is fixed at create; only its execution
 	// state (status, lease, output/error, compensation) changes.
-	id: field.string({ required: true, unique: true, immutable: true }),
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
 	status: field.enum(effectStatusValues, { required: true, index: true }),
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	inputHash: field.string({ required: true, index: true, immutable: true }),

@@ -463,7 +463,7 @@ export type {
 	WhereGroup,
 	WhereOperator,
 } from "./storage";
-export { isWhereGroup, sortByList } from "./storage";
+export { isWhereGroup, sortByList, tableOrder } from "./storage";
 // ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
 export type { TextDeltaStream } from "./stream";
 // ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──
