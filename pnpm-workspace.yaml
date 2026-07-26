@@ -6,6 +6,10 @@ packages:
   - "packages/plugins/*"
   - "packages/plugins/policies/*"
   - "packages/engines/*"
+  # Runnable integration demos. They consume the PUBLIC surface only (euroclaw, the adapters,
+  # the client) — never a package's internals — so a demo that stops compiling is a real signal
+  # about the product surface, not about the demo.
+  - "examples/*"
 
 # better-sqlite3 needs its native build to run (only this one is allowlisted) — used by the
 # SQL storage adapters' tests via an in-memory database.
@@ -16,6 +20,9 @@ allowBuilds:
   "@prisma/client": true
   "@prisma/engines": true
   msw: false
+  # Next's optional image-optimization binary. The demo serves no optimized images, and Next runs
+  # without it — so its native build stays unrun rather than being compiled on every install.
+  sharp: false
 onlyBuiltDependencies:
   - better-sqlite3
   - mongodb-memory-server
@@ -26,3 +33,15 @@ onlyBuiltDependencies:
 # verify-deps-before-run check with ERR_PNPM_IGNORED_BUILDS.
 ignoredBuiltDependencies:
   - msw
+  - sharp
+minimumReleaseAgeExclude:
+  - '@next/env@16.2.12'
+  - '@next/swc-darwin-arm64@16.2.12'
+  - '@next/swc-darwin-x64@16.2.12'
+  - '@next/swc-linux-arm64-gnu@16.2.12'
+  - '@next/swc-linux-arm64-musl@16.2.12'
+  - '@next/swc-linux-x64-gnu@16.2.12'
+  - '@next/swc-linux-x64-musl@16.2.12'
+  - '@next/swc-win32-arm64-msvc@16.2.12'
+  - '@next/swc-win32-x64-msvc@16.2.12'
+  - next@16.2.12

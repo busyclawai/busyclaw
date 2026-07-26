@@ -1,0 +1,48 @@
+{
+	"name": "@euroclaw/cli",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "The euroclaw CLI — `euroclaw db generate` / `euroclaw db migrate` over the schema your config declares.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"bin": {
+		"euroclaw": "./dist/index.mjs"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"main": "./dist/index.mjs",
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsdown",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@euroclaw/contracts": "workspace:*",
+		"@euroclaw/storage-drizzle": "workspace:*",
+		"@euroclaw/storage-kysely": "workspace:*",
+		"@euroclaw/storage-prisma": "workspace:*",
+		"commander": "15.0.0",
+		"euroclaw": "workspace:*",
+		"jiti": "2.7.0"
+	},
+	"peerDependencies": {
+		"kysely": ">=0.27.0"
+	},
+	"devDependencies": {
+		"@euroclaw/storage-core": "workspace:*",
+		"@types/better-sqlite3": "7.6.13",
+		"@types/node": "26.1.1",
+		"better-sqlite3": "12.11.1",
+		"kysely": "0.29.2",
+		"tsdown": "0.22.14"
+	}
+}
