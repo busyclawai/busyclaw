@@ -198,6 +198,37 @@ function toKysely(database: KyselyDatabase): Kysely<DB> {
 }
 
 /**
+ * The same intake as {@link kyselyAdapter}, but returning the Kysely instance TOGETHER with the
+ * dialect it speaks — what DDL needs and CRUD does not (the adapter writes portable queries; a
+ * migration has to name real column types).
+ *
+ * `type` is `undefined` when the input genuinely does not say: a bare Kysely instance or a bare
+ * `Dialect` carries no dialect tag we can read without executing a query. Callers should ask the
+ * user rather than guess — Better Auth defaults to sqlite with a warning here, which silently
+ * emits the wrong DDL if the guess is wrong, and wrong DDL is not a warning-shaped problem.
+ */
+export function resolveKyselyDatabase(database: KyselyDatabase): {
+	db: Kysely<DB>;
+	type: "postgres" | "sqlite" | undefined;
+} {
+	const probe = database as Record<string, unknown>;
+	const db = toKysely(database);
+	if ("db" in probe || "dialect" in probe) {
+		const declared = (database as { type?: KyselyDatabaseType }).type;
+		if (declared === "postgres" || declared === "sqlite") {
+			return { db, type: declared };
+		}
+		return { db, type: undefined };
+	}
+	if ("selectFrom" in probe || "createDriver" in probe) {
+		return { db, type: undefined };
+	}
+	if ("aggregate" in probe) return { db, type: "sqlite" };
+	if ("connect" in probe) return { db, type: "postgres" };
+	return { db, type: undefined };
+}
+
+/**
  * Adapt Kysely — or a raw driver/pool/dialect — to the storage Adapter port. Tables/columns are
  * addressed by string. SQLite + Postgres today (a mysql2 pool is rejected: create/update use RETURNING).
  */
@@ -310,3 +341,14 @@ export function kyselyAdapter(database: KyselyDatabase): Adapter {
 		},
 	};
 }
+
+// The migration emitter — SchemaDeclaration → DDL, over the same Kysely instance this adapter
+// drives. Lives beside the adapter because DDL is dialect work; consumed by @euroclaw/cli.
+export type {
+	MigrationDialect,
+	MigrationPlan,
+	MigrationPlanOptions,
+	PlannedColumns,
+	PlannedTable,
+} from "./migrations";
+export { planMigrations } from "./migrations";
