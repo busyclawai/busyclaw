@@ -21,6 +21,7 @@ import {
 	type RuntimeAbortSignal,
 	type RuntimeResult,
 	RuntimeResult as RuntimeResultSchema,
+	runtimeRunOptionsWithCaller,
 } from "@euroclaw/runtime";
 import { type } from "arktype";
 import type { ClaimedTask, RuntimeTask, SqlEngineStore } from "./store";
@@ -134,19 +135,29 @@ async function runTask(
 	claim: ClaimedTask,
 	abortSignal?: RuntimeAbortSignal,
 	deadlineAt?: string,
+	principal?: string,
 ): Promise<TaskExecution> {
 	// runId scopes effect ids and runtime events to the durable run, across attempts and slices;
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
+	//
+	// The PRINCIPAL comes from the durable RUN ROW, seeded through the forge-proof symbol option so it
+	// lands as the stamped `euroclaw__principal` the floor reads. A durable run is the same run as the
+	// one that started it — it is sliced across invocations, not re-authored by the worker — so it must
+	// execute as the identity it was created for, and the run row is the only record of that which
+	// survives the process. It went unnoticed while unstamped tools skipped the floor; with every tool
+	// gated, a worker that omits it cannot execute ANY tool: the floor fails closed on an absent
+	// identity rather than authorize a modeled action for nobody.
 	const options = {
 		abortSignal,
 		runId: claim.task.runId,
 		...(deadlineAt !== undefined ? { deadlineAt } : {}),
 	};
+	const withCaller = runtimeRunOptionsWithCaller(options, principal);
 	if (claim.task.kind === RUNTIME_RUN_TASK) {
 		const payload = runtimeRunPayload(claim.task.payload);
 		return {
 			result: runtimeResult(
-				await runtime.generate(payload.prompt, payload.ctx, options),
+				await runtime.generate(payload.prompt, payload.ctx, withCaller),
 				"runtime.generate result",
 			),
 			ctx: payload.ctx,
@@ -158,7 +169,7 @@ async function runTask(
 		const rawResumeResult = await runtime.resumeRun(
 			payload.checkpointId,
 			payload.ctx,
-			options,
+			withCaller,
 		);
 		if (!rawResumeResult) throw stateError("run checkpoint is not consumable");
 		return { result: workerRuntimeResult(rawResumeResult), ctx: payload.ctx };
@@ -168,7 +179,7 @@ async function runTask(
 	const rawApprovalResult = await runtime.continueRun(
 		payload.approvalId,
 		payload.ctx,
-		options,
+		withCaller,
 	);
 	if (!rawApprovalResult) throw stateError("approval is not consumable");
 	return { result: workerRuntimeResult(rawApprovalResult), ctx: payload.ctx };
@@ -324,11 +335,16 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 					payload: { taskId: claim.task.id, workerId },
 				});
 
+				// The identity this durable run belongs to, read from the run row rather than invented
+				// by the worker. A run with none executes with none, and the floor refuses it — which is
+				// the correct answer for a task nobody can be shown to have asked for.
+				const run = await store.getRun(claim.task.runId);
 				const runtimeTask = runTask(
 					runtime,
 					claim,
 					heartbeat.abortSignal,
 					deadlineAt,
+					run?.principal,
 				);
 				void runtimeTask.catch(() => undefined);
 				const execution = await Promise.race([

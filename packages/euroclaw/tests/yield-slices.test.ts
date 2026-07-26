@@ -91,7 +91,8 @@ describe("createClaw deadline slicing", () => {
 							return { pong: n };
 						},
 					}),
-					{},
+					// A ping is a read. Unstamped now means WRITE, which the floor gates.
+					{ access: "read" },
 				),
 			},
 		});
@@ -192,7 +193,8 @@ describe("createClaw deadline slicing", () => {
 						}),
 						execute: async ({ n }) => ({ pong: n }), // fast tool — clock never moves
 					}),
-					{},
+					// A ping is a read. Unstamped now means WRITE, which the floor gates.
+					{ access: "read" },
 				),
 			},
 		});
