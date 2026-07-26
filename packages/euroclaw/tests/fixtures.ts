@@ -223,7 +223,7 @@ export function emailTool(
 			}),
 			execute: async ({ to }) => input.onExecute(to),
 		}),
-		governance,
+		{ access: "write", ...governance },
 	);
 }
 

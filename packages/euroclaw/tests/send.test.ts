@@ -76,7 +76,6 @@ describe("createClaw send", () => {
 				send_email: emailTool(
 					{ onExecute: () => ({ sent: true }) },
 					{
-						gate: () => ({ decision: "needs-approval" }),
 					},
 				),
 			},
@@ -145,7 +144,6 @@ describe("createClaw send", () => {
 							return { sent: true, to };
 						},
 					},
-					{ gate: () => ({ decision: "needs-approval" }) },
 				),
 			},
 		});
@@ -209,7 +207,6 @@ describe("createClaw send", () => {
 				send_email: emailTool(
 					{ onExecute: () => ({ sent: true }) },
 					{
-						gate: () => ({ decision: "needs-approval" }),
 					},
 				),
 			},
