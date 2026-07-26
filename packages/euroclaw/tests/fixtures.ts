@@ -154,7 +154,9 @@ export function lookupTool(email: string): ToolDefinition {
 			}),
 			execute: async () => ({ email }),
 		}),
-		{},
+		// A lookup IS a read, and now has to say so: an unstamped tool is classed a WRITE, which under
+		// the seeded posture needs confirmation. This used to pass `{}` and run ungoverned.
+		{ access: "read" },
 	);
 }
 

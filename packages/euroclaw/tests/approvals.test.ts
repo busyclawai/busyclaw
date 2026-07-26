@@ -59,12 +59,12 @@ describe("createClaw approvals", () => {
 		).toBe("completed");
 	});
 
-	// A send_email tool that always parks for approval — the shared shape for the authz + audit proofs.
+	// A send_email tool that parks for approval — the shared shape for the authz + audit proofs. The
+	// parking is the FLOOR's now, not a gate stacked on top: send_email is a write, and a write needs
+	// confirmation under the seeded posture. Two gates would each want their own approval and a resume
+	// clears exactly one, which is how the stacked version failed once the floor stopped skipping.
 	const emailNeedsApproval = () => ({
-		send_email: emailTool(
-			{ onExecute: (to: string) => ({ sent: true, to }) },
-			{ gate: () => ({ decision: "needs-approval" as const }) },
-		),
+		send_email: emailTool({ onExecute: (to: string) => ({ sent: true, to }) }),
 	});
 
 	it("records actor-kind + approver in the audit across the approval flow (seams 1+2)", async () => {
