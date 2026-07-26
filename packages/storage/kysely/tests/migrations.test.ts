@@ -178,6 +178,53 @@ describe("planMigrations", () => {
 		await expect(keyless.runMigrations()).resolves.toBeUndefined();
 	});
 
+	it("emits a json column as TEXT — the storage layer owns the serialization", async () => {
+		// Not a style choice: schemaAdapter's default `json: "string"` mode (what createClaw uses)
+		// stringifies on write and demands a string on read. A native jsonb column makes pg return a
+		// parsed object and decoding throws — which is exactly how this was found, against real Neon.
+		const plan = await planMigrations({
+			db: db as never,
+			schema: {
+				claw: {
+					fields: {
+						id: { type: "string", required: true, primaryKey: true },
+						context: { type: "json", required: true },
+					},
+				},
+			},
+			dialect: "postgres",
+			warn: () => {},
+		});
+		const sql = plan.compileMigrations();
+		expect(sql).toContain('"context" text');
+		expect(sql).not.toContain("jsonb");
+	});
+
+	it("reports an existing jsonb column as DRIFT rather than accepting it", async () => {
+		await db.schema
+			.createTable("claw")
+			.addColumn("id", "text", (c) => c.primaryKey())
+			.addColumn("context", "jsonb")
+			.execute();
+
+		const plan = await planMigrations({
+			db: db as never,
+			schema: {
+				claw: {
+					fields: {
+						id: { type: "string", required: true, primaryKey: true },
+						context: { type: "json", required: true },
+					},
+				},
+			},
+			dialect: "postgres",
+			warn: () => {},
+		});
+		expect(plan.drift).toContainEqual(
+			expect.objectContaining({ column: "context", declared: "json" }),
+		);
+	});
+
 	it("refuses a primaryKey field that is not required — a key column cannot be NULL", async () => {
 		await expect(
 			plan({

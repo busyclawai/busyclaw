@@ -49,7 +49,10 @@ const COLUMN: Record<
 		number: (col) => `doublePrecision(${col})`,
 		boolean: (col) => `boolean(${col})`,
 		date: (col) => `timestamp(${col}, { withTimezone: true })`,
-		json: (col) => `jsonb(${col})`,
+		// TEXT, and WITHOUT `mode: "json"`: euroclaw's storage layer serializes a `json` field
+		// itself and expects the string back, so a column Drizzle parses for you is a column the
+		// adapter then refuses.
+		json: (col) => `text(${col})`,
 	},
 	sqlite: {
 		string: (col) => `text(${col})`,
@@ -57,7 +60,7 @@ const COLUMN: Record<
 		// SQLite has no boolean; Drizzle stores it as an integer and converts at the edge.
 		boolean: (col) => `integer(${col}, { mode: "boolean" })`,
 		date: (col) => `text(${col})`,
-		json: (col) => `text(${col}, { mode: "json" })`,
+		json: (col) => `text(${col})`,
 	},
 };
 

@@ -51,7 +51,9 @@ describe("generatePrismaSchema", () => {
 
 	it("maps declared types to Prisma scalars", () => {
 		const code = generatePrismaSchema({ schema: SCHEMA });
-		expect(code).toContain("context Json");
+		// String, not Json: a Prisma Json column hands back a parsed value, which decoding refuses.
+		expect(code).toContain("context String");
+		expect(code).not.toMatch(/\bJson\b/);
 		expect(code).toContain("createdAt DateTime");
 		expect(code).toContain("archived Boolean?");
 		expect(code).toContain("currentSequence Float");

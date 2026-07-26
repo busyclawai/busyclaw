@@ -62,7 +62,8 @@ describe("generateKyselyTypes", () => {
 		expect(code).toContain(
 			"createdAt: ColumnType<Date, Date | string, Date | string>;",
 		);
-		expect(code).toContain("context: unknown;");
+		// The column is TEXT and the storage layer owns the serialization, so a read yields the string.
+		expect(code).toContain("context: string;");
 	});
 
 	it("types SQLITE booleans as numbers and dates as strings — it has neither", () => {
