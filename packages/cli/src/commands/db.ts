@@ -196,6 +196,9 @@ export async function dbGenerate(options: DbCommandOptions): Promise<void> {
 			...(options.provider !== undefined
 				? { provider: assertProvider(options.provider) }
 				: {}),
+			...(options.dialect !== undefined
+				? { dialect: assertDialect(options.dialect) }
+				: {}),
 		});
 		console.log(`\n${Object.keys(loaded.tables).length} table(s) emitted.`);
 		write(target, contents, options.output);
