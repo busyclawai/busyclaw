@@ -33,6 +33,7 @@ import {
 	type EuroclawPlugin,
 	endpointRoutesOf,
 	errorMessage,
+	SYSTEM_ANONYMOUS,
 	type LooseResourceBinding,
 	type PolicySourceSlice,
 	type RouteAuthz,
@@ -43,6 +44,7 @@ import {
 	type ClawApiCaller,
 	type ClawApiMethod,
 	clawApiRouteList,
+	PROVIDER_TOOL_CALL_SEPARATOR,
 } from "./api";
 
 /**
@@ -71,76 +73,32 @@ export type AppAuthzConfig = {
 };
 
 /**
- * The per-method required LEVEL — the ONE non-derivable per-method fact. A FULL record over every
- * `ClawApi` method (a missing OR mistyped key fails to compile — `satisfies` pins it), so adding an api
- * method forces an intentional level, never a silent `manage` default. `read` sees, `use` runs/invokes,
- * `manage` mutates/administers. The owner has max level implicitly; the level bites a NON-owner caller
- * whose scope/grant level is compared against it.
+ * The methods that authorize against NOTHING shared — every route whose declaration is `mode: "caller"`.
+ * DERIVED from the one route table rather than listed separately: the old parallel `CORE_API_LEVELS` and
+ * `CORE_API_CREATE_METHODS` maps were a second source of truth that could drift from the binding they
+ * described, and a level recorded in one place while the resource was declared in another is exactly how
+ * a method ends up authorizing against something nobody intended.
+ *
+ * These still reach Cedar. They are members of the `creates` action group, which the sealed baseline
+ * permits for any authenticated principal — but a plugin `forbid` still overrides it, so "authorizes
+ * against no shared resource" never means "unreachable by policy".
  */
-export const CORE_API_LEVELS = {
-	bindConversation: "manage",
-	createClaw: "manage",
-	getClaw: "read",
-	updateClaw: "manage",
-	archiveClaw: "manage",
-	createThread: "use",
-	getThread: "read",
-	listThreads: "read",
-	archiveThread: "manage",
-	appendMessage: "use",
-	getMessage: "read",
-	listMessages: "read",
-	sendMessage: "use",
-	forgetSubject: "manage",
-	createToolCall: "use",
-	getToolCall: "read",
-	getToolCallByProviderId: "read",
-	updateToolCallStatus: "use",
-	createToolResult: "use",
-	getToolResult: "read",
-	listToolResults: "read",
-	createCheckpoint: "use",
-	getCheckpoint: "read",
-	getLatestCheckpoint: "read",
-	generate: "use",
-	continueRun: "use",
-	grantApproval: "manage",
-	denyApproval: "manage",
-	getApproval: "read",
-	listApprovals: "read",
-	getEffect: "read",
-	registerOpenApiSpec: "manage",
-	listRegisteredTools: "read",
-	listActions: "read",
-	putPolicySlice: "manage",
-	listPolicySlices: "read",
-	deletePolicySlice: "manage",
-	startRun: "use",
-	continueEngineRun: "use",
-	getRun: "read",
-	listRunEvents: "read",
-	// The generic share/unshare api (slice 5) — LEVEL manage, so the PEP requires the caller MANAGE the
-	// TARGET resource before a grant can be written: you can only share what you manage.
-	shareResource: "manage",
-	unshareResource: "manage",
-} satisfies Record<ClawApiMethod, ApiPermissionLevel>;
+export const CORE_API_CREATE_METHODS: readonly ClawApiMethod[] =
+	clawApiRouteList
+		.filter((route) => route.authz.mode === "caller")
+		.map((route) => route.apiMethod);
 
-/** The TRUE creates — any authenticated principal may perform them, and the created row's owner becomes
- *  the caller (createClaw) or a system principal (bindConversation binds a stranger's conversation). */
-export const CORE_API_CREATE_METHODS: readonly ClawApiMethod[] = [
-	"createClaw",
-	"bindConversation",
-];
-
-// Which resource a governed method acts on — the STATIC (kind, input[idKey]) and DYNAMIC
-// (input[kindKey], input[idKey]) bindings — is no longer a central map here. It is CO-LOCATED and
-// type-checked on each method's OWN def: core methods on their `clawApiRoutes[method].resource` (see
-// api.ts), plugin methods on their `endpoints()` def `resource` (carried into the route metadata). The
-// loader below reads those declarations via `collectResourceBindings`. A method with NO binding is not
-// resource-anchored — it acts within the caller's personal scope (`personalScope`).
-
-const CREATE_SET = new Set<string>(CORE_API_CREATE_METHODS);
-const LEVELS = CORE_API_LEVELS as Record<string, ApiPermissionLevel>;
+/**
+ * Every `mode: "caller"` method across the WHOLE assembled api — core AND plugin namespaces. The engine
+ * needs all of them, not just core's: a plugin method that authorizes against nothing shared but is
+ * absent from the `creates` group has no permit to match, so it would deny universally. `secrets.set`
+ * failed exactly that way when only core's list was passed.
+ */
+export function callerOnlyMethodIds(api: Record<string, unknown>): string[] {
+	return [...collectRouteAuthz(api)]
+		.filter(([, authz]) => authz.mode === "caller")
+		.map(([method]) => method);
+}
 
 function stringField(input: unknown, key: string): string | undefined {
 	if (input === null || typeof input !== "object") return undefined;
@@ -153,20 +111,27 @@ function stringField(input: unknown, key: string): string | undefined {
  *  row can't be resolved. NEVER "the caller owns it." */
 const DENY_SHAPE: ApiResourceShape = { grants: [] };
 
-/** The caller's own PERSONAL scope — the honest shape for a method NOT anchored to a specific shared row
- *  (secrets, policy slices, the caller's own runs …): the row such a method touches is keyed by the
- *  caller, so `createdBy == caller` is the TRUTH here, not a not-found fallback. An absent principal gets
- *  the deny shape (the actor floor already denied it upstream). */
-function personalScope(principal: string | undefined): ApiResourceShape {
-	return principal !== undefined
-		? {
-				createdBy: principal,
-				scope: "personal",
-				scopeId: principal,
-				grants: [],
-			}
-		: DENY_SHAPE;
-}
+/** The kinds CORE declares on its own routes. Membership separates "this deployment has no such store"
+ *  (a configuration error, since a core route named the kind) from "the caller named a kind nothing
+ *  registers" (a denial, since share/unshare take the kind from the input). */
+const CORE_RESOURCE_KINDS = new Set([
+	"claw",
+	"thread",
+	"message",
+	"toolCall",
+	"toolResult",
+	"checkpoint",
+	"runCheckpoint",
+	"providerToolCall",
+	"run",
+]);
+
+
+// `personalScope(principal)` lived here: it returned a resource whose `createdBy` WAS the caller, and
+// the loader fell back to it whenever a method declared no binding. That is the whole vulnerability in
+// one function — the decision then asked Cedar "does the caller own this?" about something defined one
+// line earlier as caller-owned. It is deleted rather than left unused: every method now resolves a real
+// target or declares `mode: "caller"` out loud, and an unresolvable one yields DENY_SHAPE.
 
 /** What a per-kind loader resolves — the plugin-facing opaque {@link ShareableResource} base, plus the
  *  CORE-only `grantParents`: additional (kind, id) whose grants are UNIONED into this resource's (the
@@ -218,6 +183,52 @@ export function buildResourceRegistry(input: {
 				grantParents: [{ kind: "claw", id: thread.clawId }],
 			};
 		});
+		// Every transcript descendant carries a REQUIRED `clawId`, so each resolves to that claw's
+		// owner/scope/grants and inherits its grants — share a claw and its transcript comes along. One
+		// helper rather than four copies: the only thing that differs is which store the row comes from,
+		// and a divergence between them would be an isolation gap that reads as a typo.
+		const ownedByClaw =
+			(load: (id: string) => Promise<{ clawId: string } | null>) =>
+			async (id: string): Promise<ResolvedResource | null> => {
+				const row = await load(id);
+				if (!row) return null;
+				const claw = await clawsStore.claws.get(row.clawId);
+				if (!claw) return null;
+				return {
+					createdBy: claw.createdBy,
+					scope: claw.scope,
+					scopeId: claw.scopeId,
+					grantParents: [{ kind: "claw", id: row.clawId }],
+				};
+			};
+		registry.set("message", ownedByClaw((id) => clawsStore.messages.get(id)));
+		registry.set("toolCall", ownedByClaw((id) => clawsStore.toolCalls.get(id)));
+		registry.set(
+			"toolResult",
+			ownedByClaw((id) => clawsStore.toolResults.get(id)),
+		);
+		registry.set(
+			"checkpoint",
+			ownedByClaw((id) => clawsStore.checkpoints.get(id)),
+		);
+		// A run's LATEST checkpoint, keyed by the run id — the anchor for reads that name a run but live
+		// in the claws store, so they work in a deployment with no durable engine. A run with no
+		// checkpoint yet resolves to nothing and DENIES, which is also "there is nothing to read".
+		registry.set(
+			"runCheckpoint",
+			ownedByClaw((runId) => clawsStore.checkpoints.latestForRun(runId)),
+		);
+		// The provider-assigned tool call, keyed by its natural pair. Tool-call ids are unique only
+		// within a run, so the id here is the PAIR, joined by a NUL — a byte no id can contain, so the
+		// split cannot be ambiguous the way a slash or colon would be.
+		registry.set(
+			"providerToolCall",
+			ownedByClaw(async (composite) => {
+				const [runId, toolCallId] = composite.split(PROVIDER_TOOL_CALL_SEPARATOR);
+				if (runId === undefined || toolCallId === undefined) return null;
+				return clawsStore.toolCalls.getByToolCallId({ runId, toolCallId });
+			}),
+		);
 	}
 	if (runs !== undefined) {
 		// run — createdBy is the durable run's principal (scope personal to that principal). An absent
@@ -254,36 +265,20 @@ export function buildResourceRegistry(input: {
 }
 
 /**
- * Collect the CO-LOCATED resource bindings across the whole assembled api into one lookup, keyed by the
- * dotted method id the PEP wraps. Core flat methods carry their binding on their own route def
- * (`clawApiRouteList`); plugin methods carry theirs on their `endpoints()` def, re-attached under
- * `ENDPOINTS_METADATA` and read via `endpointRoutesOf` (a route `name` is relative to its namespace
- * mount, so it prefixes). This READS the declarations each method owns — it is the plugin-extensible
- * analog of the loader registry, not a second parallel source of truth like the old central maps.
- */
-function collectResourceBindings(
-	api: Record<string, unknown>,
-): Map<string, LooseResourceBinding> {
-	const bindings = new Map<string, LooseResourceBinding>();
-	for (const route of clawApiRouteList) {
-		if (route.resource !== undefined) {
-			bindings.set(route.apiMethod, route.resource);
-		}
-	}
-	return bindings;
-}
-
-/**
- * Collect the declared {@link RouteAuthz} of every route-built method, keyed by the dotted method id the
- * PEP wraps. This is the successor to the static `resource` binding above: a route says what it
- * authorizes against with a typed RESOLVER over its own input, which the PEP evaluates per call. A
- * method that appears here takes the route path; anything left over is a core method still on the legacy
- * binding table.
+ * Collect the declared {@link RouteAuthz} of EVERY governed method, keyed by the dotted method id the PEP
+ * wraps — core flat methods off their own route defs (`clawApiRouteList`), plugin methods off the route
+ * table `endpoints()` re-attaches. Every method has one: core's `satisfies` and the route builder's type
+ * gate each make omission a compile error, and this map is the PEP's whole view of what a method
+ * authorizes against. A method missing from it is one the PEP cannot decide, so it DENIES rather than
+ * guessing — which is precisely the state the old optional binding turned into "the caller owns it".
  */
 function collectRouteAuthz(
 	api: Record<string, unknown>,
 ): Map<string, RouteAuthz> {
 	const declared = new Map<string, RouteAuthz>();
+	for (const route of clawApiRouteList) {
+		declared.set(route.apiMethod, route.authz);
+	}
 	const visit = (ns: Record<string, unknown>, prefix: string): void => {
 		for (const route of endpointRoutesOf(ns) ?? []) {
 			// A route `name` is relative to its namespace mount, so it prefixes.
@@ -316,24 +311,34 @@ function collectRouteAuthz(
  */
 function resourceLoaderFor(input: {
 	registry: Map<string, ResourceLoader>;
-	bindings: Map<string, LooseResourceBinding>;
 	grantStore: AccessGrantStore | undefined;
-}): {
-	byBinding: (
-		method: string,
-		methodInput: unknown,
-		principal: string | undefined,
-	) => Promise<ApiResourceShape>;
-	byTarget: (target: AuthzTarget) => Promise<ApiResourceShape>;
-} {
-	const { registry, bindings, grantStore } = input;
+}): (target: AuthzTarget) => Promise<ApiResourceShape> {
+	const { registry, grantStore } = input;
 
 	const loadShape = async (
 		kind: string,
 		id: string,
 	): Promise<ApiResourceShape> => {
 		const loader = registry.get(kind);
-		if (loader === undefined) return DENY_SHAPE;
+		if (loader === undefined) {
+			// A CORE kind with no loader is a deployment-shape problem, not an access question: this claw
+			// was built without the store that owns those rows, so the PEP cannot answer rather than
+			// answering no. Both refuse the call — only one says something true about why, and reporting a
+			// missing database as "denied" sends the reader hunting for a policy that does not exist.
+			if (CORE_RESOURCE_KINDS.has(kind)) {
+				throw configurationError(
+					`this deployment cannot authorize "${kind}" resources`,
+					{
+						kind,
+						reason:
+							"the store that owns this resource kind is not configured — pass a database/engine to createClaw",
+					},
+				);
+			}
+			// An UNREGISTERED kind came from the CALLER (share/unshare take the target kind from the input).
+			// That is an access question and the answer is no — naming which kinds exist would make it a probe.
+			return DENY_SHAPE;
+		}
 		const base = await loader(id);
 		if (base === null) return DENY_SHAPE;
 		// Grants are DATA: the resource's OWN (kind, id) grants ∪ any inherited parents'. Empty when no
@@ -365,34 +370,7 @@ function resourceLoaderFor(input: {
 			? loadShape(target.kind, target.id)
 			: { scope: target.scope, scopeId: target.scopeId, grants: [] };
 
-	const byBinding = async (
-		method: string,
-		methodInput: unknown,
-		principal: string | undefined,
-	): Promise<ApiResourceShape> => {
-		const binding = bindings.get(method);
-		// No binding — the method is not resource-anchored: the caller's own personal scope.
-		if (binding === undefined) return personalScope(principal);
-		// DYNAMIC-kind methods (share/unshare): the target kind + id BOTH come from the INPUT. An
-		// unregistered kind or a missing field fails CLOSED (you can't (un)share what does not resolve).
-		if (!("kind" in binding)) {
-			const kind = stringField(methodInput, binding.kindKey);
-			const id = stringField(methodInput, binding.idKey);
-			if (kind === undefined || id === undefined) return DENY_SHAPE;
-			return loadShape(kind, id);
-		}
-		// STATIC-kind methods: fixed kind, id from the input. A known kind with no registered loader = a
-		// deployment WITHOUT that store (no DB / no engine): NOT an access denial — fall to personalScope
-		// so the method's own config error surfaces (slice-1's behavior).
-		if (registry.get(binding.kind) === undefined) {
-			return personalScope(principal);
-		}
-		const id = stringField(methodInput, binding.idKey);
-		if (id === undefined) return DENY_SHAPE;
-		return loadShape(binding.kind, id);
-	};
-
-	return { byBinding, byTarget };
+	return byTarget;
 }
 
 /**
@@ -488,14 +466,11 @@ export function governApi(input: {
 		adapter: input.adapter,
 		plugins: input.plugins,
 	});
-	// The co-located bindings — read off each method's own def (core route defs + plugin endpoints defs).
-	const bindings = collectResourceBindings(input.api);
 	// What each ROUTE-built method declared via `.authz(...)`. Present ⇒ the route path below; absent ⇒
 	// a core method still on the legacy binding table.
 	const routeAuthz = collectRouteAuthz(input.api);
 	const loadResource = resourceLoaderFor({
 		registry,
-		bindings,
 		grantStore: input.grantStore,
 	});
 	const resolvePrincipalScopes = input.resolvePrincipalScopes ?? (() => []);
@@ -553,93 +528,77 @@ export function governApi(input: {
 		fn: (...args: unknown[]) => unknown,
 	): ((...args: unknown[]) => unknown) => {
 		const declared = routeAuthz.get(method);
-		if (declared !== undefined) {
-			// ── the ROUTE path ──────────────────────────────────────────────────────────────────────────
-			// The route said what it authorizes against. Resolve it, decide, then hand the handler an
-			// AuthzContext IN PLACE OF the raw caller — the handler's second parameter is the context, so
-			// an additional mid-flight check needs no extra plumbing and cannot be skipped by accident.
-			return async (...args: unknown[]) => {
-				const caller = (args[1] ?? undefined) as ClawApiCaller | undefined;
-				const domainInput = args[0];
-				const principal = unsafeOpen
-					? (caller?.principal ?? "")
-					: requirePrincipal(method, caller);
-				const check = async (
-					level: ApiPermissionLevel,
-					target: AuthzTarget,
-				): Promise<void> => {
-					if (unsafeOpen) return;
-					await enforce({
+		return async (...args: unknown[]) => {
+			// The caller rides at index 1, beside the single domain input at index 0.
+			const caller = (args[1] ?? undefined) as ClawApiCaller | undefined;
+			const domainInput = args[0];
+			if (unsafeOpen) {
+				// Still hand over a USABLE principal: handlers stamp `createdBy`/`updatedBy` from it, and a
+				// blank string is not a well-formed principal — it would fail the entity boundary rather
+				// than reproduce the pre-PEP behaviour this hatch exists to restore.
+				return fn(domainInput, {
+					caller: caller ?? {},
+					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
+					check: async () => {},
+				} satisfies AuthzContext);
+			}
+			// A method with no declaration is one the PEP cannot decide. That cannot happen through the
+			// types — core's `satisfies` and the route builder's gate both refuse it — so reaching here
+			// means the api was assembled some other way, and the only safe answer is no.
+			if (declared === undefined) {
+				throw authorizationError(
+					`app-authz denied ${method}: no authz declaration — the method cannot be decided`,
+					{ method, decision: "deny" },
+				);
+			}
+			const principal = requirePrincipal(method, caller);
+
+			if (declared.mode === "resource") {
+				// A resolver that throws must DENY, not escape as an unrelated failure a caller could
+				// mistake for a permitted call that merely errored.
+				let target: AuthzTarget;
+				try {
+					target = await declared.resolve(domainInput as never);
+				} catch (error) {
+					throw authorizationError(
+						`app-authz denied ${method}: could not resolve the resource to authorize against`,
+						{ method, decision: "deny", reason: errorMessage(error) },
+					);
+				}
+				await enforce({
+					method,
+					level: declared.level,
+					principal,
+					resource: await loadResource(target),
+				});
+			} else {
+				// `mode: "caller"` still goes to Cedar, with the create shape (no owner, no scope, no
+				// grants). The method belongs to the `creates` action group, which the sealed baseline
+				// permits for any authenticated principal — so the normal answer is yes, but a plugin
+				// `forbid` still overrides. Skipping the decision here would have made these methods
+				// unreachable by policy, which is a different and quieter kind of hole.
+				await enforce({
+					method,
+					level: "manage",
+					principal,
+					resource: { grants: [] },
+				});
+			}
+
+			// The handler's SECOND parameter is the authz context, not the raw caller: a check that only
+			// becomes expressible after loading something needs no extra plumbing, and `principal` is
+			// already guaranteed present so no handler re-derives the actor floor.
+			return fn(domainInput, {
+				caller: caller ?? {},
+				principal,
+				check: async (level, target) =>
+					enforce({
 						method,
 						level,
 						principal,
-						resource: await loadResource.byTarget(target),
-					});
-				};
-				if (!unsafeOpen && declared.mode === "resource") {
-					// A resolver that throws must DENY, not escape as an unrelated 500 that a caller could
-					// mistake for a permitted call that merely failed.
-					let target: AuthzTarget;
-					try {
-						target = await declared.resolve(domainInput as never);
-					} catch (error) {
-						throw authorizationError(
-							`app-authz denied ${method}: could not resolve the resource to authorize against`,
-							{ method, decision: "deny", reason: errorMessage(error) },
-						);
-					}
-					await enforce({
-						method,
-						level: declared.level,
-						principal,
-						resource: await loadResource.byTarget(target),
-					});
-				}
-				// `mode: "caller"` has nothing to resolve — the actor floor above IS its whole check, and
-				// the reason it gave is carried in the route metadata for the coverage walk to report.
-				const ctx: AuthzContext = {
-					caller: caller ?? {},
-					principal,
-					check,
-				};
-				return fn(domainInput, ctx);
-			};
-		}
-
-		// ── the LEGACY binding path ───────────────────────────────────────────────────────────────────
-		// Core methods that have not been converted to routes yet. Unchanged behaviour, including the
-		// `personalScope` fallback for an unbound method — the hole this whole change exists to close, and
-		// it stays open exactly until each core method carries its own `.authz(...)`.
-		return async (...args: unknown[]) => {
-			// The caller rides at index 1 (beside the single domain input at index 0) — the WithCaller
-			// contract. Missing → the actor floor denies. All args pass through to the method, so a
-			// plugin handler that needs the caller (e.g. secretStore) reads it at index 1.
-			const caller = (args[1] ?? undefined) as ClawApiCaller | undefined;
-			const principal = caller?.principal;
-			const call = () => fn(...args);
-			if (unsafeOpen) return call();
-			const level = LEVELS[method] ?? "manage";
-			const isCreate = CREATE_SET.has(method);
-			const resource = isCreate
-				? { grants: [] }
-				: await loadResource.byBinding(method, args[0], principal);
-			const scopes =
-				principal !== undefined ? await resolvePrincipalScopes(principal) : [];
-			const result = await decideApiCall({
-				engine: input.engine,
-				method,
-				level,
-				principal,
-				resource,
-				scopes,
-			});
-			if (result.decision === "permit") return call();
-			const message = `app-authz denied ${method}: ${result.reason ?? "no policy permits this call"}`;
-			if (shadow) {
-				input.warn(`euroclaw app-authz shadow: would deny — ${message}`);
-				return call();
-			}
-			throw authorizationError(message, { method, decision: result.decision });
+						resource: await loadResource(target),
+					}),
+			} satisfies AuthzContext);
 		};
 	};
 

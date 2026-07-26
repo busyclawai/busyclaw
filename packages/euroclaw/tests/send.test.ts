@@ -333,7 +333,11 @@ describe("createClaw send", () => {
 				message: "hello",
 				threadId: "thread-1",
 			}),
-		).rejects.toThrow(/requires a ClawsStore/);
+			// A claw with no ClawsStore fails loud with a CONFIGURATION error naming what is missing — not
+			// an authorization denial. The PEP reaches this first now (it has to resolve the claw before the
+			// handler runs) and deliberately distinguishes "this deployment cannot answer the question" from
+			// "the answer is no": both refuse the call, but only one sends the reader to the right fix.
+		).rejects.toThrow(/cannot authorize "claw" resources/);
 	});
 
 	it("user event sinks are observers — a throwing sink is warned, send completes, transcript persists", async () => {

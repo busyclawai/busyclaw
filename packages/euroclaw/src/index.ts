@@ -50,7 +50,7 @@ import { buildFloorPolicyPlugin } from "./authz-floor";
 import {
 	type AppAuthzConfig,
 	buildApiPolicyEngine,
-	CORE_API_CREATE_METHODS,
+	callerOnlyMethodIds,
 	enumerateApiMethodIds,
 	governApi,
 	type WithCaller,
@@ -844,7 +844,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	} as Record<string, unknown>;
 	const apiEngine = buildApiPolicyEngine({
 		methodIds: enumerateApiMethodIds(mergedApi),
-		createMethodIds: CORE_API_CREATE_METHODS,
+		createMethodIds: callerOnlyMethodIds(mergedApi),
 		plugins,
 	});
 	const api = governApi({

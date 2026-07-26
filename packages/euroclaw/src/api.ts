@@ -5,6 +5,7 @@ import type {
 	AppendMessageInput,
 	ApprovalRecord,
 	ApprovalStatus,
+	AuthzTarget,
 	BindConversationInput,
 	BindConversationResult,
 	CheckpointRecord,
@@ -20,6 +21,7 @@ import type {
 	CreateToolCallInput,
 	CreateToolResultInput,
 	EffectStore,
+	EndpointHttpMethod,
 	EngineContinueRunInput,
 	EngineRunEvent,
 	EngineRunHandle,
@@ -31,7 +33,9 @@ import type {
 	PolicySliceRecord,
 	Principal,
 	RegisteredToolRecord,
-	ResourceBinding,
+	RouteAuthz,
+	RouteLevel,
+	ScopeRef,
 	SecretDeclaration,
 	Secrets,
 	ThreadRecord,
@@ -360,8 +364,16 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
  *  its `{ textStream, result }` return isn't serializable, so it's an in-process method with no HTTP
  *  route (streaming would need SSE, a separate transport). */
 export type ClawApiMethod = Exclude<keyof ClawApi, "stream">;
-export type ClawApiHttpMethod = "GET" | "POST";
+/** Alias of the shared {@link EndpointHttpMethod} so the flat api and plugin namespaces cannot
+ *  disagree on what a verb may be. */
+export type ClawApiHttpMethod = EndpointHttpMethod;
 export type ClawApiInputSchema = (input: unknown) => unknown;
+/** Joins `(runId, toolCallId)` into one resource-registry id. A NUL byte: no identifier can contain one,
+ *  so the split is unambiguous — a slash or colon could appear inside either half and silently
+ *  mis-resolve to another run's row. Lives here rather than in the PEP because the PEP already imports
+ *  from this module, and the reverse would be a cycle. */
+export const PROVIDER_TOOL_CALL_SEPARATOR = "\u0000";
+
 /** A method's DOMAIN input type (the caller's first arg), `undefined`-stripped so an optional-input
  *  method (`listApprovals`) still exposes its keys. The type the co-located `resource` binding checks. */
 export type ClawApiMethodInput<Method extends ClawApiMethod> = NonNullable<
@@ -374,11 +386,13 @@ export type ClawApiRouteDefinition<
 	httpMethod: ClawApiHttpMethod;
 	path: `/${string}`;
 	inputSchema: ClawApiInputSchema;
-	/** The CO-LOCATED app-authz resource binding, type-checked against THIS method's input: `idKey`/
-	 *  `kindKey` must be keys of {@link ClawApiMethodInput} or it won't compile. Read by the PEP loader
-	 *  (`authz-pep.ts`) to resolve the resource; absent ⇒ the method acts within the caller's personal
-	 *  scope. This is where the old central `CORE_API_RESOURCES`/`DYNAMIC_KIND_METHODS` maps now live. */
-	resource?: ResourceBinding<ClawApiMethodInput<Method>>;
+	/** The CO-LOCATED app-authz declaration — MANDATORY. Says what this method authorizes against and at
+	 *  what level, with a resolver typed against {@link ClawApiMethodInput} so reading a field the method
+	 *  does not have will not compile. Read by the PEP (`authz-pep.ts`) before the handler runs. Required
+	 *  because optional meant "unbound" meant "the caller owns it": every method nobody had bound
+	 *  authorized itself. This is where the old `CORE_API_RESOURCES` / `DYNAMIC_KIND_METHODS` /
+	 *  `CORE_API_LEVELS` maps collapsed to. */
+	authz: RouteAuthz;
 };
 
 const idInput = ark({ id: "string" });
@@ -767,88 +781,199 @@ function apiHttpMethod(method: ClawApiMethod): ClawApiHttpMethod {
 	return endpointHttpMethod(method);
 }
 
+/** A core method's authz declaration, typed against THAT method's input: the resolver's parameter is
+ *  the validated input, so reading a field the method does not have is a compile error. The same shape
+ *  a plugin route builds with `route.…​.authz(…)`, expressed as data because the core table is STATIC —
+ *  it exists without an assembled claw (the adapter and the client read it), and a resolver only ever
+ *  reads its input, so nothing about it needs the instance. */
+type ApiRouteAuthz<Input> =
+	| {
+			readonly mode: "resource";
+			readonly level: RouteLevel;
+			readonly resolve: (input: Input) => AuthzTarget | Promise<AuthzTarget>;
+	  }
+	| { readonly mode: "caller"; readonly reason: string };
+
 function apiRoute<Method extends ClawApiMethod>(
 	method: Method,
-	resource?: ResourceBinding<ClawApiMethodInput<Method>>,
+	authz: ApiRouteAuthz<ClawApiMethodInput<Method>>,
 ): ClawApiRouteDefinition<Method> {
 	return {
 		apiMethod: method,
 		httpMethod: apiHttpMethod(method),
 		path: apiMethodPath(method),
 		inputSchema: clawApiInputSchemas[method],
-		...(resource !== undefined ? { resource } : {}),
+		authz: authz as RouteAuthz,
 	};
 }
 
-// The per-method route table. Each method's app-authz resource binding is CO-LOCATED at its own
-// `apiRoute(...)` call and type-checked against that method's input (`idKey`/`kindKey` ∈ keyof input) —
-// the "derive from the api itself" principle. A method with no binding is not resource-anchored (the
-// PEP falls to the caller's personal scope). This is the home the old central `CORE_API_RESOURCES` +
-// `DYNAMIC_KIND_METHODS` maps moved to. `satisfies` pins the keys to `ClawApiMethod` exactly, and the
-// list assertion below pins the shared contracts name list to real api methods — together, the server
-// route table, the client's call table, and the wire-name list are provably one set.
+/**
+ * Anchor on the row named by one input KEY. The resolver takes `Record<Key, string>`, so assigning it
+ * to a method whose input has no such string field fails to compile — the same guarantee the old
+ * `idKey ∈ keyof input` binding gave, now carried by an ordinary function parameter.
+ */
+const on = <const Key extends string>(
+	level: RouteLevel,
+	kind: string,
+	idKey: Key,
+): ApiRouteAuthz<Record<Key, string>> => ({
+	mode: "resource",
+	level,
+	resolve: (input) => ({ kind, id: input[idKey] }),
+});
+
+/** Anchor on the opaque `(scope, scopeId)` boundary the input names — verified membership decides. */
+const inScope = (level: RouteLevel): ApiRouteAuthz<ScopeRef> => ({
+	mode: "resource",
+	level,
+	resolve: (input) => ({ scope: input.scope, scopeId: input.scopeId }),
+});
+
+/** Authorizes against NOTHING shared — a genuine create, or a row keyed to the caller. The reason is
+ *  required and rides into the route metadata, so the set of these is enumerable rather than implied. */
+const callerOnly = (reason: string): ApiRouteAuthz<unknown> => ({
+	mode: "caller",
+	reason,
+});
+
+// Reasons reused across several methods — written once so the gap they describe is stated once.
+const CREATES =
+	"mints a new row; its owner is stamped from the authenticated caller";
+const APPROVAL_GAP =
+	"KNOWN GAP: an approval row carries no claw, run, or scope to resolve, and needs-approval exists for autonomous runs with no user-owner — so there is nothing to anchor on until the record gains immutable organization/resource/requester/approver facts. Any authenticated human can currently reach any approval";
+
+// The per-method route table. Each method's authz is CO-LOCATED at its own `apiRoute(...)` call and
+// type-checked against that method's input, so a resolver reading a field the method does not have is a
+// compile error. It is MANDATORY — the `satisfies` below makes a missing one fail to compile, which is
+// what closes the original hole: an unbound method used to fall through to a resource whose owner WAS
+// the caller, so the check asked "does the caller own this?" about something defined as caller-owned.
+// The declaration also carries the required LEVEL, which used to live in a parallel `CORE_API_LEVELS`
+// map — one method, one place, no second table to drift.
 export const clawApiRoutes = {
-	bindConversation: apiRoute("bindConversation"),
-	createClaw: apiRoute("createClaw"),
+	bindConversation: apiRoute(
+		"bindConversation",
+		callerOnly(
+			"binds a stranger's conversation: there is no prior row, and the claw it creates is owned by system:anonymous",
+		),
+	),
+	createClaw: apiRoute("createClaw", callerOnly(CREATES)),
 	// claw — the base shared agent resource (its id keys the row directly).
-	getClaw: apiRoute("getClaw", { kind: "claw", idKey: "id" }),
-	updateClaw: apiRoute("updateClaw", { kind: "claw", idKey: "id" }),
-	archiveClaw: apiRoute("archiveClaw", { kind: "claw", idKey: "id" }),
+	getClaw: apiRoute("getClaw", on("read", "claw", "id")),
+	updateClaw: apiRoute("updateClaw", on("manage", "claw", "id")),
+	archiveClaw: apiRoute("archiveClaw", on("manage", "claw", "id")),
 	// thread — a method reaching a claw via one of its threads/messages anchors on that claw (its grants
 	// inherit down); a method acting on the thread row itself anchors on the thread.
-	createThread: apiRoute("createThread", { kind: "claw", idKey: "clawId" }),
-	getThread: apiRoute("getThread", { kind: "thread", idKey: "id" }),
-	listThreads: apiRoute("listThreads", { kind: "claw", idKey: "clawId" }),
-	archiveThread: apiRoute("archiveThread", { kind: "thread", idKey: "id" }),
-	appendMessage: apiRoute("appendMessage", { kind: "claw", idKey: "clawId" }),
-	getMessage: apiRoute("getMessage"),
-	listMessages: apiRoute("listMessages", { kind: "thread", idKey: "threadId" }),
-	sendMessage: apiRoute("sendMessage", { kind: "claw", idKey: "clawId" }),
-	forgetSubject: apiRoute("forgetSubject"),
-	createToolCall: apiRoute("createToolCall"),
-	getToolCall: apiRoute("getToolCall"),
-	getToolCallByProviderId: apiRoute("getToolCallByProviderId"),
-	updateToolCallStatus: apiRoute("updateToolCallStatus"),
-	createToolResult: apiRoute("createToolResult"),
-	getToolResult: apiRoute("getToolResult"),
-	listToolResults: apiRoute("listToolResults"),
-	createCheckpoint: apiRoute("createCheckpoint"),
-	getCheckpoint: apiRoute("getCheckpoint"),
-	getLatestCheckpoint: apiRoute("getLatestCheckpoint"),
-	generate: apiRoute("generate"),
-	continueRun: apiRoute("continueRun"),
-	// approval — NOT resource-anchored: needs-approval exists for AUTONOMOUS runs (no human present), so an
-	// engine/system-initiated approval has no user-owner to anchor on, and requiring the approver to be the
-	// requester would make those unapprovable. The built-in gate is the user-principal floor (a human may
-	// decide, a machine may not — src/api.ts userApprover); WHICH human (owner-only / manager / SoD) is
-	// opt-in policy (docs/plans/approvals-authz.md), deferred to the policy-slice router.
-	grantApproval: apiRoute("grantApproval"),
-	denyApproval: apiRoute("denyApproval"),
-	getApproval: apiRoute("getApproval"),
-	listApprovals: apiRoute("listApprovals"),
-	getEffect: apiRoute("getEffect"),
-	registerOpenApiSpec: apiRoute("registerOpenApiSpec"),
-	listRegisteredTools: apiRoute("listRegisteredTools"),
-	listActions: apiRoute("listActions"),
-	putPolicySlice: apiRoute("putPolicySlice"),
-	listPolicySlices: apiRoute("listPolicySlices"),
-	deletePolicySlice: apiRoute("deletePolicySlice"),
-	// startRun/continueEngineRun mint/advance the CALLER'S OWN run (no row to load) → personal scope; the
-	// run finally isolates getRun/listRunEvents by the durable run's principal.
-	startRun: apiRoute("startRun"),
-	continueEngineRun: apiRoute("continueEngineRun"),
-	getRun: apiRoute("getRun", { kind: "run", idKey: "id" }),
-	listRunEvents: apiRoute("listRunEvents", { kind: "run", idKey: "runId" }),
-	// The generic share/unshare api — DYNAMIC kind: the target (kind, id) both come from the INPUT, so
-	// any registered kind is shareable with zero per-kind code. LEVEL manage (see CORE_API_LEVELS): the
-	// PEP requires the caller MANAGE the target before a grant is written. Unregistered kind → fail closed.
+	createThread: apiRoute("createThread", on("use", "claw", "clawId")),
+	getThread: apiRoute("getThread", on("read", "thread", "id")),
+	listThreads: apiRoute("listThreads", on("read", "claw", "clawId")),
+	archiveThread: apiRoute("archiveThread", on("manage", "thread", "id")),
+	appendMessage: apiRoute("appendMessage", on("use", "claw", "clawId")),
+	// Every transcript descendant carries a REQUIRED `clawId` referencing its claw, so each resolves to
+	// that claw's owner/scope/grants. These were the unbound methods that let a caller read another
+	// scope's transcript by guessing or learning an id.
+	getMessage: apiRoute("getMessage", on("read", "message", "id")),
+	listMessages: apiRoute("listMessages", on("read", "thread", "threadId")),
+	sendMessage: apiRoute("sendMessage", on("use", "claw", "clawId")),
+	// forgetSubject erases by bare `subjectId` with no container in its input and no anchor in the data
+	// model, so over HTTP it was an unbounded delete of any subject's mappings. `deleteForSubject` is not
+	// container-scoped at the port yet, so there is nothing honest to resolve — this states the gap
+	// rather than dressing it as personal scope. Re-anchor it on `(scope, scopeId)` with the per-run PII
+	// container work.
+	forgetSubject: apiRoute(
+		"forgetSubject",
+		callerOnly(
+			"KNOWN GAP: erasure takes only a subjectId — no container in the input and none at the store port — so there is no boundary to resolve and any caller can erase any subject's mappings",
+		),
+	),
+	createToolCall: apiRoute("createToolCall", on("use", "claw", "clawId")),
+	getToolCall: apiRoute("getToolCall", on("read", "toolCall", "id")),
+	// Keyed by (runId, provider tool-call id): tool-call ids are unique only WITHIN a run, so the pair is
+	// the natural key and the row it finds carries the claw to authorize against. Anchoring on the `run`
+	// kind instead would have denied in every deployment without a durable engine, where these are plain
+	// claws-store reads that work fine.
+	getToolCallByProviderId: apiRoute("getToolCallByProviderId", {
+		mode: "resource",
+		level: "read",
+		resolve: (input) => ({
+			kind: "providerToolCall",
+			id: `${input.runId}${PROVIDER_TOOL_CALL_SEPARATOR}${input.toolCallId}`,
+		}),
+	}),
+	updateToolCallStatus: apiRoute(
+		"updateToolCallStatus",
+		on("use", "toolCall", "id"),
+	),
+	createToolResult: apiRoute("createToolResult", on("use", "claw", "clawId")),
+	getToolResult: apiRoute("getToolResult", on("read", "toolResult", "id")),
+	listToolResults: apiRoute("listToolResults", {
+		mode: "resource",
+		level: "read",
+		resolve: (input) => ({
+			kind: "providerToolCall",
+			id: `${input.runId}${PROVIDER_TOOL_CALL_SEPARATOR}${input.toolCallId}`,
+		}),
+	}),
+	createCheckpoint: apiRoute("createCheckpoint", on("use", "claw", "clawId")),
+	getCheckpoint: apiRoute("getCheckpoint", on("read", "checkpoint", "id")),
+	// Anchors on the run's latest checkpoint row, which carries the claw — again so this works without a
+	// durable engine. No checkpoint yet ⇒ nothing resolves ⇒ deny, which is also "nothing to read".
+	getLatestCheckpoint: apiRoute(
+		"getLatestCheckpoint",
+		on("read", "runCheckpoint", "runId"),
+	),
+	// An ad-hoc generate mints nothing durable to anchor on and runs as the caller.
+	generate: apiRoute(
+		"generate",
+		callerOnly(
+			"an ad-hoc generate mints no durable row and runs as the caller",
+		),
+	),
+	// approval — the built-in gate is the user-principal floor (a human may decide, a machine may not,
+	// see `userApprover`), which is NOT an ownership check. Closing this needs a schema change.
+	grantApproval: apiRoute("grantApproval", callerOnly(APPROVAL_GAP)),
+	denyApproval: apiRoute("denyApproval", callerOnly(APPROVAL_GAP)),
+	getApproval: apiRoute("getApproval", callerOnly(APPROVAL_GAP)),
+	listApprovals: apiRoute("listApprovals", callerOnly(APPROVAL_GAP)),
+	// Resumes by approvalId, so it inherits exactly the gap above.
+	continueRun: apiRoute("continueRun", callerOnly(APPROVAL_GAP)),
+	getEffect: apiRoute(
+		"getEffect",
+		callerOnly(
+			"KNOWN GAP: an effect row carries no claw or run reference, so there is nothing to resolve it against",
+		),
+	),
+	// Scope-keyed administration. The input NAMES a `(scope, scopeId)` boundary; verified membership
+	// AUTHORIZES it. These were the sharpest instance of the unbound hole: `putPolicySlice` took its
+	// boundary key straight from the request body and got a caller-owned resource back, so any
+	// authenticated caller could rewrite any scope's Cedar policy — an authorization bypass on the
+	// authorization system itself.
+	registerOpenApiSpec: apiRoute("registerOpenApiSpec", inScope("manage")),
+	listRegisteredTools: apiRoute("listRegisteredTools", inScope("read")),
+	listActions: apiRoute("listActions", inScope("read")),
+	putPolicySlice: apiRoute("putPolicySlice", inScope("manage")),
+	listPolicySlices: apiRoute("listPolicySlices", inScope("read")),
+	deletePolicySlice: apiRoute("deletePolicySlice", inScope("manage")),
+	// startRun mints the CALLER'S OWN run (no row to load yet); continueEngineRun resumes by approvalId
+	// and inherits the approval gap. getRun/listRunEvents isolate by the durable run's own principal.
+	startRun: apiRoute(
+		"startRun",
+		callerOnly("mints the caller's own run; there is no prior row to resolve"),
+	),
+	continueEngineRun: apiRoute("continueEngineRun", callerOnly(APPROVAL_GAP)),
+	getRun: apiRoute("getRun", on("read", "run", "id")),
+	listRunEvents: apiRoute("listRunEvents", on("read", "run", "runId")),
+	// The generic share/unshare api — the target kind AND id both come from the INPUT, so any registered
+	// kind is shareable with zero per-kind code. LEVEL manage: the caller must MANAGE the target before a
+	// grant is written, i.e. you can only share what you manage. An unregistered kind fails closed.
 	shareResource: apiRoute("shareResource", {
-		kindKey: "resourceKind",
-		idKey: "resourceId",
+		mode: "resource",
+		level: "manage",
+		resolve: (input) => ({ kind: input.resourceKind, id: input.resourceId }),
 	}),
 	unshareResource: apiRoute("unshareResource", {
-		kindKey: "resourceKind",
-		idKey: "resourceId",
+		mode: "resource",
+		level: "manage",
+		resolve: (input) => ({ kind: input.resourceKind, id: input.resourceId }),
 	}),
 } satisfies {
 	readonly [Method in ClawApiMethod]: ClawApiRouteDefinition<Method>;

@@ -11,8 +11,12 @@ import { configurationError } from "@euroclaw/errors";
 import type { ClawApiCaller } from "./principal";
 import type { RouteAuthz, RouteDefinition } from "./route";
 
-/** Routed endpoints are RPC-shaped: reads ride GET (input in the query), everything else POST. */
-export type EndpointHttpMethod = "GET" | "POST";
+/** The verbs a routed endpoint may declare. The DEFAULT derivation is RPC-shaped — reads ride GET
+ *  (input in the query), everything else POST — but a route may declare any of these explicitly with
+ *  `.method(...)`, so a resource-shaped api can say PUT/PATCH/DELETE and have the generated OpenAPI
+ *  document, the adapter's route table, and any gateway in front of them all agree. The adapter has
+ *  always accepted the full set (`ClawHttpMethod`); only the declaration side was narrower. */
+export type EndpointHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
 /** The boundary validator an endpoint declares — an arktype type in practice, typed as the same
  *  loose callable euroclaw's `ClawApiInputSchema` uses (call it; an errors instance means invalid). */
@@ -89,8 +93,9 @@ export function toKebabCase(value: string): string {
 	return value.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
 }
 
-/** The one name→verb rule, shared with the base api routes: `get*`/`list*` reads ride GET, all else
- *  POST. A per-endpoint `method` override wins (declared, not a heuristic patch table). */
+/** The DEFAULT name→verb rule, shared with the base api routes: `get*`/`list*` reads ride GET, all else
+ *  POST. A declared `.method(...)` wins — the rule is a convenience for RPC-shaped names, not a
+ *  constraint on what a route may be. */
 export function endpointHttpMethod(name: string): EndpointHttpMethod {
 	return name.startsWith("get") || name.startsWith("list") ? "GET" : "POST";
 }
