@@ -71,9 +71,6 @@ export {
 	policySliceSchema,
 	policySliceUpsert,
 } from "./authz/policy-slice";
-// ── the opaque access boundary every scope-keyed core row carries ──
-export type { ScopeRef } from "./scope";
-export { scopeFields } from "./scope";
 export type { EntityRef, PolicyRequest, PolicyResult } from "./authz/request";
 export { entityRef, policyRequest, policyResult } from "./authz/request";
 // ── claw product-api wire protocol (base method-name list + response envelope) ──
@@ -296,13 +293,13 @@ export type {
 export {
 	APPROVED_BY_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	gateDecision,
 	handleResult,
 	MODEL_ANNOTATION_MAX_LENGTH,
 	modelCall,
 	modelMessage,
-	CONFIG_SCOPE_CONTEXT_KEY,
-	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	policyAnnotations,
 	RESERVED_CONTEXT_PREFIX,
@@ -442,6 +439,9 @@ export {
 	runCheckpointSchema,
 	runCheckpointStatus,
 } from "./run-checkpoint";
+// ── the opaque access boundary every scope-keyed core row carries ──
+export type { ScopeRef } from "./scope";
+export { scopeFields } from "./scope";
 // ── standard-schema interop: accept any standard-schema library without depending on one ──────
 export type {
 	JsonSchemaSource,
