@@ -1,0 +1,39 @@
+{
+	"name": "@euroclaw/example-nextjs-demo",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "A runnable Next.js chat wired to a real governed claw — streaming, redacted, inspectable.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"scripts": {
+		"build": "next build",
+		"dev": "next dev --port 4000",
+		"start": "next start --port 4000",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@ai-sdk/azure": "4.0.18",
+		"@ai-sdk/react": "4.0.23",
+		"@euroclaw/adapter-core": "workspace:*",
+		"@euroclaw/adapter-nextjs": "workspace:*",
+		"@euroclaw/client": "workspace:*",
+		"@euroclaw/contracts": "workspace:*",
+		"@euroclaw/detectors": "workspace:*",
+		"@euroclaw/storage-core": "workspace:*",
+		"@euroclaw/vendors": "workspace:*",
+		"ai": "7.0.22",
+		"euroclaw": "workspace:*",
+		"next": "16.2.12",
+		"react": "19.2.7",
+		"react-dom": "19.2.7"
+	},
+	"devDependencies": {
+		"@tailwindcss/postcss": "4.3.3",
+		"@types/node": "26.1.1",
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"tailwindcss": "4.3.3",
+		"typescript": "6.0.3"
+	}
+}
