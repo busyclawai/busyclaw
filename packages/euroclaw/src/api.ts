@@ -255,8 +255,16 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 			? { options: RunOptionsFor<Config> & { model: ModelName<Config> } }
 			: { options?: RunOptionsFor<Config> }),
 	) => Promise<RuntimeResult>;
-	/** Streaming counterpart of `generate` — same input, returns a `{ textStream, result }`. In-process
-	 *  only (streaming has no HTTP route). Requires a streaming loop vendor. */
+	/**
+	 * Streaming counterpart of `generate` — same input, resolving to `{ textStream, result }`.
+	 * In-process only (streaming has no HTTP route). Requires a streaming loop vendor.
+	 *
+	 * A PROMISE of the stream, not the stream. The runtime's own `stream` returns synchronously, but
+	 * every method on this surface is wrapped by the app-authz PEP, and authorizing is asynchronous —
+	 * it evaluates policy and may load the resource being acted on. Returning the stream synchronously
+	 * would mean handing back a live-looking object before knowing whether the call is allowed; a
+	 * rejected promise hands back nothing at all, which is the honest shape for a denial.
+	 */
 	stream: (
 		input: {
 			prompt: string;
@@ -264,7 +272,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		} & (RequiresExplicitModel<Config> extends true
 			? { options: RunOptionsFor<Config> & { model: ModelName<Config> } }
 			: { options?: RunOptionsFor<Config> }),
-	) => RuntimeStream;
+	) => Promise<RuntimeStream>;
 	continueRun: (input: {
 		approvalId: string;
 		ctx?: RunContext<Config>;
@@ -1401,7 +1409,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				runtimeRunOptionsWithCaller(options, caller?.principal) as never,
 			);
 		},
-		stream: ({ prompt, ctx, options }, caller?: ClawApiCaller) => {
+		// `async` even though `runtime.stream` returns synchronously: one type describes both this raw
+		// surface and the governed one the PEP wraps around it, and the wrapper is necessarily async
+		// (authorizing evaluates policy and may load a resource). Declaring the honest shape in one
+		// place and quietly returning another from the other is what let the two drift apart.
+		stream: async ({ prompt, ctx, options }, caller?: ClawApiCaller) => {
 			assertNoReservedContext(ctx);
 			return context.runtime.stream(
 				prompt,

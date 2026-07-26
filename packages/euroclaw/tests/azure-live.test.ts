@@ -33,7 +33,7 @@ describe.skipIf(!configured)("claw × Azure OpenAI (live)", () => {
 
 	it("streams text deltas through claw.api.stream, reconstructing the final text", async () => {
 		const claw = createClaw({ model });
-		const { textStream, result } = claw.api.stream({
+		const { textStream, result } = await claw.api.stream({
 			prompt: "Say hello in one short friendly sentence.",
 		});
 		const deltas: string[] = [];
