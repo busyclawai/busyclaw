@@ -116,7 +116,8 @@ export const IdempotencyRecord = ark({
 	key: "string",
 	method: "string",
 	path: "string",
-	"organizationId?": OptionalString,
+	"scope?": OptionalString,
+	"scopeId?": OptionalString,
 	"principal?": OptionalString,
 	requestHash: "string",
 	responseStatus: "number",
@@ -161,7 +162,8 @@ export type IdempotencyLookup = {
 	key: string;
 	method: string;
 	path: string;
-	organizationId?: string;
+	scope?: string;
+	scopeId?: string;
 	// The request's principal — a component of the idempotency key tuple. The (future) request handler
 	// passes ctx's already-branded Principal; it is a plain string at runtime, so it hashes into the
 	// key exactly as before.
@@ -277,7 +279,8 @@ function idempotencyId(input: IdempotencyLookup): string {
 			key: input.key,
 			method: input.method,
 			path: input.path,
-			organizationId: input.organizationId ?? null,
+			scope: input.scope ?? null,
+			scopeId: input.scopeId ?? null,
 			principal: input.principal ?? null,
 		}),
 	);
@@ -641,7 +644,7 @@ export function createSqlEngineStore(
 		},
 
 		async getIdempotency(input) {
-			// The id IS the hash of the scope tuple (key/method/path/organizationId/principal), so a
+			// The id IS the hash of the scope tuple (key/method/path/scope/scopeId/principal), so a
 			// primary-key lookup is exactly the scoped match — and it sidesteps `WHERE col = NULL` (never
 			// true in SQL, and undefined !== null in the memory adapter) for absent organization/principal.
 			const record = await db.findOne({
@@ -673,7 +676,8 @@ export function createSqlEngineStore(
 						key: input.key,
 						method: input.method,
 						path: input.path,
-						organizationId: input.organizationId,
+						scope: input.scope,
+						scopeId: input.scopeId,
 						principal: input.principal,
 						requestHash: input.requestHash,
 						responseStatus: input.responseStatus,

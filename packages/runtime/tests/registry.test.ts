@@ -44,11 +44,11 @@ function fakeAuthzChanges() {
 			changes.push(record);
 			return record;
 		},
-		async count(organizationId) {
-			return changes.filter((c) => c.organizationId === organizationId).length;
+		async count(ref) {
+			return changes.filter((c) => c.scopeId === ref.scopeId).length;
 		},
-		async listByOrganization(organizationId) {
-			return changes.filter((c) => c.organizationId === organizationId);
+		async listForScope(ref) {
+			return changes.filter((c) => c.scopeId === ref.scopeId);
 		},
 	};
 	return { store, changes };
@@ -61,15 +61,13 @@ function fakeStores() {
 	let seq = 0;
 
 	const registeredTools: RegisteredToolStore = {
-		async listBySource(organizationId, source) {
+		async listBySource(ref, source) {
 			return [...tools.values()].filter(
-				(row) => row.organizationId === organizationId && row.source === source,
+				(row) => row.scopeId === ref.scopeId && row.source === source,
 			);
 		},
-		async listByOrganization(organizationId) {
-			return [...tools.values()].filter(
-				(row) => row.organizationId === organizationId,
-			);
+		async listForScope(ref) {
+			return [...tools.values()].filter((row) => row.scopeId === ref.scopeId);
 		},
 		async create(input) {
 			const id = `tool-${seq++}`;
@@ -96,7 +94,7 @@ function fakeStores() {
 
 	const specRegistrations: SpecRegistrationStore = {
 		async upsert(input) {
-			const key = `${input.organizationId}:${input.source}`;
+			const key = `${input.scopeId}:${input.source}`;
 			const prior = specs.get(key);
 			const record = {
 				id: prior?.id ?? `spec-${seq++}`,
@@ -107,13 +105,11 @@ function fakeStores() {
 			specs.set(key, record);
 			return record;
 		},
-		async get(organizationId, source) {
-			return specs.get(`${organizationId}:${source}`) ?? null;
+		async get(ref, source) {
+			return specs.get(`${ref.scopeId}:${source}`) ?? null;
 		},
-		async listByOrganization(organizationId) {
-			return [...specs.values()].filter(
-				(row) => row.organizationId === organizationId,
-			);
+		async listForScope(ref) {
+			return [...specs.values()].filter((row) => row.scopeId === ref.scopeId);
 		},
 	};
 
@@ -182,7 +178,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const stores = fakeStores();
 		const registry = createSpecRegistry(stores);
 		const report = await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
 			registeredBy: "user:alice",
@@ -197,7 +194,10 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		expect(report.removed).toEqual([]);
 		expect(stores.tools.size).toBe(4);
 		// The blob + report + version were persisted.
-		const stored = await stores.specRegistrations.get("org-a", "petstore");
+		const stored = await stores.specRegistrations.get(
+			{ scope: "organization", scopeId: "org-a" },
+			"petstore",
+		);
 		expect(stored?.contentVersion).toBe(report.contentVersion);
 		expect(stored?.registeredBy).toBe("user:alice");
 	});
@@ -206,7 +206,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const stores = fakeStores();
 		const registry = createSpecRegistry(stores);
 		const input = {
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			registeredBy: "user:alice",
 		};
@@ -227,7 +228,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const stores = fakeStores();
 		const registry = createSpecRegistry(stores);
 		const input = {
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			registeredBy: "user:alice",
 		};
@@ -257,7 +259,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const stores = fakeStores();
 		const registry = createSpecRegistry(stores);
 		const input = {
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			registeredBy: "user:alice",
 			document: petstore(),
@@ -275,7 +278,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const registry = createSpecRegistry(stores);
 		await expect(
 			registry.registerOpenApiSpec({
-				organizationId: "org-a",
+				scope: "organization",
+				scopeId: "org-a",
 				source: "Bad.Slug",
 				document: petstore(),
 				registeredBy: "user:alice",
@@ -289,7 +293,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const registry = createSpecRegistry(stores, { maxDocumentBytes: 20 });
 		await expect(
 			registry.registerOpenApiSpec({
-				organizationId: "org-a",
+				scope: "organization",
+				scopeId: "org-a",
 				source: "petstore",
 				document: petstore(),
 				registeredBy: "user:alice",
@@ -303,15 +308,19 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const { store: authzChanges, changes } = fakeAuthzChanges();
 		const registry = createSpecRegistry({ ...stores, authzChanges });
 		const report = await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
 			registeredBy: "user:alice",
 		});
-		expect(await authzChanges.count("org-a")).toBe(1);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(1);
 		expect(changes[0]).toMatchObject({
 			kind: "spec_registered",
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			summary: { source: "petstore", contentVersion: report.contentVersion },
 			by: "user:alice",
 		});
@@ -321,7 +330,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const stores = fakeStores();
 		const registry = createSpecRegistry(stores); // no authzChanges
 		const report = await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
 			registeredBy: "user:alice",
@@ -342,7 +352,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			},
 		} satisfies JsonObject;
 		const report = await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "svc",
 			document,
 			registeredBy: "user:alice",
@@ -370,7 +381,8 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		try {
 			await expect(
 				registry.registerOpenApiSpec({
-					organizationId: "org-a",
+					scope: "organization",
+					scopeId: "org-a",
 					source: "svc",
 					document: petstore(),
 					registeredBy: "user:alice",

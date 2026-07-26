@@ -2,7 +2,8 @@ import { type } from "arktype";
 import { describe, expect, it } from "vitest";
 import {
 	CLAW_ID_CONTEXT_KEY,
-	ORGANIZATION_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
 	stampedFacts,
@@ -18,14 +19,16 @@ describe("stampedFacts — the one typed reader of the reserved identity stamps"
 			[ROLE_CONTEXT_KEY]: "approver",
 			[TEAM_CONTEXT_KEY]: "payments",
 			[CLAW_ID_CONTEXT_KEY]: "claw-1",
-			[ORGANIZATION_CONTEXT_KEY]: "org-a",
+			[CONFIG_SCOPE_CONTEXT_KEY]: "organization",
+			[CONFIG_SCOPE_ID_CONTEXT_KEY]: "org-a",
 			[RUN_MODE_CONTEXT_KEY]: "autonomous",
 		};
 		expect(stampedFacts(ctx)).toEqual({
 			role: "approver",
 			team: "payments",
 			clawId: "claw-1",
-			organizationId: "org-a",
+			configScope: "organization",
+			configScopeId: "org-a",
 			runMode: "autonomous",
 		});
 	});

@@ -92,8 +92,12 @@ describe("createPiiMappingStore container-scoped erasure", () => {
 
 		await store.deleteForSubject("s1");
 
-		expect(await store.resolve(shared, { scope: "claw", scopeId: "a" })).toBeNull();
-		expect(await store.resolve(shared, { scope: "claw", scopeId: "b" })).toBe("Yan");
+		expect(
+			await store.resolve(shared, { scope: "claw", scopeId: "a" }),
+		).toBeNull();
+		expect(await store.resolve(shared, { scope: "claw", scopeId: "b" })).toBe(
+			"Yan",
+		);
 		// The spared container keeps its dedup row and junction link too.
 		expect(
 			(await store.findByHash("hy", { scope: "claw", scopeId: "b" }))?.original,

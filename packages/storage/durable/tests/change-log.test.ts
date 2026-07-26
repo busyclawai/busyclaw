@@ -13,14 +13,18 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			now: stamps(),
 		});
 		const record = await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "reads-only" },
 			by: "user:admin",
 		});
 		expect(record.id).toMatch(/^[0-9a-f]{32}$/);
 		expect(record.at).toBe("2026-01-01T00:00:00Z");
-		const listed = await authzChanges.listByOrganization("org-a");
+		const listed = await authzChanges.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(listed).toHaveLength(1);
 		expect(listed[0]).toMatchObject({
 			kind: "policy_changed",
@@ -32,7 +36,8 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 	it("append works without a summary (optional)", async () => {
 		const { authzChanges } = createRegistryStores(memoryAdapter());
 		const record = await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "spec_registered",
 			by: "user:alice",
 		});
@@ -41,61 +46,81 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 
 	it("count reflects appends and only grows (monotonic)", async () => {
 		const { authzChanges } = createRegistryStores(memoryAdapter());
-		expect(await authzChanges.count("org-a")).toBe(0); // no changes yet → the shared bundle
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(0); // no changes yet → the shared bundle
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "overlay_changed",
 			by: "user:admin",
 		});
-		expect(await authzChanges.count("org-a")).toBe(1);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(1);
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "policy_changed",
 			by: "user:admin",
 		});
-		expect(await authzChanges.count("org-a")).toBe(2);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2);
 	});
 
-	it("count is scoped by org — org A's appends never change org B's count", async () => {
+	it("count is scoped by (scope, scopeId) — scope A's appends never change scope B's count", async () => {
 		const { authzChanges } = createRegistryStores(memoryAdapter());
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "policy_changed",
 			by: "user:admin",
 		});
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "policy_changed",
 			by: "user:admin",
 		});
-		expect(await authzChanges.count("org-a")).toBe(2);
-		expect(await authzChanges.count("org-b")).toBe(0);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-b" }),
+		).toBe(0);
 	});
 
-	it("listByOrganization returns the history oldest-first, scoped by org", async () => {
+	it("listForScope returns the history oldest-first, scoped by (scope, scopeId)", async () => {
 		const { authzChanges } = createRegistryStores(memoryAdapter(), {
 			now: stamps(),
 		});
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "spec_registered",
 			summary: { source: "petstore" },
 			by: "user:alice",
 		});
 		await authzChanges.append({
-			organizationId: "org-b",
+			scope: "organization",
+			scopeId: "org-b",
 			kind: "policy_changed",
 			by: "user:bob",
 		});
 		await authzChanges.append({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "guard" },
 			by: "user:alice",
 		});
-		const a = await authzChanges.listByOrganization("org-a");
+		const a = await authzChanges.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(a.map((c) => c.kind)).toEqual(["spec_registered", "policy_changed"]);
-		expect(a.every((c) => c.organizationId === "org-a")).toBe(true);
+		expect(a.every((c) => c.scopeId === "org-a")).toBe(true);
 	});
 
 	it("rejects a malformed stored change row (out-of-enum kind)", async () => {
@@ -105,28 +130,31 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			model: "authz_change",
 			data: {
 				id: "bad",
-				organizationId: "org-bad",
+				scope: "organization",
+				scopeId: "org-bad",
 				kind: "mystery", // not a known change kind
 				at: "t",
 				by: "user:a",
 			},
 		});
-		await expect(authzChanges.listByOrganization("org-bad")).rejects.toThrow(
-			"authz_change record invalid",
-		);
+		await expect(
+			authzChanges.listForScope({ scope: "organization", scopeId: "org-bad" }),
+		).rejects.toThrow("authz_change record invalid");
 	});
 });
 
-const slice = (organizationId: string, name: string) => ({
-	organizationId,
+const slice = (scopeId: string, name: string) => ({
+	scope: "organization",
+	scopeId,
 	name,
 	cedar: `forbid(principal, action == Action::"x", resource);`,
 	mode: "enforce" as const,
 	updatedBy: "user:admin",
 });
 
-const overlay = (organizationId: string, actionId: string) => ({
-	organizationId,
+const overlay = (scopeId: string, actionId: string) => ({
+	scope: "organization",
+	scopeId,
 	actionId,
 	access: "read" as const,
 	updatedBy: "user:admin",
@@ -138,8 +166,13 @@ describe("authz changes are appended on every mutation", () => {
 			memoryAdapter(),
 		);
 		await policySlices.upsert(slice("org-a", "guard"));
-		expect(await authzChanges.count("org-a")).toBe(1);
-		const [change] = await authzChanges.listByOrganization("org-a");
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(1);
+		const [change] = await authzChanges.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(change).toMatchObject({
 			kind: "policy_changed",
 			summary: { slice: "guard" },
@@ -153,7 +186,9 @@ describe("authz changes are appended on every mutation", () => {
 		);
 		await policySlices.upsert(slice("org-a", "guard"));
 		await policySlices.upsert(slice("org-a", "guard")); // an edit — a replace, still a change
-		expect(await authzChanges.count("org-a")).toBe(2);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2);
 	});
 
 	it("a policy-slice delete APPENDS (never removes log rows) — the count bumps", async () => {
@@ -161,11 +196,19 @@ describe("authz changes are appended on every mutation", () => {
 			memoryAdapter(),
 		);
 		const created = await policySlices.upsert(slice("org-a", "guard"));
-		await policySlices.delete(created.organizationId, created.id);
-		expect(await authzChanges.count("org-a")).toBe(2); // upsert + delete = 2 events
-		const kinds = (await authzChanges.listByOrganization("org-a")).map(
-			(c) => c.kind,
+		await policySlices.delete(
+			{ scope: "organization", scopeId: created.scopeId },
+			created.id,
 		);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2); // upsert + delete = 2 events
+		const kinds = (
+			await authzChanges.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			})
+		).map((c) => c.kind);
 		expect(kinds).toEqual(["policy_changed", "policy_changed"]);
 	});
 
@@ -178,18 +221,30 @@ describe("authz changes are appended on every mutation", () => {
 		);
 		const a = await policySlices.upsert(slice("org-a", "a")); // older row
 		await policySlices.upsert(slice("org-a", "b")); // newer row — holds the MAX updatedAt
-		expect(await authzChanges.count("org-a")).toBe(2);
-		await policySlices.delete(a.organizationId, a.id); // delete the NON-newest row
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2);
+		await policySlices.delete(
+			{ scope: "organization", scopeId: a.scopeId },
+			a.id,
+		); // delete the NON-newest row
 		// max(updatedAt) is unchanged (b is still newest) → a stale key; append-only count bumps:
-		expect(await authzChanges.count("org-a")).toBe(3);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(3);
 	});
 
 	it("a no-op delete (row already gone) does NOT append", async () => {
 		const { policySlices, authzChanges } = createRegistryStores(
 			memoryAdapter(),
 		);
-		await policySlices.delete("org-a", "does-not-exist");
-		expect(await authzChanges.count("org-a")).toBe(0);
+		await policySlices.delete(
+			{ scope: "organization", scopeId: "org-a" },
+			"does-not-exist",
+		);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(0);
 	});
 
 	it("a facts-overlay upsert and delete each append overlay_changed", async () => {
@@ -199,20 +254,29 @@ describe("authz changes are appended on every mutation", () => {
 		const created = await factsOverlay.upsert(
 			overlay("org-a", "petstore.getPet"),
 		);
-		expect(await authzChanges.count("org-a")).toBe(1);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(1);
 		await factsOverlay.deleteById(created.id);
-		expect(await authzChanges.count("org-a")).toBe(2);
-		const kinds = (await authzChanges.listByOrganization("org-a")).map(
-			(c) => c.kind,
-		);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
+		).toBe(2);
+		const kinds = (
+			await authzChanges.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			})
+		).map((c) => c.kind);
 		expect(kinds).toEqual(["overlay_changed", "overlay_changed"]);
 	});
 
-	it("appends are org-scoped — org A's mutations never change org B's count", async () => {
+	it("appends are scope-keyed — scope A's mutations never change scope B's count", async () => {
 		const { policySlices, authzChanges } = createRegistryStores(
 			memoryAdapter(),
 		);
 		await policySlices.upsert(slice("org-a", "guard"));
-		expect(await authzChanges.count("org-b")).toBe(0);
+		expect(
+			await authzChanges.count({ scope: "organization", scopeId: "org-b" }),
+		).toBe(0);
 	});
 });

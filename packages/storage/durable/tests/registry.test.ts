@@ -5,8 +5,9 @@ import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRegistryStores } from "../src/registry";
 
-const specInput = (organizationId: string, source = "petstore") => ({
-	organizationId,
+const specInput = (scopeId: string, source = "petstore") => ({
+	scope: "organization",
+	scopeId,
 	source,
 	specBlob: { openapi: "3.1.0", paths: { "/pets": { get: {} } } },
 	contentVersion: "spec-v1",
@@ -20,12 +21,9 @@ const specInput = (organizationId: string, source = "petstore") => ({
 	registeredBy: "user:alice",
 });
 
-const toolInput = (
-	organizationId: string,
-	name = "addPet",
-	source = "petstore",
-) => ({
-	organizationId,
+const toolInput = (scopeId: string, name = "addPet", source = "petstore") => ({
+	scope: "organization",
+	scopeId,
 	source,
 	name,
 	address: `${source}.${name}`,
@@ -36,11 +34,9 @@ const toolInput = (
 	contentVersion: "tool-v1",
 });
 
-const overlayInput = (
-	organizationId: string,
-	actionId = "petstore.addPet",
-) => ({
-	organizationId,
+const overlayInput = (scopeId: string, actionId = "petstore.addPet") => ({
+	scope: "organization",
+	scopeId,
 	actionId,
 	access: "read" as const,
 	groups: ["audited"],
@@ -59,13 +55,16 @@ describe("createRegistryStores over memory adapter", () => {
 		const { specRegistrations } = createRegistryStores(memoryAdapter());
 		const created = await specRegistrations.upsert(specInput("org-a"));
 		expect(created.id).toMatch(/^[0-9a-f]{32}$/);
-		const read = await specRegistrations.get("org-a", "petstore");
+		const read = await specRegistrations.get(
+			{ scope: "organization", scopeId: "org-a" },
+			"petstore",
+		);
 		expect(read?.specBlob).toEqual(specInput("org-a").specBlob); // parsed back, not a string
 		expect(read?.report).toEqual(specInput("org-a").report);
 		expect(read?.registeredBy).toBe("user:alice");
 	});
 
-	it("spec_registration upsert REPLACES by (organizationId, source), id preserved", async () => {
+	it("spec_registration upsert REPLACES by (scope, scopeId, source), id preserved", async () => {
 		const { specRegistrations } = createRegistryStores(memoryAdapter(), {
 			now: stamps(),
 		});
@@ -78,7 +77,10 @@ describe("createRegistryStores over memory adapter", () => {
 		expect(second.id).toBe(first.id); // replace-in-place
 		expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
 		expect(second.updatedAt).not.toBe(first.updatedAt); // updatedAt bumped
-		const all = await specRegistrations.listByOrganization("org-a");
+		const all = await specRegistrations.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(all).toHaveLength(1); // one row per (org, source)
 		expect(all[0]?.contentVersion).toBe("spec-v2");
 		expect(all[0]?.registeredBy).toBe("user:bob");
@@ -87,7 +89,10 @@ describe("createRegistryStores over memory adapter", () => {
 	it("registered_tool round-trips schema/governance/binding and updates in place", async () => {
 		const { registeredTools } = createRegistryStores(memoryAdapter());
 		const created = await registeredTools.create(toolInput("org-a"));
-		const listed = await registeredTools.listBySource("org-a", "petstore");
+		const listed = await registeredTools.listBySource(
+			{ scope: "organization", scopeId: "org-a" },
+			"petstore",
+		);
 		expect(listed).toHaveLength(1);
 		expect(listed[0]?.governance).toEqual(toolInput("org-a").governance);
 		expect(listed[0]?.inputSchema).toEqual(toolInput("org-a").inputSchema);
@@ -106,13 +111,21 @@ describe("createRegistryStores over memory adapter", () => {
 		const { registeredTools } = createRegistryStores(memoryAdapter());
 		const created = await registeredTools.create(toolInput("org-a"));
 		await registeredTools.deleteById(created.id);
-		expect(await registeredTools.listBySource("org-a", "petstore")).toEqual([]);
+		expect(
+			await registeredTools.listBySource(
+				{ scope: "organization", scopeId: "org-a" },
+				"petstore",
+			),
+		).toEqual([]);
 	});
 
 	it("facts_overlay round-trips access/groups/audit", async () => {
 		const { factsOverlay } = createRegistryStores(memoryAdapter());
 		await factsOverlay.upsert(overlayInput("org-a"));
-		const listed = await factsOverlay.listByOrganization("org-a");
+		const listed = await factsOverlay.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(listed).toHaveLength(1);
 		expect(listed[0]).toMatchObject({
 			actionId: "petstore.addPet",
@@ -123,16 +136,20 @@ describe("createRegistryStores over memory adapter", () => {
 		});
 	});
 
-	it("facts_overlay upsert REPLACES by (organizationId, actionId) — omitted facts are CLEARED", async () => {
+	it("facts_overlay upsert REPLACES by (scope, scopeId, actionId) — omitted facts are CLEARED", async () => {
 		const { factsOverlay } = createRegistryStores(memoryAdapter());
 		await factsOverlay.upsert(overlayInput("org-a")); // access read, groups ["audited"]
 		await factsOverlay.upsert({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			actionId: "petstore.addPet",
 			access: "write",
 			updatedBy: "user:bob",
 		});
-		const listed = await factsOverlay.listByOrganization("org-a");
+		const listed = await factsOverlay.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(listed).toHaveLength(1); // one row per (org, actionId)
 		expect(listed[0]?.access).toBe("write");
 		expect(listed[0]?.groups).toBeUndefined(); // the earlier override's groups were cleared
@@ -143,7 +160,12 @@ describe("createRegistryStores over memory adapter", () => {
 		const { factsOverlay } = createRegistryStores(memoryAdapter());
 		const created = await factsOverlay.upsert(overlayInput("org-a"));
 		await factsOverlay.deleteById(created.id);
-		expect(await factsOverlay.listByOrganization("org-a")).toEqual([]);
+		expect(
+			await factsOverlay.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
+		).toEqual([]);
 	});
 
 	it("lists are scoped by organizationId — org A rows never leak into org B", async () => {
@@ -156,17 +178,32 @@ describe("createRegistryStores over memory adapter", () => {
 		await stores.factsOverlay.upsert(overlayInput("org-b"));
 
 		expect(
-			await stores.specRegistrations.listByOrganization("org-a"),
+			await stores.specRegistrations.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
 		).toHaveLength(1);
-		const aSpecs = await stores.specRegistrations.listByOrganization("org-a");
-		expect(aSpecs.every((r) => r.organizationId === "org-a")).toBe(true);
-		const aTools = await stores.registeredTools.listByOrganization("org-a");
-		expect(aTools.every((r) => r.organizationId === "org-a")).toBe(true);
+		const aSpecs = await stores.specRegistrations.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		expect(aSpecs.every((r) => r.scopeId === "org-a")).toBe(true);
+		const aTools = await stores.registeredTools.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		expect(aTools.every((r) => r.scopeId === "org-a")).toBe(true);
 		expect(
-			await stores.registeredTools.listBySource("org-b", "petstore"),
+			await stores.registeredTools.listBySource(
+				{ scope: "organization", scopeId: "org-b" },
+				"petstore",
+			),
 		).toHaveLength(1);
-		const aOverlays = await stores.factsOverlay.listByOrganization("org-a");
-		expect(aOverlays.every((r) => r.organizationId === "org-a")).toBe(true);
+		const aOverlays = await stores.factsOverlay.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		expect(aOverlays.every((r) => r.scopeId === "org-a")).toBe(true);
 	});
 
 	it("rejects a malformed stored spec_registration row (required blob missing)", async () => {
@@ -176,7 +213,8 @@ describe("createRegistryStores over memory adapter", () => {
 			model: "spec_registration",
 			data: {
 				id: "bad",
-				organizationId: "org-bad",
+				scope: "organization",
+				scopeId: "org-bad",
 				source: "x",
 				contentVersion: "v",
 				registeredBy: "user:a",
@@ -185,7 +223,10 @@ describe("createRegistryStores over memory adapter", () => {
 			},
 		});
 		await expect(
-			specRegistrations.listByOrganization("org-bad"),
+			specRegistrations.listForScope({
+				scope: "organization",
+				scopeId: "org-bad",
+			}),
 		).rejects.toThrow("spec_registration record invalid");
 	});
 
@@ -196,7 +237,8 @@ describe("createRegistryStores over memory adapter", () => {
 			model: "registered_tool",
 			data: {
 				id: "bad",
-				organizationId: "org-bad",
+				scope: "organization",
+				scopeId: "org-bad",
 				source: "x",
 				name: "y",
 				address: "x.y",
@@ -207,9 +249,12 @@ describe("createRegistryStores over memory adapter", () => {
 				updatedAt: "t",
 			},
 		});
-		await expect(registeredTools.listByOrganization("org-bad")).rejects.toThrow(
-			"registered_tool record invalid",
-		);
+		await expect(
+			registeredTools.listForScope({
+				scope: "organization",
+				scopeId: "org-bad",
+			}),
+		).rejects.toThrow("registered_tool record invalid");
 	});
 });
 
@@ -225,13 +270,13 @@ describe("createRegistryStores over kysely (sqlite) — JSON columns round-trip"
 		});
 		sqlite.exec(
 			`CREATE TABLE spec_registration (
-				id TEXT PRIMARY KEY, organizationId TEXT, source TEXT, specBlob TEXT,
+				id TEXT PRIMARY KEY, scope TEXT, scopeId TEXT, source TEXT, specBlob TEXT,
 				contentVersion TEXT, report TEXT, registeredBy TEXT, createdAt TEXT, updatedAt TEXT
 			)`,
 		);
 		sqlite.exec(
 			`CREATE TABLE registered_tool (
-				id TEXT PRIMARY KEY, organizationId TEXT, source TEXT, name TEXT, address TEXT,
+				id TEXT PRIMARY KEY, scope TEXT, scopeId TEXT, source TEXT, name TEXT, address TEXT,
 				description TEXT, inputSchema TEXT, governance TEXT, binding TEXT,
 				contentVersion TEXT, createdAt TEXT, updatedAt TEXT
 			)`,
@@ -244,12 +289,18 @@ describe("createRegistryStores over kysely (sqlite) — JSON columns round-trip"
 			makeAdapter(),
 		);
 		await specRegistrations.upsert(specInput("org-a"));
-		const spec = await specRegistrations.get("org-a", "petstore");
+		const spec = await specRegistrations.get(
+			{ scope: "organization", scopeId: "org-a" },
+			"petstore",
+		);
 		expect(spec?.specBlob).toEqual(specInput("org-a").specBlob);
 		expect(spec?.report).toEqual(specInput("org-a").report);
 
 		const tool = await registeredTools.create(toolInput("org-a"));
-		const listed = await registeredTools.listBySource("org-a", "petstore");
+		const listed = await registeredTools.listBySource(
+			{ scope: "organization", scopeId: "org-a" },
+			"petstore",
+		);
 		expect(listed[0]?.governance).toEqual(toolInput("org-a").governance);
 		expect(listed[0]?.inputSchema).toEqual(toolInput("org-a").inputSchema);
 		expect(tool.address).toBe("petstore.addPet");

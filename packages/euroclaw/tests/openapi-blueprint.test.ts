@@ -139,7 +139,9 @@ describe("openapi → cedar blueprint (composed slices 1–4)", () => {
 		expect(schema).toMatch(/action "addPet".*"categoryId"\?: Long/);
 		expect(schema).not.toContain("weight");
 		// the rendered schema parses under cedar-wasm — cedarPolicyPlugin() construction validates it
-		expect(() => cedarPolicyPlugin({ model, policies: POLICIES })).not.toThrow();
+		expect(() =>
+			cedarPolicyPlugin({ model, policies: POLICIES }),
+		).not.toThrow();
 	});
 
 	it("reads run autonomously", async () => {

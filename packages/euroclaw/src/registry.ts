@@ -119,18 +119,18 @@ export function serverForActionFromRegisteredTools(
 }
 
 /**
- * The agent-facing GOVERNED registration tool. The model may set ONLY `{ source, document }`;
- * organizationId + registeredBy are BOUND here from trusted turn context (the claw's org + principal),
- * NEVER from model args — the input schema has no such field, so a prompt-injected model cannot
- * register into another organization. "Who may register" is a policy over register_openapi_spec.
+ * The agent-facing GOVERNED registration tool. The model may set ONLY `{ source, document }`; the
+ * `(scope, scopeId)` boundary and `registeredBy` are BOUND here from trusted turn context, NEVER from
+ * model args — the input schema has no such field, so a prompt-injected model cannot register into
+ * another scope. "Who may register" is a policy over register_openapi_spec.
  */
 export function registerOpenApiSpecTool(
 	registry: SpecRegistry,
-	principal: { organizationId: string; registeredBy: string },
+	principal: { scope: string; scopeId: string; registeredBy: string },
 ) {
 	return tool({
 		description:
-			"Register an OpenAPI spec so its operations become this organization's governed tools.",
+			"Register an OpenAPI spec so its operations become this scope's governed tools.",
 		inputSchema: type({ source: "string", document: "object" }),
 		access: "write",
 		groups: ["registry"],
@@ -144,7 +144,8 @@ export function registerOpenApiSpecTool(
 				);
 			}
 			return registry.registerOpenApiSpec({
-				organizationId: principal.organizationId,
+				scope: principal.scope,
+				scopeId: principal.scopeId,
 				registeredBy: principal.registeredBy,
 				source,
 				document: doc,

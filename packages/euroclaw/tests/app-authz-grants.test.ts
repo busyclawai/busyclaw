@@ -5,7 +5,10 @@
 // thread inheritance / a plugin `shareable` kind), owner-isolation holds, and fail-closed is preserved.
 
 import type { EuroclawPlugin } from "@euroclaw/contracts";
-import { accessGrantFields, accessGrantPrincipalRef } from "@euroclaw/contracts";
+import {
+	accessGrantFields,
+	accessGrantPrincipalRef,
+} from "@euroclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
@@ -357,14 +360,23 @@ describe("grantee ref shape (accessGrantPrincipalRef)", () => {
 	// the method); an in-process call is typed by TS and deliberately does not re-parse — so the
 	// over-the-wire rejection is proven in @euroclaw/adapter-core.
 	it("accepts `public` and any tagged authority — a new source needs no change here", () => {
-		for (const ref of ["public", "user:alice", "betterauth:org_123", "workday:dept_456"]) {
+		for (const ref of [
+			"public",
+			"user:alice",
+			"betterauth:org_123",
+			"workday:dept_456",
+		]) {
 			expect(accessGrantPrincipalRef(ref)).toBe(ref);
 		}
 	});
 
 	it("rejects an UNTAGGED ref and empty halves — the mistakes a tagged model invites", () => {
-		expect(String(accessGrantPrincipalRef("engineering"))).toMatch(/no colon found/);
+		expect(String(accessGrantPrincipalRef("engineering"))).toMatch(
+			/no colon found/,
+		);
 		expect(String(accessGrantPrincipalRef("user:"))).toMatch(/non-empty id/);
-		expect(String(accessGrantPrincipalRef(":eng"))).toMatch(/non-empty authority/);
+		expect(String(accessGrantPrincipalRef(":eng"))).toMatch(
+			/non-empty authority/,
+		);
 	});
 });

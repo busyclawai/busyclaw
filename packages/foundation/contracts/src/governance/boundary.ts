@@ -141,11 +141,17 @@ export const CLAW_ID_CONTEXT_KEY = "euroclaw__clawId";
 export const THREAD_ID_CONTEXT_KEY = "euroclaw__threadId";
 export const RUN_ID_CONTEXT_KEY = "euroclaw__runId";
 export const SUBJECT_CONTEXT_KEY = "euroclaw__subjectId";
-export const ORGANIZATION_CONTEXT_KEY = "euroclaw__organizationId";
+// The run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary its durable config belongs to (registered
+// tools, policy slices, the facts overlay). Was a single `euroclaw__organizationId`, which made core
+// assert that a boundary is an organization; an organization is a PLUGIN, so the pair is opaque here and
+// some plugin gives the label meaning. DISTINCT from the redaction container below: this is "whose
+// configuration governs this run", that is "which container may rehydrate this placeholder".
+export const CONFIG_SCOPE_CONTEXT_KEY = "euroclaw__configScope";
+export const CONFIG_SCOPE_ID_CONTEXT_KEY = "euroclaw__configScopeId";
 // The redaction CONTAINMENT ref — a polymorphic (scope, scopeId) pointing at the container a
 // redaction happened in (`claw:<clawId>` today, `memory:<kbId>` / `task:<taskId>` later). A PII
 // placeholder rehydrates only within the same container. `scopeId` is a unique entity id, so the
-// container implies its tenant — redaction stays org-blind (no organizationId anywhere in pii).
+// container implies its boundary — redaction stays scope-blind (no boundary key anywhere in pii).
 export const SCOPE_CONTEXT_KEY = "euroclaw__scope";
 export const SCOPE_ID_CONTEXT_KEY = "euroclaw__scopeId";
 // How the run started — stamped by the runtime from mechanical fact (sendMessage/api.generate =
@@ -165,7 +171,8 @@ export type StampedFacts = {
 	role?: string;
 	team?: string;
 	clawId?: string;
-	organizationId?: string;
+	configScope?: string;
+	configScopeId?: string;
 	runMode?: RunMode;
 };
 
@@ -182,7 +189,8 @@ export const stampedFacts = type({
 	"euroclaw__role?": "string",
 	"euroclaw__team?": "string",
 	"euroclaw__clawId?": "string",
-	"euroclaw__organizationId?": "string",
+	"euroclaw__configScope?": "string",
+	"euroclaw__configScopeId?": "string",
 	"euroclaw__runMode?": "'interactive' | 'autonomous'",
 }).pipe(
 	(stamps): StampedFacts => ({
@@ -195,8 +203,11 @@ export const stampedFacts = type({
 		...(stamps.euroclaw__clawId !== undefined
 			? { clawId: stamps.euroclaw__clawId }
 			: {}),
-		...(stamps.euroclaw__organizationId !== undefined
-			? { organizationId: stamps.euroclaw__organizationId }
+		...(stamps.euroclaw__configScope !== undefined
+			? { configScope: stamps.euroclaw__configScope }
+			: {}),
+		...(stamps.euroclaw__configScopeId !== undefined
+			? { configScopeId: stamps.euroclaw__configScopeId }
 			: {}),
 		...(stamps.euroclaw__runMode !== undefined
 			? { runMode: stamps.euroclaw__runMode }

@@ -22,7 +22,8 @@ export const policyRequest = type({
 	context: {
 		"confirmationUsed?": "boolean",
 		"clawId?": "string",
-		"organizationId?": "string",
+		"configScope?": "string",
+		"configScopeId?": "string",
 		"role?": "string",
 		"runMode?": "'interactive' | 'autonomous'",
 		"team?": "string",

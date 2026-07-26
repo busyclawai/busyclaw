@@ -8,7 +8,10 @@
 // through the full-scan path. The `name` kind draws from a separate NAME book and is covered on its own.
 import type { Detector, PiiKind, PiiSpan } from "@euroclaw/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryPiiMappingStore, createStoredRedactor } from "../src/index";
+import {
+	createMemoryPiiMappingStore,
+	createStoredRedactor,
+} from "../src/index";
 import { NAME_SET } from "../src/wordlist";
 
 /** A detector that flags Alice/Bob/Zoe as the given kind — lets one helper drive both books. */
@@ -20,7 +23,13 @@ const detectorFor =
 			const value = match[0];
 			if (value === undefined) continue;
 			const start = match.index ?? 0;
-			spans.push({ start, end: start + value.length, value, kind, source: "regex" });
+			spans.push({
+				start,
+				end: start + value.length,
+				value,
+				kind,
+				source: "regex",
+			});
 		}
 		return spans;
 	};
@@ -38,7 +47,14 @@ function seed(
 	subjectIds?: string[],
 ) {
 	return store.save(
-		{ placeholder, original, kind: "email", scope: ctx.scope, scopeId: ctx.scopeId, createdAt: born },
+		{
+			placeholder,
+			original,
+			kind: "email",
+			scope: ctx.scope,
+			scopeId: ctx.scopeId,
+			createdAt: born,
+		},
 		subjectIds,
 	);
 }
@@ -88,9 +104,9 @@ describe("recovery of a mangled token", () => {
 		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA);
 		const on = createStoredRedactor({ mappings: store, recover: true });
 
-		expect(await on.rehydrateValue("hi {pii:email:apache-blizzard} bye", ctxA)).toBe(
-			"hi Zoe bye",
-		);
+		expect(
+			await on.rehydrateValue("hi {pii:email:apache-blizzard} bye", ctxA),
+		).toBe("hi Zoe bye");
 		expect(
 			await on.rehydrateValue("hi {{pii: email : apache blizzard}} bye", ctxA),
 		).toBe("hi Zoe bye");
@@ -100,7 +116,9 @@ describe("recovery of a mangled token", () => {
 		const store = createMemoryPiiMappingStore();
 		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA);
 		const on = createStoredRedactor({ mappings: store, recover: true });
-		expect(await on.rehydrateValue("hi {{pii:email:apache-blizzard}}", ctxA)).toBe("hi Zoe");
+		expect(
+			await on.rehydrateValue("hi {{pii:email:apache-blizzard}}", ctxA),
+		).toBe("hi Zoe");
 	});
 });
 
@@ -111,7 +129,9 @@ describe("recovery is fail-safe", () => {
 		const on = createStoredRedactor({ mappings: store, recover: true });
 		// abacus -> abacas is a single substitution; the books are built to a minimum pairwise distance
 		// of 3, so exactly one word can sit within one edit and the repair is provably the original.
-		expect(await on.rehydrateValue("{{pii:email:abacas-blizzard}}", ctxA)).toBe("Bob");
+		expect(await on.rehydrateValue("{{pii:email:abacas-blizzard}}", ctxA)).toBe(
+			"Bob",
+		);
 	});
 
 	it("REFUSES a mangling BEYOND the radius rather than snapping to a neighbour", async () => {
@@ -124,7 +144,10 @@ describe("recovery is fail-safe", () => {
 		// outside the distance-3 books' correcting radius of 1. Past that point "nearest word" stops
 		// being "the word it came from", so the only safe answer is to leave the token alone: this
 		// recoverer is same-value-or-refuse, and a guess here rehydrates as somebody else.
-		const out = await on.rehydrateValue("see {{pii:email:baacus-blizzard}} today", ctxA);
+		const out = await on.rehydrateValue(
+			"see {{pii:email:baacus-blizzard}} today",
+			ctxA,
+		);
 		expect(out).toBe("see {{pii:email:baacus-blizzard}} today"); // untouched
 		expect(out).not.toContain("Bob");
 	});
@@ -159,7 +182,8 @@ describe("name-styled tokens (the name book)", () => {
 		// Corrupt a middle char of the first name-word → recovers via the NAME book (edit>=3 → unique).
 		const first = words[0] ?? "";
 		const rest = words.slice(1);
-		const typo = first.slice(0, 2) + (first[2] === "x" ? "q" : "x") + first.slice(3);
+		const typo =
+			first.slice(0, 2) + (first[2] === "x" ? "q" : "x") + first.slice(3);
 		const mangled = `{{pii:name:${[typo, ...rest].join("-")}}}`;
 		expect(await redactor.rehydrateValue(mangled, ctxA)).toBe("Zoe");
 	});
@@ -170,18 +194,30 @@ describe("container-scoped identity", () => {
 		const store = createMemoryPiiMappingStore();
 		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA);
 		await seed(store, "{{pii:email:apache-blizzard}}", "Yan", ctxB);
-		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxA)).toBe("Zoe");
-		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxB)).toBe("Yan");
+		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxA)).toBe(
+			"Zoe",
+		);
+		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxB)).toBe(
+			"Yan",
+		);
 	});
 
 	it("erases a subject in its OWN container, sparing a namesake elsewhere", async () => {
 		const store = createMemoryPiiMappingStore();
-		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA, ["subject-1"]);
-		await seed(store, "{{pii:email:apache-blizzard}}", "Yan", ctxB, ["subject-2"]);
+		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA, [
+			"subject-1",
+		]);
+		await seed(store, "{{pii:email:apache-blizzard}}", "Yan", ctxB, [
+			"subject-2",
+		]);
 
 		await store.deleteForSubject("subject-1");
 
-		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxA)).toBeNull(); // erased
-		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxB)).toBe("Yan"); // spared
+		expect(
+			await store.resolve("{{pii:email:apache-blizzard}}", ctxA),
+		).toBeNull(); // erased
+		expect(await store.resolve("{{pii:email:apache-blizzard}}", ctxB)).toBe(
+			"Yan",
+		); // spared
 	});
 });

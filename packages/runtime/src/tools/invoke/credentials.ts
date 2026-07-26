@@ -4,7 +4,7 @@
 // unconfigured.
 //
 // RESOLUTION and APPLICATION are separate concerns. Resolution: the material comes ONLY from the
-// reader, keyed by the registration SOURCE name with the turn's {organizationId, principal?} context
+// reader, keyed by the registration SOURCE name with the turn's {scope, scopeId, principal?} context
 // (never from model args, never from the spec) — one credential per registration (the per-scheme
 // override is a later slice). Application: HOW to place that material (header/query/basic/bearer) is
 // read from the spec's own securityScheme, per scheme. A required-but-unconfigured source fails the
@@ -26,7 +26,8 @@ import type { HttpRequestPlan } from "./request-plan";
 /** The trusted keying context for credential resolution — the turn's org + principal, plus the row's
  *  registration source. NONE of it comes from model args. */
 export type CredentialContext = {
-	organizationId: string;
+	scope: string;
+	scopeId: string;
 	source: string;
 	principal?: string;
 };
@@ -47,7 +48,8 @@ export async function applyCredentials(
 	// of the name (name = the registration source); they are read from the spec's securityScheme when the
 	// material is APPLIED below.
 	const resolveCtx: ResolveContext = {
-		organizationId: context.organizationId,
+		scope: context.scope,
+		scopeId: context.scopeId,
 		principal:
 			context.principal === undefined
 				? undefined

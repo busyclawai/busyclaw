@@ -177,7 +177,9 @@ describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
 			audit: createMemoryAudit(),
 			tools: { run_code: runCodeTool({ sandbox: rec.sandbox }) },
 		});
-		expect((await runtime.generate("write with no store")).status).toBe("completed");
+		expect((await runtime.generate("write with no store")).status).toBe(
+			"completed",
+		);
 		// The write threw inside the guest (file access disabled) → an error VALUE, no result.
 		expect(rec.last()?.error).toBeDefined();
 		expect(rec.last()?.result).toBeNull();

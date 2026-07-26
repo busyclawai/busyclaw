@@ -39,7 +39,9 @@ function suite(
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
 			expect(await store.consume(rec.id)).toBeNull(); // not granted yet
-			expect((await store.grant(rec.id, userPrincipal("alice")))?.status).toBe("approved");
+			expect((await store.grant(rec.id, userPrincipal("alice")))?.status).toBe(
+				"approved",
+			);
 			const consumed = await store.consume(rec.id);
 			expect(consumed?.toolName).toBe("send_email");
 			expect(consumed?.args).toEqual({ to: "{{pii:abc}}" }); // the call to re-run
@@ -50,7 +52,9 @@ function suite(
 		it("deny blocks consume, and a decided row can't be re-decided", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
-			expect(await store.deny(rec.id, userPrincipal("alice"), "not allowed")).toMatchObject({
+			expect(
+				await store.deny(rec.id, userPrincipal("alice"), "not allowed"),
+			).toMatchObject({
 				status: "denied",
 				reason: "not allowed",
 			});

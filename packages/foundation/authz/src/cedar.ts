@@ -30,7 +30,7 @@ export type CedarSchemaOptions = {
 // org can write egress policy over `context.server`. Per-action `args` appends when the action's
 // schema projects.
 const CONTEXT_FIELDS =
-	"confirmationUsed: Bool, clawId?: String, organizationId?: String, role?: String, runMode?: String, server?: String, team?: String";
+	"confirmationUsed: Bool, clawId?: String, configScope?: String, configScopeId?: String, role?: String, runMode?: String, server?: String, team?: String";
 
 function renderAction(
 	action: ActionDef,

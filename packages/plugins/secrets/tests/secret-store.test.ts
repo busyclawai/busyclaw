@@ -158,14 +158,16 @@ describe("the store provider — nearest-scope resolution", () => {
 		expect(
 			await provider.get("MY_TOKEN", {
 				principal: "user:alice",
-				organizationId: "org-a",
+				scope: "organization",
+				scopeId: "org-a",
 			}),
 		).toEqual({ kind: "token", value: "alices-own" });
 		// bob saved nothing personally — the org-wide row serves him.
 		expect(
 			await provider.get("MY_TOKEN", {
 				principal: "user:bob",
-				organizationId: "org-a",
+				scope: "organization",
+				scopeId: "org-a",
 			}),
 		).toEqual({ kind: "token", value: "org-wide" });
 	});
@@ -182,7 +184,10 @@ describe("the store provider — nearest-scope resolution", () => {
 		).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
-			await provider.get("PRIVATE", { organizationId: "org-a" }),
+			await provider.get("PRIVATE", {
+				scope: "organization",
+				scopeId: "org-a",
+			}),
 		).toBeNull();
 	});
 
@@ -202,7 +207,8 @@ describe("the store provider — nearest-scope resolution", () => {
 		expect(
 			await provider.get("NOWHERE", {
 				principal: "user:alice",
-				organizationId: "org-a",
+				scope: "organization",
+				scopeId: "org-a",
 			}),
 		).toBeNull();
 
@@ -357,7 +363,7 @@ describe("encryption at rest", () => {
 	});
 
 	// The binding, from the outside: a sealed value is not portable. Someone able to write the value
-	// column but NOT holding the master key — SQL injection, a backup restored into the wrong tenant,
+	// column but NOT holding the master key — SQL injection, a backup restored into the wrong boundary,
 	// an app bug addressing the wrong row — cannot move one row's secret into another and have it
 	// resolve. Without AAD every one of these decrypts happily: the key is right and the tag is valid.
 	describe("a sealed value is bound to its row", () => {
@@ -368,7 +374,7 @@ describe("encryption at rest", () => {
 			value: string,
 		) => cipherFor(TEST_KEY).seal(value, { scope, scopeId, name });
 
-		it("refuses to open under another tenant's boundary", async () => {
+		it("refuses to open under another scope's boundary", async () => {
 			const sealed = await sealFor(
 				"organization",
 				"org-a",

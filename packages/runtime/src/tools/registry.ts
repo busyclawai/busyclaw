@@ -33,7 +33,8 @@ const SOURCE_SLUG = /^[a-z][a-z0-9-]{0,63}$/;
 const DEFAULT_MAX_DOCUMENT_BYTES = 5_000_000;
 
 export type SpecRegistrationInput = {
-	organizationId: string;
+	scope: string;
+	scopeId: string;
 	/** Address prefix; must match /^[a-z][a-z0-9-]{0,63}$/ (dots are the address separator). */
 	source: string;
 	document: JsonObject;
@@ -183,7 +184,7 @@ export function createSpecRegistry(
 			}
 
 			const existing = await stores.registeredTools.listBySource(
-				input.organizationId,
+				{ scope: input.scope, scopeId: input.scopeId },
 				input.source,
 			);
 			const priorByAddress = new Map(existing.map((row) => [row.address, row]));
@@ -211,7 +212,8 @@ export function createSpecRegistry(
 				// absent description stays absent without conditional spreads here.
 				if (!prior) {
 					await stores.registeredTools.create({
-						organizationId: input.organizationId,
+						scope: input.scope,
+						scopeId: input.scopeId,
 						source: input.source,
 						name: tool.name,
 						address,
@@ -256,7 +258,8 @@ export function createSpecRegistry(
 				warnings: extraction.warnings,
 			};
 			await stores.specRegistrations.upsert({
-				organizationId: input.organizationId,
+				scope: input.scope,
+						scopeId: input.scopeId,
 				source: input.source,
 				specBlob: input.document,
 				contentVersion,
@@ -268,7 +271,8 @@ export function createSpecRegistry(
 			// A registration is an authz-state change — append so the org router's count-keyed bundle
 			// version bumps and the newly registered surface takes effect on the next decision.
 			await stores.authzChanges?.append({
-				organizationId: input.organizationId,
+				scope: input.scope,
+						scopeId: input.scopeId,
 				kind: "spec_registered",
 				summary: { source: input.source, contentVersion },
 				by: asPrincipal(input.registeredBy),

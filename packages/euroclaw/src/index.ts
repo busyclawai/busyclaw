@@ -11,7 +11,8 @@ import {
 	errorMessage,
 	flattenToolTree,
 	type InferPluginApi,
-	ORGANIZATION_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
 	type Secrets,
@@ -529,13 +530,16 @@ function registeredToolResolver(
 ): NonNullable<RuntimeConfig["resolveTools"]> {
 	const provider = createRegisteredToolProvider({ secrets });
 	return async (ctx) => {
-		const organizationId = ctx[ORGANIZATION_CONTEXT_KEY];
-		if (typeof organizationId !== "string") return {};
-		const rows =
-			await stores.registeredTools.listByOrganization(organizationId);
+		// Both halves or nothing: a run with a boundary label but no id (or the reverse) names no boundary,
+		// and resolving tools for half a key would read another scope's rows.
+		const scope = ctx[CONFIG_SCOPE_CONTEXT_KEY];
+		const scopeId = ctx[CONFIG_SCOPE_ID_CONTEXT_KEY];
+		if (typeof scope !== "string" || typeof scopeId !== "string") return {};
+		const rows = await stores.registeredTools.listForScope({ scope, scopeId });
 		const principal = ctx[PRINCIPAL_CONTEXT_KEY];
 		return provider(rows, {
-			organizationId,
+			scope,
+			scopeId,
 			principal: typeof principal === "string" ? principal : undefined,
 		});
 	};

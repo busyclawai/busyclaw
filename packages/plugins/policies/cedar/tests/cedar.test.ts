@@ -12,7 +12,7 @@ const runEcho = (call: ToolCall) => ({ ran: call.name });
 // The trusted seed the runtime does from the authenticated caller — mirrored here by promoting the
 // test's convenient unprefixed `principal` to the stamped `euroclaw__principal` the mapper now reads
 // (audit #7: the mapper NEVER reads the unprefixed key). Runs after createGovernance's stripReserved,
-// exactly like the runtime's resolveGovernanceContext seed and the `euroclaw__role`/`organizationId`
+// exactly like the runtime's resolveGovernanceContext seed and the `euroclaw__role`/config-scope
 // stamps below.
 const seedPrincipal = (
 	ctx: Record<string, unknown>,
@@ -158,33 +158,34 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		expect(operator.status).toBe("denied"); // role != approver → no permit matches → deny-by-default
 	});
 
-	it("organizationId flows from resolution context and cannot be spoofed from caller args", async () => {
-		// The router keys on the org; a policy may also condition on it directly.
-		const policies = `permit(principal, action == Action::"list_pets", resource) when { context.organizationId == "org-a" };`;
-		const inOrg = (organizationId: string) =>
+	it("the config scope flows from resolution context and cannot be spoofed from caller args", async () => {
+		// The router keys on the config scope; a policy may also condition on it directly.
+		const policies = `permit(principal, action == Action::"list_pets", resource) when { context.configScopeId == "org-a" };`;
+		const inScope = (scopeId: string) =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],
-				// resolveContext stamps euroclaw__organizationId exactly as the claw's organization resolver would.
+				// resolveContext stamps the config-scope pair exactly as the claw's resolver would.
 				resolveContext: (ctx) => ({
 					...seedPrincipal(ctx),
-					euroclaw__organizationId: organizationId,
+					euroclaw__configScope: "organization",
+					euroclaw__configScopeId: scopeId,
 				}),
 				runTool: runEcho,
 			});
 
-		const orgA = await inOrg("org-a").handleToolCall(
+		const scopeA = await inScope("org-a").handleToolCall(
 			{ name: "list_pets", args: {} },
 			{ principal: "alice" },
 		);
-		expect(orgA.status).toBe("ok"); // context.organizationId == "org-a" → permitted
+		expect(scopeA.status).toBe("ok"); // context.configScopeId == "org-a" → permitted
 
-		const orgB = await inOrg("org-b").handleToolCall(
+		const scopeB = await inScope("org-b").handleToolCall(
 			{ name: "list_pets", args: {} },
 			{ principal: "alice" },
 		);
-		expect(orgB.status).toBe("denied"); // different org → no permit matches
+		expect(scopeB.status).toBe("denied"); // a different scope → no permit matches
 
-		// A caller cannot forge the org: euroclaw__ keys are stripped before the trusted stamp.
+		// A caller cannot forge the scope: euroclaw__ keys are stripped before the trusted stamp.
 		const unstamped = createGovernance({
 			plugins: [cedarPolicyPlugin({ policies })],
 			resolveContext: seedPrincipal,
@@ -192,9 +193,13 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		});
 		const forged = await unstamped.handleToolCall(
 			{ name: "list_pets", args: {} },
-			{ principal: "alice", euroclaw__organizationId: "org-a" },
+			{
+				principal: "alice",
+				euroclaw__configScope: "organization",
+				euroclaw__configScopeId: "org-a",
+			},
 		);
-		expect(forged.status).toBe("denied"); // stripped → context.organizationId absent → deny
+		expect(forged.status).toBe("denied"); // stripped → context.configScopeId absent → deny
 	});
 });
 

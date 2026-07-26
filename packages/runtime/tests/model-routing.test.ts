@@ -96,10 +96,14 @@ describe("model routing", () => {
 				},
 			},
 		});
-		expect(await rt.generate("hi", undefined, { model: "fast" })).toMatchObject({
-			text: "fast",
-		});
-		expect(await rt.generate("hi", undefined, { model: "smart" })).toMatchObject({
+		expect(await rt.generate("hi", undefined, { model: "fast" })).toMatchObject(
+			{
+				text: "fast",
+			},
+		);
+		expect(
+			await rt.generate("hi", undefined, { model: "smart" }),
+		).toMatchObject({
 			text: "smart",
 		});
 		expect(await rt.generate("hi")).toMatchObject({ text: "smart" }); // default
@@ -117,9 +121,11 @@ describe("model routing", () => {
 				full: { model: taggedModel("full"), default: true },
 			},
 		});
-		expect(await rt.generate("hi", undefined, { model: "bare" })).toMatchObject({
-			text: "bare",
-		});
+		expect(await rt.generate("hi", undefined, { model: "bare" })).toMatchObject(
+			{
+				text: "bare",
+			},
+		);
 	});
 
 	it("the single-`model` shorthand still works unchanged", async () => {

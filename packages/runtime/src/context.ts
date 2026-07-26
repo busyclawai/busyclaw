@@ -4,11 +4,13 @@
 
 import {
 	type ContextResolver,
-	ORGANIZATION_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	type Principal,
 	ROLE_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
+	type ScopeRef,
 	type TurnContext,
 	userPrincipal,
 } from "@euroclaw/contracts";
@@ -26,10 +28,12 @@ export type MembershipResolver = (
 	ctx: TurnContext,
 ) => Membership | undefined | Promise<Membership | undefined>;
 
-/** Resolves the organization boundary for durable resources and PII mapping scopes. */
-export type OrganizationResolver = (
+/** Resolves the run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary whose durable configuration
+ *  governs it (registered tools, policy slices, the facts overlay). Both halves are opaque to core: an
+ *  organization is a plugin, so the label is whatever the host's boundary is called. */
+export type ConfigScopeResolver = (
 	ctx: TurnContext,
-) => string | undefined | Promise<string | undefined>;
+) => ScopeRef | undefined | Promise<ScopeRef | undefined>;
 
 /** Build an IdentityResolver from any session-getter — better-auth's, your own — just `getSession`. */
 export function sessionIdentity(deps: {
@@ -71,15 +75,17 @@ export function roleMembership(deps: {
 export function composeContext(parts: {
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
-	organization?: OrganizationResolver;
+	configScope?: ConfigScopeResolver;
 }): ContextResolver | undefined {
-	const { identity, membership, organization } = parts;
-	if (!identity && !membership && !organization) return undefined;
+	const { identity, membership, configScope } = parts;
+	if (!identity && !membership && !configScope) return undefined;
 	return async (ctx) => {
-		if (organization) {
-			const organizationId = await organization(ctx);
-			if (typeof organizationId === "string")
-				ctx[ORGANIZATION_CONTEXT_KEY] = organizationId;
+		if (configScope) {
+			const ref = await configScope(ctx);
+			if (ref !== undefined) {
+				ctx[CONFIG_SCOPE_CONTEXT_KEY] = ref.scope;
+				ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] = ref.scopeId;
+			}
 		}
 		if (identity) {
 			const principal = await identity(ctx);

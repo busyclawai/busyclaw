@@ -315,7 +315,9 @@ describe("presidioDetector — the response is not trusted", () => {
 			url: "http://x",
 			// `entityType` instead of `entity_type` — every row would silently drop to zero spans.
 			fetch: raw(
-				JSON.stringify([{ entityType: "PERSON", start: 0, end: 5, score: 0.9 }]),
+				JSON.stringify([
+					{ entityType: "PERSON", start: 0, end: 5, score: 0.9 },
+				]),
 			),
 		});
 		await expect(detect("Alice lives in Berlin")).rejects.toThrow(

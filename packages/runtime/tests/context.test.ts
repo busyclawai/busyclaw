@@ -1,7 +1,8 @@
 import {
-	PRINCIPAL_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	type ContextResolver,
-	ORGANIZATION_CONTEXT_KEY,
+	PRINCIPAL_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
 	userPrincipal,
 } from "@euroclaw/contracts";
@@ -51,13 +52,14 @@ describe("runtime context", () => {
 		expect(ctx[ROLE_CONTEXT_KEY]).toBe("approver");
 	});
 
-	it("resolves organization through a trusted resolver", async () => {
+	it("resolves the config scope through a trusted resolver", async () => {
 		const resolve = resolverFor({
-			organization: () => "organization-1",
+			configScope: () => ({ scope: "organization", scopeId: "organization-1" }),
 		});
 
-		expect((await resolve({}))[ORGANIZATION_CONTEXT_KEY]).toBe(
-			"organization-1",
-		);
+		// Both halves land, or neither — half a key names no boundary.
+		const ctx = await resolve({});
+		expect(ctx[CONFIG_SCOPE_CONTEXT_KEY]).toBe("organization");
+		expect(ctx[CONFIG_SCOPE_ID_CONTEXT_KEY]).toBe("organization-1");
 	});
 });

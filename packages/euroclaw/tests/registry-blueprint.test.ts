@@ -22,7 +22,10 @@ import type {
 	PolicyRequest,
 	ToolCall,
 } from "@euroclaw/contracts";
-import { ORGANIZATION_CONTEXT_KEY } from "@euroclaw/contracts";
+import {
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
+} from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
 import {
 	createSpecRegistry,
@@ -140,16 +143,23 @@ describe("registry blueprint (composed slice 5)", () => {
 		const stores = createRegistryStores(memoryAdapter());
 		const registry = createSpecRegistry(stores);
 		await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
 			registeredBy: "user:alice",
 		});
 
-		const assembleFor = async (organizationId: string) => {
+		const assembleFor = async (scopeId: string) => {
 			const [registeredTools, overlay] = await Promise.all([
-				stores.registeredTools.listByOrganization(organizationId),
-				stores.factsOverlay.listByOrganization(organizationId),
+				stores.registeredTools.listForScope({
+					scope: "organization",
+					scopeId,
+				}),
+				stores.factsOverlay.listForScope({
+					scope: "organization",
+					scopeId,
+				}),
 			]);
 			return assembleOrgActions({
 				base: [pingTool, REGISTER_OPENAPI_SPEC_ACTION],
@@ -159,20 +169,20 @@ describe("registry blueprint (composed slice 5)", () => {
 		};
 
 		const router = createOrgPolicyRouter({
-			// Key on the org's registration content version — a re-registration bumps it and the next
-			// decision rebuilds; orgs with nothing registered share the "system" bundle.
-			keyFor: async (org) => {
-				if (!org) return "system";
-				const regs = await stores.specRegistrations.listByOrganization(org);
+			// Key on the scope's registration content version — a re-registration bumps it and the next
+			// decision rebuilds; scopes with nothing registered share the "system" bundle.
+			keyFor: async (ref) => {
+				if (!ref) return "system";
+				const regs = await stores.specRegistrations.listForScope(ref);
 				return regs.length
-					? `${org}:${regs.map((r) => r.contentVersion).join(",")}`
+					? `${ref.scopeId}:${regs.map((r) => r.contentVersion).join(",")}`
 					: "system";
 			},
-			engineFor: async (org) => {
-				const { model } = await assembleFor(org ?? "");
+			engineFor: async (ref) => {
+				const { model } = await assembleFor(ref?.scopeId ?? "");
 				return compileBundle(
 					model,
-					org === "org-a" ? ORG_A_POLICIES : SYSTEM_POLICIES,
+					ref?.scopeId === "org-a" ? ORG_A_POLICIES : SYSTEM_POLICIES,
 				);
 			},
 		});
@@ -181,7 +191,7 @@ describe("registry blueprint (composed slice 5)", () => {
 			call: ToolCall,
 			ctx: { principal: string },
 		): PolicyRequest => {
-			const organizationId = Reflect.get(ctx, ORGANIZATION_CONTEXT_KEY);
+			const scopeId = Reflect.get(ctx, CONFIG_SCOPE_ID_CONTEXT_KEY);
 			return {
 				principal: { type: "User", id: ctx.principal },
 				action: { type: "Action", id: call.name },
@@ -189,17 +199,20 @@ describe("registry blueprint (composed slice 5)", () => {
 				context: {
 					args: call.args,
 					confirmationUsed: false,
-					...(typeof organizationId === "string" ? { organizationId } : {}),
+					...(typeof scopeId === "string"
+						? { configScope: "organization", configScopeId: scopeId }
+						: {}),
 				},
 			};
 		};
 
-		const coreFor = (organizationId: string) =>
+		const coreFor = (scopeId: string) =>
 			createGovernance({
 				plugins: [createPolicyPlugin({ engine: router, mapCall })],
 				resolveContext: (ctx) => ({
 					...ctx,
-					euroclaw__organizationId: organizationId,
+					euroclaw__configScope: "organization",
+					euroclaw__configScopeId: scopeId,
 				}),
 				runTool: runEcho,
 			});
@@ -244,7 +257,8 @@ describe("registry blueprint (composed slice 5)", () => {
 		expect(before.status).toBe("needs-approval"); // a delete, gated but present
 
 		await registry.registerOpenApiSpec({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(false), // removePet gone from the spec
 			registeredBy: "user:alice",
@@ -261,7 +275,8 @@ describe("registry blueprint (composed slice 5)", () => {
 	it("a facts overlay changes the assembled vocabulary and the rendered Cedar", async () => {
 		const { stores, assembleFor } = await setup();
 		await stores.factsOverlay.upsert({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			actionId: "petstore.getPet",
 			access: "write", // a read tool, forced to write by the customer overlay
 			groups: ["audited"],
@@ -298,7 +313,8 @@ describe("the registration verb is itself governed", () => {
 		const stores = createRegistryStores(memoryAdapter());
 		const registry = createSpecRegistry(stores);
 		const registerTool = registerOpenApiSpecTool(registry, {
-			organizationId: principalOrg,
+			scope: "organization",
+			scopeId: principalOrg,
 			registeredBy: "user:alice",
 		});
 		const model = buildAuthzModel([REGISTER_OPENAPI_SPEC_ACTION]);
@@ -334,9 +350,12 @@ describe("the registration verb is itself governed", () => {
 			{ principal: "mallory" },
 		);
 		expect(denied.status).toBe("denied");
-		expect(await stores.specRegistrations.listByOrganization("org-a")).toEqual(
-			[],
-		);
+		expect(
+			await stores.specRegistrations.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
+		).toEqual([]);
 	});
 
 	it("a policy that permits it registers the spec", async () => {
@@ -352,33 +371,42 @@ describe("the registration verb is itself governed", () => {
 			{ principal: "alice" },
 		);
 		expect(ok.status).toBe("ok");
-		const regs = await stores.specRegistrations.listByOrganization("org-a");
+		const regs = await stores.specRegistrations.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
 		expect(regs).toHaveLength(1);
 	});
 
-	it("organizationId comes from bound context, never model args — no cross-org registration", async () => {
+	it("the config scope comes from bound context, never model args — no cross-scope registration", async () => {
 		const { stores, coreWith } = registerSetup("org-a"); // the tool is bound to org-a
 		const core = coreWith(
 			`permit(principal, action == Action::"register_openapi_spec", resource);`,
 		);
-		// A prompt-injected model smuggles organizationId: "org-b" into the args.
+		// A prompt-injected model smuggles a foreign scopeId into the args.
 		await core.handleToolCall(
 			{
 				name: "register_openapi_spec",
 				args: {
 					source: "petstore",
 					document: petstore(),
-					organizationId: "org-b",
+					scopeId: "org-b",
 				},
 			},
 			{ principal: "alice" },
 		);
 		// The injected org was ignored: the row landed in the BOUND org, and org-b got nothing.
 		expect(
-			await stores.specRegistrations.listByOrganization("org-a"),
+			await stores.specRegistrations.listForScope({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
 		).toHaveLength(1);
-		expect(await stores.specRegistrations.listByOrganization("org-b")).toEqual(
-			[],
-		);
+		expect(
+			await stores.specRegistrations.listForScope({
+				scope: "organization",
+				scopeId: "org-b",
+			}),
+		).toEqual([]);
 	});
 });

@@ -305,14 +305,15 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 	// Guarded at this one boundary so all five adapters inherit it.
 	it("refuses an object where-value (operator injection), and still allows scalars", async () => {
 		const db = schemaAdapter(memoryAdapter(), fieldSchema);
-		await db.create({ model: "claw", data: { id: "c9", organizationId: "t9" } });
+		await db.create({
+			model: "claw",
+			data: { id: "c9", organizationId: "t9" },
+		});
 
 		await expect(
 			db.findOne({
 				model: "claw",
-				where: [
-					{ field: "organizationId", value: { $ne: null } as never },
-				],
+				where: [{ field: "organizationId", value: { $ne: null } as never }],
 			}),
 		).rejects.toThrow(/not a comparison operand/);
 

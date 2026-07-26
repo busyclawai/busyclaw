@@ -13,17 +13,14 @@
 
 import type { EntityInput, EntityRecord } from "../entity";
 import { entity, field } from "../entity";
+import { scopeFields } from "../scope";
 
-// ── policy_slice — one row per (organizationId, name); upsert REPLACES in place ─────────────────
+// ── policy_slice — one row per (scope, scopeId, name); upsert REPLACES in place ─────────────────
 
 export const policySliceFields = {
 	id: field.string({ required: true, unique: true, immutable: true }),
-	organizationId: field.string({
-		required: true,
-		index: true,
-		immutable: true,
-	}),
-	// A human label AND the stable slice id within the org — upsert replaces by (organizationId, name).
+	...scopeFields,
+	// A human label AND the stable slice id within the org — upsert replaces by (scope, scopeId, name).
 	// Indexed like its siblings facts_overlay.actionId / spec_registration.source (the by-name lookup).
 	name: field.string({ required: true, index: true }),
 	// The raw customer Cedar (one or more permit/forbid statements). UNTRUSTED: stored verbatim and
@@ -41,7 +38,7 @@ export const policySliceEntity = entity("policy_slice", policySliceFields);
 export const policySliceRecord = policySliceEntity.record;
 export type PolicySliceRecord = EntityRecord<typeof policySliceFields>;
 
-/** Upsert input — the store owns id/createdAt/updatedAt (replace-by-(organizationId, name)). */
+/** Upsert input — the store owns id/createdAt/updatedAt (replace-by-(scope, scopeId, name)). */
 export const policySliceUpsert = policySliceEntity.schema({
 	omit: ["id", "createdAt", "updatedAt"],
 });

@@ -19,7 +19,8 @@ import {
 } from "@euroclaw/authz";
 import type { AuthzModel, PolicyEngine, ToolCall } from "@euroclaw/contracts";
 import {
-	ORGANIZATION_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 import { createGovernance } from "@euroclaw/core";
@@ -66,16 +67,16 @@ function setup() {
 	// The HOST composition: route each decision to the org's content-addressed bundle, keyed on the
 	// append-only change-log count — an edit or delete bumps the count, the next decision rebuilds.
 	const router = createOrgPolicyRouter({
-		keyFor: async (org) => {
-			if (!org) return "system";
+		keyFor: async (ref) => {
+			if (!ref) return "system";
 			return authzBundleKey({
-				organizationId: org,
-				changeCount: await stores.authzChanges.count(org),
+				configScope: ref,
+				changeCount: await stores.authzChanges.count(ref),
 			});
 		},
-		engineFor: async (org) => {
+		engineFor: async (ref) => {
 			builds++;
-			const slices = await stores.policySlices.listByOrganization(org ?? "");
+			const slices = ref ? await stores.policySlices.listForScope(ref) : [];
 			const bundle = loadPolicyBundle({ system: SYSTEM_POSTURE, slices });
 			const live = compile(model, bundle.live);
 			// A candidate set exists ONLY when shadow slices do — then wrap two engines, else use live.
@@ -93,7 +94,7 @@ function setup() {
 	});
 
 	const mapCall = (call: ToolCall, ctx: { principal: string }) => {
-		const organizationId = Reflect.get(ctx, ORGANIZATION_CONTEXT_KEY);
+		const scopeId = Reflect.get(ctx, CONFIG_SCOPE_ID_CONTEXT_KEY);
 		const runMode = Reflect.get(ctx, RUN_MODE_CONTEXT_KEY);
 		return {
 			principal: { type: "User", id: ctx.principal },
@@ -101,7 +102,9 @@ function setup() {
 			resource: { type: "Tool", id: call.name },
 			context: {
 				confirmationUsed: false,
-				...(typeof organizationId === "string" ? { organizationId } : {}),
+				...(typeof scopeId === "string"
+					? { configScope: "organization", configScopeId: scopeId }
+					: {}),
 				// Always present (default autonomous) — mirrors the real cedar() mapCall.
 				runMode: typeof runMode === "string" ? runMode : "autonomous",
 			},
@@ -111,14 +114,15 @@ function setup() {
 	// "absent" = do NOT stamp runMode — the PRODUCTION reality (nothing stamps euroclaw__runMode yet),
 	// which the floor must fail closed against.
 	const coreFor = (
-		organizationId: string,
+		scopeId: string,
 		runMode: "interactive" | "autonomous" | "absent" = "interactive",
 	) =>
 		createGovernance({
 			plugins: [createPolicyPlugin({ engine: router, mapCall })],
 			resolveContext: (ctx) => ({
 				...ctx,
-				[ORGANIZATION_CONTEXT_KEY]: organizationId,
+				[CONFIG_SCOPE_CONTEXT_KEY]: "organization",
+				[CONFIG_SCOPE_ID_CONTEXT_KEY]: scopeId,
 				...(runMode !== "absent" ? { [RUN_MODE_CONTEXT_KEY]: runMode } : {}),
 			}),
 			runTool: (call) => {
@@ -155,7 +159,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		expect((await call("org-x", "readDoc")).status).toBe("ok");
 		// A customer enforce forbid on readDoc: deny wins over the posture's permit-reads.
 		await stores.policySlices.upsert({
-			organizationId: "org-y",
+			scope: "organization",
+			scopeId: "org-y",
 			name: "no-reads",
 			cedar: FORBID_READ,
 			mode: "enforce",
@@ -167,7 +172,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 	it("a shadow slice records a divergence WITHOUT changing the decision", async () => {
 		const { call, stores, divergences } = setup();
 		await stores.policySlices.upsert({
-			organizationId: "org-s",
+			scope: "organization",
+			scopeId: "org-s",
 			name: "watch",
 			cedar: FORBID_READ,
 			mode: "shadow",
@@ -182,7 +188,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 	it("an off slice is inert (no candidate, no second evaluation)", async () => {
 		const { call, stores, divergences } = setup();
 		await stores.policySlices.upsert({
-			organizationId: "org-o",
+			scope: "organization",
+			scopeId: "org-o",
 			name: "disabled",
 			cedar: FORBID_READ,
 			mode: "off",
@@ -195,7 +202,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 	it("editing a slice takes effect on the next decision (count-keyed invalidation)", async () => {
 		const { call, stores } = setup();
 		await stores.policySlices.upsert({
-			organizationId: "org-e",
+			scope: "organization",
+			scopeId: "org-e",
 			name: "guard",
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
@@ -204,7 +212,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		expect((await call("org-e", "readDoc")).status).toBe("ok"); // guard doesn't touch reads
 		// Edit the SAME slice to forbid readDoc — the upsert appends → count bumps → router rebuilds.
 		await stores.policySlices.upsert({
-			organizationId: "org-e",
+			scope: "organization",
+			scopeId: "org-e",
 			name: "guard",
 			cedar: FORBID_READ,
 			mode: "enforce",
@@ -219,14 +228,16 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		// updatedAt) is unrelated. Under max(updatedAt) keying, deleting the older sliceA leaves the
 		// max unchanged → a STALE bundle that still forbids readDoc. Append-only count keying is sound.
 		await stores.policySlices.upsert({
-			organizationId: "org-d",
+			scope: "organization",
+			scopeId: "org-d",
 			name: "a-forbid",
 			cedar: FORBID_READ,
 			mode: "enforce",
 			updatedBy: "user:admin",
 		});
 		await stores.policySlices.upsert({
-			organizationId: "org-d",
+			scope: "organization",
+			scopeId: "org-d",
 			name: "b-permit",
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
@@ -234,9 +245,15 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		});
 		expect((await call("org-d", "readDoc")).status).toBe("denied");
 		// Delete the OLDER forbidding slice.
-		for (const slice of await stores.policySlices.listByOrganization("org-d")) {
+		for (const slice of await stores.policySlices.listForScope({
+			scope: "organization",
+			scopeId: "org-d",
+		})) {
 			if (slice.name === "a-forbid")
-				await stores.policySlices.delete(slice.organizationId, slice.id);
+				await stores.policySlices.delete(
+					{ scope: slice.scope, scopeId: slice.scopeId },
+					slice.id,
+				);
 		}
 		// count bumped → cache miss → rebuild WITHOUT the forbid → readDoc runs again.
 		expect((await call("org-d", "readDoc")).status).toBe("ok");
@@ -253,7 +270,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		const { coreFor, stores, ran } = setup();
 		// The store accepts the raw text (untrusted, stored verbatim); cedar rejects it at construction.
 		await stores.policySlices.upsert({
-			organizationId: "org-bad",
+			scope: "organization",
+			scopeId: "org-bad",
 			name: "broken",
 			cedar: "this is not valid cedar @@@",
 			mode: "enforce",
@@ -272,7 +290,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		const { call, stores } = setup();
 		// A customer slice permits writes outright, laid over the sealed posture.
 		await stores.policySlices.upsert({
-			organizationId: "org-floor",
+			scope: "organization",
+			scopeId: "org-floor",
 			name: "escalate",
 			cedar: `permit(principal, action == Action::"writeDoc", resource);`,
 			mode: "enforce",
@@ -298,7 +317,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		// A "safe to experiment with" shadow slice with a Cedar typo — its candidate set fails to
 		// build. Live authz must be unaffected (reads still run); the build error is surfaced.
 		await stores.policySlices.upsert({
-			organizationId: "org-badshadow",
+			scope: "organization",
+			scopeId: "org-badshadow",
 			name: "typo",
 			cedar: `this is not valid cedar`,
 			mode: "shadow",
@@ -317,7 +337,8 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 		// real action → silently inert. Pinned so the footgun is KNOWN, not hidden. A stricter host
 		// can pass modelToCedarSchema(model) + Cedar policy validation to reject unknown-action refs.
 		await stores.policySlices.upsert({
-			organizationId: "org-typo",
+			scope: "organization",
+			scopeId: "org-typo",
 			name: "typo-forbid",
 			cedar: `forbid(principal, action == Action::"reedDoc", resource);`, // typo: reedDoc != readDoc
 			mode: "enforce",
@@ -335,7 +356,8 @@ describe("policy-slice api surface", () => {
 			newId: (prefix) => prefix,
 		});
 		const created = await api.putPolicySlice({
-			organizationId: "org-a",
+			scope: "organization",
+			scopeId: "org-a",
 			name: "s1",
 			cedar: `permit(principal, action, resource);`,
 			mode: "enforce",
@@ -343,11 +365,22 @@ describe("policy-slice api surface", () => {
 		});
 		expect(created.id).toBeTruthy();
 		expect(
-			await api.listPolicySlices({ organizationId: "org-a" }),
+			await api.listPolicySlices({ scope: "organization", scopeId: "org-a" }),
 		).toHaveLength(1);
-		await api.deletePolicySlice({ organizationId: "org-a", id: created.id });
-		expect(await api.listPolicySlices({ organizationId: "org-a" })).toEqual([]);
+		await api.deletePolicySlice({
+			scope: "organization",
+			scopeId: "org-a",
+			id: created.id,
+		});
+		expect(
+			await api.listPolicySlices({ scope: "organization", scopeId: "org-a" }),
+		).toEqual([]);
 		// put + delete each appended → the org router's count-keyed version bumped twice.
-		expect(await stores.authzChanges.count("org-a")).toBe(2);
+		expect(
+			await stores.authzChanges.count({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
+		).toBe(2);
 	});
 });
