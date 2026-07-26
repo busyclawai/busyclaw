@@ -5,6 +5,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	floorPermitsWrites,
 	owned,
 	textModel,
 } from "./fixtures";
@@ -31,6 +32,7 @@ describe("logEvents", () => {
 			database: db,
 			events: logEvents({ log: (line) => lines.push(line) }),
 			model: approvalToolModel(),
+			plugins: [floorPermitsWrites],
 			redaction: { redactor },
 			tools: {
 				send_email: emailTool({ onExecute: async () => ({ sent: true }) }),

@@ -1,5 +1,6 @@
 import type {
 	Detector,
+	EuroclawPlugin,
 	PiiSpan,
 	ToolDefinition,
 	ToolGovernance,
@@ -286,3 +287,27 @@ export function withPrincipal<T extends { readonly api: object }>(
  *  act as the claw owner. `owned(config).api.method(input)` reads exactly like the pre-PEP call. */
 export const owned: typeof createClaw = (config) =>
 	withPrincipal(createClaw(config), "user:actor-1");
+
+/**
+ * A plugin whose only contribution is a policy slice permitting writes — the explicit way for a test
+ * to say "the floor is not what I am exercising here".
+ *
+ * The floor sees every tool call now and classes a write as needing confirmation, so a suite about
+ * something ELSE — event ordering, log lines, observer wiring — would otherwise park on an approval
+ * it does not care about. `emailTool` genuinely IS a write, so the honest move is to permit it
+ * loudly here rather than relabel it a read at the call site: a test that stamps `access: "read"` on
+ * a tool that sends email has hidden the same hole one layer up, where the next reader cannot see it.
+ *
+ * It permits the `writes` GROUP and nothing else. The floor's sealed forbids still outrank it, and a
+ * tool's OWN gate still runs — so this exempts a suite from the floor, never from governance.
+ */
+export const floorPermitsWrites: EuroclawPlugin = {
+	id: "test:permit-writes",
+	policies: [
+		{
+			name: "test:permit-writes",
+			cedar: `permit(principal, action in Action::"writes", resource);`,
+			mode: "enforce",
+		},
+	],
+};

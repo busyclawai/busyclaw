@@ -15,6 +15,7 @@ import {
 	durableRedactor,
 	emailDetector,
 	emailTool,
+	floorPermitsWrites,
 	owned,
 	textModel,
 } from "./fixtures";
@@ -174,6 +175,7 @@ describe("plugin.eventSinks", () => {
 			database: db,
 			model: approvalToolModel(),
 			plugins: [
+				floorPermitsWrites,
 				{
 					id: "notifier",
 					eventSinks: [
