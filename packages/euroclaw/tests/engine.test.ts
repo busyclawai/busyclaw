@@ -2,6 +2,9 @@ import type { ClawEngineFactory } from "@euroclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
 import { memoryAdapter } from "@euroclaw/storage-core";
 import { describe, expect, it } from "vitest";
+
+/** The principal `owned()` binds onto every api call — and now what a durable run is stamped with. */
+const OWNER = "user:actor-1";
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
@@ -169,6 +172,7 @@ describe("createClaw engine", () => {
 			prompt: "email alice@personal.com",
 		});
 		const parked = await claw.$context.engine?.work?.();
+		console.log("PARKED:", JSON.stringify(parked));
 
 		expect(parked.status).toBe("waiting_approval");
 		if (parked.status !== "waiting_approval" || !parked.approvalIds[0]) {
@@ -200,10 +204,12 @@ describe("createClaw engine", () => {
 		});
 
 		expect(claw.$context.engine?.kind).toBe("sql");
+		// `run.principal` is no longer accepted from the body — the durable run executes its tool calls
+		// under it, so it is stamped from the authenticated caller. `owned()` binds `user:actor-1`.
 		const run = await claw.api.startRun({
 			ctx: { team: "acme" },
 			prompt: "hello",
-			run: { principal: "user:alice", team: "acme" },
+			run: { team: "acme" },
 		});
 		const result = await claw.$context.engine?.work?.();
 
@@ -211,15 +217,15 @@ describe("createClaw engine", () => {
 		expect(run.id).toMatch(/^[0-9a-f]{32}$/);
 		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read AS the run's principal.
 		await expect(
-			claw.api.getRun({ id: run.id }, { principal: "user:alice" }),
+			claw.api.getRun({ id: run.id }, { principal: OWNER }),
 		).resolves.toMatchObject({
 			id: run.id,
 			status: "completed",
-			principal: "user:alice",
+			principal: OWNER,
 			team: "acme",
 		});
 		await expect(
-			claw.api.listRunEvents({ runId: run.id }, { principal: "user:alice" }),
+			claw.api.listRunEvents({ runId: run.id }, { principal: OWNER }),
 		).resolves.toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ type: "run.started" }),

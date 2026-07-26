@@ -439,12 +439,15 @@ const runtimeRunOptionsInput = ark({
 	}),
 });
 const runtimeRunOptionsOrUndefined = runtimeRunOptionsInput.or("undefined");
+// `principal` is NOT here. It used to be, documented as "caller-supplied principal recorded on the
+// durable run for attribution" — a forgeable identity field of exactly the kind stamped-fields removed
+// everywhere else, missed because the engine landed later and the column read as attribution only.
+//
+// It is not attribution any more. The SQL worker authorizes a resumed slice's tool calls AS the run's
+// principal, so a body that could set it would be choosing the identity its durable work executes
+// under — privilege escalation with an audit trail that agrees with the forgery. Stamped from the
+// authenticated caller in the handler instead.
 const engineRunMetadataInput = ark({
-	"principal?": ark("string | undefined").configure({
-		euroclaw: {
-			doc: "Caller-supplied principal recorded on the durable run for attribution.",
-		},
-	}),
 	"id?": ark("string | undefined").configure({
 		euroclaw: {
 			doc: "Pins the durable run id (idempotency / correlation) instead of letting the engine mint one.",
@@ -1509,13 +1512,29 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		deletePolicySlice: ({ scope, scopeId, id }) =>
 			registry().policySlices.delete({ scope, scopeId }, id),
 
-		startRun: (args) => {
+		// The durable run's principal is STAMPED from the authenticated caller — never read from the
+		// body — because the worker executes the run's tool calls under it. An unauthenticated start
+		// records SYSTEM_ANONYMOUS, which the floor refuses at the first tool: work nobody can be shown
+		// to have asked for does not get to act.
+		startRun: (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
-			return requireEngine(context.engine).startRun(args);
+			return requireEngine(context.engine).startRun({
+				...args,
+				run: {
+					...args.run,
+					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
+				},
+			});
 		},
-		continueEngineRun: (args) => {
+		continueEngineRun: (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
-			return requireEngine(context.engine).continueRun(args);
+			return requireEngine(context.engine).continueRun({
+				...args,
+				run: {
+					...args.run,
+					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
+				},
+			});
 		},
 		getRun: ({ id }) => requireRuns(context.runs).get(id),
 		listRunEvents: ({ runId }) => requireRuns(context.runs).events(runId),

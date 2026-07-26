@@ -514,6 +514,9 @@ describe("createClaw send", () => {
 		const clawB = createClaw({
 			database: db,
 			model: approvalToolModel(),
+			// The assertion is on what the TOOL RECEIVED, so the write has to reach the tool. What is
+			// under test is container isolation in the redactor, not the floor.
+			plugins: [floorPermitsWrites],
 			redaction: { redactor },
 			tools: {
 				send_email: emailTool({
