@@ -1,4 +1,4 @@
-import { entity, field } from "@busyclaw/contracts";
+import { entity, field, isConflict } from "@busyclaw/contracts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
 	entityAdapter,
@@ -113,5 +113,56 @@ describe("entityView — the typed lens fails loud on wiring mistakes", () => {
 		await expect(validating.count({ model: "nope" })).rejects.toThrow(
 			/not registered with the entity adapter/,
 		);
+	});
+});
+
+// The adapter CONTRACT, not a nicety. "Try to create, treat a conflict as somebody-got-there-first" is
+// how the registry claims a tuple, how the redactor settles a mint race, and how the channel inbox
+// claims a delivery. All of it rests on the second insert LOSING — and the memory adapter's create was
+// an unconditional push, so in every test in this repository the losing branch was unreachable and the
+// claim silently always succeeded.
+describe("declared uniqueness is enforced even where the engine cannot", () => {
+	const composite = entity("pair", {
+		left: field.string({ required: true, primaryKey: true }),
+		right: field.string({ required: true, primaryKey: true }),
+		note: field.string(),
+	} as const);
+
+	it("rejects a second row on the same single-column key", async () => {
+		const db = entityAdapter(memoryAdapter(), models);
+		await db.create({ model: "thing", data: record });
+		await expect(
+			db.create({ model: "thing", data: { ...record, label: "two" } }),
+		).rejects.toThrow(/unique constraint violated/);
+		// …and the first row is untouched: a losing write changes nothing.
+		expect(
+			await db.findOne({
+				model: "thing",
+				where: [{ field: "id", value: "t1" }],
+			}),
+		).toMatchObject({ label: "one" });
+	});
+
+	it("rejects a duplicate COMPOSITE primary key, and allows a different one", async () => {
+		const db = entityAdapter(memoryAdapter(), { pair: composite });
+		await db.create({ model: "pair", data: { left: "a", right: "b" } });
+		await expect(
+			db.create({ model: "pair", data: { left: "a", right: "b", note: "x" } }),
+		).rejects.toThrow(/unique constraint violated/);
+		// Sharing one half is not sharing the key.
+		await expect(
+			db.create({ model: "pair", data: { left: "a", right: "c" } }),
+		).resolves.toMatchObject({ right: "c" });
+	});
+
+	it("is a typed conflict, so try-create → on-conflict reads the same everywhere", async () => {
+		const db = entityAdapter(memoryAdapter(), models);
+		await db.create({ model: "thing", data: record });
+		// The shape a claim actually branches on — the same one a real driver's violation normalizes to.
+		const conflict = await db
+			.create({ model: "thing", data: record })
+			.then(() => undefined)
+			.catch((error: unknown) => error);
+		expect(isConflict(conflict)).toBe(true);
 	});
 });

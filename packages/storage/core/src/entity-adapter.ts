@@ -27,6 +27,7 @@ import type {
 } from "@busyclaw/contracts";
 import {
 	configurationError,
+	conflictError,
 	entity,
 	validationError,
 } from "@busyclaw/contracts";
@@ -216,8 +217,39 @@ async function withConflict<T>(
 function withValidation(
 	inner: Adapter,
 	validators: ModelValidators,
+	/** Present only when the inner adapter does NOT arbitrate uniqueness — see `Adapter.enforcesUnique`. */
+	uniqueKeys?: Map<string, string[][]>,
 ): EntityValidatedAdapter {
 	const runTransaction = inner.transaction;
+
+	/** Refuse a write that would duplicate a declared key. No-op when the engine handles it. */
+	const assertUnique = async (
+		model: string,
+		row: Record<string, unknown>,
+	): Promise<void> => {
+		const keys = uniqueKeys?.get(model);
+		if (keys === undefined) return;
+		for (const columns of keys) {
+			// A key with a missing column names no row — an optional unique left empty is not a
+			// duplicate of another empty one, the same rule SQL applies to NULLs.
+			if (columns.some((column) => row[column] === undefined)) continue;
+			const existing = await inner.findOne({
+				model,
+				where: columns.map((column, index) => ({
+					field: column,
+					value: row[column] as string,
+					...(index === 0 ? {} : { connector: "AND" as const }),
+				})),
+			});
+			if (existing !== null) {
+				throw conflictError(
+					`unique constraint violated (${model}.${columns.join(",")})`,
+					{ model, operation: "create", constraint: columns.join(",") },
+				);
+			}
+		}
+	};
+
 	return {
 		id: inner.id,
 		entityModels: validators.names,
@@ -229,6 +261,11 @@ function withValidation(
 				string,
 				unknown
 			>;
+			// …and when the adapter has no engine to reject a duplicate, the check happens here, before
+			// the write. Same answer, same typed conflict — so a caller writing try-create →
+			// on-conflict-re-read behaves identically whichever adapter is underneath, which is the
+			// whole point: that branch was unreachable in memory, and memory is what tests run on.
+			await assertUnique(model, valid);
 			// Losing a race to a uniqueness constraint arrives here as whatever the driver raised.
 			// Normalized at the ONE place every write already passes through, so a caller can write
 			// try-create → on-conflict-re-read without knowing which database is underneath.
@@ -330,7 +367,34 @@ export function entityAdapter(
 		read,
 		write,
 	};
-	return withValidation(schemaAdapter(adapter, storage, options), validators);
+	return withValidation(
+		schemaAdapter(adapter, storage, options),
+		validators,
+		// Nothing to enforce when the engine already does — which is every real database.
+		adapter.enforcesUnique === false ? uniqueKeysOf(storage) : undefined,
+	);
+}
+
+/** The column groups a write must not duplicate: the (possibly composite) primary key, and each
+ *  single-column `unique`. Read off the same table schemas the adapter was built from, so a field's
+ *  declaration is the one source — nobody re-lists a key here and gets it wrong. */
+function uniqueKeysOf(storage: SchemaDeclaration): Map<string, string[][]> {
+	const byModel = new Map<string, string[][]>();
+	for (const [model, table] of Object.entries(storage)) {
+		const keys: string[][] = [];
+		const primary = Object.entries(table.fields)
+			.filter(([, field]) => field.primaryKey === true)
+			.map(([name]) => name);
+		if (primary.length > 0) keys.push(primary);
+		for (const [name, field] of Object.entries(table.fields)) {
+			// A single-column unique that IS the whole primary key would be checked twice; skip it.
+			if (field.unique !== true) continue;
+			if (primary.length === 1 && primary[0] === name) continue;
+			keys.push([name]);
+		}
+		if (keys.length > 0) byModel.set(model, keys);
+	}
+	return byModel;
 }
 
 /**

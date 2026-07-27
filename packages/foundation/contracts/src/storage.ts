@@ -127,6 +127,24 @@ export type Adapter = {
 	 * calls against the same row, exactly one caller gets it; the rest get `null`.
 	 */
 	consumeOne: (data: { model: string; where: Where[] }) => Promise<unknown>;
+	/**
+	 * Does the BACKEND arbitrate declared uniqueness — primary keys and `unique` columns?
+	 *
+	 * Absent or `true` for every real database: the engine rejects the second insert, which is what
+	 * makes "try to create, treat a conflict as somebody-got-there-first" a safe way to claim something
+	 * without a read two writers can both pass.
+	 *
+	 * `false` says the adapter needs help, and `entityAdapter` then checks before it writes. Only the
+	 * in-memory adapter says this, and only there is a pre-check actually sufficient: one process, one
+	 * thread, so nothing can slip between the check and the insert. On a real database the same
+	 * pre-check would be false comfort — two processes would both pass it.
+	 *
+	 * It matters because the claim pattern is everywhere: the registry's replace-by-tuple upserts, the
+	 * PII mint race, the channel delivery inbox. Against an adapter that silently accepts duplicates,
+	 * every one of them degrades to "always succeeds" — and since tests run on memory, the branch that
+	 * handles losing is the branch nothing exercises.
+	 */
+	enforcesUnique?: boolean;
 	/** Run a set of adapter operations atomically when the backing store supports transactions. */
 	transaction?: <R>(fn: (tx: Adapter) => Promise<R>) => Promise<R>;
 };
