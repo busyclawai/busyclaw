@@ -120,3 +120,19 @@ export function conflictError(
 		details,
 	});
 }
+
+/**
+ * Whether this is the recoverable one — the read half of {@link conflictError}.
+ *
+ * Lives here for the same reason the normalization does: a caller writing try-insert →
+ * on-conflict-re-read otherwise tests `code === "EUROCLAW_CONFLICT"` by hand, and a caller that
+ * spells the check slightly wrong turns a recoverable race into a crash on a path that had a correct
+ * recovery available. One predicate, one place to be right.
+ *
+ * Narrow on purpose: an error that is not this exact code is not a conflict, so an unrecognised
+ * failure keeps its identity and reaches the caller loud. Never widen this to "looks like a
+ * duplicate" — guessing turns a real failure into a silent retry.
+ */
+export function isConflict(error: unknown): error is EuroclawError {
+	return error instanceof EuroclawError && error.code === "EUROCLAW_CONFLICT";
+}

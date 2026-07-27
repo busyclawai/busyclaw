@@ -20,7 +20,7 @@ import {
 	rehydrationContext,
 	type ScopeRef,
 } from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/errors";
+import { isConflict, validationError } from "@euroclaw/errors";
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -423,17 +423,27 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	// Cleared on settle: a concurrency latch, never a cache. Dedup and erasure keep coming from the
 	// store, which is the only thing that survives a restart.
 	//
-	// SCOPE OF THE GUARANTEE — per process. Two instances redacting one value in one container at the
-	// same instant can still each mint, because neither sees the other's in-flight write. Closing that
-	// needs the DATABASE to arbitrate: a unique constraint on (scope, scopeId, originalHash), the loser
-	// catching the conflict and re-reading. `field()` carries no composite-unique support, and a
-	// single-field unique on originalHash would be WRONG — the same value legitimately exists in many
-	// containers — so it wants a synthetic keyed column or an entity-layer change, plus unique-violation
-	// detection portable across every adapter. Deliberately not built, for a bounded failure: a split
-	// costs coreference within one payload, never a wrong value and never a leak.
+	// SCOPE OF THE GUARANTEE — this half is per process, and it is the fast half, not the whole of it.
+	// Two INSTANCES redacting one value in one container at the same instant cannot see each other's
+	// in-flight write, so only the database can arbitrate between them: `pii_mapping` is unique on
+	// (scope, scopeId, originalHash), and `lookupOrMint` below adopts the winner when its insert loses.
+	// The latch's job is to make that the rare path — within one process the race is settled here, for
+	// the cost of a map lookup instead of a rejected insert and a re-read.
 	const inFlight = new Map<string, Promise<PiiMapping>>();
 
 	// The mapping for a value: an existing row, or a freshly minted and saved one.
+	//
+	// The mint can LOSE. `pii_mapping` is unique on (scope, scopeId, originalHash), so another process
+	// that minted for this same value a moment earlier already holds the row, and this insert is
+	// rejected. Losing is not a failure — the row we wanted exists — so the answer is to re-read and
+	// adopt the winner's placeholder.
+	//
+	// The recovery has to return the winner rather than swallow the error, and that is the whole
+	// reason it lives here instead of inside the store's `save`: a store that quietly adopted the
+	// winner would still leave THIS caller holding the placeholder it minted, and that placeholder was
+	// never written. The redacted text would carry a token with no mapping behind it, and rehydration
+	// would hand it back verbatim — a leaked placeholder in an otherwise finished draft, which is
+	// worse than the split it was fixing.
 	const lookupOrMint = async (
 		span: PiiSpan,
 		originalHash: string | undefined,
@@ -458,8 +468,26 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 			...piiContainer(ctx),
 			createdAt: now(),
 		};
-		await mappings.save(minted, ctx?.subjectIds);
-		return minted;
+		try {
+			await mappings.save(minted, ctx?.subjectIds);
+			return minted;
+		} catch (error) {
+			if (!isConflict(error) || originalHash === undefined) throw error;
+			const winner = await mappings.findByHash(originalHash, ctx);
+			// A conflict whose winner cannot be read back is not a race we understand — some OTHER
+			// uniqueness on the table was violated. Rethrow rather than invent a placeholder.
+			if (winner === null) throw error;
+			// The losing save threw before it reached the junction, so this caller's subjects are not
+			// linked yet. Same rule as the latch: a dropped link is a subject whose erasure would never
+			// reach this mapping.
+			if (ctx?.subjectIds !== undefined && ctx.subjectIds.length > 0) {
+				await mappings.save(winner, ctx.subjectIds);
+			}
+			options.warn?.(
+				"adopted another writer's placeholder after a mapping conflict — concurrent redaction of one value",
+			);
+			return winner;
+		}
 	};
 
 	const placeholderFor = async (
