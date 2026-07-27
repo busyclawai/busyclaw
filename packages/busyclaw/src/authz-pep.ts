@@ -26,17 +26,18 @@ import {
 	type AuthzContext,
 	type AuthzTarget,
 	authorizationError,
+	type BusyclawPlugin,
 	type ClawRunReadModel,
 	type ClawsStore,
 	configurationError,
 	ENDPOINTS_METADATA,
 	type EndpointRoute,
-	type BusyclawPlugin,
 	endpointRoutesOf,
 	errorMessage,
 	isReservedScope,
 	type LooseResourceBinding,
 	type PolicySourceSlice,
+	type Principal,
 	RESERVED_SCOPE_PREFIX,
 	type RouteAuthz,
 	type ShareableLoaderContext,
@@ -638,13 +639,13 @@ export function governApi(input: {
 
 	/**
 	 * The ACTOR FLOOR, run before any handler is entered. Every route path guarantees its handler a
-	 * present, non-blank principal, which is why {@link AuthzContext.principal} is a plain string and no
+	 * present, non-blank principal, which is why {@link AuthzContext.principal} is non-optional and no
 	 * handler re-derives it. `decideApiCall` enforces the same floor for the legacy path.
 	 */
 	const requirePrincipal = (
 		method: string,
 		caller: ClawApiCaller | undefined,
-	): string => {
+	): Principal => {
 		const principal = caller?.principal;
 		if (principal === undefined || principal.trim() === "") {
 			throw authorizationError(

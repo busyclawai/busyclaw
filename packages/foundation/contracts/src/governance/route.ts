@@ -17,7 +17,7 @@
 // coverage walk and the cross-principal tests are for.
 
 import type { EndpointHttpMethod } from "./endpoints";
-import type { ClawApiCaller } from "./principal";
+import type { ClawApiCaller, Principal } from "./principal";
 
 /** An action's required permission level, ordered `read < use < manage`.
  *
@@ -46,8 +46,9 @@ export type AuthzContext = {
 	/** The out-of-band caller as received. */
 	readonly caller: ClawApiCaller;
 	/** The caller's principal, guaranteed present and non-blank — the actor floor ran before the
-	 *  handler was entered, so a handler never has to re-check it. */
-	readonly principal: string;
+	 *  handler was entered, so a handler never has to re-check it. Branded, because it IS one: a handler
+	 *  stamping an identity column takes it straight, with no re-parse and no cast to reach the brand. */
+	readonly principal: Principal;
 	/**
 	 * Authorize an additional resource mid-handler. Throws `authorizationError` on deny.
 	 *

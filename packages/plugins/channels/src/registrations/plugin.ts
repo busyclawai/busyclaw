@@ -1,14 +1,15 @@
 import {
+	type AuthzContext,
 	type BindConversationClawInput,
 	type BindConversationThreadInput,
-	bindConversationClawInput,
-	bindConversationThreadInput,
-	type ClawApiCaller,
-	configurationError,
 	type BusyclawPluginConfigureContext,
 	type BusyclawPluginRuntime,
 	type BusyclawRoute,
 	type BusyclawRouteContext,
+	bindConversationClawInput,
+	bindConversationThreadInput,
+	type ClawApiCaller,
+	configurationError,
 	endpoints,
 	route,
 	validationError,
@@ -22,6 +23,7 @@ import {
 	type EndpointContext,
 } from "../core/contracts";
 import { dispatchWebhook } from "../core/dispatch";
+import { endpointId } from "../core/id";
 import {
 	channelRegistrationLookupInput,
 	channelRegistrationsModels,
@@ -33,47 +35,70 @@ import {
 	type ChannelRegistrationLookup,
 	type ChannelRegistrationRecord,
 	type ChannelRegistrationsStore,
+	type ChannelRegistrationView,
 	createChannelRegistrationsStore,
 	type RegisterChannelRegistrationInput,
+	toChannelRegistrationView,
 } from "./store";
 
-// Registration rows carry no owner and no access boundary, so there is nothing for a resolver to load:
-// `get`/`getByKey`/`list`/`revoke` reach any boundary's registration by id or by (provider, endpointKey),
-// and the records they return still contain the bot token and webhook secret. This states that plainly
-// instead of leaving it implied by an absent binding — the reason rides into the route metadata, so the
-// boot coverage walk lists these among the routes authorizing against nothing shared. Closing it needs
-// owner/scope columns stamped from the caller and credentials moved behind the secret store, which is a
-// schema change tracked as the channel-registration hardening work, not something a resolver can fix.
-const UNOWNED_REGISTRATIONS =
-	"KNOWN GAP: registration rows have no owner or scope column yet, so any caller reaches any boundary's registration and the returned record still carries its credentials";
+/** The kind a registration's `access_grant` rows carry — the label the assembly merges into the ONE
+ *  loader registry, and the label every route below authorizes against. */
+export const CHANNEL_REGISTRATION_KIND = "channel_registration";
+
+// A FIRST registration creates a row, so there is nothing yet to authorize against — the same shape as
+// `createClaw`. Everything else about the call IS authorized, inside the handler where the facts exist:
+// an explicit boundary as membership, and an existing row as manage. Both are checks the declarative
+// resolver cannot express, because both depend on a lookup the resolver has not done.
+const REGISTER_IS_A_CREATE =
+	"a first registration creates the row it would authorize against; re-registration is checked as manage on the existing row, and an explicit (scope, scopeId) as membership, inside the handler";
+
+// A listing has no id to resolve. It is authorized ROW BY ROW as `channels.registrations.get` — naming
+// that method matters: decided as the listing, a per-row check would inherit the create-group permit the
+// sealed baseline gives any authenticated principal, and pass for everyone.
+const LIST_IS_FILTERED =
+	"a listing has no single resource; every row is authorized individually as channels.registrations.get before it is returned";
+
+// The method every in-handler check inside `register` is decided AS. Not cosmetic, and the reason both
+// checks below pass an `asMethod`: `register` is caller-mode, so it sits in the `creates` group the
+// sealed baseline permits for any authenticated principal — decided as itself, a check inside it
+// inherits that permit and answers yes to everyone, which is indistinguishable from having no check at
+// all. `revoke` is this kind's declared MANAGE method, and "does this principal have authority over a
+// registration here" is exactly the question it asks.
+const REGISTRATION_AUTHORITY = "channels.registrations.revoke";
+
+/** The single-row read every per-row listing check is decided as — same reasoning as above, one level
+ *  down: a listing is caller-mode, its rows are not. */
+const REGISTRATION_READ = "channels.registrations.get";
 
 /** The api namespace registrations mode exposes on `claw.api.channels.registrations`. Every method
  *  takes the out-of-band app-authz caller as its 2nd argument, the same shape the rest of `claw.api`
  *  uses. `list` takes its filter POSITIONALLY REQUIRED (pass `{}` for "everything visible") because a
  *  governed method's first parameter is its validated input — an omitted one would have nothing for the
- *  boundary schema to check. */
+ *  boundary schema to check.
+ *
+ *  Every method returns the {@link ChannelRegistrationView} — the row WITHOUT its credentials. */
 export type ChannelRegistrationsApi = {
 	/** Register (or re-register: rotate + re-activate) a user's bot — the sso register analog. */
 	register: (
 		input: RegisterChannelRegistrationInput,
 		caller?: ClawApiCaller,
-	) => Promise<ChannelRegistrationRecord>;
+	) => Promise<ChannelRegistrationView>;
 	get: (
 		input: { id: string },
 		caller?: ClawApiCaller,
-	) => Promise<ChannelRegistrationRecord | null>;
+	) => Promise<ChannelRegistrationView | null>;
 	getByKey: (
 		input: ChannelRegistrationLookup,
 		caller?: ClawApiCaller,
-	) => Promise<ChannelRegistrationRecord | null>;
+	) => Promise<ChannelRegistrationView | null>;
 	list: (
 		filter: ChannelRegistrationListFilter,
 		caller?: ClawApiCaller,
-	) => Promise<ChannelRegistrationRecord[]>;
+	) => Promise<ChannelRegistrationView[]>;
 	revoke: (
 		input: ChannelRegistrationLookup,
 		caller?: ClawApiCaller,
-	) => Promise<ChannelRegistrationRecord | null>;
+	) => Promise<ChannelRegistrationView | null>;
 };
 
 /** The `claw.api` shape registrations mode contributes (folded onto `claw.api` via `$Api`). */
@@ -109,9 +134,10 @@ const registrationIdInput = type({ id: "string" }).configure({
 
 /**
  * The registrations mode of channels() — user-registered bots, the SSO analog: hosts let their users
- * bring their OWN bots at runtime. Credentials live in the channel_registration row (read back at use),
- * the organization they belong to is row data (the organizationId analog), and conversations bind under
- * the row's claw defaults. Registrations are WEBHOOK-ONLY — no poll cron, no shared/default bot. One
+ * bring their OWN bots at runtime. Credentials live in the channel_registration row (read back at use,
+ * never returned to a caller), each row carries `createdBy` + a `(scope, scopeId)` boundary that decides
+ * both who may manage it and where its conversations land, and conversations bind under the row's claw
+ * defaults. Registrations are WEBHOOK-ONLY — no poll cron, no shared/default bot. One
  * webhook URL per provider: the request names its own registration (Channel.identify returns the secret
  * the provider echoes; the row is found by matching its webhookSecret). Providers are the same Channel
  * transports app bots use — pass them config-light (e.g. `telegram()`), everything endpoint-specific
@@ -155,16 +181,11 @@ export function buildRegistrationsPlugin(
 	const clawDefaults = (
 		row: ChannelRegistrationRecord,
 	): BindConversationClawInput | undefined => {
-		// The registration's org (an org-scoped BYO bot) places its conversations' claws under that org:
-		// organizationId → the standard (scope, scopeId) boundary. Organizationless registrations carry no
-		// placement and the claw defaults to personal at create. `createdBy` is filled at bind time.
-		const merged = {
-			...row.claw,
-			...(row.organizationId !== undefined
-				? { scope: "organization", scopeId: row.organizationId }
-				: {}),
-		};
-		if (Object.keys(merged).length === 0) return undefined;
+		// The registration's own boundary places its conversations' claws — a bot registered into an org
+		// makes org claws, a personal one makes personal claws. It OVERRIDES any boundary in the stored
+		// defaults, because the row's boundary is the authorized one (register checked membership before
+		// writing it) while the JSON blob is whatever was submitted. `createdBy` is filled at bind time.
+		const merged = { ...row.claw, scope: row.scope, scopeId: row.scopeId };
 		const valid = bindConversationClawInput(merged);
 		if (valid instanceof type.errors) {
 			throw validationError(
@@ -234,7 +255,8 @@ export function buildRegistrationsPlugin(
 
 		const register = async (
 			input: RegisterChannelRegistrationInput,
-		): Promise<ChannelRegistrationRecord> => {
+			ctx: AuthzContext,
+		): Promise<ChannelRegistrationView> => {
 			if (!byProvider.has(input.provider)) {
 				throw configurationError("unknown channel provider", {
 					provider: input.provider,
@@ -264,7 +286,44 @@ export function buildRegistrationsPlugin(
 					reason: "an endpointKey is a single segment: A-Z a-z 0-9 _ -",
 				});
 			}
-			return requireStore().register(registration);
+			// An explicit boundary is a claim about where this bot belongs, and it decides BOTH who may
+			// manage the row and where its conversations land — so it is authorized as membership before
+			// anything is written. Without it a caller could register a bot into another tenant, handing
+			// that tenant's members a bot they do not control and pushing conversations into their data.
+			// Half a pair is neither a boundary nor a default, so it is refused rather than guessed.
+			const { scope, scopeId } = registration;
+			if ((scope === undefined) !== (scopeId === undefined)) {
+				throw validationError(
+					"channel registration boundary incomplete",
+					"pass both scope and scopeId, or neither (the registration is then personal to you)",
+					{ endpointKey: input.endpointKey, provider: input.provider },
+				);
+			}
+			if (scope !== undefined && scopeId !== undefined) {
+				await ctx.check("use", { scope, scopeId }, REGISTRATION_AUTHORITY);
+			}
+			// Re-registration rotates an EXISTING row's credentials and bind defaults and re-activates it.
+			// That is a management operation on someone's bot, not a create: without this check the
+			// natural key is a hijack surface — re-register (provider, endpointKey) with your own token
+			// and the tenant's traffic starts flowing to you.
+			const existing = await requireStore().getByKey({
+				provider: input.provider,
+				endpointKey: input.endpointKey,
+			});
+			if (existing) {
+				await ctx.check(
+					"manage",
+					{ kind: CHANNEL_REGISTRATION_KIND, id: existing.id },
+					REGISTRATION_AUTHORITY,
+				);
+			}
+			return toChannelRegistrationView(
+				await requireStore().register({
+					...registration,
+					// Stamped, never read from the body: a forged `createdBy` loses to runtime proof.
+					createdBy: ctx.principal,
+				}),
+			);
 		};
 
 		const webhookRoute: BusyclawRoute = {
@@ -324,29 +383,70 @@ export function buildRegistrationsPlugin(
 					registrations: endpoints({
 						register: route
 							.input(registerChannelRegistrationInput)
-							.authz(null, UNOWNED_REGISTRATIONS)
+							.authz(null, REGISTER_IS_A_CREATE)
 							.handler(register),
 						get: route
 							.input(registrationIdInput)
-							.authz(null, UNOWNED_REGISTRATIONS)
-							.handler(({ id }: { id: string }) => requireStore().get(id)),
+							.authz("read", ({ id }) => ({
+								kind: CHANNEL_REGISTRATION_KIND,
+								id,
+							}))
+							.handler(async ({ id }: { id: string }) =>
+								toChannelRegistrationView(await requireStore().get(id)),
+							),
+						// The (provider, endpointKey) pair hashes to the row id, so the resolver computes the
+						// anchor without a lookup — the same row `get` would have named.
 						getByKey: route
 							.input(channelRegistrationLookupInput)
-							.authz(null, UNOWNED_REGISTRATIONS)
-							.handler((input: ChannelRegistrationLookup) =>
-								requireStore().getByKey(input),
+							.authz("read", (input) => ({
+								kind: CHANNEL_REGISTRATION_KIND,
+								id: endpointId(input),
+							}))
+							.handler(async (input: ChannelRegistrationLookup) =>
+								toChannelRegistrationView(await requireStore().getByKey(input)),
 							),
 						list: route
 							.input(listChannelRegistrationsInput)
-							.authz(null, UNOWNED_REGISTRATIONS)
-							.handler((filter?: ChannelRegistrationListFilter) =>
-								requireStore().list(filter),
+							.authz(null, LIST_IS_FILTERED)
+							.handler(
+								async (
+									filter: ChannelRegistrationListFilter,
+									ctx: AuthzContext,
+								) => {
+									const rows = await requireStore().list(filter);
+									const visible = await Promise.all(
+										rows.map(async (row) => {
+											try {
+												await ctx.check(
+													"read",
+													{ kind: CHANNEL_REGISTRATION_KIND, id: row.id },
+													REGISTRATION_READ,
+												);
+												return row;
+											} catch {
+												// A row the caller may not read is ABSENT from the listing, not an
+												// error: one unreadable row must not fail the whole page, and
+												// distinguishing "denied" from "not there" would make the list a
+												// probe for other tenants' registrations.
+												return null;
+											}
+										}),
+									);
+									return visible
+										.filter(
+											(row): row is ChannelRegistrationRecord => row !== null,
+										)
+										.map((row) => toChannelRegistrationView(row));
+								},
 							),
 						revoke: route
 							.input(channelRegistrationLookupInput)
-							.authz(null, UNOWNED_REGISTRATIONS)
-							.handler((input: ChannelRegistrationLookup) =>
-								requireStore().revoke(input),
+							.authz("manage", (input) => ({
+								kind: CHANNEL_REGISTRATION_KIND,
+								id: endpointId(input),
+							}))
+							.handler(async (input: ChannelRegistrationLookup) =>
+								toChannelRegistrationView(await requireStore().revoke(input)),
 							),
 					}),
 				},
@@ -359,6 +459,31 @@ export function buildRegistrationsPlugin(
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: channelRegistrationsModels,
+		// The ONE per-kind bit: a data-fetcher, not authz logic. Registering the kind is what makes every
+		// binding above enforceable — owner ∪ scope ∪ grant over the generic `access_grant` table, with no
+		// policy of our own. Read statically off the plugin, so the registry binds before configure runs;
+		// a no-database claw has no rows and the loader is never invoked.
+		shareable: [
+			{
+				kind: CHANNEL_REGISTRATION_KIND,
+				load: (context) => {
+					const store = context.adapter
+						? createChannelRegistrationsStore(context.adapter, { now })
+						: undefined;
+					return async (id) => {
+						const row = await store?.get(id);
+						// Absent ⇒ null ⇒ DENY, like every other loader.
+						return row
+							? {
+									createdBy: row.createdBy,
+									scope: row.scope,
+									scopeId: row.scopeId,
+								}
+							: null;
+					};
+				},
+			},
+		],
 		// The webhook route and the management api are the RUNTIME half — configure returns them.
 		configure,
 	};

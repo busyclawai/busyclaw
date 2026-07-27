@@ -19,7 +19,8 @@ import {
 	channelRegistrationLookupInput,
 	type channelRegistrationLookupInputOptions,
 	type channelRegistrationStatusValues,
-	registerChannelRegistrationInput,
+	createChannelRegistrationInput,
+	type createChannelRegistrationOptions,
 	type registerChannelRegistrationInputOptions,
 	updateChannelRegistrationInput,
 } from "./schema";
@@ -40,12 +41,51 @@ export type ChannelRegistrationLookup = EntitySchemaInput<
 	typeof channelRegistrationFields,
 	typeof channelRegistrationLookupInputOptions
 >;
+/** What the STORE takes at create — the caller's input plus the `createdBy` the handler stamped. */
+export type CreateChannelRegistrationInput = EntitySchemaInput<
+	typeof channelRegistrationFields,
+	typeof createChannelRegistrationOptions
+>;
 // An internal query shape (not a parsed boundary — the api/cron build it in code), so it stays plain TS.
 export type ChannelRegistrationListFilter = {
 	provider?: string;
-	organizationId?: string;
+	scope?: string;
+	scopeId?: string;
 	status?: ChannelRegistrationStatus;
 };
+
+/**
+ * What the MANAGEMENT api returns — the row with both secrets removed.
+ *
+ * The store keeps handing out whole rows because the webhook path genuinely needs them: dispatch calls
+ * the provider with `secret`, and `getBySecret` matches on `webhookSecret`. Neither is a caller's to see.
+ * `redacted` on those columns was never the control it looked like — it keeps them out of audit and
+ * exports, and left them in every ordinary read, so `register` handed the bot token straight back and
+ * `list` handed back every token in the boundary.
+ *
+ * `hasSecret` survives because "is this registration configured" is the real question a management UI
+ * asks of the credential, and answering it needs one bit, not the value.
+ */
+export type ChannelRegistrationView = Omit<
+	ChannelRegistrationRecord,
+	"secret" | "webhookSecret"
+> & { hasSecret: boolean };
+
+/** Project a stored row into the view. The one place credentials are dropped — every api handler returns
+ *  through it, so adding a method cannot accidentally return a raw row. */
+export function toChannelRegistrationView(
+	row: ChannelRegistrationRecord,
+): ChannelRegistrationView;
+export function toChannelRegistrationView(
+	row: ChannelRegistrationRecord | null,
+): ChannelRegistrationView | null;
+export function toChannelRegistrationView(
+	row: ChannelRegistrationRecord | null,
+): ChannelRegistrationView | null {
+	if (row === null) return null;
+	const { secret, webhookSecret, ...rest } = row;
+	return { ...rest, hasSecret: secret !== undefined && secret !== "" };
+}
 
 export type ChannelRegistrationsStore = {
 	/**
@@ -54,7 +94,7 @@ export type ChannelRegistrationsStore = {
 	 * re-activates a revoked registration (registration is the trust grant).
 	 */
 	register: (
-		input: RegisterChannelRegistrationInput,
+		input: CreateChannelRegistrationInput,
 	) => Promise<ChannelRegistrationRecord>;
 	get: (id: string) => Promise<ChannelRegistrationRecord | null>;
 	getByKey: (
@@ -129,8 +169,8 @@ async function guarded<T>(fn: () => Promise<T>): Promise<T> {
 	}
 }
 
-function assertRegisterInput(input: unknown): RegisterChannelRegistrationInput {
-	const valid = registerChannelRegistrationInput(input);
+function assertRegisterInput(input: unknown): CreateChannelRegistrationInput {
+	const valid = createChannelRegistrationInput(input);
 	if (valid instanceof type.errors) {
 		throw validationError(
 			"register channel registration invalid",
@@ -163,8 +203,8 @@ function listWhere(filter: ChannelRegistrationListFilter): RegistrationWhere[] {
 		);
 	};
 	if (filter.provider !== undefined) add("provider", filter.provider);
-	if (filter.organizationId !== undefined)
-		add("organizationId", filter.organizationId);
+	if (filter.scope !== undefined) add("scope", filter.scope);
+	if (filter.scopeId !== undefined) add("scopeId", filter.scopeId);
 	if (filter.status !== undefined) add("status", filter.status);
 	return where;
 }
@@ -205,7 +245,9 @@ export function createChannelRegistrationsStore(
 	return {
 		async register(input) {
 			const valid = assertRegisterInput(input);
-			const { provider, endpointKey, ...rest } = valid;
+			// `createdBy` is immutable and drops out of the rotate patch: a re-registration by someone who
+			// merely MANAGES the row rotates its credentials, it does not make them the registrant.
+			const { provider, endpointKey, createdBy, ...rest } = valid;
 			const lookup = { provider, endpointKey };
 			// The webhookSecret is the inbound ROUTING key (the row is found by it), so it must be unique
 			// per provider — a different registration claiming it would make routing ambiguous. Fail loud.
@@ -230,6 +272,10 @@ export function createChannelRegistrationsStore(
 						model: "channel_registration",
 						data: {
 							...valid,
+							// Personal until registered into a boundary — the same default a claw takes, and
+							// the reason an omitted boundary can never widen who reaches the row.
+							scope: valid.scope ?? "personal",
+							scopeId: valid.scopeId ?? createdBy,
 							id: endpointId(lookup),
 							status: "active",
 							createdAt: ts,

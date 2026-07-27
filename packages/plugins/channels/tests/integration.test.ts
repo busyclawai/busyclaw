@@ -1,4 +1,4 @@
-import { field } from "@busyclaw/contracts";
+import { field, userPrincipal } from "@busyclaw/contracts";
 import { createStoredRedactor, noopDetector } from "@busyclaw/core";
 import { env } from "@busyclaw/secrets";
 import { secrets } from "@busyclaw/secrets-plugin";
@@ -61,9 +61,15 @@ describe("channels ↔ busyclaw integration", () => {
 		expect(
 			withPlugins.channel_registration?.fields.webhookSecret,
 		).toBeDefined();
+		// …and the ownership columns that make it a shareable resource: who registered it, and the
+		// boundary that decides who may manage it and where its conversations land.
+		expect(withPlugins.channel_registration?.fields.createdBy).toBeDefined();
+		expect(withPlugins.channel_registration?.fields.scope).toBeDefined();
+		expect(withPlugins.channel_registration?.fields.scopeId).toBeDefined();
+		// The org-only column it replaced is gone — core reads neither half of the pair.
 		expect(
 			withPlugins.channel_registration?.fields.organizationId,
-		).toBeDefined();
+		).toBeUndefined();
 		// registrations are webhook-only — no poll columns on the row
 		expect(withPlugins.channel_registration?.fields.cursor).toBeUndefined();
 		expect(
@@ -123,23 +129,113 @@ describe("channels ↔ busyclaw integration", () => {
 				endpointKey: "acme-bot",
 				secret: "bot-token",
 				webhookSecret: "hook",
-				organizationId: "org-acme",
 			},
-			{ principal: "user:operator" },
+			{ principal: userPrincipal("operator") },
 		);
+		// Stamped from the authenticated caller and personal until registered into a boundary — the same
+		// default a claw takes.
 		expect(created).toMatchObject({
 			status: "active",
-			organizationId: "org-acme",
+			createdBy: "user:operator",
+			scope: "personal",
+			scopeId: "user:operator",
+			hasSecret: true,
 		});
+		expect(created).not.toHaveProperty("secret");
+		expect(created).not.toHaveProperty("webhookSecret");
 		expect(
 			await claw.api.channels.registrations.getByKey(
 				{
 					provider: "telegram",
 					endpointKey: "acme-bot",
 				},
-				{ principal: "user:operator" },
+				{ principal: userPrincipal("operator") },
 			),
 		).toMatchObject({ id: created.id });
+	});
+
+	// The whole point of the ownership columns, through the REAL PEP rather than a fake context: a second
+	// authenticated principal is not a privileged one. Before the columns existed every one of these
+	// passed, because a registration row belonged to nobody and the PEP had nothing to decide against.
+	it("keeps one principal's registration out of another's reach", async () => {
+		const db = memoryAdapter();
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+		const owner = { principal: userPrincipal("owner") };
+		const stranger = { principal: userPrincipal("stranger") };
+		const key = { provider: "telegram", endpointKey: "acme-bot" };
+
+		const created = await claw.api.channels.registrations.register(
+			{ ...key, secret: "bot-token", webhookSecret: "hook" },
+			owner,
+		);
+
+		await expect(
+			claw.api.channels.registrations.get({ id: created.id }, stranger),
+		).rejects.toThrow(/denied/i);
+		await expect(
+			claw.api.channels.registrations.getByKey(key, stranger),
+		).rejects.toThrow(/denied/i);
+		await expect(
+			claw.api.channels.registrations.revoke(key, stranger),
+		).rejects.toThrow(/denied/i);
+		// The hijack: re-register the (provider, endpointKey) with your own credentials and the owner's
+		// traffic starts flowing to you. The natural key is guessable — the row is not reachable.
+		await expect(
+			claw.api.channels.registrations.register(
+				{ ...key, secret: "stranger-token", webhookSecret: "stranger-hook" },
+				stranger,
+			),
+		).rejects.toThrow(/denied/i);
+		// A listing returns what the caller may read, which for a stranger is nothing — not an error,
+		// and not a probe that would confirm the row exists.
+		await expect(
+			claw.api.channels.registrations.list({}, stranger),
+		).resolves.toEqual([]);
+
+		// The owner still reaches their own, and it still holds the original credentials.
+		await expect(
+			claw.api.channels.registrations.getByKey(key, owner),
+		).resolves.toMatchObject({ id: created.id, hasSecret: true });
+	});
+
+	// An org-scoped BYO bot needs a deployment that can PROVE org membership. Until an org plugin
+	// resolves it, an explicit boundary is denied rather than taken on the caller's word — which is the
+	// fail-closed direction: the alternative is registering a bot into a tenant you do not belong to.
+	it("denies a boundary the deployment cannot prove membership of", async () => {
+		const db = memoryAdapter();
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+		await expect(
+			claw.api.channels.registrations.register(
+				{
+					provider: "telegram",
+					endpointKey: "acme-bot",
+					webhookSecret: "hook",
+					scope: "organization",
+					scopeId: "org-acme",
+				},
+				{ principal: userPrincipal("operator") },
+			),
+		).rejects.toThrow(/denied/i);
 	});
 
 	it("keeps an app bot and a same-named registration in disjoint binding spaces", async () => {
