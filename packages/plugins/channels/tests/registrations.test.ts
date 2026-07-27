@@ -95,18 +95,34 @@ function fakeAuthz(
 	allow: (level: string, target: AuthzTarget) => boolean = () => true,
 ): AuthzContext & { checks: { level: string; target: AuthzTarget }[] } {
 	const checks: { level: string; target: AuthzTarget }[] = [];
+	const check = async (level: string, target: AuthzTarget) => {
+		checks.push({ level, target });
+		if (!allow(level, target)) {
+			throw authorizationError("app-authz denied (test)", {
+				method: "test",
+				decision: "deny",
+			});
+		}
+	};
 	return {
 		caller: { principal },
 		principal,
 		checks,
-		check: async (level, target) => {
-			checks.push({ level, target });
-			if (!allow(level, target)) {
-				throw authorizationError("app-authz denied (test)", {
-					method: "test",
-					decision: "deny",
-				});
+		check,
+		// The real one hoists the scope resolution and bounds concurrency; neither is observable from a
+		// handler, so the double only has to reproduce the CONTRACT — decide each row, drop the ones
+		// that deny, never throw.
+		filter: async (level, rows, target) => {
+			const kept = [];
+			for (const row of rows) {
+				try {
+					await check(level, target(row));
+					kept.push(row);
+				} catch {
+					// dropped, not thrown
+				}
 			}
+			return kept;
 		},
 	};
 }
