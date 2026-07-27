@@ -1,6 +1,7 @@
 import type { ClawEngineFactory } from "@euroclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@euroclaw/engine-sql";
 import { memoryAdapter } from "@euroclaw/storage-core";
+import { createMemoryAudit } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
 
 /** The principal `owned()` binds onto every api call — and now what a durable run is stamped with. */
@@ -155,7 +156,9 @@ describe("createClaw engine", () => {
 		const store = createSqlEngineStore(db, {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
+		const audit = createMemoryAudit();
 		const claw = owned({
+			audit,
 			cronHandler: false,
 			database: db,
 			engine: sqlEngine({ store, workerId: "worker-1" }),
@@ -172,7 +175,6 @@ describe("createClaw engine", () => {
 			prompt: "email alice@personal.com",
 		});
 		const parked = await claw.$context.engine?.work?.();
-		console.log("PARKED:", JSON.stringify(parked));
 
 		expect(parked.status).toBe("waiting_approval");
 		if (parked.status !== "waiting_approval" || !parked.approvalIds[0]) {
@@ -184,13 +186,29 @@ describe("createClaw engine", () => {
 			approvalId: parked.approvalIds[0],
 			by: "user:alice",
 		});
-		const resume = await claw.api.continueEngineRun({
-			approvalId: parked.approvalIds[0],
-		});
+		// A THIRD PARTY resumes. The worker seeds the run row's principal so a durable slice executes as
+		// somebody — and the run row for THIS task is stamped from whoever called continueEngineRun. If
+		// that seed reached the replay, the approved action would execute as the resumer, which is the
+		// escalation the approval record exists to prevent.
+		const resume = await claw.api.continueEngineRun(
+			{ approvalId: parked.approvalIds[0] },
+			{ principal: "user:stranger" },
+		);
 		const completed = await claw.$context.engine?.work?.();
 
 		expect(completed.status).toBe("completed");
 		expect(resume.id).toMatch(/^[0-9a-f]{32}$/);
+
+		// The record fixes the executing identity (attest: the requester's, the approver merely
+		// vouching), so the replayed tool call is attributed to the requester — never the resumer.
+		const replayed = audit
+			.entries()
+			.filter((entry) => entry.name === "send_email");
+		expect(replayed.length).toBeGreaterThan(0);
+		for (const entry of replayed) {
+			expect(entry.principal).not.toBe("user:stranger");
+		}
+		expect(replayed.at(-1)?.principal).toBe("user:actor-1");
 	});
 
 	it("enqueues and executes a SQL-engine runtime run", async () => {
