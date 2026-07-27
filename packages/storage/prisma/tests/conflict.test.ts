@@ -10,12 +10,26 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const prisma = new PrismaClient();
 
+// Scoped to the one row this file writes, never `deleteMany({})`.
+//
+// `schema.prisma` points at a single shared `file:./test.db`, and prisma.test.ts blanket-wipes the
+// same `approval` table in its own afterEach — so with vitest running files in parallel the two
+// delete each other's rows mid-test, and an update comes back undefined. It only showed up under
+// load, which is what widened the window enough to interleave, so it read as flaky rather than as
+// the fixture collision it is.
+//
+// Scoping this side was not sufficient on its own (it still failed 1 in 3 under load), because the
+// collision is symmetric. The package therefore runs its test FILES serially —
+// `--no-file-parallelism` in its `test` script — which is the actual fix; this stays because a
+// blanket wipe of a shared table is wrong regardless of who else is running.
+const OWN_ROW = { id: "dup" };
+
 beforeAll(async () => {
 	await prisma.$connect();
-	await prisma.approval.deleteMany({});
+	await prisma.approval.deleteMany({ where: OWN_ROW });
 });
 afterAll(async () => {
-	await prisma.approval.deleteMany({});
+	await prisma.approval.deleteMany({ where: OWN_ROW });
 	await prisma.$disconnect();
 });
 

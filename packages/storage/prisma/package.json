@@ -19,7 +19,7 @@
 	],
 	"scripts": {
 		"build": "tsc",
-		"test": "vitest run tests",
+		"test": "vitest run tests --no-file-parallelism",
 		"typecheck": "tsc --noEmit",
 		"pretest": "prisma db push --skip-generate --accept-data-loss"
 	},
