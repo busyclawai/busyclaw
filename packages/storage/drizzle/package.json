@@ -29,6 +29,7 @@
 		"drizzle-orm": ">=0.30.0"
 	},
 	"devDependencies": {
+		"@euroclaw/storage-core": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"better-sqlite3": "12.11.1",
 		"drizzle-orm": "0.45.2"
