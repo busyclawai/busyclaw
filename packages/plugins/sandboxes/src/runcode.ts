@@ -123,6 +123,12 @@ export function runCodeTool(input: {
 	// Forced stamp (sandboxes-plan invariant #8): the script is one atomic effect — idempotency/output
 	// "none" so a half-run script is never replayed or double-fired. NOT configurable.
 	return govern(theTool, {
+		// WRITE, stated rather than inherited. An unstamped tool defaults to write, so this changes
+		// nothing today — but `run_code` is the last tool that should depend on a default. The outer
+		// code-execution capability is authorized on its OWN account, independently of the nested tools
+		// the script may go on to call: each of those is decided again at the chokepoint, and a policy
+		// permitting them says nothing about whether this caller may run arbitrary code at all.
+		access: "write",
 		invoker: true,
 		effect: {
 			idempotency: "none",

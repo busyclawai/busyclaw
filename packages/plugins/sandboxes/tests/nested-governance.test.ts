@@ -216,3 +216,21 @@ describe("@euroclaw/sandboxes nested governance", () => {
 		expect(pending).toHaveLength(0);
 	}, 30000);
 });
+
+// H-04, bullet 4: the OUTER capability is authorized on its own account.
+//
+// Everything above is about the nested calls a script makes. This is about the call that starts the
+// script. The two are separate questions and the floor asks them separately — a policy permitting the
+// tools a script reaches says nothing about whether this caller may run arbitrary code at all.
+describe("run_code is a modeled, high-risk write", () => {
+	it("declares its access class rather than inheriting the default", () => {
+		const descriptor = runCodeTool({ sandbox: quickjs() });
+
+		// An unstamped tool already defaults to write, so this asserts INTENT, not behaviour: run_code
+		// is the last tool whose classification should depend on a default nobody wrote down. If the
+		// default ever changes, this is the tool that must not move with it.
+		expect(descriptor.governance.access).toBe("write");
+		expect(descriptor.governance.invoker).toBe(true);
+		expect(descriptor.governance.effect?.risk).toBe("high");
+	});
+});
