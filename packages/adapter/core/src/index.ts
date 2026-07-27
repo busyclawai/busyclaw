@@ -11,9 +11,11 @@ import {
 	BusyclawError,
 	configurationError,
 	errorMessage,
+	limitError,
 	parseClawResponseEnvelope,
 	validationError,
 } from "@busyclaw/contracts";
+import { MAX_REQUEST_BODY_BYTES, readRequestBody } from "@busyclaw/core";
 import { type } from "arktype";
 import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "busyclaw";
 import { clawApiRouteList, parseClawApiInput } from "busyclaw";
@@ -86,6 +88,10 @@ function statusForError(error: unknown): number {
 		// NOT a masked 500. Without this a fail-closed governed call reads as a server error on the wire
 		// (tripping error alarms / client retries) instead of the deliberate deny it is.
 		if (error.code === "BUSYCLAW_AUTHORIZATION_DENIED") return 403;
+		// A refused budget is Payload Too Large, not a masked 400 — the distinction is actionable:
+		// 400 invites the caller to fix the value and send it again, 413 tells them the same value
+		// will be refused again however well-formed it is.
+		if (error.code === "BUSYCLAW_LIMIT_EXCEEDED") return 413;
 	}
 	if (error instanceof SyntaxError) return 400;
 	return 500;
@@ -242,10 +248,21 @@ async function readInput(
 	if (method === "GET") {
 		const search = new URL(request.url).searchParams;
 		const encoded = search.get("input");
-		if (encoded) return JSON.parse(encoded) as unknown;
+		if (encoded) {
+			// A GET carries its input in the URL, so the same ceiling applies to a different carrier.
+			if (encoded.length > MAX_REQUEST_BODY_BYTES) {
+				throw limitError(
+					`request input exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
+					{
+						limit: MAX_REQUEST_BODY_BYTES,
+					},
+				);
+			}
+			return JSON.parse(encoded) as unknown;
+		}
 		return Object.fromEntries(search.entries());
 	}
-	const text = await request.text();
+	const text = await readRequestBody(request);
 	return text ? (JSON.parse(text) as unknown) : {};
 }
 

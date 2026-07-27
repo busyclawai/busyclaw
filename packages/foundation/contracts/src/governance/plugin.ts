@@ -41,6 +41,30 @@ export type BusyclawRouteRequest = {
 	headers: { get: (name: string) => string | null };
 	json: () => Promise<unknown>;
 	text: () => Promise<string>;
+	/**
+	 * The unread request body, when the host has one to give.
+	 *
+	 * Optional because a `BusyclawRouteRequest` is a structural shape — a platform `Request` satisfies
+	 * it, and so does a hand-built object in a test — but a body limit can only be ENFORCED where the
+	 * bytes are still arriving. `text()` has already buffered whatever was sent by the time it
+	 * resolves, so a size check on its result refuses the parse without refusing the spend. Hosts that
+	 * can, should pass this through; the adapter falls back to a post-hoc check when they cannot.
+	 */
+	body?: RequestBodyStream | null;
+};
+
+/**
+ * The reading half of a request body, structurally — a platform `ReadableStream<Uint8Array>`
+ * satisfies it. Spelled out rather than named because this package compiles against ES2023 with no
+ * DOM or Node lib, which is what keeps it importable from anywhere; {@link BusyclawRouteRequest}
+ * stands in for `Request` on the same terms.
+ */
+export type RequestBodyStream = {
+	getReader: () => {
+		read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+		releaseLock: () => void;
+	};
+	cancel: () => Promise<void>;
 };
 
 export type BusyclawRouteResult = {
