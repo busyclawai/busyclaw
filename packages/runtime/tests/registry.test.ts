@@ -7,6 +7,11 @@ import type {
 	SpecRegistrationRecord,
 	SpecRegistrationStore,
 } from "@busyclaw/contracts";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import {
+	createRegistryStores,
+	type RegistryStores,
+} from "@busyclaw/storage-durable";
 import { describe, expect, it, vi } from "vitest";
 import { createSpecRegistry } from "../src/tools/registry";
 import type { OpenApiExtraction } from "../src/tools/sources/openapi";
@@ -487,5 +492,85 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				(row) => row.credentialOrigin === "https://api.petstore.example",
 			),
 		).toBe(true);
+	});
+
+	// M-07. A registration is not one write: it inserts, updates and DELETES tool rows, replaces the
+	// spec row, and appends the change that bumps the org's bundle version. Committed separately, a
+	// crash between the rows and the append leaves the surface changed and the version stale — so the
+	// router keeps serving a bundle that still names a tool the new spec removed, and the fail-closed
+	// delete stops being fail-closed until something unrelated bumps the version.
+	//
+	// Real stores over a real adapter transaction, not a hand-rolled rollback: the memory adapter works
+	// on a snapshot and only replaces state on success, so a throw genuinely un-does the writes.
+	it("applies nothing when a later write in the registration fails", async () => {
+		const adapter = memoryAdapter();
+		const real = createRegistryStores(adapter);
+		const boom = async (): Promise<never> => {
+			throw new Error("bundle version append failed");
+		};
+		// The LAST write in the sequence, and the one a crash most plausibly interrupts.
+		const failing = (bundle: RegistryStores) => ({
+			...bundle,
+			authzChanges: { ...bundle.authzChanges, append: boom },
+		});
+		const registry = createSpecRegistry({
+			...failing(real),
+			transaction: (fn) => {
+				const run = real.transaction;
+				if (!run) throw new Error("expected a transactional adapter");
+				return run((tx) => fn(failing(tx)));
+			},
+		});
+
+		await expect(
+			registry.registerOpenApiSpec({
+				scope: "organization",
+				scopeId: "org-a",
+				source: "petstore",
+				document: petstore(),
+				registeredBy: "user:alice",
+			}),
+		).rejects.toThrow(/bundle version append failed/);
+
+		// Nothing landed. Before the transaction the tool rows were written and only the append was
+		// lost — the worst shape, because the surface changed while the version governing it did not.
+		expect(
+			await real.registeredTools.listBySource(
+				{ scope: "organization", scopeId: "org-a" },
+				"petstore",
+			),
+		).toEqual([]);
+		expect(
+			await real.specRegistrations.get(
+				{ scope: "organization", scopeId: "org-a" },
+				"petstore",
+			),
+		).toBeNull();
+	});
+
+	it("commits every write when the registration succeeds", async () => {
+		const real = createRegistryStores(memoryAdapter());
+		const registry = createSpecRegistry(real);
+		const report = await registry.registerOpenApiSpec({
+			scope: "organization",
+			scopeId: "org-a",
+			source: "petstore",
+			document: petstore(),
+			registeredBy: "user:alice",
+		});
+		expect(report.added).toHaveLength(4);
+		expect(
+			await real.registeredTools.listBySource(
+				{ scope: "organization", scopeId: "org-a" },
+				"petstore",
+			),
+		).toHaveLength(4);
+		// …including the append that bumps the bundle version, inside the same unit.
+		expect(
+			await real.authzChanges.count({
+				scope: "organization",
+				scopeId: "org-a",
+			}),
+		).toBe(1);
 	});
 });
