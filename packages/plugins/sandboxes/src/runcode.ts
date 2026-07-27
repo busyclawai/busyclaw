@@ -58,7 +58,15 @@ export function runCodeTool(input: {
 	 *  the claw/conversation id is NOT reachable through the AI-SDK tool boundary (the runtime injects
 	 *  it into the governance context, not the tool's execute options). For cross-call persistence the
 	 *  host supplies this resolver (e.g. mapping to a claw id it closes over, or an external S3/
-	 *  SharePoint key). Only consulted when `store` is set. */
+	 *  SharePoint key). Only consulted when `store` is set.
+	 *
+	 *  THE REF IS THE ONLY TENANCY BOUNDARY on a shared store, and nothing here can check it. What it
+	 *  returns names a volume directly, so two tenants whose resolvers can produce the same string
+	 *  share a filesystem — one run's writes readable by the other's guest. The default cannot collide
+	 *  (a tool-call id is unique), and neither can a claw id; a ref built from something a tenant
+	 *  supplies or influences — a user-chosen project name, a path segment off a request — can. Make
+	 *  the tenant part of the ref, from server-verified state, the way every other scoped key in
+	 *  busyclaw is stamped rather than accepted. */
 	volumeRef?: (options: { toolCallId: string }) => VolumeRef;
 }): ToolDefinition {
 	// The AI SDK's `tool()` is used purely to infer `execute`'s args from the schema; `govern` then

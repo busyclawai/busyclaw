@@ -35,6 +35,13 @@ export type QuickJsConfig = {
 	 *  memfs lives in the HOST heap and is NOT bounded by `memoryLimitBytes`, so this cap is the only
 	 *  thing standing between a write-bomb and a host OOM. Default 16MB. */
 	maxFsBytes?: number;
+	/** Entry budget for a mounted filesystem — how many distinct paths one run may touch. Sits beside
+	 *  `maxFsBytes` because a filesystem costs the host along two independent axes and bounding one
+	 *  leaves the other open: the byte budget charged only payloads, so a loop writing empty files
+	 *  charged nothing while the volume grew an entry each time. A workload that legitimately writes
+	 *  many small files needs to raise this exactly as one writing few large files raises the bytes.
+	 *  Default 4096. */
+	maxFsEntries?: number;
 };
 
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -42,6 +49,25 @@ const DEFAULT_MAX_STACK_SIZE_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_TIMER_COUNT = 4;
 const DEFAULT_MAX_FS_BYTES = 16 * 1024 * 1024;
+
+// M-06. The budgets above bound the GUEST's heap; these bound the HOST's, and the distinction is the
+// whole finding. Everything the guest emits or names crosses into host memory that the QuickJS memory
+// limit does not see, so a run that stays comfortably inside its 64MB could still spend the host's
+// heap without limit until the timeout happened to fire.
+//
+//   logs   — `console.log` in a loop appended to a host array with no ceiling on lines or bytes.
+//   inodes — the write cap charged the PAYLOAD, so a million zero-byte files charged nothing while
+//            the volume grew a million entries.
+//   paths  — and it charged nothing for the path either, so a long name was free.
+//
+// The log caps are constants: console output is diagnostic, and a run that needs more than this to
+// explain itself is not going to be read by a model anyway. The entry cap is CONFIGURABLE beside
+// `maxFsBytes`, because a filesystem costs the host along two independent axes and a workload that
+// legitimately writes many small files has the same claim on the budget as one writing few large.
+const MAX_LOG_LINES = 1000;
+const MAX_LOG_BYTES = 256 * 1024;
+const MAX_LOG_LINE_BYTES = 8 * 1024;
+const DEFAULT_MAX_FS_ENTRIES = 4096;
 
 // Host globals not ambiently typed here (this package builds without a node lib) — cast like
 // engine.ts's globalThis cast. Buffer gives an exact utf8 byte length for a write payload.
@@ -60,7 +86,10 @@ function byteSizeOf(data: unknown): number {
 }
 
 // Total byte size of a seed tree — the LOAD budget's measure. Recurses the nested dirs and sums the
-// string/binary leaves; ignores the keys (path names) themselves, which the budget need not bound.
+// string/binary leaves, PLUS the keys: a name is host memory exactly as its contents are, and a tree
+// of a million empty files under long names would otherwise measure zero and pass any budget. (This
+// counted only the leaves and said the keys "need not" be bounded, which the write path's own
+// entry-count hole showed to be wrong in the same way.)
 function treeByteSize(node: unknown): number {
 	if (node === null || node === undefined) return 0;
 	if (
@@ -72,8 +101,8 @@ function treeByteSize(node: unknown): number {
 	}
 	if (typeof node !== "object") return 0;
 	let total = 0;
-	for (const value of Object.values(node as Record<string, unknown>)) {
-		total += treeByteSize(value);
+	for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+		total += byteSizeOf(key) + treeByteSize(value);
 	}
 	return total;
 }
@@ -124,8 +153,12 @@ function extractTree(vol: Volume): VolumeTree {
 // never reaches host memory; the throw surfaces as a normal error VALUE (the runSandboxed catch
 // converts it) that the model reads as "quota exceeded" and adapts to. The guest bridge (the
 // wrapper's provideFs) calls these by name on this exact IFs, so a name-keyed override is invoked.
-function capWrites(fs: IFs, maxBytes: number): void {
+function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 	let written = 0;
+	// Distinct paths touched. The byte budget alone missed this entirely: a loop writing zero-byte
+	// files charged zero while the volume grew an entry — and an entry costs host memory for its key,
+	// its node, and again when the tree is snapshotted out at the end of the run.
+	const entries = new Set<string>();
 	const charge = (bytes: number): void => {
 		if (written + bytes > maxBytes) {
 			throw new Error(
@@ -134,35 +167,72 @@ function capWrites(fs: IFs, maxBytes: number): void {
 		}
 		written += bytes;
 	};
+	const chargePath = (path: unknown): void => {
+		// A path is host memory too — it is retained as a key in the volume and in every snapshot of
+		// it — so its bytes come out of the same budget the contents do.
+		const text = typeof path === "string" ? path : String(path);
+		charge(byteSizeOf(text));
+		if (entries.has(text)) return;
+		if (entries.size >= maxEntries) {
+			throw new Error(
+				`filesystem quota exceeded: ${maxEntries}-entry budget for this run`,
+			);
+		}
+		entries.add(text);
+	};
 	// Blessed seam cast: memfs types each write method as a heavy overload set; the cap overrides the
 	// write surface uniformly as string-keyed functions.
 	const surface = fs as unknown as Record<
 		string,
 		((...args: unknown[]) => unknown) | undefined
 	>;
-	const cap = (name: string, payloadIndex: number): void => {
+	/**
+	 * Wrap one write method. `payloadIndex` is where the bytes are (-1 when the call writes none);
+	 * `pathIndex` is where the name is (-1 when arg 0 is a file DESCRIPTOR rather than a path — the
+	 * fd forms are charged for their bytes only, since whatever opened the fd was charged for the
+	 * name already).
+	 */
+	const cap = (name: string, payloadIndex: number, pathIndex: number): void => {
 		const original = surface[name];
 		if (typeof original !== "function") return;
 		const bound = original.bind(fs);
 		surface[name] = (...args: unknown[]) => {
-			charge(byteSizeOf(args[payloadIndex]));
+			if (pathIndex >= 0) chargePath(args[pathIndex]);
+			if (payloadIndex >= 0) charge(byteSizeOf(args[payloadIndex]));
 			return bound(...args);
 		};
 	};
-	// writeFile/appendFile(path, data, …) and fd write(fd, data, …): the payload is arg 1.
+	// writeFile/appendFile(path, data, …): a name AND contents.
 	for (const name of [
 		"writeFileSync",
 		"writeFile",
 		"appendFileSync",
 		"appendFile",
-		"writeSync",
-		"write",
 	]) {
-		cap(name, 1);
+		cap(name, 1, 0);
 	}
-	// mkdir(path, …): no file bytes, but charge the path length so a mkdir-bomb is bounded too (arg 0).
-	for (const name of ["mkdirSync", "mkdir"]) {
-		cap(name, 0);
+	// write(fd, data, …): contents only — arg 0 is a descriptor, and its path was charged at open.
+	for (const name of ["writeSync", "write"]) {
+		cap(name, 1, -1);
+	}
+	// A name with no contents still costs. `open` is here because it is what CREATES the entry the
+	// fd forms above then write into — charging only at write would let an open-loop make entries
+	// for free.
+	for (const name of [
+		"mkdirSync",
+		"mkdir",
+		"openSync",
+		"open",
+		"copyFileSync",
+		"copyFile",
+		"renameSync",
+		"rename",
+		"symlinkSync",
+		"symlink",
+		"linkSync",
+		"link",
+	]) {
+		cap(name, -1, 0);
 	}
 }
 
@@ -234,6 +304,7 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 	const maxTimeoutCount = config.maxTimeoutCount ?? DEFAULT_TIMER_COUNT;
 	const maxIntervalCount = config.maxIntervalCount ?? DEFAULT_TIMER_COUNT;
 	const maxFsBytes = config.maxFsBytes ?? DEFAULT_MAX_FS_BYTES;
+	const maxFsEntries = config.maxFsEntries ?? DEFAULT_MAX_FS_ENTRIES;
 	if (maxFsBytes <= 0) {
 		throw configurationError("quickjs maxFsBytes must be positive", {
 			maxFsBytes: config.maxFsBytes,
@@ -267,11 +338,36 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 			context: ExecutionContext;
 		}): Promise<SandboxExecution> {
 			const { runSandboxed } = await load();
+			// Bounded on three axes, because a log line is host memory the guest's own limit never
+			// counted. Truncation is ANNOUNCED rather than silent: a model reading its own output has
+			// to be able to tell "nothing more was printed" from "the rest was dropped", or it will
+			// draw conclusions from an absence it caused.
 			const logs: string[] = [];
+			let logBytes = 0;
+			let logsTruncated = false;
 			const capture =
 				(level: string) =>
 				(...params: unknown[]) => {
-					logs.push(`${level}: ${params.map(render).join(" ")}`);
+					if (logsTruncated) return;
+					const rendered = `${level}: ${params.map(render).join(" ")}`;
+					// Per LINE too: one `console.log` of a guest-sized string would otherwise land a
+					// multi-megabyte string in the host array in a single call.
+					const line =
+						rendered.length > MAX_LOG_LINE_BYTES
+							? `${rendered.slice(0, MAX_LOG_LINE_BYTES)}… (line truncated)`
+							: rendered;
+					if (
+						logs.length >= MAX_LOG_LINES ||
+						logBytes + line.length > MAX_LOG_BYTES
+					) {
+						logsTruncated = true;
+						logs.push(
+							`… logs truncated: this run exceeded ${MAX_LOG_LINES} lines or ${MAX_LOG_BYTES} bytes`,
+						);
+						return;
+					}
+					logBytes += line.length;
+					logs.push(line);
 				};
 
 			// Filesystem, default-absent. When a tree is mounted we seed a memfs volume OURSELVES via
@@ -296,7 +392,7 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 				});
 				vol = built.vol;
 				mountedFs = built.fs;
-				capWrites(mountedFs, maxFsBytes);
+				capWrites(mountedFs, maxFsBytes, maxFsEntries);
 			}
 
 			const options: SandboxOptions = {

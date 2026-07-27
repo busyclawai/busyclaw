@@ -159,3 +159,137 @@ describe("@busyclaw/sandboxes resource limits", () => {
 		await hostStillWorks();
 	}, 30000);
 });
+
+// ── M-06: the budgets above bound the GUEST's heap; these bound the HOST's ────────────────────────
+//
+// R1b pins the premise for the filesystem. The same premise holds for everything else the guest
+// emits or names: it crosses into host memory that `memoryLimitBytes` never sees. A run staying
+// comfortably inside its wasm cap could still spend the host's heap until the timeout happened to
+// fire — which is a bound on TIME, not on memory, and on a slower host it fires later.
+
+describe("@busyclaw/sandboxes host-side resource limits (M-06)", () => {
+	// R6 — console output accumulates in a HOST array. Unbounded, a print loop is a host OOM that no
+	// guest-side cap can see.
+	it("R6: bounds console output and says so rather than dropping it silently", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs(),
+			// 2048-byte lines against a 256KB budget: the cap trips after ~128 of them. The loop only
+			// has to outrun the cap, and every crossing of the guest→host bridge costs real time.
+			code: [
+				'const line = "y".repeat(2048);',
+				"for (let i = 0; i < 2000; i++) console.log(line);",
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: {},
+		});
+
+		expect(res.result).toBe(1); // the RUN is fine — only the log is capped
+		const logs = res.logs ?? [];
+		// Under 200, not merely under the 1000-line cap: at 2048 bytes a line the BYTE budget trips
+		// first, around 128 lines. Asserting the line count alone would stay green with no byte budget
+		// at all, which is exactly what mutation showed before this was tightened.
+		expect(logs.length).toBeLessThan(200);
+		// Announced, not silent: a model reading its own output must be able to tell "nothing more
+		// was printed" from "the rest was dropped", or it reasons from an absence it caused itself.
+		expect(logs.at(-1)).toMatch(/logs truncated/);
+		await hostStillWorks();
+	}, 30000);
+
+	// R6c — many SHORT lines. R6 trips the byte budget (2048-byte lines exhaust 256KB in ~128 of
+	// them), so it never exercises the line count; a print loop of tiny lines is the other shape, and
+	// costs a host array SLOT each time however small the string is.
+	it("R6c: bounds the NUMBER of log lines, not just their bytes", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"for (let i = 0; i < 4000; i++) console.log(i);",
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: {},
+		});
+
+		expect(res.result).toBe(1);
+		const logs = res.logs ?? [];
+		// Well under the 256KB byte budget the whole time — only the count can have stopped this.
+		expect(logs.join("").length).toBeLessThan(256 * 1024);
+		expect(logs.length).toBeLessThanOrEqual(1001);
+		expect(logs.at(-1)).toMatch(/logs truncated/);
+		await hostStillWorks();
+	}, 30000);
+
+	// R6b — one enormous line, rather than many. The per-line cap is what stops a single call landing
+	// a guest-sized string in the host array.
+	it("R6b: truncates a single oversized log line", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: ['console.log("z".repeat(4 * 1024 * 1024));', "return 1;"].join(
+				"\n",
+			),
+			invoker: noInvoke,
+			context: {},
+		});
+
+		expect(res.result).toBe(1);
+		const first = (res.logs ?? [])[0] ?? "";
+		expect(first.length).toBeLessThan(16 * 1024);
+		expect(first).toMatch(/line truncated/);
+		await hostStillWorks();
+	}, 30000);
+
+	// R7 — the byte budget charged the PAYLOAD, so empty files were free. Each entry still costs a
+	// key, a node, and a slot in the snapshot taken at the end of the run.
+	it("R7: bounds the NUMBER of filesystem entries, not just their bytes", async () => {
+		const { output: res } = await executeInSandbox({
+			// A generous byte budget on purpose: the bytes are not what should stop this.
+			sandbox: quickjs({ maxFsBytes: 64 * 1024 * 1024, maxFsEntries: 64 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'for (let i = 0; i < 5000; i++) fs.writeFileSync("/f" + i, "");',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toMatch(/entry budget/);
+		await hostStillWorks();
+	}, 30000);
+
+	// R9 — the same blindness on the LOAD side: the seed budget summed only the leaves, so a tree of
+	// empty files under long names measured zero and passed any budget. The seed is pulled into host
+	// heap before the guest runs at all, so this one is spent before any guest code executes.
+	it("R9: the seed budget counts path names, not only file contents", async () => {
+		const seed: Record<string, string> = {};
+		for (let i = 0; i < 200; i += 1) seed[`${"n".repeat(4096)}${i}`] = "";
+
+		await expect(
+			executeInSandbox({
+				sandbox: quickjs({ maxFsBytes: 64 * 1024 }),
+				code: "return 1",
+				invoker: noInvoke,
+				context: { mountFs: seed },
+			}),
+		).rejects.toThrow(/byte budget/);
+		await hostStillWorks();
+	}, 30000);
+
+	// R8 — and it charged nothing for the NAME, so a long path was free too.
+	it("R8: charges the path, so long names cannot be written for free", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024 }),
+			code: [
+				'const fs = await import("node:fs");',
+				// Every file is empty — under the old accounting this whole loop charged zero.
+				'for (let i = 0; i < 100; i++) fs.writeFileSync("/" + "n".repeat(4096) + i, "");',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toMatch(/quota exceeded/);
+		await hostStillWorks();
+	}, 30000);
+});
