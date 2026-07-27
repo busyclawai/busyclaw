@@ -2,7 +2,7 @@ import type {
 	BusyclawPlugin,
 	BusyclawPluginConfigureContext,
 } from "@busyclaw/contracts";
-import { endpoints, route } from "@busyclaw/contracts";
+import { endpoints, route, validationError } from "@busyclaw/contracts";
 import { secrets, storedSecretModels } from "@busyclaw/secrets-plugin";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { type } from "arktype";
@@ -353,23 +353,62 @@ describe("@busyclaw/adapter-core", () => {
 		});
 	});
 
-	it("surfaces the server error message to the client via the parsed envelope", async () => {
+	// M-08 changed this contract deliberately. It used to assert that a raw server exception reached
+	// the client — which is exactly the leak: a driver error carrying SQL, a TypeError naming an
+	// internal field, a provider failure echoing the content it choked on. An UNEXPECTED failure now
+	// gives the caller a fixed sentence and a correlation id; the real error goes to the operator.
+	it("does NOT surface an unexpected server exception to the client", async () => {
 		const claw = {
 			api: {
 				getClaw: async () => {
-					throw new Error("boom from server");
+					throw new Error("boom from server: SELECT * FROM secrets");
 				},
 			},
 		} as unknown as Claw;
-		const handler = toRequestHandler(claw);
+		const seen: { correlationId: string; error: unknown }[] = [];
+		const handler = toRequestHandler(claw, {
+			onError: (report) => seen.push(report),
+		});
 		const client = createClawClient({
 			baseUrl: "https://app.test/api/busyclaw",
 			fetch: (input, init) => handler(new Request(input, init)),
 		});
 
 		await expect(client.getClaw({ id: "claw-1" })).rejects.toThrow(
-			/boom from server/,
+			/internal error/,
 		);
+		await expect(client.getClaw({ id: "claw-1" })).rejects.not.toThrow(
+			/SELECT/,
+		);
+
+		// It went somewhere — the operator can still read it, and the id joins the two.
+		expect(seen).toHaveLength(2);
+		expect((seen[0]?.error as Error).message).toContain("SELECT");
+		expect(seen[0]?.correlationId).toBeTruthy();
+	});
+
+	// The other half of the split: an error AUTHORED for a caller still reaches them intact, or the
+	// sanitization would have made every deliberate refusal unreadable.
+	it("still surfaces an authored BusyclawError, code and all", async () => {
+		const claw = {
+			api: {
+				getClaw: async () => {
+					throw validationError("claw id", "must not be empty");
+				},
+			},
+		} as unknown as Claw;
+		const handler = toRequestHandler(claw);
+
+		const response = await handler(
+			new Request("https://app.test/api/busyclaw/get-claw?id=x"),
+		);
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			error: {
+				message: expect.stringContaining("must not be empty"),
+				code: "BUSYCLAW_VALIDATION_FAILED",
+			},
+		});
 	});
 });
 

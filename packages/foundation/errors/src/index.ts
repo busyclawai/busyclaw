@@ -39,6 +39,42 @@ export function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * A short opaque handle joining what one audience was told to what another can read. Correlation,
+ * not secrecy — it only has to be unique enough to find one failure in a log.
+ */
+export function correlationId(): string {
+	const source = (globalThis as { crypto?: { randomUUID?: () => string } })
+		.crypto;
+	return (
+		source?.randomUUID?.() ??
+		`${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+	);
+}
+
+/**
+ * M-08. The message safe to hand an audience that did not cause the failure — an HTTP caller, a
+ * persisted row, an event payload someone else will read.
+ *
+ * The test is AUTHORSHIP. A {@link BusyclawError} was written to be read: it names a stable code and
+ * describes the reader's own situation, so passing it through is the point. Anything else is an
+ * accident of the internals — a driver error carrying a fragment of SQL, a `TypeError` naming a
+ * private field, a provider failure echoing the content it choked on — and on a redacting deployment
+ * it can carry the very values redaction exists to keep out of reach.
+ *
+ * `onInternal` receives the raw failure and the id the reader was given. It is not optional in
+ * spirit: once the message stops travelling, this is the only thing that still knows what happened.
+ */
+export function safeFailureMessage(
+	error: unknown,
+	onInternal: (id: string, error: unknown) => void,
+): string {
+	if (error instanceof BusyclawError) return error.message;
+	const id = correlationId();
+	onInternal(id, error);
+	return `internal error [${id}]`;
+}
+
 export function validationError(
 	label: string,
 	summary: string,

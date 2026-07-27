@@ -10,6 +10,7 @@ import type {
 import {
 	BusyclawError,
 	configurationError,
+	correlationId,
 	errorMessage,
 	limitError,
 	parseClawResponseEnvelope,
@@ -75,6 +76,24 @@ export type ClawRequestHandlerOptions = {
 	resolveCaller?: (
 		request: Request,
 	) => ClawApiCaller | undefined | Promise<ClawApiCaller | undefined>;
+	/**
+	 * Where an UNEXPECTED exception goes, now that it no longer goes to the caller.
+	 *
+	 * Only failures nobody authored for a caller arrive here — a `BusyclawError` is deliberate and
+	 * still answers for itself on the wire. `correlationId` is the handle the caller was given, so a
+	 * support request quoting it lands on this record.
+	 *
+	 * Defaults to `console.error`. Suppressing it entirely (`() => {}`) makes these failures
+	 * invisible: the caller is told nothing by design, so this is the only place left that knows.
+	 * The error may carry unredacted values — treat this sink as privileged, and if it forwards
+	 * anywhere (an APM, a log aggregator) make that a deliberate choice about where PII may land.
+	 */
+	onError?: (report: {
+		correlationId: string;
+		error: unknown;
+		method: string;
+		path: string;
+	}) => void;
 };
 
 type CronTaskResult = BusyclawCronResult & { id: string };
@@ -116,18 +135,45 @@ function statusForError(error: unknown): number {
 	return 500;
 }
 
+/**
+ * M-08. Every failure returned its own message, so an exception nobody wrote for a caller — a driver
+ * error carrying a fragment of SQL, a `TypeError` naming an internal field, a provider failure
+ * echoing the content it choked on — was handed to whoever made the request. That is free
+ * reconnaissance, and on a redacting deployment it can carry the very values redaction exists to keep
+ * off the wire.
+ *
+ * The split is authorship. A `BusyclawError` was WRITTEN to be read by a caller: it names a stable
+ * code, its message describes the caller's own situation, and telling them is the point. Anything
+ * else is an accident of the internals, and the caller gets a fixed sentence plus a correlation id
+ * — enough to quote in a support request, and nothing else. The real error goes to `onError`, which
+ * is where an operator can see it without it crossing the boundary.
+ */
 function errorResponse(
 	error: unknown,
 	status = statusForError(error),
+	report?: (id: string, error: unknown) => void,
 ): Response {
 	// BusyclawError failures carry their stable code onto the wire — the client surfaces it as
 	// `error.code` so callers can branch on the code instead of matching message text.
-	const code = error instanceof BusyclawError ? error.code : undefined;
+	if (error instanceof BusyclawError) {
+		return json(
+			{ error: { message: errorMessage(error), code: error.code }, ok: false },
+			{ status },
+		);
+	}
+	// A string is the adapter's own literal ("not found", "method not allowed") — authored here, so
+	// it is as caller-facing as a BusyclawError.
+	if (typeof error === "string") {
+		return json({ error: { message: error }, ok: false }, { status });
+	}
+	const id = correlationId();
+	report?.(id, error);
 	return json(
 		{
 			error: {
-				message: errorMessage(error),
-				...(code !== undefined ? { code } : {}),
+				message: "internal error",
+				code: "BUSYCLAW_INTERNAL_ERROR",
+				correlationId: id,
 			},
 			ok: false,
 		},
@@ -761,7 +807,22 @@ export function toRequestHandler(
 				}),
 			);
 		} catch (error) {
-			return errorResponse(error);
+			return errorResponse(error, statusForError(error), (id, raw) => {
+				const report = {
+					correlationId: id,
+					error: raw,
+					method,
+					path: normalizedPath,
+				};
+				if (options.onError) {
+					options.onError(report);
+					return;
+				}
+				console.error(
+					`busyclaw ${method} ${normalizedPath} failed [${id}]`,
+					raw,
+				);
+			});
 		}
 	};
 }

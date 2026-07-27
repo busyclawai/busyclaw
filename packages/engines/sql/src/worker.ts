@@ -12,6 +12,7 @@
 
 import {
 	errorMessage,
+	safeFailureMessage,
 	stateError,
 	unsupportedOperationError,
 	validationError,
@@ -466,15 +467,20 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 					return { status: "completed", task };
 				});
 			} catch (err) {
+				// M-08. This reason is PERSISTED — onto the task row and into a `task.failed` event
+				// someone else will read — so an unauthored exception must not travel in it. The raw
+				// failure goes to the operator's console instead, joined by the id the row carries.
+				const reason = safeFailureMessage(err, (id, raw) =>
+					console.error(
+						`busyclaw engine task ${claim.task.id} failed [${id}]`,
+						raw,
+					),
+				);
 				if (heartbeat.isLost()) {
-					return {
-						status: "failed",
-						task: null,
-						reason: errorMessage(err),
-					};
+					return { status: "failed", task: null, reason };
 				}
 				heartbeat.stop();
-				return failClaim(store, claim, errorMessage(err));
+				return failClaim(store, claim, reason);
 			} finally {
 				heartbeat.stop();
 			}
