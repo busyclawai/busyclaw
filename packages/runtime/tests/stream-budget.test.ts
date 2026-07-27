@@ -7,14 +7,17 @@
 //     normal case, not the pathological one. Every delta the reader has not taken yet lived in an
 //     array with no ceiling, so the gap between the two rates WAS the memory footprint.
 //   - A reader that stops reading was invisible. The tab closes, the transport hangs up, the
-//     consumer `break`s — and the run carried on generating tokens, calling tools, and performing
-//     side effects for output nobody would ever see.
+//     consumer `break`s — and nothing downstream could tell.
 //
-// Both are tested here against a model that only produces when it is READ, because a mock that
+// What a departure MEANS turns on where the answer goes, and both halves are pinned below. A
+// recorded run detaches and finishes, because the transcript is what the reader comes back to; an
+// ad-hoc run has nowhere to put its output, so with no reader it has nothing left to serve.
+//
+// All of it is tested against a model that only produces when it is READ, because a mock that
 // enqueues its whole script up front measures nothing about backpressure.
 
 import { describe, expect, it } from "vitest";
-import { createRuntime } from "../src/index";
+import { createRuntime, runtimeRunOptionsWithRecording } from "../src/index";
 
 type V2Model = Parameters<typeof createRuntime>[0]["model"];
 
@@ -114,7 +117,10 @@ describe("runtime.stream — resource budget", () => {
 		await stream.result.catch(() => {});
 	});
 
-	it("aborts the run when the reader walks away", async () => {
+	it("aborts an AD-HOC run when the reader walks away", async () => {
+		// Nothing is recording, so this run has no claw and no thread — nowhere to put what it
+		// produces. With no reader either, every further token is spent on output that cannot be
+		// read now or later.
 		const { model, pulls } = pullModel(DELTAS);
 		const runtime = createRuntime({ model });
 
@@ -125,12 +131,49 @@ describe("runtime.stream — resource budget", () => {
 			if (taken === 3) break; // the tab closes, the transport hangs up
 		}
 
-		// The run is told, rather than left generating for an audience of nobody.
 		await expect(stream.result).rejects.toThrow(/abort/i);
 
 		const settled = pulls();
 		for (let i = 0; i < 50; i += 1) await new Promise(setImmediate);
 		expect(pulls()).toBe(settled);
+	});
+
+	it("lets a RECORDED run finish when the reader walks away, so the answer is there later", async () => {
+		// The behaviour anyone who has closed a chat tab expects: come back and the answer is in the
+		// thread. The transcript sink is writing to a claw, so finishing puts the answer exactly
+		// where the reader will look for it — throwing that away to save the tail of one generation
+		// would trade the entire point of the run for a few tokens already mostly spent.
+		const { model } = pullModel(40);
+		const recorded: string[] = [];
+		const runtime = createRuntime({
+			model,
+			recording: {
+				emit: async (event) => {
+					recorded.push(event.type);
+				},
+			},
+		});
+
+		const stream = runtime.stream(
+			"go",
+			undefined,
+			runtimeRunOptionsWithRecording(undefined, {
+				clawId: "claw-1",
+				threadId: "thread-1",
+			}),
+		);
+		let taken = 0;
+		for await (const _delta of stream.textStream) {
+			taken += 1;
+			if (taken === 3) break;
+		}
+
+		// Not rejected, not parked — finished.
+		const result = await stream.result;
+		expect(result.status).toBe("completed");
+		expect(result.text.length).toBeGreaterThan(0);
+		// And it reached the sink that persists it, which is what makes finishing worth anything.
+		expect(recorded).toContain("run.completed");
 	});
 
 	it("a reader that stays to the end still gets the whole answer", async () => {

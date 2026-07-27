@@ -739,12 +739,14 @@ function createModelSelector(
  * The streamed result of `runtime.stream`: the shared `TextDeltaStream` protocol shape with a
  * concrete `result` — a promise of the final governed result (resolves when the run completes).
  *
- * **Consume it or cancel it.** The channel behind `textStream` is bounded, so a stream nobody reads
- * fills up and the run PARKS rather than running to completion: `result` never settles and the
- * provider connection stays open. That is the same contract a `fetch` body has, and it is the right
- * side of the trade — an ignored stream now stops spending model tokens instead of generating a
- * whole answer for nobody — but it does mean abandoning one silently is no longer free. Break out of
- * the loop, or call `textStream[Symbol.asyncIterator]().return()`; either aborts the run.
+ * **Start reading, or cancel.** The channel behind `textStream` is bounded, so a stream that is
+ * never read at all fills up and the run parks — `result` does not settle and the provider
+ * connection stays open, the same contract a `fetch` body has. Abandoning one is not free.
+ *
+ * Abandoning it once you HAVE started reading is well defined, and depends on where the answer
+ * goes. A **recorded** run (a claw and thread to write to) detaches and runs to completion, so the
+ * transcript is waiting when the reader returns — closing a tab does not throw away the answer. An
+ * **ad-hoc** run has nowhere to put it, so it aborts and `result` rejects.
  */
 export type RuntimeStream = TextDeltaStream & {
 	readonly result: Promise<RuntimeResult>;
@@ -768,10 +770,14 @@ const STREAM_DELTA_BUFFER = 512;
  * reader can be arbitrarily slower (a browser over a bad link, a disk-backed sink); the gap between
  * the two rates is the leak, and this is where it is closed.
  *
- * **Cancellation.** A consumer that breaks out of its `for await`, or a transport that cancels the
+ * **Departure.** A consumer that breaks out of its `for await`, or a transport that cancels the
  * `ReadableStream` wrapping it, runs the generator's `finally` — which is the only signal that
  * nobody is reading any more. `onCancel` fires there, and only there: a stream that simply ran to
- * completion has not been cancelled and must not be treated as if it had.
+ * completion has not been abandoned and must not be treated as if it had.
+ *
+ * What that DEPARTURE means is not the channel's call — see `stream()`, which detaches a recorded
+ * run and aborts an ad-hoc one. Either way the channel stops holding deltas from that moment: a
+ * `push` after departure discards, so a detached run's output costs nothing to ignore.
  */
 function createDeltaChannel(options: { onCancel: () => void }): {
 	push: (value: string) => void | Promise<void>;
@@ -1642,12 +1648,29 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		ctx?: Record<string, unknown>,
 		options?: RunOptionsFor<Config>,
 	): RuntimeStream => {
-		// A reader that walks away — the browser tab closes, the transport cancels, the consumer
-		// `break`s — used to leave the run generating for nobody: model tokens billed, tools called,
-		// side effects performed, all for output no one would ever read. The channel's cancellation
-		// trips this signal and the run's existing abort checks stop it at the next boundary.
+		// A reader that walks away — the tab closes, the transport cancels, the consumer `break`s —
+		// is not the same event as the work becoming worthless, and the difference is whether the
+		// answer has anywhere to land.
+		//
+		// DETACH when the run is recorded. The transcript sink is writing to the claw's thread, so
+		// finishing the run puts the answer where the reader will look for it when they come back —
+		// which is the behaviour anyone who has closed a chat tab expects. The deltas are dropped as
+		// they arrive (the channel discards once cancelled, so nothing accumulates) and `result`
+		// settles normally. Losing a completed answer to save the tail of one generation is a bad
+		// trade: the tokens are already mostly spent, and the answer is the entire point.
+		//
+		// ABORT when it is not. An ad-hoc run with no claw and no thread has nowhere to put what it
+		// produces, so with no reader there is nothing left to serve — every further token, tool call
+		// and side effect is spent on output that cannot be read now or later.
 		const readerGone = createRuntimeAbortController();
-		const channel = createDeltaChannel({ onCancel: () => readerGone.abort() });
+		const persisted =
+			config.recording !== undefined &&
+			options?.[RUNTIME_RECORDING_OPTION] !== undefined;
+		const channel = createDeltaChannel({
+			onCancel: () => {
+				if (!persisted) readerGone.abort();
+			},
+		});
 		const runOptions = {
 			...options,
 			abortSignal: combinedAbortSignal(options?.abortSignal, readerGone.signal),
@@ -1655,9 +1678,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const result = invoke(prompt, ctx, runOptions, (text) =>
 			channel.push(text),
 		).finally(() => channel.close());
-		// Abandoning the stream rejects `result` with the abort — truthfully. A consumer that awaits
-		// it still sees that rejection; this only keeps the one who walked away from tripping an
-		// unhandled-rejection warning for a cancellation they asked for.
+		// Abandoning an UNRECORDED stream rejects `result` with that abort — truthfully. A consumer
+		// that awaits it still sees the rejection; this only keeps the one who walked away from
+		// tripping an unhandled-rejection warning for a cancellation they asked for.
 		result.catch(() => {});
 		return { textStream: channel.iterable, result };
 	};
