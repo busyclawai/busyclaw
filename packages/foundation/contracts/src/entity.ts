@@ -448,6 +448,12 @@ function dropUndefined<T extends object>(value: T): T {
 export function entity<const Fields extends Record<string, EntityField>>(
 	name: string,
 	fields: Fields,
+	/** Table-level declarations that no single field can carry. Optional — a table needing none
+	 *  passes nothing, which is why adding this changed no existing call site. */
+	options?: {
+		/** Composite unique constraints, each a list of field keys in constraint order. */
+		uniques?: readonly (readonly (keyof Fields & string)[])[];
+	},
 ) {
 	// `shapeFor` assembles the validator from each field's `ark` expression, but it returns
 	// `Record<string, unknown>`, so arktype can't recover the precise shape and `.infer` would be
@@ -462,6 +468,7 @@ export function entity<const Fields extends Record<string, EntityField>>(
 	// the compile-time extras (kind/values/ark validators) so schema declarations stay serializable.
 	const storage = {
 		[name]: {
+			...(options?.uniques !== undefined ? { uniques: options.uniques } : {}),
 			fields: Object.fromEntries(
 				Object.entries(fields).map(([fieldName, field]) => [
 					fieldName,

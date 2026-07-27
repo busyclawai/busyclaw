@@ -95,6 +95,24 @@ describe("generatePrismaSchema", () => {
 		expect(code).not.toContain('@@map("Claw")');
 	});
 
+	it("emits a table-level composite unique as @@unique over its fields", () => {
+		const code = generatePrismaSchema({
+			schema: {
+				pii_mapping: {
+					uniques: [["scope", "placeholder"]],
+					fields: {
+						id: { type: "string", required: true, primaryKey: true },
+						scope: { type: "string", required: true },
+						placeholder: { type: "string", required: true },
+					},
+				},
+			},
+		});
+		expect(code).toContain("@@unique([scope, placeholder])");
+		// Grouped columns must not ALSO carry a single-column @unique.
+		expect(code).not.toContain("scope String @unique");
+	});
+
 	it("does NOT emit datasource or generator BLOCKS — those are the host's", () => {
 		const code = generatePrismaSchema({ schema: SCHEMA });
 		// The words appear in the header comment explaining their absence, so match the blocks.

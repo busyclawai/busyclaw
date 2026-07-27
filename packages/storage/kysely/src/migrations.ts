@@ -28,7 +28,11 @@ import type {
 	SchemaDeclaration,
 	TableSchema,
 } from "@euroclaw/contracts";
-import { configurationError, tableOrder } from "@euroclaw/contracts";
+import {
+	configurationError,
+	tableOrder,
+	uniqueConstraints,
+} from "@euroclaw/contracts";
 import type {
 	AlterTableColumnAlteringBuilder,
 	ColumnDataType,
@@ -273,6 +277,15 @@ export async function planMigrations(
 			} else {
 				warn(
 					`euroclaw migrations: table "${table}" declares no primaryKey field — created without a primary key`,
+				);
+			}
+			// Named composite-unique groups, as real table constraints. A constraint rather than a
+			// unique INDEX because that is what a driver reports as a conflict — the thing a caller
+			// doing try-insert/on-conflict has to catch.
+			for (const constraint of uniqueConstraints(model, declared)) {
+				create = create.addUniqueConstraint(
+					constraint.name,
+					constraint.columns as never[],
 				);
 			}
 			statements.push(create);

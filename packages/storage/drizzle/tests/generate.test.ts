@@ -139,6 +139,28 @@ describe("the emitted code names REAL drizzle-orm helpers", () => {
 		}
 	});
 
+	it("emits a table-level composite unique as one constraint", () => {
+		const code = generateDrizzleSchema({
+			schema: {
+				pii_mapping: {
+					uniques: [["scope", "placeholder"]],
+					fields: {
+						id: { type: "string", required: true, primaryKey: true },
+						scope: { type: "string", required: true },
+						placeholder: { type: "string", required: true },
+					},
+				},
+			},
+			provider: "pg",
+		});
+		expect(code).toContain(
+			'unique("pii_mapping_scope_placeholder_uq").on(t.scope, t.placeholder)',
+		);
+		// The composite form is imported; the columns are NOT each marked .unique().
+		expect(code).toContain("unique");
+		expect(code).not.toContain('scope: text("scope").notNull().unique()');
+	});
+
 	it("refuses a provider it has no column map for, rather than emitting a wrong one", () => {
 		expect(() =>
 			generateDrizzleSchema({ schema: SCHEMA, provider: "mysql" }),

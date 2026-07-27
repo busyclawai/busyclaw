@@ -9,6 +9,7 @@ import {
 	field,
 	type JsonObject,
 	piiMappingSchema,
+	uniqueConstraints,
 } from "../src/index";
 
 /** Guard-narrowed error summary — the test fails loud when validation unexpectedly passed. */
@@ -267,5 +268,55 @@ describe("field docs — description/doc ride every derived schema", () => {
 			JSON.stringify(bare.storage),
 		);
 		expect(documented.storage).toEqual(bare.storage);
+	});
+});
+
+describe("entity() — table-level composite uniques", () => {
+	const fields = {
+		placeholder: field.string({ required: true }),
+		scope: field.string({ required: true }),
+		scopeId: field.string({ required: true }),
+		original: field.string({ required: true }),
+	} as const;
+
+	it("carries `uniques` through to the storage declaration", () => {
+		const declared = entity("pii_mapping", fields, {
+			uniques: [["scope", "scopeId", "placeholder"]],
+		});
+		expect(declared.storage.pii_mapping?.uniques).toEqual([
+			["scope", "scopeId", "placeholder"],
+		]);
+	});
+
+	it("omits the key entirely when a table declares none", () => {
+		// The option is additive: the 38 existing call sites pass nothing and must be unchanged.
+		const declared = entity("pii_mapping", fields);
+		expect(declared.storage.pii_mapping).not.toHaveProperty("uniques");
+	});
+
+	it("resolves a constraint to physical columns and a derived name", () => {
+		const declared = entity(
+			"pii_mapping",
+			{
+				...fields,
+				scopeId: field.string({ required: true, fieldName: "scope_id" }),
+			} as const,
+			{ uniques: [["scope", "scopeId"]] },
+		);
+
+		expect(
+			uniqueConstraints("pii_mapping", declared.storage.pii_mapping as never),
+		).toEqual([
+			{ name: "pii_mapping_scope_scope_id_uq", columns: ["scope", "scope_id"] },
+		]);
+	});
+
+	it("throws when a constraint names a field the table does not have", () => {
+		const declared = entity("pii_mapping", fields, {
+			uniques: [["scope", "nope"] as never],
+		});
+		expect(() =>
+			uniqueConstraints("pii_mapping", declared.storage.pii_mapping as never),
+		).toThrow(/names "nope", which is not a field/);
 	});
 });

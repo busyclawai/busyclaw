@@ -153,6 +153,8 @@ export type FieldAttribute = {
 	 * this flag (SQL forbids it, and the emitter refuses it rather than emitting invalid DDL).
 	 */
 	primaryKey?: boolean;
+	/** This column alone is unique. For a constraint over SEVERAL columns see {@link TableSchema.uniques}
+	 *  — composition is a property of the table, not something a column flag can carry. */
 	unique?: boolean;
 	index?: boolean;
 	references?: { model: string; field: string };
@@ -170,10 +172,70 @@ export type FieldAttribute = {
 export type TableSchema = {
 	modelName?: string;
 	fields: Record<string, FieldAttribute>;
+	/**
+	 * Composite unique constraints, each a list of FIELD KEYS in constraint order.
+	 *
+	 * Declared on the table because that is what they belong to. A column flag cannot express one
+	 * without lying about scope — and `unique: true` already means "this column alone", which every
+	 * existing declaration depends on, so overloading it would silently merge unrelated constraints.
+	 * Drizzle draws the same line: single-column uniqueness rides the column, composites sit beside
+	 * the table.
+	 *
+	 * ```ts
+	 * entity("invite", inviteFields, { uniques: [["orgId", "email"]] })
+	 * ```
+	 *
+	 * Pick the columns that identify the THING, not the ones that identify the row. A constraint over
+	 * columns already covered by the primary key restates it and enforces nothing new — and if the
+	 * race you are closing is two writers minting a row for the same underlying value, the generated
+	 * ids differ by construction, so a constraint naming them can never see the collision. The
+	 * value's own identity is what has to be in the tuple.
+	 *
+	 * MIGRATION metadata, like {@link FieldAttribute.primaryKey}: the database enforces it, adapters
+	 * do not. Nothing here turns a violation into a typed conflict — each driver still spells that
+	 * error its own way (Postgres 23505, SQLite SQLITE_CONSTRAINT_UNIQUE, Prisma P2002, Drizzle
+	 * passing the driver's through). Declaring the constraint is the easy half.
+	 */
+	uniques?: readonly (readonly string[])[];
 };
 
 /** A plugin declares the tables it needs: `{ audit: { fields: { … } } } satisfies SchemaDeclaration`. */
 export type SchemaDeclaration = Record<string, TableSchema>;
+
+/** One composite unique constraint, resolved to physical column names and a stable name. */
+export type UniqueConstraint = { name: string; columns: string[] };
+
+/**
+ * A table's composite unique constraints, resolved for an emitter: field keys mapped through
+ * `fieldName`, plus a derived constraint name. Single-column `unique: true` is NOT here — that one
+ * is a per-column concern each emitter handles inline.
+ *
+ * Shared for the same reason {@link tableOrder} is: three emitters must agree on which columns form
+ * which constraint, and deriving it separately is how they stop agreeing. A field key that does not
+ * exist throws — a constraint over a column that was renamed or removed is a schema bug, and it
+ * would otherwise surface as DDL the database rejects.
+ */
+export function uniqueConstraints(
+	model: string,
+	table: TableSchema,
+): UniqueConstraint[] {
+	const physical = table.modelName ?? model;
+	return (table.uniques ?? []).map((keys) => {
+		if (keys.length === 0) {
+			throw new Error(`${model}: a unique constraint names no columns`);
+		}
+		const columns = keys.map((key) => {
+			const field = table.fields[key];
+			if (field === undefined) {
+				throw new Error(
+					`${model}: unique constraint names "${key}", which is not a field on this table`,
+				);
+			}
+			return field.fieldName ?? key;
+		});
+		return { name: `${physical}_${columns.join("_")}_uq`, columns };
+	});
+}
 
 /**
  * Tables ordered so a referenced table always precedes the table referencing it.
