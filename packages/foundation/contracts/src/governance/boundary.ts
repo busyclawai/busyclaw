@@ -99,14 +99,40 @@ export const gateDecision = type({ decision: "'permit'" })
 	});
 export type GateDecision = typeof gateDecision.infer;
 
+/**
+ * ONE gate's demand for human sign-off — which gate, and why.
+ *
+ * A call can attract several at once, and that is the ordinary case rather than an exotic one: the
+ * policy engine's confirmation probe and a tool's own `govern({ gate })` are both before-gates, so any
+ * governed write with its own confirmation in an autonomous run produces two. The pipeline used to
+ * return on the FIRST objection, so a human was shown one demand, approved it, and the resume walked
+ * into the next one with nowhere to put it.
+ *
+ * `(gateId, reasonCode)` is also the identity a resume matches on: an approval answers the demands it
+ * was shown, and a demand that appears later is a new question, not a satisfied one.
+ */
+export const gateDemand = type({
+	gateId: "string",
+	reason: "string",
+	"reasonCode?": "string",
+});
+export type GateDemand = typeof gateDemand.infer;
+
 /** The outcome of handling one tool call — the SDK/wire contract. `reason` is always present on the
- * way out; `reasonCode` is the stable machine-readable key (when the deciding gate supplied one). */
+ * way out; `reasonCode` is the stable machine-readable key (when the deciding gate supplied one).
+ *
+ * `demands` carries EVERY gate that wanted approval, in gate order. On a `needs-approval` it is what
+ * the human is asked to grant — all of it, at once, because approving one demand without being told a
+ * second exists is a worse decision. On a `denied` it is what the call would ALSO have needed had it
+ * not been denied outright: an operator learns everything that was wrong in one pass instead of
+ * peeling gates off one at a time. `gateId`/`reason` on a denial stay the DENYING gate's. */
 export const handleResult = type({ status: "'ok'", output: "unknown" })
 	.or({
 		status: "'denied'",
 		gateId: "string",
 		reason: "string",
 		"reasonCode?": "string",
+		demands: gateDemand.array(),
 		"annotations?": policyAnnotations,
 		"modelAnnotations?": policyAnnotations,
 	})
@@ -115,6 +141,7 @@ export const handleResult = type({ status: "'ok'", output: "unknown" })
 		gateId: "string",
 		reason: "string",
 		"reasonCode?": "string",
+		demands: gateDemand.array(),
 		"annotations?": policyAnnotations,
 		"modelAnnotations?": policyAnnotations,
 	});

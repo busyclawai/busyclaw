@@ -114,6 +114,8 @@ describe("busyclaw governance — the model boundary (handleModelCall)", () => {
 
 		expect(result).toEqual({
 			status: "denied",
+			// A refusal with nothing else outstanding — an empty list, not an absent field.
+			demands: [],
 			gateId: "model-block",
 			reason: "model denied",
 		});
@@ -145,6 +147,8 @@ describe("busyclaw governance — the model boundary (handleModelCall)", () => {
 
 		expect(result).toEqual({
 			status: "denied",
+			// A refusal with nothing else outstanding — an empty list, not an absent field.
+			demands: [],
 			gateId: "model-allowlist",
 			reason: "model not allowed",
 		});

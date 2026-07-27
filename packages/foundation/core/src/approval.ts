@@ -31,6 +31,8 @@ export function approvalGate(
 			if (call.boundary !== "tool") return;
 			await store.create({
 				gateId: outcome.gateId,
+				// The whole question, not just the gate that happened to be listed first.
+				demands: outcome.demands,
 				toolName: call.toolCall.name,
 				args: call.toolCall.args,
 				reasonCode: outcome.reasonCode,
