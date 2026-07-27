@@ -1260,4 +1260,75 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 		expect(result).not.toHaveProperty("annotations");
 		expect(JSON.stringify(result)).not.toContain("betterauth:team_eng");
 	});
+
+	// A registered source can be re-registered while an approval sits pending. The ADDRESS survives
+	// what it points at, so a resume would dispatch onto whatever the name means now — a different
+	// path, schema or governance from the one the human read and agreed to.
+	describe("an approved tool that changed underneath the approval", () => {
+		const parkAndGrant = async (version: () => string) => {
+			let toolRuns = 0;
+			const db = memoryAdapter();
+			const runtime = createRuntime({
+				model: scriptedModel({ prompt: "" }),
+				database: db,
+				redactor: createStoredRedactor({
+					detector: emailDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+				// Per-run resolution is what a data-backed tool set really is — resolved fresh on every
+				// run, including the resume, which is exactly how the drift gets in.
+				resolveTools: () => ({
+					send_email: {
+						...govern(
+							tool({
+								description: "Send an email.",
+								inputSchema: jsonSchema<{ to: string }>({
+									type: "object",
+									properties: { to: { type: "string" } },
+									required: ["to"],
+								}),
+								execute: async () => {
+									toolRuns++;
+									return { sent: true };
+								},
+							}),
+							{ gate: () => ({ decision: "needs-approval" }) },
+						),
+						contentVersion: version(),
+					},
+				}),
+			});
+			const waiting = await runtime.generate(
+				"email alice@personal.com the offer",
+			);
+			if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+				throw new Error("expected runtime to wait for approval");
+			}
+			const approvalId = waiting.approvalIds[0];
+			await runtime.approvals?.grant(approvalId, userPrincipal("alice"));
+			return { runtime, approvalId, runs: () => toolRuns };
+		};
+
+		it("refuses the resume and does not run the tool", async () => {
+			let version = "v1";
+			const { runtime, approvalId, runs } = await parkAndGrant(() => version);
+			// The spec is re-registered between the ask and the answer.
+			version = "v2";
+			await expect(runtime.continueRun(approvalId)).rejects.toThrow(
+				/changed since it was approved/,
+			);
+			expect(runs()).toBe(0);
+			// Not consumed by the refusal — the approval is still there to be re-decided, and the lease
+			// was never taken, so nothing has to lapse before someone can act on it.
+			expect((await runtime.approvals?.get(approvalId))?.status).toBe(
+				"approved",
+			);
+		});
+
+		it("resumes normally when the tool is unchanged", async () => {
+			const { runtime, approvalId, runs } = await parkAndGrant(() => "v1");
+			expect((await runtime.continueRun(approvalId))?.status).toBe("completed");
+			expect(runs()).toBe(1);
+		});
+	});
 });

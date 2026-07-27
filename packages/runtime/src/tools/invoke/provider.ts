@@ -162,6 +162,9 @@ export function createRegisteredToolProvider(
 			const description = row.description;
 			// Keyed by the row's dotted address — the canonical PATH, the id the model is built from.
 			tools[row.address] = {
+				// What this descriptor was built from — the approval binding reads it, so a spec
+				// re-registered under a pending approval is caught rather than silently resumed onto.
+				contentVersion: row.contentVersion,
 				...(typeof description === "string" && description !== ""
 					? { description }
 					: {}),
