@@ -711,9 +711,9 @@ export function governApi(input: {
 			return fn(domainInput, {
 				caller: caller ?? {},
 				principal,
-				check: async (level, target) =>
+				check: async (level, target, asMethod) =>
 					enforce({
-						method,
+						method: asMethod ?? method,
 						level,
 						principal,
 						resource: await loadResource(target),
