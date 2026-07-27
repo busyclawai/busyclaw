@@ -10,6 +10,13 @@
 //
 // The `auth` param is typed structurally (just `api.hasPermission`), so a real auth WITH the
 // organization plugin satisfies it, an auth WITHOUT it fails to compile, and a test stub needs no DB.
+//
+// H-13. Which is why better-auth is a PEER here and not a dependency: nothing in this package
+// imports it, and pinning a version it never loads only forced a second copy into every consumer's
+// tree — one that shipped at 1.6.19, inside the range GHSA-qq9h-g4jm-xgf3 covers, whether or not the
+// host used better-auth at all. As a peer, the host's own install is the one that answers, and the
+// `>=1.6.22` range says which installs this plugin is willing to be used with. Optional, because a
+// deployment governing tools some other way should not have to install it to satisfy a resolver.
 
 import { createPolicyPlugin, type PolicyPlugin } from "@busyclaw/authz";
 import type {
