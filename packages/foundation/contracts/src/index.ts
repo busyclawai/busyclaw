@@ -10,6 +10,7 @@ export {
 	conflictError,
 	EuroclawError,
 	errorMessage,
+	isConflict,
 	stateError,
 	unsupportedOperationError,
 	validationError,
