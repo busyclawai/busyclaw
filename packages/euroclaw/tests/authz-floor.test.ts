@@ -498,3 +498,51 @@ forbid(principal, action == Action::"read_salary", resource);`,
 		).toThrow(/@guidance/);
 	});
 });
+
+// H-04's acceptance criterion, stated as three calls a zero-config claw must refuse to just run.
+//
+// The finding was that the floor's action inventory had holes, and a hole read as permission: an
+// action the model did not contain was one the gate never matched, so the call proceeded ungoverned.
+// Each case below is one of the ways an action used to fall out of that inventory.
+describe("the floor's action inventory has no holes (H-04)", () => {
+	it("an UNSTAMPED tool is a write, not an omission", async () => {
+		let ran = false;
+		const { db, redactor } = durableRedactor();
+		// No `access` — the cheapest mistake available, and previously the one that produced an
+		// ungoverned tool: no access class meant no modeled action meant the gate skipped the call.
+		const unstamped = govern(
+			tool({
+				description: "do a thing",
+				inputSchema: jsonSchema<Record<string, never>>({
+					type: "object",
+					properties: {},
+				}),
+				execute: async () => {
+					ran = true;
+					return { ok: true };
+				},
+			}),
+			{},
+		);
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: toolCallModel("doThing"),
+			tools: { doThing: unstamped },
+		});
+
+		const result = await claw.api.generate({ prompt: "go", ctx: runCtx });
+		expect(result.status).toBe("waiting_approval");
+		expect(ran).toBe(false);
+	});
+
+	// The other two cases in H-04's acceptance list are covered where the machinery actually lives:
+	//
+	//   - a DYNAMICALLY REGISTERED operation — tests/secrets-wiring.test.ts. `resolveTools` is
+	//     assembly-owned (derived from the registry stores), not a createClaw option, so the honest
+	//     test is the real path: register an OpenAPI spec, run, and watch the invoker reach the wire.
+	//     Those two cases pass ONLY because the run's registered actions now reach the floor — before
+	//     that they were denied as unmodeled, and the outbound call never happened.
+	//
+	//   - `run_code` — packages/plugins/sandboxes. Its stamp is asserted beside the tool it belongs to.
+});
