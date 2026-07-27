@@ -37,6 +37,28 @@ export const approvalFields = {
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
 	reasonCode: field.string({ index: true, immutable: true }),
 	principal: field.principal({ index: true, immutable: true }),
+	/** The claw whose run parked this — the approval's ACCESS ANCHOR, and the reason an autonomous
+	 *  run's approval is reviewable at all. Whoever may manage the claw may review what it parked, so
+	 *  the decision reuses the same owner ∪ scope ∪ grant rule every other resource gets rather than
+	 *  inventing an approval-shaped one.
+	 *
+	 *  IMMUTABLE, and absent only for an ad-hoc `generate` that belongs to no claw — those fall back to
+	 *  the boundary below. Stamped by the approval gate from the runtime's recording context, never
+	 *  from anything a model or a request body reaches. */
+	clawId: field.string({ index: true, immutable: true }),
+	/** The TENANT the parked run was executing in — the second anchor, and the one that answers "who
+	 *  may approve this?" when there is no claw.
+	 *
+	 *  A cron-triggered one-off has no claw and a `system:` requester, so neither owns it. It is still
+	 *  a tenant's work, and members of that tenant are exactly the humans entitled to decide it —
+	 *  which is also why "any authenticated human" is not an option: in a multi-tenant deployment that
+	 *  is every OTHER tenant's humans too.
+	 *
+	 *  Immutable, and stamped from the host's configScope resolver via the turn context. Absent only
+	 *  where a deployment resolves no tenant at all, and then the approval has no parent and is denied
+	 *  — fail-closed, not "everyone". */
+	scope: field.string({ index: true, immutable: true }),
+	scopeId: field.string({ index: true, immutable: true }),
 	reason: field.string(),
 	metadata: field.jsonObject(),
 	decidedBy: field.principal(),

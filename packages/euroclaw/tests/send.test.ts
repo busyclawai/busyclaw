@@ -226,6 +226,13 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
+		// Alice is an ASSIGNED approver — deciding is a permission now, held on the approval itself.
+		await api.shareResource({
+			resourceKind: "approval",
+			resourceId: approvalId,
+			principalRef: "user:alice",
+			permission: "use",
+		});
 		// `decidedBy` is stamped from the caller (arg 2), never a body `by` — alice denies here, so the
 		// denial records decidedBy = user:alice (docs/plans/stamped-fields.md, #6).
 		await api.denyApproval(

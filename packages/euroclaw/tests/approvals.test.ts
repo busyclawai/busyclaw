@@ -5,6 +5,7 @@ import {
 	type EuroclawPlugin,
 	PRINCIPAL_CONTEXT_KEY,
 } from "@euroclaw/contracts";
+import { SYSTEM_ANONYMOUS } from "@euroclaw/contracts";
 import { createMemoryAudit } from "@euroclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
@@ -113,31 +114,49 @@ describe("createClaw approvals", () => {
 
 	it("only a human may decide an approval — the user-principal floor (seam 3)", async () => {
 		const { db, redactor } = durableRedactor();
-		const claw = createClaw({
+		const claw = owned({
 			database: db,
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: emailNeedsApproval(),
 		});
-		// An autonomous, system-initiated run parks for approval — the case approvals EXIST for (no human
-		// present). There is no user-owner to anchor on, so anchoring would make it unapprovable.
-		const waiting = await claw.api.generate(
-			{ prompt: "email alice@personal.com" },
-			{ principal: "system:cron" },
-		);
-		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+		// An unattended run parks for approval — the case approvals EXIST for, no human present at the
+		// moment of the call. It still belongs to a CLAW: unattended work in euroclaw is a claw's work
+		// (a cron tick processes due claws), so the claw is the human-owned thing behind it and its
+		// access rules are what say who may decide. `owned()` binds user:actor-1 as that human.
+		const agent = await claw.api.createClaw({ name: "nightly" });
+		const thread = await claw.api.createThread({ clawId: agent.id });
+		const sent = await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "email alice@personal.com",
+		});
+		if (
+			sent.result.status !== "waiting_approval" ||
+			!sent.result.approvalIds?.[0]
+		) {
 			throw new Error("expected approval wait");
 		}
-		const approvalId = waiting.approvalIds[0];
+		const approvalId = sent.result.approvalIds[0];
 
-		// A machine may not decide — approval exists to put a HUMAN in front of an autonomous action.
+		// A machine may not decide — approval exists to put a HUMAN in front of an unattended action.
+		// This floor is an ACTOR check and runs on top of the ownership one, never instead of it.
+		// `system:anonymous` is the real machine identity here: euroclaw has no scheduler principal,
+		// because a scheduled run belongs to a claw and carries whoever delegated it.
+		// Refused. WHICH layer refuses it changed: the ownership gate now runs before the handler, so a
+		// machine that owns nothing is stopped there rather than by the actor floor. Both are correct
+		// and the floor still backs it up for a machine that somehow does own the claw — so this
+		// asserts the outcome, and the floor's own message is asserted where it can still be reached.
 		await expect(
-			claw.api.grantApproval({ approvalId }, { principal: "system:cron" }),
-		).rejects.toThrow(/only a user principal may decide/);
-		// Any authenticated human may — WHICH human (owner-only / manager / SoD) is opt-in policy, deferred.
+			claw.api.grantApproval({ approvalId }, { principal: SYSTEM_ANONYMOUS }),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED|only a user principal/);
+		// An unrelated human may NOT. This is H-02: being logged in used to be the whole check, which in
+		// a multi-tenant deployment means every other tenant's people could decide your approvals.
 		await expect(
-			claw.api.grantApproval({ approvalId }, { principal: "user:reviewer" }),
-		).resolves.not.toBeNull();
+			claw.api.grantApproval({ approvalId }, { principal: "user:unrelated" }),
+		).rejects.toThrow(/EUROCLAW_AUTHORIZATION_DENIED/);
+		// The claw's owner may — the approval resolves through the claw that parked it.
+		await expect(claw.api.grantApproval({ approvalId })).resolves.not.toBeNull();
 	});
 
 	it("the resume caller cannot choose the executing identity — the record fixes it (attest)", async () => {
@@ -157,6 +176,22 @@ describe("createClaw approvals", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
+
+		// ASSIGN the reviewers. An approval is anchored now, so deciding and resuming it are permissions
+		// somebody holds — the owner grants them, exactly as they would share any other resource. This
+		// is the "assigned approvers" half of the design: an unrelated human is refused, an assigned one
+		// is not, and which is which is data the owner wrote rather than a property of being logged in.
+		for (const [principalRef, permission] of [
+			["user:approver-9", "use"],
+			["user:random-8", "manage"],
+		] as const) {
+			await claw.api.shareResource({
+				resourceKind: "approval",
+				resourceId: approvalId,
+				principalRef,
+				permission,
+			});
+		}
 
 		await claw.api.grantApproval(
 			{ approvalId },
@@ -215,6 +250,19 @@ describe("createClaw approvals", () => {
 				throw new Error("expected approval wait");
 			}
 			const approvalId = waiting.approvalIds[0];
+			// Bob is an ASSIGNED approver: manage, because he both decides and resumes. Note what this
+			// does NOT give him — the entitlement gate below still asks whether the executing identity
+			// may send, and being allowed to approve says nothing about that.
+			// Assigned by ALICE — the requester, who owns the approval her run parked.
+			await claw.api.shareResource(
+				{
+					resourceKind: "approval",
+					resourceId: approvalId,
+					principalRef: BOB,
+					permission: "manage",
+				},
+				{ principal: ALICE },
+			);
 			await claw.api.grantApproval({ approvalId }, { principal: BOB });
 			await claw.api.continueRun({ approvalId }, { principal: BOB });
 			return audit

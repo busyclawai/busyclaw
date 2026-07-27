@@ -190,6 +190,15 @@ describe("createClaw engine", () => {
 		// somebody — and the run row for THIS task is stamped from whoever called continueEngineRun. If
 		// that seed reached the replay, the approved action would execute as the resumer, which is the
 		// escalation the approval record exists to prevent.
+		// The stranger is ASSIGNED the resume permission — so the call is allowed, and the question
+		// this test asks is sharpened rather than dodged: being permitted to resume is not the same as
+		// getting to choose the identity the approved action executes as.
+		await claw.api.shareResource({
+			resourceKind: "approval",
+			resourceId: parked.approvalIds[0],
+			principalRef: "user:stranger",
+			permission: "manage",
+		});
 		const resume = await claw.api.continueEngineRun(
 			{ approvalId: parked.approvalIds[0] },
 			{ principal: "user:stranger" },

@@ -248,6 +248,48 @@ export function buildResourceRegistry(input: {
 					grantParents: [{ kind: "claw", id: row.clawId }],
 				};
 			};
+		// approval — the resource H-02 is about. Two anchors, in order, because an approval has two
+		// quite different lives:
+		//
+		//   1. It belongs to a CLAW. Whoever may manage the claw may review what that claw parked. This
+		//      is the case that matters: needs-approval exists FOR autonomous runs, whose requester is a
+		//      `system:` principal, and an earlier attempt to anchor on the requester alone made exactly
+		//      those approvals unapprovable by any human. The claw is the human-owned thing behind them.
+		//   2. Failing that (an ad-hoc `generate` belonging to no claw), the REQUESTER owns it — and an
+		//      ad-hoc call has an authenticated caller or it does not run, so that owner is a real user.
+		//
+		// Absent or unresolvable ⇒ null ⇒ DENY, like every other loader. Deciding an approval is not a
+		// question you get to answer by asking about a row nobody can find.
+		if (approvals !== undefined) {
+			registry.set("approval", async (id) => {
+				const record = await approvals.get(id);
+				if (!record) return null;
+				if (record.clawId !== undefined) {
+					const claw = await clawsStore.claws.get(record.clawId);
+					if (!claw) return null;
+					return {
+						createdBy: claw.createdBy,
+						scope: claw.scope,
+						scopeId: claw.scopeId,
+						grantParents: [{ kind: "claw", id: record.clawId }],
+					};
+				}
+				// No claw. The run still belonged to a TENANT, and its members are the humans entitled
+				// to decide its work — this is what a cron-triggered one-off has instead of an owner.
+				// Deliberately NOT "any authenticated human": in a multi-tenant deployment that is
+				// every other tenant's humans too, which is a tenancy breach wearing a convenience.
+				if (record.scope !== undefined && record.scopeId !== undefined) {
+					return { scope: record.scope, scopeId: record.scopeId };
+				}
+				// An ad-hoc call by a real person, in a deployment that resolves no tenant: they own it.
+				// A `system:` requester here has no parent at all and is DENIED — the correct answer for
+				// work that belongs to nobody, and a deployment that wants it decidable resolves a
+				// tenant.
+				return record.principal !== undefined
+					? { createdBy: record.principal }
+					: null;
+			});
+		}
 		registry.set(
 			"message",
 			ownedByClaw((id) => clawsStore.messages.get(id)),

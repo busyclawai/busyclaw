@@ -50,6 +50,7 @@ import {
 	clawCronHandlerUnsafeConfig,
 	createClawApi,
 } from "./api";
+import type { PrincipalScope } from "@euroclaw/authz";
 import { buildFloorPolicyPlugin } from "./authz-floor";
 import {
 	type AppAuthzConfig,
@@ -127,6 +128,23 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	/** App-authz PEP posture (docs/plans/app-authz.md). Default: enforce. `unsafeOpen` restores the
 	 *  pre-PEP host-authorizes world; `posture: "shadow"` logs would-be denials without blocking. */
 	appAuthz?: AppAuthzConfig;
+	/**
+	 * Which boundaries a principal BELONGS TO — the host's membership answer, and the only way the
+	 * scope branch of a decision ever fires. Absent ⇒ `[]`, so scope-anchored resources are decided by
+	 * owner and grants alone.
+	 *
+	 * A RESOLVER, never a field on the caller: memberships arriving in the request would be
+	 * caller-supplied and therefore forgeable. Core stays boundary-blind — it compares opaque
+	 * `(scope, scopeId)` pairs and never learns what an organization is; a plugin that does supplies
+	 * this. Reserved `euroclaw:` scopes are dropped from whatever it returns.
+	 *
+	 * Pairs with `configScope`: that one says which boundary a RUN is acting in, this one says which
+	 * boundaries a PERSON is in. An approval parked by a tenant's cron job is decidable exactly when
+	 * both are answered.
+	 */
+	resolvePrincipalScopes?: (
+		principal: string,
+	) => readonly PrincipalScope[] | Promise<readonly PrincipalScope[]>;
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
 	engine?: ClawEngineFactory<
@@ -881,6 +899,9 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		adapter: pluginAdapter,
 		plugins,
 		appAuthz: config.appAuthz,
+		...(config.resolvePrincipalScopes
+			? { resolvePrincipalScopes: config.resolvePrincipalScopes }
+			: {}),
 		warn,
 	}) as Claw<ResolvedConfig<Config>>["api"];
 

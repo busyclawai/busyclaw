@@ -4,7 +4,6 @@ import {
 	type Principal,
 	parsePrincipal,
 	SYSTEM_ANONYMOUS,
-	SYSTEM_CRON,
 	systemPrincipal,
 	userPrincipal,
 } from "../src/index";
@@ -75,8 +74,21 @@ describe("Principal — the tagged authorizable identity", () => {
 		expectValidationError(() => systemPrincipal("\t "));
 	});
 
-	it("exposes the well-known system principals as their canonical tags", () => {
-		expect(SYSTEM_CRON).toBe("system:cron");
+	it("exposes the well-known system principal as its canonical tag", () => {
 		expect(SYSTEM_ANONYMOUS).toBe("system:anonymous");
+	});
+
+	it("has no scheduler principal — a scheduled run belongs to a claw and a delegator", async () => {
+		// `SYSTEM_CRON` used to sit beside SYSTEM_ANONYMOUS as a well-known tag. It was never used by
+		// any product code, and it modelled something false: a cron tick processes DUE CLAWS, so a
+		// scheduled run carries the claw it belongs to and the principal of whoever delegated it.
+		//
+		// An anonymous scheduler identity erased both. The approval such a run parks would have no
+		// owner to authorize against — which is exactly how "any authenticated human may decide" got
+		// justified — and the audit would record a machine asking for work a person had asked for.
+		// A host that really wants one can still build it; euroclaw no longer suggests it.
+		expect(Object.keys(await import("../src/index"))).not.toContain(
+			"SYSTEM_CRON",
+		);
 	});
 });
