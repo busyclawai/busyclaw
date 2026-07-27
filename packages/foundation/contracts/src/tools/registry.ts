@@ -111,6 +111,27 @@ export const registeredToolFields = {
 	governance: field.json(toolGovernance, { required: true }),
 	// Format-opaque invocation metadata (the OpenApiBinding today).
 	binding: field.jsonObject({ required: true }),
+	// WHERE this row's credential may be sent, and HOW it is placed. Not derived at use time from the
+	// binding — that is the thing an attacker edits. Recorded when the source is first registered and
+	// compared on every re-registration and every invocation.
+	//
+	// Credential resolution keys on the SOURCE name, while the destination came from the uploaded spec,
+	// so the two were never tied together: replacing a spec under an existing source kept the name,
+	// changed `servers:`, and the next call resolved the established credential and sent it to the new
+	// host. `credentialOrigin` is the tie.
+	credentialOrigin: field.string({
+		required: true,
+		index: true,
+		doc: "Canonical origin (scheme://host, default ports dropped) this row's credential may be sent to — recorded at first registration and re-asserted before every credential placement.",
+	}),
+	// The placement half of the same binding: a digest over each security scheme's (name, type, in,
+	// header/param name, http scheme). The destination is unchanged when only this moves, so it is the
+	// milder half — but a spec edit that turns `apiKey in query` into a bearer header still relocates a
+	// live credential, and the caller who approved the first placement never saw the second.
+	credentialPlacement: field.string({
+		required: true,
+		doc: "Digest of how credentials are placed (scheme type/in/name), pinned alongside the origin; a change fails re-registration for the same reason an origin change does.",
+	}),
 	// Hash of this row's content (schema/governance/binding/description).
 	contentVersion: field.string({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),

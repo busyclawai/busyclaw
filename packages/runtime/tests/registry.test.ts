@@ -169,6 +169,10 @@ const petstore = (
 	return {
 		openapi: "3.1.0",
 		info: { title: "petstore", version: "1.0.0" },
+		// A `servers:` entry is now REQUIRED to register: it is the origin each row's credential is
+		// pinned to, and a spec with no destination has nothing to approve. Previously a serverless spec
+		// registered fine and failed at the first tool call instead.
+		servers: [{ url: "https://api.petstore.example/v1" }],
 		paths,
 	} satisfies JsonObject;
 };
@@ -346,6 +350,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		const document = {
 			openapi: "3.1.0",
 			info: { title: "dup", version: "1.0.0" },
+			servers: [{ url: "https://api.dup.example" }],
 			paths: {
 				"/a": { get: { operationId: "dup" } },
 				"/b": { get: { operationId: "dup" } },
@@ -393,5 +398,94 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		} finally {
 			extractor.override = undefined;
 		}
+	});
+
+	// H-05, at the door the attack actually walks through. `register` is idempotent on the source name
+	// and rotates every row in place, so replacing the document under an existing source was a full
+	// redirect of that source's established credential — same name, same tool addresses, new host.
+	it("refuses a re-registration that moves the source's origin", async () => {
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		const input = {
+			scope: "organization",
+			scopeId: "org-a",
+			source: "petstore",
+			registeredBy: "user:alice",
+		};
+		await registry.registerOpenApiSpec({ ...input, document: petstore() });
+		const before = [...stores.tools.values()].map((row) => ({
+			address: row.address,
+			credentialOrigin: row.credentialOrigin,
+		}));
+
+		const moved = petstore();
+		moved.servers = [{ url: "https://attacker.example/v1" }];
+		await expect(
+			registry.registerOpenApiSpec({ ...input, document: moved }),
+		).rejects.toThrow(/different origin/);
+
+		// Refused BEFORE the first write — the registration is a diff that deletes and rotates rows, so
+		// a half-applied one is worse than a rejected one.
+		expect(
+			[...stores.tools.values()].map((row) => ({
+				address: row.address,
+				credentialOrigin: row.credentialOrigin,
+			})),
+		).toEqual(before);
+	});
+
+	it("refuses a re-registration that relocates where the credential is placed", async () => {
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		const input = {
+			scope: "organization",
+			scopeId: "org-a",
+			source: "petstore",
+			registeredBy: "user:alice",
+		};
+		const withScheme = (scheme: JsonObject) => {
+			const document = petstore() as JsonObject & {
+				components?: JsonObject;
+				security?: unknown;
+			};
+			document.components = { securitySchemes: { main: scheme } };
+			document.security = [{ main: [] }];
+			return document;
+		};
+		await registry.registerOpenApiSpec({
+			...input,
+			document: withScheme({ type: "apiKey", in: "header", name: "X-Api-Key" }),
+		});
+		// Same host, same credential — but now it rides in the query string, where it lands in the
+		// destination's access logs. The caller who approved the header placement never saw this one.
+		await expect(
+			registry.registerOpenApiSpec({
+				...input,
+				document: withScheme({ type: "apiKey", in: "query", name: "api_key" }),
+			}),
+		).rejects.toThrow(/place this source's credential differently/);
+	});
+
+	it("registers the same document twice without complaint", async () => {
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		const input = {
+			scope: "organization",
+			scopeId: "org-a",
+			source: "petstore",
+			registeredBy: "user:alice",
+		};
+		await registry.registerOpenApiSpec({ ...input, document: petstore() });
+		// The pin must not make ordinary re-registration (a rotate, a schema edit) fail — only a MOVE.
+		const second = await registry.registerOpenApiSpec({
+			...input,
+			document: petstore(),
+		});
+		expect(second.removed).toEqual([]);
+		expect(
+			[...stores.tools.values()].every(
+				(row) => row.credentialOrigin === "https://api.petstore.example",
+			),
+		).toBe(true);
 	});
 });

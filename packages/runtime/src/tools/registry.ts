@@ -26,6 +26,11 @@ import {
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
+import {
+	assertCredentialBindingUnchanged,
+	type CredentialBinding,
+	credentialBindingOf,
+} from "./credential-binding";
 import { toolsFromOpenApi } from "./sources/openapi";
 
 /** The slug is the address prefix; dots are reserved as the `<source>.<tool>` separator. */
@@ -189,6 +194,43 @@ export function createSpecRegistry(
 			);
 			const priorByAddress = new Map(existing.map((row) => [row.address, row]));
 
+			// WHERE each operation's credential may go — derived from the freshly extracted bindings and
+			// checked against what the source already had, ENTIRELY before the first write. A spec that
+			// moves one operation's origin must leave the whole registration untouched: half-applying it
+			// would delete rows and rotate others while the caller reads a thrown error.
+			const credentialBindings = new Map<string, CredentialBinding>();
+			for (const tool of extraction.tools) {
+				const address = `${input.source}.${tool.name}`;
+				// Throws when the spec names no server: an operation with no approvable destination must
+				// not become a row, because a row with no pinned origin is one whose credential could
+				// later be sent anywhere.
+				const next = credentialBindingOf(tool.binding, {
+					source: input.source,
+					address,
+				});
+				const prior = priorByAddress.get(address);
+				// A re-registration may rotate anything about an operation EXCEPT where its credential
+				// goes and how it is placed.
+				if (prior) {
+					assertCredentialBindingUnchanged(prior, next, {
+						source: input.source,
+						address,
+					});
+				}
+				credentialBindings.set(address, next);
+			}
+			/** Present for every extracted address — the pre-pass above filled the map. */
+			const requireCredentialBinding = (address: string): CredentialBinding => {
+				const binding = credentialBindings.get(address);
+				if (!binding) {
+					throw configurationError(
+						"registered tool has no credential binding",
+						{ address, source: input.source },
+					);
+				}
+				return binding;
+			};
+
 			const added: string[] = [];
 			const updated: string[] = [];
 			const perRowVersions: string[] = [];
@@ -208,6 +250,7 @@ export function createSpecRegistry(
 				// format-opaque binding still needs the explicit JSON-safety gate before storage.
 				const binding = asJsonObject(tool.binding, "registered tool binding");
 				const prior = priorByAddress.get(address);
+				const credentialBinding = requireCredentialBinding(address);
 				// Flat literals — the store's entity schemas drop undefined-valued keys, so an
 				// absent description stays absent without conditional spreads here.
 				if (!prior) {
@@ -221,6 +264,7 @@ export function createSpecRegistry(
 						inputSchema: tool.inputSchema,
 						governance: tool.governance,
 						binding,
+						...credentialBinding,
 						contentVersion: version,
 					});
 					added.push(address);
@@ -232,6 +276,7 @@ export function createSpecRegistry(
 						inputSchema: tool.inputSchema,
 						governance: tool.governance,
 						binding,
+						...credentialBinding,
 						contentVersion: version,
 					});
 					updated.push(address);
