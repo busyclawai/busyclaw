@@ -38,6 +38,8 @@ import { assembleOrgActions, registerOpenApiSpecTool } from "../src/index";
 
 const petstore = (withRemove = true): JsonObject => ({
 	openapi: "3.1.0",
+	// Required to register: the origin each row's credential is pinned to.
+	servers: [{ url: "https://api.example/v1" }],
 	info: { title: "petstore", version: "1.0.0" },
 	paths: {
 		"/pets": {

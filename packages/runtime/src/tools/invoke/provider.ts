@@ -36,6 +36,7 @@ import {
 } from "@busyclaw/contracts";
 import { jsonSchema } from "ai";
 import { type } from "arktype";
+import { assertApprovedOrigin } from "../credential-binding";
 import { openApiBinding } from "../sources/openapi";
 import { applyCredentials } from "./credentials";
 import {
@@ -119,6 +120,23 @@ export function createRegisteredToolProvider(
 				}
 
 				const plan = planHttpRequest(binding, validArgs);
+				// DESTINATION FIRST, then the credential. Both checks below used to run after the secret
+				// was already on the plan, which got the order exactly backwards: the thing being
+				// protected was resolved and placed before anything asked where it was going.
+				//
+				// The row's pinned origin is the approval; the plan's origin is what the stored binding
+				// says today. They agree unless the binding moved without going through registration —
+				// and the credential is the one thing that must not follow it there.
+				assertApprovedOrigin(plan.url, row, options.allowInsecure);
+				// The floor resolves + blocks + pins BEFORE the socket opens; a blocked target throws.
+				// Credential placement never changes the origin (an apiKey query param is appended to a
+				// URL already vetted here), so nothing downstream can move the destination.
+				const decision = await assertEgressAllowed(plan.url, {
+					...(options.allowInsecure !== undefined
+						? { allowInsecure: options.allowInsecure }
+						: {}),
+					...(options.lookup !== undefined ? { lookup: options.lookup } : {}),
+				});
 				const credentialed = await applyCredentials(
 					plan,
 					binding,
@@ -130,13 +148,6 @@ export function createRegisteredToolProvider(
 						principal: context.principal,
 					},
 				);
-				// The floor resolves + blocks + pins BEFORE the socket opens; a blocked target throws.
-				const decision = await assertEgressAllowed(credentialed.url, {
-					...(options.allowInsecure !== undefined
-						? { allowInsecure: options.allowInsecure }
-						: {}),
-					...(options.lookup !== undefined ? { lookup: options.lookup } : {}),
-				});
 				// CONSUME the decision: dial the vetted address, not the name again. A host that injects
 				// its own `fetch` owns this half of the floor — the dispatcher only reaches the built-in
 				// one — so the pin is passed and a custom impl is free to ignore it.

@@ -32,6 +32,10 @@ const toolInput = (scopeId: string, name = "addPet", source = "petstore") => ({
 	inputSchema: { type: "object", properties: { name: { type: "string" } } },
 	governance: { access: "write", groups: ["creates", "tag:pets"] },
 	binding: { method: "post", path: "/pets" },
+	// Where this row's credential may be sent, and how it is placed — pinned at registration, not
+	// re-derived from the binding at use time.
+	credentialOrigin: "https://api.petstore.example",
+	credentialPlacement: "placement-v1",
 	contentVersion: "tool-v1",
 });
 
@@ -279,6 +283,7 @@ describe("createRegistryStores over kysely (sqlite) — JSON columns round-trip"
 			`CREATE TABLE registered_tool (
 				id TEXT PRIMARY KEY, scope TEXT, scopeId TEXT, source TEXT, name TEXT, address TEXT,
 				description TEXT, inputSchema TEXT, governance TEXT, binding TEXT,
+				credentialOrigin TEXT, credentialPlacement TEXT,
 				contentVersion TEXT, createdAt TEXT, updatedAt TEXT
 			)`,
 		);
