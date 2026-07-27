@@ -89,6 +89,25 @@ function pullModel(count: number): { model: V2Model; pulls: () => number } {
 
 const DELTAS = 20_000;
 
+/** Let queued work run. Not a wall-clock wait — just yields, so a loaded machine only means more
+ *  of them are needed, never that the assertion becomes wrong. */
+async function settle(rounds = 50): Promise<void> {
+	for (let i = 0; i < rounds; i += 1) await new Promise(setImmediate);
+}
+
+/** Poll a condition across settles, so a busy machine costs patience rather than a false failure.
+ *  Returns whether it ever held — the assertion still belongs to the caller. */
+async function eventually(
+	holds: () => boolean,
+	attempts = 40,
+): Promise<boolean> {
+	for (let i = 0; i < attempts; i += 1) {
+		if (holds()) return true;
+		await settle(10);
+	}
+	return holds();
+}
+
 describe("runtime.stream — resource budget", () => {
 	it("stops producing when the reader stops reading (backpressure)", async () => {
 		const { model, pulls } = pullModel(DELTAS);
@@ -99,7 +118,7 @@ describe("runtime.stream — resource budget", () => {
 		// buffer drains the entire model stream into memory here; a bounded one stalls the producer.
 		const deltas = stream.textStream[Symbol.asyncIterator]();
 		await deltas.next();
-		for (let i = 0; i < 50; i += 1) await new Promise(setImmediate);
+		await settle();
 
 		// Measured: 530 with the bound (the channel's 512 plus the SDK pipeline's own small queues),
 		// 20002 without it — the entire generation resident in an array nobody was draining. The
@@ -107,11 +126,11 @@ describe("runtime.stream — resource budget", () => {
 		// are two orders of magnitude apart, so nothing subtle rides on where the line sits.
 		expect(pulls()).toBeLessThan(DELTAS / 4);
 
-		// And it is a stall, not a stop: reading again lets the producer go on.
+		// And it is a stall, not a stop: reading again lets the producer go on. Polled rather than
+		// settled-once, so a loaded machine costs patience instead of producing a false failure.
 		const before = pulls();
 		for (let i = 0; i < 600; i += 1) await deltas.next();
-		for (let i = 0; i < 50; i += 1) await new Promise(setImmediate);
-		expect(pulls()).toBeGreaterThan(before);
+		expect(await eventually(() => pulls() > before)).toBe(true);
 
 		await deltas.return?.();
 		await stream.result.catch(() => {});
@@ -133,9 +152,12 @@ describe("runtime.stream — resource budget", () => {
 
 		await expect(stream.result).rejects.toThrow(/abort/i);
 
-		const settled = pulls();
-		for (let i = 0; i < 50; i += 1) await new Promise(setImmediate);
-		expect(pulls()).toBe(settled);
+		// Quiesce FIRST, then take the reading, then confirm it stays put — otherwise a pull already
+		// in flight when the snapshot was taken reads as "kept producing".
+		await settle();
+		const stopped = pulls();
+		await settle();
+		expect(pulls()).toBe(stopped);
 	});
 
 	it("lets a RECORDED run finish when the reader walks away, so the answer is there later", async () => {

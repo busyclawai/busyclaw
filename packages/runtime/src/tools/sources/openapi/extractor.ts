@@ -290,7 +290,7 @@ function extractParameters(
 		out.push({
 			name: parsed.name,
 			required: isRequired,
-			schema: inlineRefs(document, schema, []),
+			schema: inlineRefs(document, schema, new Set()),
 			binding: {
 				name: parsed.name,
 				in: parsed.in,
@@ -343,7 +343,7 @@ function extractBody(
 	const media = asJsonObject(content[contentType]);
 	const schema =
 		media?.schema !== undefined
-			? inlineRefs(document, media.schema, [])
+			? inlineRefs(document, media.schema, new Set())
 			: undefined;
 	return { contentType, required: bodyRequired, schema };
 }
@@ -578,59 +578,86 @@ function resolveNode(document: JsonObject, node: JsonValue): JsonValue {
 // loudly — never a hang, never an uncontrolled throw.
 const MAX_INLINED_NODES = 10_000;
 const MAX_INLINE_DEPTH = 64;
+// M-14. A $ref chain (`A → B → C → …`) is not nesting — every link resolves to the SAME place in the
+// output — so following one used to leave `depth` untouched, deliberately. But each hop was a
+// recursive call, so the walk went as deep as the chain was long while the only cap watching was the
+// node budget. A 9,000-link acyclic chain therefore produced `RangeError: Maximum call stack size
+// exceeded`, escaping past the per-operation skip and killing the whole extraction — precisely the
+// uncontrolled throw the paragraph above promises not to produce. Chains are followed iteratively
+// now, and this bounds how long one may be. No real document chains aliases more than a few deep.
+const MAX_REF_HOPS = 64;
 
 /** Deep-copy a schema with every local $ref inlined; cycles/bombs skip the operation. */
 function inlineRefs(
 	document: JsonObject,
 	node: JsonValue,
-	stack: readonly string[],
+	// The refs currently being expanded ON THIS PATH — a Set, so the cycle check is O(1) instead of
+	// scanning a list that was also being COPIED at every hop (an N-link chain cost N² either way).
+	// Entries are added as a chain is followed and removed on the way out, because the same ref
+	// reached down two sibling branches is fan-out, not a cycle.
+	stack: Set<string>,
 	budget: { nodes: number } = { nodes: 0 },
 	depth = 0,
 ): JsonValue {
-	budget.nodes += 1;
-	if (budget.nodes > MAX_INLINED_NODES) {
-		throw new OperationSkip(
-			`schema expands past ${MAX_INLINED_NODES} nodes when $refs inline (possible $ref bomb)`,
-		);
-	}
+	const spend = (): void => {
+		budget.nodes += 1;
+		if (budget.nodes > MAX_INLINED_NODES) {
+			throw new OperationSkip(
+				`schema expands past ${MAX_INLINED_NODES} nodes when $refs inline (possible $ref bomb)`,
+			);
+		}
+	};
+	spend();
 	if (depth > MAX_INLINE_DEPTH) {
 		throw new OperationSkip(
 			`schema nests deeper than ${MAX_INLINE_DEPTH} levels`,
 		);
 	}
-	if (Array.isArray(node)) {
-		return node.map((item) =>
-			inlineRefs(document, item, stack, budget, depth + 1),
-		);
-	}
-	if (!isJsonObject(node)) return node;
-	const ref = node.$ref;
-	if (typeof ref === "string") {
-		if (!ref.startsWith("#/")) {
-			throw new OperationSkip(
-				`remote $ref ${JSON.stringify(ref)} refused (local refs only)`,
+
+	// Follow the whole $ref chain here, in a loop, before descending into anything. Costs one stack
+	// frame however long the chain is.
+	let current = node;
+	const followed: string[] = [];
+	try {
+		while (isJsonObject(current) && typeof current.$ref === "string") {
+			const ref = current.$ref;
+			if (!ref.startsWith("#/")) {
+				throw new OperationSkip(
+					`remote $ref ${JSON.stringify(ref)} refused (local refs only)`,
+				);
+			}
+			if (stack.has(ref)) {
+				throw new OperationSkip(`circular $ref ${JSON.stringify(ref)}`);
+			}
+			if (followed.length >= MAX_REF_HOPS) {
+				throw new OperationSkip(`$ref chain longer than ${MAX_REF_HOPS} hops`);
+			}
+			stack.add(ref);
+			followed.push(ref);
+			spend();
+			current = resolvePointer(document, ref);
+		}
+
+		if (Array.isArray(current)) {
+			return current.map((item) =>
+				inlineRefs(document, item, stack, budget, depth + 1),
 			);
 		}
-		if (stack.includes(ref)) {
-			throw new OperationSkip(`circular $ref ${JSON.stringify(ref)}`);
-		}
-		// The inlined target nests at the SAME output depth — depth tracks the copy, not the walk.
-		return inlineRefs(
-			document,
-			resolvePointer(document, ref),
-			[...stack, ref],
-			budget,
-			depth,
+		if (!isJsonObject(current)) return current;
+		// fromEntries: a key like "__proto__" must become an OWN property of the copy, never a
+		// prototype mutation mid-walk.
+		return Object.fromEntries(
+			Object.entries(current).map(([key, value]) => [
+				key,
+				inlineRefs(document, value, stack, budget, depth + 1),
+			]),
 		);
+	} finally {
+		// Off the path again. Without this a ref used twice in DIFFERENT branches would read as a
+		// cycle the second time — the copy-per-hop array got this right by construction, and a shared
+		// mutable Set only keeps it right if the unwind is honest.
+		for (const ref of followed) stack.delete(ref);
 	}
-	// fromEntries: a key like "__proto__" must become an OWN property of the copy, never a
-	// prototype mutation mid-walk.
-	return Object.fromEntries(
-		Object.entries(node).map(([key, value]) => [
-			key,
-			inlineRefs(document, value, stack, budget, depth + 1),
-		]),
-	);
 }
 
 function resolvePointer(document: JsonObject, ref: string): JsonValue {
