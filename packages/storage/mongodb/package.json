@@ -29,6 +29,7 @@
 		"mongodb": ">=5.0.0"
 	},
 	"devDependencies": {
+		"@euroclaw/storage-core": "workspace:*",
 		"mongodb": "6.21.0",
 		"mongodb-memory-server": "10.4.3"
 	}

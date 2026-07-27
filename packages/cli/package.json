@@ -29,6 +29,7 @@
 		"@euroclaw/contracts": "workspace:*",
 		"@euroclaw/storage-drizzle": "workspace:*",
 		"@euroclaw/storage-kysely": "workspace:*",
+		"@euroclaw/storage-mongodb": "workspace:*",
 		"@euroclaw/storage-prisma": "workspace:*",
 		"commander": "15.0.0",
 		"euroclaw": "workspace:*",

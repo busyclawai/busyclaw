@@ -172,3 +172,9 @@ export function mongoAdapter(db: Db): Adapter {
 		},
 	};
 }
+
+// The index generator — SchemaDeclaration → the `createIndex` calls a declaration implies. Mongo has
+// no DDL, so uniqueness and indexing are the only things a schema can still ask it to enforce;
+// `euroclaw db generate --target mongodb` dispatches here.
+export type { MongoGenerateOptions, MongoIndexSpec } from "./generate";
+export { generateMongoIndexes, mongoIndexes } from "./generate";
