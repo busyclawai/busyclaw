@@ -173,6 +173,11 @@ const CORE_RESOURCE_KINDS = new Set([
 	"runCheckpoint",
 	"providerToolCall",
 	"run",
+	// Registered only when the claw has an approval store, i.e. a database. Naming it here means a
+	// claw without one reports a CONFIGURATION error rather than a denial — the distinction this set
+	// exists for, and the more useful answer: reporting a missing database as "denied" sends the
+	// reader hunting for a policy that does not exist.
+	"approval",
 ]);
 
 // `personalScope(principal)` lived here: it returned a resource whose `createdBy` WAS the caller, and

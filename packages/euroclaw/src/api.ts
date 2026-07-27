@@ -938,8 +938,6 @@ export const clawApiRoutes = {
 			"an ad-hoc generate mints no durable row and runs as the caller",
 		),
 	),
-	// approval — the built-in gate is the user-principal floor (a human may decide, a machine may not,
-	// see `userApprover`), which is NOT an ownership check. Closing this needs a schema change.
 	// approval — anchored on the record, at three levels, because viewing, deciding and executing are
 	// three different permissions and collapsing them is how "can see it" quietly becomes "can run it".
 	//
