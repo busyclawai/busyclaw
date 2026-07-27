@@ -422,6 +422,15 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	//
 	// Cleared on settle: a concurrency latch, never a cache. Dedup and erasure keep coming from the
 	// store, which is the only thing that survives a restart.
+	//
+	// SCOPE OF THE GUARANTEE — per process. Two instances redacting one value in one container at the
+	// same instant can still each mint, because neither sees the other's in-flight write. Closing that
+	// needs the DATABASE to arbitrate: a unique constraint on (scope, scopeId, originalHash), the loser
+	// catching the conflict and re-reading. `field()` carries no composite-unique support, and a
+	// single-field unique on originalHash would be WRONG — the same value legitimately exists in many
+	// containers — so it wants a synthetic keyed column or an entity-layer change, plus unique-violation
+	// detection portable across every adapter. Deliberately not built, for a bounded failure: a split
+	// costs coreference within one payload, never a wrong value and never a leak.
 	const inFlight = new Map<string, Promise<PiiMapping>>();
 
 	// The mapping for a value: an existing row, or a freshly minted and saved one.
