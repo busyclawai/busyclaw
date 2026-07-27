@@ -143,6 +143,7 @@ describe("createClaw engine", () => {
 			"putPolicySlice",
 			"registerOpenApiSpec",
 			"sendMessage",
+			"sendMessageAndStream",
 			"shareResource",
 			"startRun",
 			"stream",
