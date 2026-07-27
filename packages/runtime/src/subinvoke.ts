@@ -15,3 +15,5 @@ export type SubInvoke = (
 export const NESTED_INVOKER_TOOL = "NESTED_INVOKER_TOOL";
 /** A nested call that a gate wants to park has no durable home — fail closed as a value. */
 export const NESTED_APPROVAL_UNSUPPORTED = "NESTED_APPROVAL_UNSUPPORTED";
+/** A nested call that cannot safely run twice has no effect ledger behind it — fail closed. */
+export const NESTED_EFFECT_UNSUPPORTED = "NESTED_EFFECT_UNSUPPORTED";

@@ -21,6 +21,7 @@ import {
 	createRuntime,
 	govern,
 	NESTED_APPROVAL_UNSUPPORTED,
+	NESTED_EFFECT_UNSUPPORTED,
 	NESTED_INVOKER_TOOL,
 	type SubInvoke,
 } from "../src/index";
@@ -518,5 +519,90 @@ describe("@busyclaw/runtime subInvoke", () => {
 			status: "denied",
 			gateId: "tool:send_email",
 		});
+	});
+
+	// H-09's third half. A nested call never reaches the effect ledger — the nested core has none, and
+	// a deterministic child id cannot be derived honestly from model-authored code that may not replay
+	// the same calls in the same order. So a tool that declares it cannot run twice is refused rather
+	// than run unledgered, where a parent retry would repeat it in silence.
+	it("refuses a required-idempotency tool from nested execution, as a denied value", async () => {
+		let nested: HandleResult | undefined;
+		let toolRuns = 0;
+		const db = memoryAdapter();
+		const runtime = createRuntime({
+			model: callToolOnceModel("run_code", {}),
+			database: db,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				run_code: invokerTool(async (subInvoke) => {
+					nested = await subInvoke("charge_card", {});
+					return { nested };
+				}),
+				charge_card: govern(
+					tool({
+						description: "Charge a card.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => {
+							toolRuns++;
+							return { charged: true };
+						},
+					}),
+					{ effect: { kind: "external", idempotency: "required" } },
+				),
+			},
+		});
+
+		const result = await runtime.generate("do it");
+
+		// A VALUE, not a throw — the guest reads it and can react, the same door the nested
+		// needs-approval conversion uses. The run itself completes.
+		expect(result.status).toBe("completed");
+		expect(nested).toMatchObject({
+			status: "denied",
+			reasonCode: NESTED_EFFECT_UNSUPPORTED,
+		});
+		expect(toolRuns).toBe(0);
+	});
+
+	it("lets a nested call through when a duplicate is survivable", async () => {
+		let toolRuns = 0;
+		const db = memoryAdapter();
+		const runtime = createRuntime({
+			model: callToolOnceModel("run_code", {}),
+			database: db,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				run_code: invokerTool(async (subInvoke) => {
+					await subInvoke("ping", {});
+					return { ok: true };
+				}),
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => {
+							toolRuns++;
+							return { pong: true };
+						},
+					}),
+					{ effect: { kind: "external", idempotency: "optional" } },
+				),
+			},
+		});
+
+		expect((await runtime.generate("do it")).status).toBe("completed");
+		expect(toolRuns).toBe(1);
 	});
 });

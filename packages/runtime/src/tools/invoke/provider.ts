@@ -137,6 +137,21 @@ export function createRegisteredToolProvider(
 						: {}),
 					...(options.lookup !== undefined ? { lookup: options.lookup } : {}),
 				});
+				// The ledger's id for this effect, sent as `Idempotency-Key` when the tool's own governance
+				// says a duplicate matters. That header is the de-facto convention (Stripe, Square,
+				// PayPal, and an IETF draft), and a provider that does not speak it ignores an unknown
+				// header — so the cost of sending it is nothing and the cost of NOT sending it is a
+				// double charge on any retried attempt. Only when governance asks: an `idempotency:
+				// "none"` tool has said duplicates are fine, and we do not editorialize.
+				const effectId = effectIdOf(_callOptions);
+				if (
+					effectId !== undefined &&
+					row.governance.effect?.idempotency !== undefined &&
+					row.governance.effect.idempotency !== "none" &&
+					plan.headers["idempotency-key"] === undefined
+				) {
+					plan.headers["idempotency-key"] = effectId;
+				}
 				const credentialed = await applyCredentials(
 					plan,
 					binding,
@@ -197,6 +212,13 @@ type FetchDeps = {
 	/** The floor's vetted resolution — the socket is pinned to it so the name is not resolved twice. */
 	decision: EgressDecision;
 };
+
+/** The runtime hands the effect id through the call options; a plain read with no cast escaping. */
+function effectIdOf(callOptions: unknown): string | undefined {
+	if (callOptions === null || typeof callOptions !== "object") return undefined;
+	const value = (callOptions as { effectId?: unknown }).effectId;
+	return typeof value === "string" && value !== "" ? value : undefined;
+}
 
 async function performFetch(
 	plan: ReturnType<typeof planHttpRequest>,

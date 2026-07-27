@@ -61,7 +61,11 @@ export {
 	runtimeYieldMetadata,
 } from "./runtime";
 export type { SubInvoke } from "./subinvoke";
-export { NESTED_APPROVAL_UNSUPPORTED, NESTED_INVOKER_TOOL } from "./subinvoke";
+export {
+	NESTED_APPROVAL_UNSUPPORTED,
+	NESTED_EFFECT_UNSUPPORTED,
+	NESTED_INVOKER_TOOL,
+} from "./subinvoke";
 export type {
 	EgressLookup,
 	InvokerResponse,
