@@ -36,6 +36,9 @@ export const approvalFields = {
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
 	reasonCode: field.string({ index: true, immutable: true }),
+	/** The REQUESTER — whoever the parked run was executing as. `system:` for an autonomous run, which
+	 *  is why it cannot be the only thing an approval is authorized against: anchoring on it alone made
+	 *  exactly the approvals that most need a human unapprovable by one. */
 	principal: field.principal({ index: true, immutable: true }),
 	/** The claw whose run parked this — the approval's ACCESS ANCHOR, and the reason an autonomous
 	 *  run's approval is reviewable at all. Whoever may manage the claw may review what it parked, so
