@@ -72,6 +72,9 @@ describe("telegram channel", () => {
 		});
 		expect(messages).toEqual([
 			{
+				// The provider's own id for this update — what tells a retry from a new message, and
+				// what the delivery inbox claims on.
+				deliveryId: "10",
 				externalConversationId: "123",
 				externalActorId: undefined,
 				text: "hello",

@@ -12,6 +12,7 @@ import type {
 	InboundRequest,
 	PersistEndpointEvent,
 } from "./contracts";
+import type { DeliveryInbox } from "./inbox";
 
 export type ChannelDispatchResult = {
 	status: number;
@@ -79,6 +80,9 @@ export async function dispatchWebhook(input: {
 	endpoint: EndpointContext;
 	request: InboundRequest;
 	persist: PersistEndpointEvent;
+	/** Absent ⇒ this claw has no database, so there is nowhere to record a claim and a provider retry
+	 *  replays the turn exactly as it did before. */
+	inbox?: DeliveryInbox;
 }): Promise<ChannelDispatchResult> {
 	const { claw, channel, endpoint, request } = input;
 	// Authentication is NOT optional here. `if (channel.verify)` read as "verify when the channel
@@ -99,14 +103,62 @@ export async function dispatchWebhook(input: {
 	const ok = await channel.verify({ request, endpoint });
 	if (!ok) return { status: 401, body: { ok: false, error: "unauthorized" } };
 	const messages = await channel.parseInbound({ request, endpoint });
+	let processed = 0;
 	for (const message of messages) {
-		await handleInbound({ claw, channel, endpoint, message });
+		if (await relayOnce({ ...input, message })) processed += 1;
 	}
 	await input.persist({ kind: "received" });
 	return {
 		status: 200,
-		body: { ok: true, data: { processed: messages.length } },
+		// What this endpoint actually RAN, not what arrived: a retried delivery is answered 200 (the
+		// provider must stop retrying) while contributing nothing, and the count says so.
+		body: { ok: true, data: { processed } },
 	};
+}
+
+/**
+ * How long a delivery may be held before a retry may take it over. Generous, like the approval lease
+ * and for the same reason: it has to outlast the slowest legitimate turn, because what it guards is a
+ * process that DIED and what it would cause if set short is the same turn running twice.
+ */
+const DELIVERY_LEASE_MS = 15 * 60 * 1000;
+
+/**
+ * Relay one inbound message AT MOST ONCE, and say whether this call is the one that ran it.
+ *
+ * A provider retries — on a non-2xx, on a timeout, on its own schedule — and a poll can overlap the
+ * previous one. Both replay messages that were already handled, and without a claim each replay was a
+ * fresh turn: another model charge, another set of tool calls, another reply, under a new run id.
+ *
+ * A message with no `deliveryId` cannot be de-duplicated, and no inbox means nowhere to record the
+ * claim. Both relay as before rather than refusing — the alternative is a channel that silently stops
+ * delivering — but they are the deployments where the replay remains possible, and that is the honest
+ * shape of it rather than a guarantee that quietly does not hold.
+ */
+async function relayOnce(input: {
+	claw: ClawLike;
+	channel: Channel;
+	endpoint: EndpointContext;
+	message: InboundMessage;
+	inbox?: DeliveryInbox;
+}): Promise<boolean> {
+	const { claw, channel, endpoint, message, inbox } = input;
+	const deliveryId = message.deliveryId;
+	if (inbox === undefined || deliveryId === undefined) {
+		await handleInbound({ claw, channel, endpoint, message });
+		return true;
+	}
+	const key = {
+		provider: channel.provider,
+		endpointKey: endpoint.endpointKey,
+		deliveryId,
+	};
+	// Claimed BEFORE the turn: a claim taken afterwards would be recording history, and the second
+	// arrival is already halfway through its own run by then.
+	if (!(await inbox.claim(key, DELIVERY_LEASE_MS))) return false;
+	await handleInbound({ claw, channel, endpoint, message });
+	await inbox.complete(key);
+	return true;
 }
 
 /**
@@ -120,6 +172,7 @@ export async function pollEndpoint(input: {
 	endpoint: EndpointContext;
 	persist: PersistEndpointEvent;
 	limit?: number;
+	inbox?: DeliveryInbox;
 }): Promise<{ processed: number }> {
 	const { claw, channel, endpoint } = input;
 	if (!channel.poll) return { processed: 0 };
@@ -131,8 +184,9 @@ export async function pollEndpoint(input: {
 		});
 		let processed = 0;
 		for (const message of result.messages) {
-			await handleInbound({ claw, channel, endpoint, message });
-			processed += 1;
+			// Polls OVERLAP: a cursor advanced after the batch means a poll that starts before the
+			// previous one finishes re-reads the same messages. The claim is what makes that harmless.
+			if (await relayOnce({ ...input, message })) processed += 1;
 		}
 		await input.persist({ kind: "polled", cursor: result.cursor });
 		return { processed };

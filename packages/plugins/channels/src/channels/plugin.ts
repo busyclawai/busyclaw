@@ -15,6 +15,7 @@ import {
 	type EndpointContext,
 } from "../core/contracts";
 import { dispatchWebhook, pollEndpoint } from "../core/dispatch";
+import { channelDeliveryModels, createDeliveryInbox } from "../core/inbox";
 import {
 	buildRegistrationsPlugin,
 	type ChannelRegistrationsPluginApi,
@@ -295,6 +296,13 @@ function buildAppBotPlugin(
 		const store = context.adapter
 			? createChannelEndpointStateStore(context.adapter, { now })
 			: undefined;
+		// One delivery is relayed once. An app bot may run WITHOUT a database (its endpoint state is
+		// optional), and then there is nowhere to record a claim — a provider retry replays the turn
+		// exactly as it did before, which is the honest shape rather than a guarantee that lapses
+		// silently.
+		const inbox = context.adapter
+			? createDeliveryInbox(context.adapter, { now })
+			: undefined;
 		const secrets = context.secrets;
 		const requireStore = (): ChannelEndpointStateStore => {
 			if (!store) {
@@ -353,6 +361,7 @@ function buildAppBotPlugin(
 					endpoint: await contextFor(channel),
 					request: { headers: request.headers, rawBody },
 					persist: persistFor(channel),
+					...(inbox !== undefined ? { inbox } : {}),
 				});
 				return { status: result.status, body: result.body };
 			};
@@ -388,6 +397,7 @@ function buildAppBotPlugin(
 						endpoint: await contextFor(channel),
 						limit,
 						persist: persistFor(channel),
+						...(inbox !== undefined ? { inbox } : {}),
 					});
 					processed += result.processed;
 				}
@@ -407,7 +417,8 @@ function buildAppBotPlugin(
 	return {
 		id: options.id ?? "busyclaw.channels",
 		$HasCron: pollTargets.length > 0 ? "has-cron" : "no-cron",
-		schema: channelsModels,
+		// The endpoint state PLUS the delivery inbox — the claim needs a table wherever a webhook lands.
+		schema: { ...channelsModels, ...channelDeliveryModels },
 		// Each app bot's token name is a coverage EXPECTATION (boot warns if unresolvable); registrations
 		// declare none — their tokens live in the rows, not under a `secrets.get` name.
 		...(declaredSecrets.length > 0

@@ -2,6 +2,7 @@ import type { Secrets } from "@busyclaw/contracts";
 import { buildSecrets, env } from "@busyclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
+import { channelDeliveryModels } from "../src/core/inbox";
 import { type Channel, channels, channelsModels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
 
@@ -29,7 +30,10 @@ function fakeClaw(binds: unknown[]) {
 /** Configure the plugin against a wrapped adapter and the one-door reader — what createClaw does. */
 function configured(plugin: ReturnType<typeof channels>, secrets?: Secrets) {
 	const built = plugin.configure?.({
-		adapter: entityAdapter(memoryAdapter(), channelsModels),
+		adapter: entityAdapter(memoryAdapter(), {
+			...channelsModels,
+			...channelDeliveryModels,
+		}),
 		secrets,
 	});
 	if (!built) throw new Error("expected configure to build the plugin");

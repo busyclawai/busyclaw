@@ -24,6 +24,7 @@ import {
 } from "../core/contracts";
 import { dispatchWebhook } from "../core/dispatch";
 import { endpointId } from "../core/id";
+import { channelDeliveryModels, createDeliveryInbox } from "../core/inbox";
 import {
 	channelRegistrationLookupInput,
 	channelRegistrationsModels,
@@ -240,6 +241,11 @@ export function buildRegistrationsPlugin(
 		const store = context.adapter
 			? createChannelRegistrationsStore(context.adapter, { now })
 			: undefined;
+		// One delivery is relayed once: a provider retry finds the claim already taken. Registrations
+		// require a database, so this is always present here.
+		const inbox = context.adapter
+			? createDeliveryInbox(context.adapter, { now })
+			: undefined;
 		const requireStore = (): ChannelRegistrationsStore => {
 			if (!store) {
 				throw configurationError(
@@ -366,6 +372,8 @@ export function buildRegistrationsPlugin(
 					channel,
 					endpoint: contextFor(row),
 					request: inbound,
+					// Registrations require a database, so the claim always has somewhere to live.
+					...(inbox !== undefined ? { inbox } : {}),
 					persist: (event) =>
 						requireStore().record(
 							{ provider: row.provider, endpointKey: row.endpointKey },
@@ -452,7 +460,7 @@ export function buildRegistrationsPlugin(
 		id: options.id ?? "busyclaw.channels.registrations",
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
-		schema: channelRegistrationsModels,
+		schema: { ...channelRegistrationsModels, ...channelDeliveryModels },
 		// The ONE per-kind bit: a data-fetcher, not authz logic. Registering the kind is what makes every
 		// binding above enforceable — owner ∪ scope ∪ grant over the generic `access_grant` table, with no
 		// policy of our own. Read statically off the plugin, so the registry binds before configure runs;
