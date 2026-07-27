@@ -1,4 +1,4 @@
-import { createGovernance } from "@euroclaw/core";
+import { createGovernance } from "@busyclaw/core";
 import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 import { tool } from "../../src/ai-sdk/index";
@@ -12,7 +12,7 @@ const toSchema = jsonSchema<{ to: string }>({
 	required: ["to"],
 });
 
-describe("@euroclaw/ai tool() — authoring the canonical descriptor", () => {
+describe("@busyclaw/ai tool() — authoring the canonical descriptor", () => {
 	it("returns a descriptor with first-class governance; undefined facts are stripped", () => {
 		const t = tool({
 			description: "Send an offer letter",

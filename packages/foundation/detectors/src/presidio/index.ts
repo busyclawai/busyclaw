@@ -1,5 +1,5 @@
-// @euroclaw/detectors/presidio — Microsoft Presidio's analyzer behind euroclaw's Detector port.
-// Async (HTTP POST /analyze, the whole API is one route). ANALYZER ONLY: the euroclaw redactor
+// @busyclaw/detectors/presidio — Microsoft Presidio's analyzer behind busyclaw's Detector port.
+// Async (HTTP POST /analyze, the whole API is one route). ANALYZER ONLY: the busyclaw redactor
 // already owns the pseudonymization map, overlap resolution, and dedup, so this detector only
 // FINDS spans — building a second redaction mechanism (presidio-anonymizer) is pointless here.
 //
@@ -12,14 +12,14 @@
 // deliberately unmapped — a birth date and an employment year-range both come back as DATE_TIME at
 // the same NER-grade score, so the type carries no signal to tell PII from noise. Names and
 // locations are what this vendor is FOR: the categories regex cannot reach.
-import type { Detector, PiiKind, PiiSpan } from "@euroclaw/contracts";
+import type { Detector, PiiKind, PiiSpan } from "@busyclaw/contracts";
 
 /** Below this a hit is noise, not PII — the one knob, client-side. Proven live: a spurious
  *  US_DRIVER_LICENSE fires at 0.01 over a phone number; a real recognizer scores ≥0.5. */
 export const DEFAULT_SCORE_FLOOR = 0.35;
 
 /**
- * The DEFAULT closed map: Presidio's stock vocabulary → euroclaw's PiiKind. Presence = mapped;
+ * The DEFAULT closed map: Presidio's stock vocabulary → busyclaw's PiiKind. Presence = mapped;
  * absence = dropped. DATE_TIME is intentionally absent (see header). Different Presidio deployments
  * emit different labels (a GLiNER model with custom entities, a medical de-id model with MRN/AGE),
  * so this is overridable per detector via `entityMap` — spread this to extend, or replace wholesale
@@ -38,7 +38,7 @@ export const presidioDefaultEntityMap: Readonly<Record<string, PiiKind>> = {
 	URL: "url",
 };
 
-/** Presidio entity_type → euroclaw kind, or null for "drop this hit". */
+/** Presidio entity_type → busyclaw kind, or null for "drop this hit". */
 export function presidioKindOf(
 	entityType: string,
 	entityMap: Readonly<Record<string, PiiKind>> = presidioDefaultEntityMap,
@@ -117,8 +117,8 @@ export type PresidioSpanOptions = {
 };
 
 /**
- * The pure assembly: Presidio rows + the exact text analyzed → euroclaw spans. Drops unmapped
- * entities and sub-floor hits; converts offsets; fills `value` by slicing (euroclaw spans carry
+ * The pure assembly: Presidio rows + the exact text analyzed → busyclaw spans. Drops unmapped
+ * entities and sub-floor hits; converts offsets; fills `value` by slicing (busyclaw spans carry
  * the value — the redactor is what makes it die into a placeholder). Overlaps are left INTACT:
  * resolving them is the redactor's job (earliest start wins, ties to the longer span).
  */

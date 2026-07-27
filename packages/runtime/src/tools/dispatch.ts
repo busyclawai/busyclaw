@@ -8,18 +8,18 @@
 // field, so that reader is gone; arktype now runs only where governance genuinely arrives untyped
 // (storage rows, spec extraction).
 
-import type { ToolDefinition, ToolDefinitionSet } from "@euroclaw/contracts";
+import type { ToolDefinition, ToolDefinitionSet } from "@busyclaw/contracts";
 import {
 	configurationError,
 	stateError,
 	toolModelName,
-} from "@euroclaw/contracts";
-import type { Governance } from "@euroclaw/core";
+} from "@busyclaw/contracts";
+import type { Governance } from "@busyclaw/core";
 import type { ToolSet } from "ai";
 import { EXECUTE_TOOL_PATH, readExecuteEnvelope } from "./discovery";
 
 /** The one calling convention the chokepoint uses: model args, then the AI-SDK call options plus
- *  euroclaw's own `subInvoke` extension. Deliberately loose — the runtime, not the vendor, owns it. */
+ *  busyclaw's own `subInvoke` extension. Deliberately loose — the runtime, not the vendor, owns it. */
 export type ToolExecutable = (input: unknown, options: unknown) => unknown;
 
 /**
@@ -134,13 +134,13 @@ export function modelToolProjection(
 			const path = pathByModelName.get(call.name) ?? call.name;
 			// Unwrapping happens only when THIS run's set actually contains the meta-tool — the same
 			// index everything else resolves through, not a special-cased wire name. A run that never
-			// minted it resolves `euroclaw__execute` to nothing, and the call fails closed at dispatch
+			// minted it resolves `busyclaw__execute` to nothing, and the call fails closed at dispatch
 			// like any other name nobody declared.
 			if (path !== EXECUTE_TOOL_PATH) return { path, args: call.input };
 			// An envelope that names no usable target is a broken ENCODING, not a call — so it is
 			// refused here rather than passed on as a call to the meta-tool. It used to be passed on,
 			// relying on the meta-tool's own executable to throw; that worked only while the floor
-			// skipped unmodeled actions, because otherwise the gate reaches `euroclaw.execute` first
+			// skipped unmodeled actions, because otherwise the gate reaches `busyclaw.execute` first
 			// and answers a question this file exists to make sure is never asked. Refusing at the
 			// ingress keeps `execute` out of every decision, and keeps the diagnostic — "you named no
 			// target" is a different fact from "you may not do that", and the model needs the first.

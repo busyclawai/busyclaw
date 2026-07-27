@@ -17,7 +17,7 @@
 // `…:manage in …:use in …:read`: the caller is `in` the node its scope/grant grants, the resource's
 // `requiredXAccess` attribute points at the node for the action's required level, and being `in` a higher
 // node is transitively being `in` every lower one — so a `use` member satisfies a `read` requirement but
-// NOT a `manage` one, decided entirely by Cedar `in`, never a TS `>=`. The euroclaw side only RENDERS the
+// NOT a `manage` one, decided entirely by Cedar `in`, never a TS `>=`. The busyclaw side only RENDERS the
 // graph (which held scope/grant maps to which node — kind-blind, opaque labels); every DECISION is
 // Cedar's. `scope`/`scopeId`/`principalRef` are opaque; the three permits live in `API_ACCESS_BASELINE`
 // (the un-removable api floor). Owner is LIVE; scope-member and grant are present-but-dormant (their `in`
@@ -30,8 +30,8 @@ import type {
 	AccessGrantPermission,
 	PolicyRequest,
 	PolicyResult,
-} from "@euroclaw/contracts";
-import { grantReaches } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { grantReaches } from "@busyclaw/contracts";
 import type { CedarEngine } from "./cedar-types";
 import type { NamedPolicies } from "./policy-bundle";
 
@@ -39,7 +39,7 @@ import type { NamedPolicies } from "./policy-bundle";
  *  `read < use < manage`: `read` sees, `use` runs/invokes (distinct from read/write), `manage`
  *  mutates/administers. The owner has the max level implicitly; scope-members and grantees carry a level
  *  the resource's requirement is compared against — by Cedar `in`, not a TS compare. ALIASES the grant
- *  level in @euroclaw/contracts (the store's `access_grant.permission`), so the store, the grant shape,
+ *  level in @busyclaw/contracts (the store's `access_grant.permission`), so the store, the grant shape,
  *  and the action-required level are ONE vocabulary with no conversion seam. */
 export type ApiPermissionLevel = AccessGrantPermission;
 
@@ -93,7 +93,7 @@ export const API_ACCESS_BASELINE: NamedPolicies = {
 /** One entry in the generic ACL (a row of the `access_grant` table, projected). `principalRef` is
  *  polymorphic and OPAQUE — `user:…` | `team:…` | `organization:…` | `public`; `level` is what the
  *  resource's requirement is compared against. Carried as request DATA (the store's `listForResource`
- *  feeds it — slice 5). The type is DEFINED in @euroclaw/contracts (beside the `AccessGrantStore` port,
+ *  feeds it — slice 5). The type is DEFINED in @busyclaw/contracts (beside the `AccessGrantStore` port,
  *  the layer the store lives under) and re-exported here so the store returns exactly the shape the PEP
  *  renders — one type, no translation. */
 export type { AccessGrant };
@@ -146,7 +146,7 @@ export type DecideApiCallInput = {
 };
 
 // `grantReaches` — does a grant's opaque `principalRef` reach the caller (public / direct / labelled
-// held scope) — is DEFINED in @euroclaw/contracts (beside `AccessGrant`), so the skills runtime gate and
+// held scope) — is DEFINED in @busyclaw/contracts (beside `AccessGrant`), so the skills runtime gate and
 // this PEP share ONE matcher. Here it decides graph RENDERING only (which grant becomes a principal `in`
 // edge); whether the reached grant's LEVEL satisfies the requirement stays Cedar's `in`. `PrincipalScope`
 // is a structural superset of the `GrantScope` it takes, so the richer scopes pass straight in.
@@ -203,7 +203,7 @@ function buildApiEntities(input: {
 	}
 
 	// The caller's `in` edges — RENDERED from its opaque scopes + the grants that reach it (the kind-
-	// blind, euroclaw-resolved side). NO level compare here: each held scope makes the caller `in` its own
+	// blind, busyclaw-resolved side). NO level compare here: each held scope makes the caller `in` its own
 	// `<scope>:<scopeId>:<level>` node; each reaching grant makes it `in` the resource's
 	// `grant:<method>:<level>` node. The chain then decides whether that satisfies the required level.
 	const principalParents: Array<{ type: string; id: string }> = [];

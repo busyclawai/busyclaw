@@ -8,7 +8,7 @@ import {
 
 const a = (): Adapter => memoryAdapter();
 
-describe("@euroclaw/storage-core — memory adapter", () => {
+describe("@busyclaw/storage-core — memory adapter", () => {
 	it("create + findOne by a where clause", async () => {
 		const db = a();
 		await db.create({
@@ -140,7 +140,7 @@ describe("@euroclaw/storage-core — memory adapter", () => {
 		).toBeNull();
 	});
 
-	it("serves the two euroclaw use cases: append-only audit + approval lifecycle", async () => {
+	it("serves the two busyclaw use cases: append-only audit + approval lifecycle", async () => {
 		const db = a();
 
 		// Audit: append rows, read back in order — what a durable AuditSink will do.
@@ -177,7 +177,7 @@ describe("@euroclaw/storage-core — memory adapter", () => {
 
 const fieldSchema = {
 	claw: {
-		modelName: "euroclaw_claw",
+		modelName: "busyclaw_claw",
 		fields: {
 			id: { type: "string", required: true, unique: true },
 			organizationId: {
@@ -217,7 +217,7 @@ type FieldClaw = {
 	locked?: string;
 };
 
-describe("@euroclaw/storage-core — schema adapter", () => {
+describe("@busyclaw/storage-core — schema adapter", () => {
 	it("maps model and field names while encoding and decoding JSON", async () => {
 		const raw = memoryAdapter();
 		const db = schemaAdapter(raw, fieldSchema);
@@ -237,7 +237,7 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 		});
 
 		const row = (await raw.findOne({
-			model: "euroclaw_claw",
+			model: "busyclaw_claw",
 			where: [{ field: "organization_id", value: "t1" }],
 		})) as Record<string, unknown> | null;
 		expect(row).toMatchObject({
@@ -291,7 +291,7 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 		expect(updated?.updatedAt).toBe("updated");
 
 		const row = (await raw.findOne({
-			model: "euroclaw_claw",
+			model: "busyclaw_claw",
 			where: [{ field: "organization_id", value: "a" }],
 		})) as Record<string, unknown> | null;
 		expect(row?.context).toBe(JSON.stringify({ patched: true }));
@@ -400,7 +400,7 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 			});
 		});
 
-		expect(await raw.count({ model: "euroclaw_claw" })).toBe(1);
+		expect(await raw.count({ model: "busyclaw_claw" })).toBe(1);
 		await expect(
 			db.transaction?.(async (tx) => {
 				await tx.create({
@@ -412,7 +412,7 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 		).rejects.toThrow("rollback");
 		expect(
 			await raw.findOne({
-				model: "euroclaw_claw",
+				model: "busyclaw_claw",
 				where: [{ field: "id", value: "tx2" }],
 			}),
 		).toBeNull();
@@ -433,7 +433,7 @@ describe("@euroclaw/storage-core — schema adapter", () => {
 
 		expect(consumed?.context).toEqual({ source: "default" });
 		expect(consumed?.organizationId).toBe("t");
-		expect(await raw.count({ model: "euroclaw_claw" })).toBe(0);
+		expect(await raw.count({ model: "busyclaw_claw" })).toBe(0);
 	});
 });
 

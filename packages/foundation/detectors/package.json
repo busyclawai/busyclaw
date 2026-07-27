@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/detectors",
+	"name": "@busyclaw/detectors",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "PII detectors for euroclaw's redaction port, one subpath per detector. `@euroclaw/detectors/regex`: a deterministic email/phone/card/id/ip/url detector. `@euroclaw/detectors/presidio`: the Microsoft Presidio analyzer behind the same port. Feather-light: contracts only (Presidio adds global fetch).",
+	"description": "PII detectors for busyclaw's redaction port, one subpath per detector. `@busyclaw/detectors/regex`: a deterministic email/phone/card/id/ip/url detector. `@busyclaw/detectors/presidio`: the Microsoft Presidio analyzer behind the same port. Feather-light: contracts only (Presidio adds global fetch).",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/detectors"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -37,10 +37,10 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@busyclaw/contracts": "workspace:*"
 	},
 	"devDependencies": {
-		"@euroclaw/core": "workspace:*",
+		"@busyclaw/core": "workspace:*",
 		"arktype": "2.2.0"
 	}
 }

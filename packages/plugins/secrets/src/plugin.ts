@@ -1,14 +1,14 @@
 import {
 	configurationError,
-	type EuroclawPlugin,
-	type EuroclawPluginConfigureContext,
-	type EuroclawPluginRuntime,
+	type BusyclawPlugin,
+	type BusyclawPluginConfigureContext,
+	type BusyclawPluginRuntime,
 	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,
 	type Secrets,
 	stateError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { createSecretsManagementApi, type SecretsPluginApi } from "./api";
 import {
 	createSecretCipher,
@@ -29,7 +29,7 @@ export const SECRET_STORE_PROVIDER_NAME = "store";
 /** The in-app store the `{ store }` option turns on. */
 export type SecretStoreOptions = {
 	/** The at-rest master key: 32 bytes hex-encoded (64 chars), validated loud at construction.
-	 *  Absent ⇒ the plugin resolves `EUROCLAW_SECRET_STORE_KEY` through the one-door reader captured at
+	 *  Absent ⇒ the plugin resolves `BUSYCLAW_SECRET_STORE_KEY` through the one-door reader captured at
 	 *  configure — lazily, on first seal/open — so the key itself lives in env/vault. */
 	key?: string;
 	/** Time source for deterministic tests and host-controlled timestamps. */
@@ -37,7 +37,7 @@ export type SecretStoreOptions = {
 };
 
 export type SecretsPluginOptions = {
-	/** Plugin id override (default "euroclaw.secrets"). */
+	/** Plugin id override (default "busyclaw.secrets"). */
 	id?: string;
 	/** Turn on the in-app secret store: `true` for defaults, or {@link SecretStoreOptions} to configure
 	 *  the master key / time source. Adds the `stored_secret` table + the `"store"` data-tier provider,
@@ -102,8 +102,8 @@ async function materialOf(
 function buildStore(options: SecretStoreOptions): {
 	provider: SecretProvider;
 	configure: (
-		context: EuroclawPluginConfigureContext,
-	) => EuroclawPluginRuntime<SecretsPluginApi> | undefined;
+		context: BusyclawPluginConfigureContext,
+	) => BusyclawPluginRuntime<SecretsPluginApi> | undefined;
 } {
 	let store: StoredSecretsStore | undefined;
 	let reader: Secrets | undefined;
@@ -117,7 +117,7 @@ function buildStore(options: SecretStoreOptions): {
 		if (!reader) {
 			throw configurationError("secret store has no master key source", {
 				reason:
-					"pass secrets([], { store: { key } }) or connect the plugin through createClaw so it can resolve EUROCLAW_SECRET_STORE_KEY via the one-door reader",
+					"pass secrets([], { store: { key } }) or connect the plugin through createClaw so it can resolve BUSYCLAW_SECRET_STORE_KEY via the one-door reader",
 			});
 		}
 		// require packages the null+kind dance: fail loud naming the key, and assert token material
@@ -176,8 +176,8 @@ function buildStore(options: SecretStoreOptions): {
 	// the personal management api, closing over the SAME `requireStore` guard the provider uses (so a
 	// no-database claw fails loud on first call, never silently). No routes, no cron.
 	const configure = (
-		context: EuroclawPluginConfigureContext,
-	): EuroclawPluginRuntime<SecretsPluginApi> | undefined => {
+		context: BusyclawPluginConfigureContext,
+	): BusyclawPluginRuntime<SecretsPluginApi> | undefined => {
 		if (context.adapter) {
 			store = createStoredSecretsStore(context.adapter, {
 				cipher,
@@ -198,7 +198,7 @@ function buildStore(options: SecretStoreOptions): {
  * `claw.api.secrets`) and requires a database. The no-store path is the same plugin minus those two
  * (providers only, no api). Mirrors channels' registrations-vs-app-bot return split.
  */
-export type SecretsStorePlugin = EuroclawPlugin<
+export type SecretsStorePlugin = BusyclawPlugin<
 	"no-cron",
 	readonly string[],
 	SecretsPluginApi
@@ -224,7 +224,7 @@ type StoreEnabled<Options> = Options extends { store: infer Store }
 type SecretsReturn<Options> =
 	StoreEnabled<Options> extends true
 		? SecretsStorePlugin
-		: EuroclawPlugin<"no-cron">;
+		: BusyclawPlugin<"no-cron">;
 
 /**
  * `secrets(providers?, { store? })` — contributes secret providers (and the optional in-app store),
@@ -250,8 +250,8 @@ export function secrets<
 				: options.store;
 
 	if (!storeOptions) {
-		const plugin: EuroclawPlugin<"no-cron"> = {
-			id: options.id ?? "euroclaw.secrets",
+		const plugin: BusyclawPlugin<"no-cron"> = {
+			id: options.id ?? "busyclaw.secrets",
 			$HasCron: "no-cron",
 			secrets: { providers: [...base] },
 		};
@@ -262,8 +262,8 @@ export function secrets<
 	// pattern): this path sets $RequiresDatabase (RequireDatabaseForPlugins) and, via configure's api,
 	// contributes $Api — exactly what StoreEnabled folds a truthy `store` to.
 	const { provider, configure } = buildStore(storeOptions);
-	const plugin: EuroclawPlugin = {
-		id: options.id ?? "euroclaw.secrets",
+	const plugin: BusyclawPlugin = {
+		id: options.id ?? "busyclaw.secrets",
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: storedSecretModels,

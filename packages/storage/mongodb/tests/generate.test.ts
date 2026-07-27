@@ -47,7 +47,7 @@ beforeAll(async () => {
 	server = await MongoMemoryServer.create();
 	client = new MongoClient(server.getUri());
 	await client.connect();
-	db = client.db("euroclaw_test");
+	db = client.db("busyclaw_test");
 }, 120_000);
 
 afterAll(async () => {
@@ -73,7 +73,7 @@ async function applyIndexes(): Promise<void> {
 
 describe("mongoIndexes", () => {
 	it("turns a declared primary key into a UNIQUE index, not _id", () => {
-		// euroclaw rows carry their own `id` and the adapter strips Mongo's `_id`, so `_id` is an
+		// busyclaw rows carry their own `id` and the adapter strips Mongo's `_id`, so `_id` is an
 		// unrelated ObjectId — the declared key has to be enforced by an index or not at all.
 		const specs = mongoIndexes(SCHEMA as never);
 		expect(specs).toContainEqual(
@@ -176,12 +176,12 @@ describe("the generated indexes against a real mongod", () => {
 });
 
 describe("a real Mongo duplicate-key error is recognised as a conflict", () => {
-	// The normalizer in @euroclaw/storage-core claims Mongo says "already exists" with code 11000.
+	// The normalizer in @busyclaw/storage-core claims Mongo says "already exists" with code 11000.
 	// That claim is checked HERE, where a real mongod can raise it, rather than against a hand-built
 	// object shaped the way the documentation describes.
 	it("isUniqueViolation sees E11000, and asConflict names the key", async () => {
 		const { asConflict, isUniqueViolation } = await import(
-			"@euroclaw/storage-core"
+			"@busyclaw/storage-core"
 		);
 		await applyIndexes();
 		const claws = db.collection("claw");
@@ -197,7 +197,7 @@ describe("a real Mongo duplicate-key error is recognised as a conflict", () => {
 		expect(raised).toBeDefined();
 		expect(isUniqueViolation(raised)).toBe(true);
 		const conflict = asConflict(raised, { model: "claw" });
-		expect(conflict?.code).toBe("EUROCLAW_CONFLICT");
+		expect(conflict?.code).toBe("BUSYCLAW_CONFLICT");
 		// Mongo reports the offending key pattern; that is what tells you WHICH index refused.
 		expect(conflict?.details?.constraint).toBe("id");
 	}, 60_000);

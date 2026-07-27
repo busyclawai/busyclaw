@@ -1,7 +1,7 @@
-// `euroclaw db generate` / `euroclaw db migrate`.
+// `busyclaw db generate` / `busyclaw db migrate`.
 //
-// Both commands read the SAME declaration the runtime validates rows against — `getEuroclawTables`
-// is the projection of the very field maps `getEuroclawModels` feeds the entity adapter. That is
+// Both commands read the SAME declaration the runtime validates rows against — `getBusyclawTables`
+// is the projection of the very field maps `getBusyclawModels` feeds the entity adapter. That is
 // the point of the design: a column cannot exist in the validator and be missing from the
 // migration, because there is one declaration and two projections of it.
 //
@@ -13,7 +13,7 @@ import {
 	type MigrationDialect,
 	planMigrations,
 	resolveKyselyDatabase,
-} from "@euroclaw/storage-kysely";
+} from "@busyclaw/storage-kysely";
 import {
 	findConfigPath,
 	type LoadedSchema,
@@ -176,7 +176,7 @@ function describe(plan: Prepared["plan"], dialect: MigrationDialect): void {
 }
 
 /** Where SQL accumulates when `--output` is not given. */
-const MIGRATIONS_DIR = "euroclaw_migrations";
+const MIGRATIONS_DIR = "busyclaw_migrations";
 
 /**
  * SQL goes to a NEW timestamped file each run; every other target overwrites one file.
@@ -247,7 +247,7 @@ export async function dbMigrate(options: DbCommandOptions): Promise<void> {
 	const target = resolveTarget(loaded, options);
 	if (isOfflineTarget(target)) {
 		throw new Error(
-			`\`db migrate\` is SQL-only, and this config resolves to the "${target}" target. ${target === "drizzle" ? "drizzle-kit" : "prisma migrate"} owns migration history for it — run \`euroclaw db generate\` to emit the schema, then migrate with that tool.`,
+			`\`db migrate\` is SQL-only, and this config resolves to the "${target}" target. ${target === "drizzle" ? "drizzle-kit" : "prisma migrate"} owns migration history for it — run \`busyclaw db generate\` to emit the schema, then migrate with that tool.`,
 		);
 	}
 

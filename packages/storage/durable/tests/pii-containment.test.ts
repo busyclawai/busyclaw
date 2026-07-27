@@ -11,8 +11,8 @@
 //
 // UNCONTAINED is the interesting case precisely because it used to be the NULL one. It is a container
 // like any other here, and containment has to hold between it and a real one in both directions.
-import { UNCONTAINED } from "@euroclaw/contracts";
-import { memoryAdapter } from "@euroclaw/storage-core";
+import { UNCONTAINED } from "@busyclaw/contracts";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createPiiMappingStore } from "../src/pii";
 

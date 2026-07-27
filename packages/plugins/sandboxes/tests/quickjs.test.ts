@@ -13,7 +13,7 @@ const noInvoke: SandboxToolInvoker = {
 	},
 };
 
-describe("@euroclaw/sandboxes quickjs provider", () => {
+describe("@busyclaw/sandboxes quickjs provider", () => {
 	it("runs plain code with a top-level return", async () => {
 		const { output: res } = await executeInSandbox({
 			sandbox: quickjs(),

@@ -7,7 +7,7 @@ import { type } from "arktype";
 import { describe, expect, it } from "vitest";
 import {
 	ENDPOINTS_METADATA,
-	EuroclawError,
+	BusyclawError,
 	endpointHttpMethod,
 	endpointRoutesOf,
 	endpoints,
@@ -163,7 +163,7 @@ describe("endpoints() — callable namespace + route metadata", () => {
 
 	it("fails loud at declaration when a definition has no input schema", () => {
 		const noInput = { handler: () => "ok", authz: { mode: "caller" } };
-		expect(() => endpoints({ set: noInput } as never)).toThrow(EuroclawError);
+		expect(() => endpoints({ set: noInput } as never)).toThrow(BusyclawError);
 		expect(() => endpoints({ set: noInput } as never)).toThrow(
 			/no input schema/,
 		);
@@ -174,7 +174,7 @@ describe("endpoints() — callable namespace + route metadata", () => {
 	// state the whole mechanism exists to make impossible, so it must not be collected as "no check".
 	it("fails loud at declaration when a definition declares no authz", () => {
 		const noAuthz = { input: echoInput, handler: () => "ok" };
-		expect(() => endpoints({ set: noAuthz } as never)).toThrow(EuroclawError);
+		expect(() => endpoints({ set: noAuthz } as never)).toThrow(BusyclawError);
 		expect(() => endpoints({ set: noAuthz } as never)).toThrow(
 			/declares no authz/,
 		);

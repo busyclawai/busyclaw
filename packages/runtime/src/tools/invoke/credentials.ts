@@ -15,8 +15,8 @@ import type {
 	ResolveContext,
 	SecretMaterial,
 	Secrets,
-} from "@euroclaw/contracts";
-import { asPrincipal, configurationError } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { asPrincipal, configurationError } from "@busyclaw/contracts";
 import type {
 	OpenApiAuthScheme,
 	OpenApiBinding,
@@ -155,7 +155,7 @@ function appendQueryParam(
 	plan.url = `${plan.url}${separator}${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
 }
 
-/** Base64 of a UTF-8 string using web-standard primitives (euroclaw packages avoid node `Buffer`
+/** Base64 of a UTF-8 string using web-standard primitives (busyclaw packages avoid node `Buffer`
  *  types): TextEncoder → bytes → btoa. Correct for non-ASCII basic-auth credentials. */
 function base64Utf8(text: string): string {
 	const bytes = new TextEncoder().encode(text);

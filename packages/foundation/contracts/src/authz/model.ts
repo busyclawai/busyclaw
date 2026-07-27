@@ -5,7 +5,7 @@
 // facts (runMode/confirmationUsed), never an action attribute.
 //
 // The model is plain data (host-assembled by trusted code — no boundary, no schema). Cedar schema
-// text is a RENDERING of this model owned by @euroclaw/authz; non-Cedar engines consume the
+// text is a RENDERING of this model owned by @busyclaw/authz; non-Cedar engines consume the
 // model directly and never parse Cedar.
 
 import type { JsonObject } from "../common";
@@ -20,7 +20,7 @@ export type ActionAccess = "read" | "write";
 export type ActionSource = "tool" | "domain" | "api";
 
 /** One authorizable action — facts only. `args` is the action's arg schema (JSON Schema); the
- *  Cedar projection (@euroclaw/authz `projectArgs`) renders and request-filters the policy-visible
+ *  Cedar projection (@busyclaw/authz `projectArgs`) renders and request-filters the policy-visible
  *  subset from it (lossy-but-safe: policies may only condition on what projects cleanly). */
 export type ActionDef = {
 	id: string;

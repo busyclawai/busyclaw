@@ -1,9 +1,9 @@
-// @euroclaw/policy-cedar — the `cedar()` policy SOURCE: raw Cedar policy TEXT contributed to the
+// @busyclaw/policy-cedar — the `cedar()` policy SOURCE: raw Cedar policy TEXT contributed to the
 // assembly's internal engine, merged UNDER the sealed SYSTEM_POSTURE floor (`forbid` > `permit`).
-// The Cedar decision ENGINE (eval, floor, mapper, escape-hatch plugin) lives in @euroclaw/authz;
+// The Cedar decision ENGINE (eval, floor, mapper, escape-hatch plugin) lives in @busyclaw/authz;
 // this package is a thin source — no cedar-wasm, no engine.
 
-import type { CedarContext, PolicyPlugin } from "@euroclaw/authz";
+import type { CedarContext, PolicyPlugin } from "@busyclaw/authz";
 
 /** Config for the `cedar()` policy SOURCE — the raw Cedar TEXT laid beneath the floor. */
 export type CedarSourceConfig = {
@@ -25,7 +25,7 @@ export type CedarSourceConfig = {
  * widens, and neither can remove the floor's un-removable forbids.
  *
  * The `$InferContext` folds an OPEN turn context onto `run(prompt, ctx)` — it does NOT require the
- * caller to supply a `principal`. The acting identity is the ONE stamped `euroclaw__principal`, seeded
+ * caller to supply a `principal`. The acting identity is the ONE stamped `busyclaw__principal`, seeded
  * by the trusted context assembly from the authenticated caller (never a caller-typed ctx field — that
  * was audit #7). The source's policies reference the principal; the internal engine's mapper reads it
  * from the stamp.

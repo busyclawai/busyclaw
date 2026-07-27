@@ -1,4 +1,4 @@
-import { piiMappingSchema, piiSubjectSchema } from "@euroclaw/contracts";
+import { piiMappingSchema, piiSubjectSchema } from "@busyclaw/contracts";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import { planMigrations } from "../src/migrations";
 // The PII vault's own schema, migrated against a real SQLite database.
 //
 // Everything else in this file uses fixtures shaped to exercise the emitter. This one asserts the
-// table euroclaw actually ships: its key is the container triple, and that key was undeclarable until
+// table busyclaw actually ships: its key is the container triple, and that key was undeclarable until
 // `scope`/`scopeId` became required — a primary key cannot contain NULL. The emitter's composite
 // support was already tested; that the REAL schema uses it was asserted and not run.
 describe("the real PII schema", () => {

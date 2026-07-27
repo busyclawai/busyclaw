@@ -1,6 +1,6 @@
 // The slice-6b store PORTS — the behavioural protocol (verbs) the durable stores satisfy, kept apart
 // from the entity/schema declarations (mirrors tools/registry-ports.ts). Types only; the impls live
-// in @euroclaw/storage-durable (createRegistryStores).
+// in @busyclaw/storage-durable (createRegistryStores).
 
 import type { ScopeRef } from "../scope";
 import type { AuthzChangeAppend, AuthzChangeRecord } from "./change-log";

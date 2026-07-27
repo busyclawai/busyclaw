@@ -14,7 +14,7 @@ import {
 	toolDescriptors,
 	toolModelName,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 
 const ADDRESS_SEP = ".";

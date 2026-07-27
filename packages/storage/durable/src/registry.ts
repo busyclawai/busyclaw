@@ -1,6 +1,6 @@
 // createRegistryStores — the tool-registry ports (SpecRegistrationStore / RegisteredToolStore /
 // FactsOverlayStore) plus the slice-6b customer-policy stores (PolicySliceStore + the append-only
-// AuthzChangeStore), backed by any @euroclaw/storage-core Adapter. Persistence goes through
+// AuthzChangeStore), backed by any @busyclaw/storage-core Adapter. Persistence goes through
 // `entityDb`: the model name drives the row types, JSON columns (specBlob, report, inputSchema,
 // governance, binding, groups, summary) are (de)serialized by the schema layer, and every row
 // crossing the adapter boundary is parsed against its record schema (untrusted boundary: a hostile
@@ -16,7 +16,7 @@
 // set (a partial update can only add, and a nulled JSON column would fail the record schema on
 // read-back) — a fresh row is the honest "the override was replaced".
 
-import type { Adapter, ScopeRef } from "@euroclaw/contracts";
+import type { Adapter, ScopeRef } from "@busyclaw/contracts";
 import {
 	type AuthzChangeAppend,
 	type AuthzChangeStore,
@@ -43,8 +43,8 @@ import {
 	specRegistrationUpsert as specRegistrationUpsertSchema,
 	stateError,
 	validationError,
-} from "@euroclaw/contracts";
-import { entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 

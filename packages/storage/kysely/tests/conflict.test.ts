@@ -1,10 +1,10 @@
 // Does better-sqlite3, through Kysely, actually raise what the conflict detector expects?
 //
-// @euroclaw/storage-core owns the rule and pins its logic; it cannot own this question, because
+// @busyclaw/storage-core owns the rule and pins its logic; it cannot own this question, because
 // answering it needs the driver. Kysely appears in no branch of that detector — the claim is that it
 // hands its driver's error through untouched — so this is where that claim is checked.
 
-import { asConflict, isUniqueViolation } from "@euroclaw/storage-core";
+import { asConflict, isUniqueViolation } from "@busyclaw/storage-core";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ describe("sqlite through kysely", () => {
 		expect(error).toBeDefined();
 		expect(isUniqueViolation(error)).toBe(true);
 		expect(asConflict(error, { model: "claw" })?.code).toBe(
-			"EUROCLAW_CONFLICT",
+			"BUSYCLAW_CONFLICT",
 		);
 	});
 

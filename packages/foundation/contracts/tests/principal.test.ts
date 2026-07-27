@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	EuroclawError,
+	BusyclawError,
 	type Principal,
 	parsePrincipal,
 	SYSTEM_ANONYMOUS,
@@ -8,7 +8,7 @@ import {
 	userPrincipal,
 } from "../src/index";
 
-// Every malformed-input path raises the same contracts validationError — a real EuroclawError with the
+// Every malformed-input path raises the same contracts validationError — a real BusyclawError with the
 // validation code, not a bare throw. This mirrors the secrets suite's assertion style.
 function expectValidationError(fn: () => Principal | { kind: string }): void {
 	let caught: unknown;
@@ -17,8 +17,8 @@ function expectValidationError(fn: () => Principal | { kind: string }): void {
 	} catch (error) {
 		caught = error;
 	}
-	expect(caught).toBeInstanceOf(EuroclawError);
-	expect(caught).toMatchObject({ code: "EUROCLAW_VALIDATION_FAILED" });
+	expect(caught).toBeInstanceOf(BusyclawError);
+	expect(caught).toMatchObject({ code: "BUSYCLAW_VALIDATION_FAILED" });
 }
 
 describe("Principal — the tagged authorizable identity", () => {
@@ -86,7 +86,7 @@ describe("Principal — the tagged authorizable identity", () => {
 		// An anonymous scheduler identity erased both. The approval such a run parks would have no
 		// owner to authorize against — which is exactly how "any authenticated human may decide" got
 		// justified — and the audit would record a machine asking for work a person had asked for.
-		// A host that really wants one can still build it; euroclaw no longer suggests it.
+		// A host that really wants one can still build it; busyclaw no longer suggests it.
 		expect(Object.keys(await import("../src/index"))).not.toContain(
 			"SYSTEM_CRON",
 		);

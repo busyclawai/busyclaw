@@ -1,13 +1,13 @@
 /**
  * The engine protocol — what a durable execution engine IS: the engine-neutral handle
  * (start/continue/optional work), the factory composed by `createClaw`, the run read-model, and
- * the bounded `drainWork` helper cron hosts pump with. Implementations live in `@euroclaw/engine-*`
+ * the bounded `drainWork` helper cron hosts pump with. Implementations live in `@busyclaw/engine-*`
  * (engine-sql today; a managed-workflow engine implements the same verbs and omits `work`).
  */
 
-import { configurationError } from "@euroclaw/errors";
+import { configurationError } from "@busyclaw/errors";
 import type { JsonObject } from "./common";
-import type { EuroclawCronFlag, EuroclawPlugin } from "./governance/plugin";
+import type { BusyclawCronFlag, BusyclawPlugin } from "./governance/plugin";
 import type { Principal } from "./governance/principal";
 
 export type EngineRunHandle = {
@@ -67,18 +67,18 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 
 export type ClawEngineInstance<
 	Handle extends ClawEngineHandle = ClawEngineHandle,
-	HasCron extends EuroclawCronFlag = "unknown-cron",
+	HasCron extends BusyclawCronFlag = "unknown-cron",
 > = {
 	engine: Handle;
 	runs?: ClawRunReadModel;
-	plugins?: readonly EuroclawPlugin<HasCron>[];
+	plugins?: readonly BusyclawPlugin<HasCron>[];
 	$HasCron?: HasCron;
 };
 
 export type ClawEngineFactory<
 	RuntimeLike = unknown,
 	Handle extends ClawEngineHandle = ClawEngineHandle,
-	HasCron extends EuroclawCronFlag = "unknown-cron",
+	HasCron extends BusyclawCronFlag = "unknown-cron",
 > = {
 	kind: Handle["kind"];
 	create: (runtime: RuntimeLike) => ClawEngineInstance<Handle, HasCron>;

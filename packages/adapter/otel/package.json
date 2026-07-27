@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/otel",
+	"name": "@busyclaw/otel",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "OpenTelemetry span bridge for euroclaw's operational event stream.",
+	"description": "OpenTelemetry span bridge for busyclaw's operational event stream.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,7 +23,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/runtime": "workspace:*"
+		"@busyclaw/runtime": "workspace:*"
 	},
 	"peerDependencies": {
 		"@opentelemetry/api": "^1.9.0"

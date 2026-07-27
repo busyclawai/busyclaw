@@ -1,7 +1,7 @@
 // The approval CONTRACTS: the ApprovalStore port + the approval record schema for durable,
 // single-use human approvals. NO storage import (the port is behaviour-only; the SQL-backed impl is
-// @euroclaw/storage-durable). The approval after-gate that persists needs-approval outcomes lives in
-// @euroclaw/core. See docs/architecture/07-approval-and-audit.md.
+// @busyclaw/storage-durable). The approval after-gate that persists needs-approval outcomes lives in
+// @busyclaw/core. See docs/architecture/07-approval-and-audit.md.
 
 import { type } from "arktype";
 import type { JsonObject as JsonObjectType } from "../common";

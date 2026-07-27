@@ -23,10 +23,10 @@ export type ScopeRef = {
 	scopeId: string;
 };
 
-/** Core reserves the `euroclaw:` prefix on the `scope` LABEL, and nothing else about the pair. A
+/** Core reserves the `busyclaw:` prefix on the `scope` LABEL, and nothing else about the pair. A
  *  plugin's boundary kind ("organization", "team", "personal") never starts with it, so a container
  *  core mints for itself cannot collide with one a plugin means. */
-export const RESERVED_SCOPE_PREFIX = "euroclaw:";
+export const RESERVED_SCOPE_PREFIX = "busyclaw:";
 
 /**
  * The container for a row that genuinely belongs to no boundary — a redaction performed with no turn
@@ -35,7 +35,7 @@ export const RESERVED_SCOPE_PREFIX = "euroclaw:";
  * It exists because "no container" and "some container" cannot both be representable in a column that
  * is part of a PRIMARY KEY: a key column cannot be NULL. Rather than leave the key undeclared, the
  * absent case gets a value. The value is deliberately one NOBODY CAN BE A MEMBER OF — a membership
- * resolver returning a `euroclaw:`-prefixed scope is refused by {@link isReservedScope}, so a sentinel
+ * resolver returning a `busyclaw:`-prefixed scope is refused by {@link isReservedScope}, so a sentinel
  * container can never widen access. It narrows: rows here are reachable only by an equally
  * context-less read.
  */

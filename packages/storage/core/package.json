@@ -1,5 +1,5 @@
 {
-	"name": "@euroclaw/storage-core",
+	"name": "@busyclaw/storage-core",
 	"version": "0.0.0",
 	"type": "module",
 	"description": "The storage Adapter port + declarative schema format + a zero-dep memory adapter. Port/schema patterns adapted from Better Auth (MIT). ORM adapters implement this port.",
@@ -23,7 +23,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
 		"arktype": "2.2.0"
 	}
 }

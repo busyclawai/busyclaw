@@ -1,19 +1,19 @@
 /**
- * @euroclaw/storage-prisma — the @euroclaw/storage-core Adapter port over a Prisma client.
+ * @busyclaw/storage-prisma — the @busyclaw/storage-core Adapter port over a Prisma client.
  * Structurally typed (no `@prisma/client` dependency) — pass your generated `PrismaClient`.
  * `consumeOne` runs find + delete-by-`id` inside one interactive `$transaction`.
  *
  * Modeled on Better Auth's Prisma adapter: https://github.com/better-auth/better-auth —
- * `packages/prisma-adapter`. The where/CRUD translation here is euroclaw's own, written against
+ * `packages/prisma-adapter`. The where/CRUD translation here is busyclaw's own, written against
  * Prisma's public delegate API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /** The subset of a Prisma model delegate this adapter uses (your generated client satisfies it). */
 export type PrismaDelegate = {
@@ -210,7 +210,7 @@ export function prismaAdapter(prisma: PrismaLike): Adapter {
 }
 
 // The schema GENERATOR — SchemaDeclaration → Prisma models. Beside the adapter because its syntax
-// and its rules (every model needs an identifier) are Prisma's; `euroclaw db generate --target
+// and its rules (every model needs an identifier) are Prisma's; `busyclaw db generate --target
 // prisma` dispatches here. Emits only; `prisma migrate` owns the migration.
 export type { PrismaGenerateOptions } from "./generate";
 export { generatePrismaSchema } from "./generate";

@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { generateKyselyTypes } from "../src/generate";
 

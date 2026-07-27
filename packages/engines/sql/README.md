@@ -1,14 +1,14 @@
-# @euroclaw/engine-sql
+# @busyclaw/engine-sql
 
-SQL-backed durable execution engine for euroclaw.
+SQL-backed durable execution engine for busyclaw.
 
-This package is one concrete implementation of the engine contract from `@euroclaw/engine-core`. It provides SQL run/task/event/lease storage, worker ticking, continuation tasks, and idempotent runtime-run enqueueing over `@euroclaw/storage-core` adapters that support transactions.
+This package is one concrete implementation of the engine contract from `@busyclaw/engine-core`. It provides SQL run/task/event/lease storage, worker ticking, continuation tasks, and idempotent runtime-run enqueueing over `@busyclaw/storage-core` adapters that support transactions.
 
 Use it by passing `sqlEngine(...)` into the branded `createClaw(...)` composition point:
 
 ```ts
-import { sqlEngine } from "@euroclaw/engine-sql"
-import { createClaw } from "euroclaw"
+import { sqlEngine } from "@busyclaw/engine-sql"
+import { createClaw } from "busyclaw"
 
 const claw = createClaw({
   model,
@@ -31,7 +31,7 @@ The underlying engine intentionally exposes only the generic execution surface: 
 const claw = createClaw({
   model,
   cronHandler: {
-    secret: process.env.EUROCLAW_CRON_SECRET,
+    secret: process.env.BUSYCLAW_CRON_SECRET,
   },
   engine: sqlEngine({
     store,

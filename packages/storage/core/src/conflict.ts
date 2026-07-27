@@ -15,7 +15,7 @@
 // Guessing wrong turns a real failure into a silent retry loop, which is a far worse trade than
 // leaving one exotic driver unrecognised and loud.
 
-import { conflictError, type EuroclawError } from "@euroclaw/contracts";
+import { conflictError, type BusyclawError } from "@busyclaw/contracts";
 
 /** The shapes a driver error can carry, none of them guaranteed. */
 type DriverError = {
@@ -101,7 +101,7 @@ function constraintOf(error: DriverError): string | undefined {
 export function asConflict(
 	error: unknown,
 	context?: { model?: string; operation?: string },
-): EuroclawError | undefined {
+): BusyclawError | undefined {
 	if (!isUniqueViolation(error)) return undefined;
 	const driver = asDriverError(error) ?? {};
 	const constraint = constraintOf(driver);

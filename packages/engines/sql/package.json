@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/engine-sql",
+	"name": "@busyclaw/engine-sql",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "SQL-backed execution engine for euroclaw runtime: runs, tasks, leases, runtime events, and idempotency over @euroclaw/storage-core.",
+	"description": "SQL-backed execution engine for busyclaw runtime: runs, tasks, leases, runtime events, and idempotency over @busyclaw/storage-core.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,9 +23,9 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/runtime": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/runtime": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"
 	}

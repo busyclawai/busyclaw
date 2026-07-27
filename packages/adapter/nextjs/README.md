@@ -1,20 +1,20 @@
-# @euroclaw/adapter-nextjs
+# @busyclaw/adapter-nextjs
 
-Thin Next.js route-handler adapter for euroclaw, inspired by Better Auth's `toNextJsHandler` shape.
+Thin Next.js route-handler adapter for busyclaw, inspired by Better Auth's `toNextJsHandler` shape.
 
 ```ts
-import { toNextJsHandler } from "@euroclaw/adapter-nextjs"
-import { claw } from "@/lib/euroclaw"
+import { toNextJsHandler } from "@busyclaw/adapter-nextjs"
+import { claw } from "@/lib/busyclaw"
 
 export const { GET, POST, PATCH, PUT, DELETE } = toNextJsHandler(claw)
 ```
 
-The heavy lifting lives in `@euroclaw/adapter-core`; this package only adapts the handler to Next.js' route export shape. The same handler exposes API routes, plugin/channel routes, and the built-in `POST /cron` trigger for connected cron tasks.
+The heavy lifting lives in `@busyclaw/adapter-core`; this package only adapts the handler to Next.js' route export shape. The same handler exposes API routes, plugin/channel routes, and the built-in `POST /cron` trigger for connected cron tasks.
 
-For browser/server clients, use `createClawClient(...)` from `@euroclaw/adapter-core` against the same base route:
+For browser/server clients, use `createClawClient(...)` from `@busyclaw/adapter-core` against the same base route:
 
 ```ts
-import { createClawClient } from "@euroclaw/adapter-core"
+import { createClawClient } from "@busyclaw/adapter-core"
 
-const client = createClawClient({ baseUrl: "/api/euroclaw" })
+const client = createClawClient({ baseUrl: "/api/busyclaw" })
 ```

@@ -1,4 +1,4 @@
-import { buildSecrets, env } from "@euroclaw/secrets";
+import { buildSecrets, env } from "@busyclaw/secrets";
 import { describe, expect, it } from "vitest";
 import {
 	dispatchWebhook,

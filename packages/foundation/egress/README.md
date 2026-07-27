@@ -1,7 +1,7 @@
-# @euroclaw/egress
+# @busyclaw/egress
 
 The outbound egress safety floor — the layer BENEATH policy. Authorization ("may this actor reach
-this destination?") is `@euroclaw/authz` + Cedar over `context.server`; this package is the
+this destination?") is `@busyclaw/authz` + Cedar over `context.server`; this package is the
 non-negotiable network-safety guard that runs regardless of any policy:
 
 - `assertEgressAllowed` — https-only (with an `allowInsecure` opt for localhost/tests), reject

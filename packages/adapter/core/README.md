@@ -1,8 +1,8 @@
-# @euroclaw/adapter-core
+# @busyclaw/adapter-core
 
-Protocol-neutral `Request -> Response` handler for euroclaw adapters.
+Protocol-neutral `Request -> Response` handler for busyclaw adapters.
 
-It exposes a small base route set around the `euroclaw` API route manifest:
+It exposes a small base route set around the `busyclaw` API route manifest:
 
 - `GET /health`
 - `POST /cron`, which runs cron tasks contributed by connected plugins/channels/engines
@@ -14,7 +14,7 @@ Plugins can add routes for channel/webhook integrations such as Telegram, Teams,
 ## Server
 
 ```ts
-import { toRequestHandler } from "@euroclaw/adapter-core"
+import { toRequestHandler } from "@busyclaw/adapter-core"
 import { claw } from "./claw"
 
 const handler = toRequestHandler(claw)
@@ -25,7 +25,7 @@ Use `createClaw({ cronHandler })` to enable and protect scheduled invocations:
 ```ts
 const claw = createClaw({
   cronHandler: {
-    secret: process.env.EUROCLAW_CRON_SECRET,
+    secret: process.env.BUSYCLAW_CRON_SECRET,
     limit: 10,
   },
   engine: sqlEngine({ store }),
@@ -61,8 +61,8 @@ Errors use the same envelope shape and validation failures return HTTP `400`:
 GET routes accept simple query parameters, or a full JSON input object in `input`:
 
 ```txt
-GET /api/euroclaw/get-claw?id=claw_123
-GET /api/euroclaw/list-messages?input={"threadId":"thread_123","afterSequence":2}
+GET /api/busyclaw/get-claw?id=claw_123
+GET /api/busyclaw/list-messages?input={"threadId":"thread_123","afterSequence":2}
 ```
 
 POST routes accept the API input object as JSON body.
@@ -70,9 +70,9 @@ POST routes accept the API input object as JSON body.
 ## Client
 
 ```ts
-import { createClawClient } from "@euroclaw/adapter-core"
+import { createClawClient } from "@busyclaw/adapter-core"
 
-const client = createClawClient({ baseUrl: "/api/euroclaw" })
+const client = createClawClient({ baseUrl: "/api/busyclaw" })
 
 const binding = await client.bindConversation({
   provider: "telegram",

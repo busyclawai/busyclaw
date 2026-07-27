@@ -1,6 +1,6 @@
-import { userPrincipal } from "@euroclaw/contracts";
-import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
-import { kyselyAdapter } from "@euroclaw/storage-kysely";
+import { userPrincipal } from "@busyclaw/contracts";
+import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
+import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
@@ -378,7 +378,7 @@ suite(
 		const db = new Kysely<Record<string, Record<string, unknown>>>({
 			dialect: new SqliteDialect({ database: sqlite }),
 		});
-		// The `approval` table `euroclaw generate` will emit from approvalSchema (`args` holds JSON).
+		// The `approval` table `busyclaw generate` will emit from approvalSchema (`args` holds JSON).
 		sqlite.exec(
 			`CREATE TABLE approval (
 						id TEXT PRIMARY KEY, status TEXT, gateId TEXT, toolName TEXT, args TEXT, reasonCode TEXT, metadata TEXT,

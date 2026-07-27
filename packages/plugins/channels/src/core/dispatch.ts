@@ -3,7 +3,7 @@
 // EndpointContext, and supplies a persist sink for state events; the engine owns the
 // verify → parse → bind → relay → reply round-trip and never touches storage.
 
-import { errorMessage, SYSTEM_ANONYMOUS } from "@euroclaw/contracts";
+import { errorMessage, SYSTEM_ANONYMOUS } from "@busyclaw/contracts";
 import type { ClawLike } from "./claw";
 import type {
 	Channel,

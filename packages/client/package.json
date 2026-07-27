@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/client",
+	"name": "@busyclaw/client",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The vanilla euroclaw client: table-driven base api calls, convention-routed plugin namespaces over a recursive proxy, and nanostores reactivity — typed from `typeof claw` with zero server runtime in the bundle.",
+	"description": "The vanilla busyclaw client: table-driven base api calls, convention-routed plugin namespaces over a recursive proxy, and nanostores reactivity — typed from `typeof claw` with zero server runtime in the bundle.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/client"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -44,8 +44,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/errors": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/errors": "workspace:*",
 		"nanostores": "1.4.0"
 	},
 	"peerDependencies": {
@@ -57,12 +57,12 @@
 		}
 	},
 	"devDependencies": {
-		"@euroclaw/adapter-core": "workspace:*",
-		"@euroclaw/secrets-plugin": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/adapter-core": "workspace:*",
+		"@busyclaw/secrets-plugin": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@types/react": "19.2.17",
 		"@types/react-dom": "19.2.3",
-		"euroclaw": "workspace:*",
+		"busyclaw": "workspace:*",
 		"happy-dom": "20.10.6",
 		"react": "19.2.7",
 		"react-dom": "19.2.7"

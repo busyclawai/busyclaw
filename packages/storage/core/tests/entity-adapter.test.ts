@@ -1,4 +1,4 @@
-import { entity, field } from "@euroclaw/contracts";
+import { entity, field } from "@busyclaw/contracts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
 	entityAdapter,

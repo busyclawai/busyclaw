@@ -1,6 +1,6 @@
 // The per-organization policy router — a PolicyEngine that resolves each decision to the compiled
 // bundle for the request's organization and delegates. Engine-agnostic (better-auth/SAP engines
-// need the same routing) and core's chokepoint is untouched: it lives here, in @euroclaw/authz.
+// need the same routing) and core's chokepoint is untouched: it lives here, in @busyclaw/authz.
 //
 // Content-addressed cache (D4): `keyFor(org)` is the bundle identity — it MUST fold in every input
 // of the bundle (model version, policy-set version, entity source), so organizations with no
@@ -14,7 +14,7 @@ import type {
 	PolicyEngine,
 	PolicyEngineCapabilities,
 	ScopeRef,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 export type OrgPolicyRouterConfig = {
 	/** Bundle identity. MUST uniquely identify EVERY input of the bundle — model version,

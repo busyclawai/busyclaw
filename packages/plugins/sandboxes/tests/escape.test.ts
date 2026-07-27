@@ -22,7 +22,7 @@ const noInvoke: SandboxToolInvoker = {
 	},
 };
 
-describe("@euroclaw/sandboxes escape boundary", () => {
+describe("@busyclaw/sandboxes escape boundary", () => {
 	// E1 — there is no working network without a host-supplied adapter: any reachable `fetch` is the
 	// wrapper's throwing stub.
 	it("E1: exposes no working fetch without an adapter", async () => {
@@ -231,7 +231,7 @@ describe("@euroclaw/sandboxes escape boundary", () => {
 	}, 30000);
 
 	// E8 — the bridge leaks no host internals: stringifying the injected function must not expose a
-	// host filesystem path, euroclaw source, or subInvoke/handler internals.
+	// host filesystem path, busyclaw source, or subInvoke/handler internals.
 	it("E8: the __invoke bridge exposes no host source or internals", async () => {
 		const { output: res } = await executeInSandbox({
 			sandbox,

@@ -1,6 +1,6 @@
-// The secret resolver — euroclaw's ONE door for credential material. Every subsystem (the tool
+// The secret resolver — busyclaw's ONE door for credential material. Every subsystem (the tool
 // invoker, sandbox egress, channels) resolves through `Secrets.get(name)`, so an org's remap is
-// respected once, not remembered per-subsystem. euroclaw stores NO secret values — a provider
+// respected once, not remembered per-subsystem. busyclaw stores NO secret values — a provider
 // resolves each on demand from where it actually lives (env / vault / SSM …).
 //
 // This package ships the `env()` provider and the `[env()]` default only. `env()` reads the env
@@ -19,7 +19,7 @@ import {
 	type SecretMaterial,
 	type SecretProvider,
 	type Secrets,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 export type EnvOptions = {
 	/** Provider key. Defaults to `"env"`; set it only for a 2nd env-like provider or a clearer key. */
@@ -29,12 +29,12 @@ export type EnvOptions = {
 	 *  Defaults to the env GLOBAL (`globalThis.process?.env`) — no `node:process` import, so
 	 *  foundation-safe. An edge runtime without `process.env` reads `{}`. */
 	vars?: Record<string, string | undefined>;
-	/** Per-provider remap of euroclaw's canonical name → this backend's key; pass-through if absent. */
+	/** Per-provider remap of busyclaw's canonical name → this backend's key; pass-through if absent. */
 	aliases?: Record<string, string>;
 };
 
 /** The environment-variable secret provider: reads a plain token out of the env map. Get-only
- *  (`capability.manage: false`) — euroclaw never writes env vars. `vars` is captured at call time
+ *  (`capability.manage: false`) — busyclaw never writes env vars. `vars` is captured at call time
  *  from the env global unless one is passed, so no `node:*` is imported. */
 export function env(options: EnvOptions = {}): SecretProvider {
 	const vars =

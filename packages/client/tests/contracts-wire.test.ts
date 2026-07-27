@@ -5,7 +5,7 @@
 // src — types never bundle, values must ride the wire subpaths; (b) every deep contracts specifier
 // is on the allowlist below; (c) the allowlisted modules' transitive source graph inside contracts
 // carries no doc/description authoring at all — `.describe(` and `.configure(` are banned outright
-// (stricter than banning only `{ euroclaw` so formatting can never hide the key). Node env on
+// (stricter than banning only `{ busyclaw` so formatting can never hide the key). Node env on
 // purpose, like react-free.test.ts: the walk is an fs walk.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -13,12 +13,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const CONTRACTS_PACKAGE = "@euroclaw/contracts";
+const CONTRACTS_PACKAGE = "@busyclaw/contracts";
 
 /** The wire subpaths client src may VALUE-import — mirrors the contracts exports-map additions. */
 const ALLOWED_CONTRACTS_SUBPATHS = [
-	"@euroclaw/contracts/claw-api",
-	"@euroclaw/contracts/governance/endpoints",
+	"@busyclaw/contracts/claw-api",
+	"@busyclaw/contracts/governance/endpoints",
 ] as const;
 
 const clientSrcDir = fileURLToPath(new URL("../src", import.meta.url));
@@ -102,7 +102,7 @@ describe("client src imports contracts through the wire allowlist only", () => {
 
 	it("keeps the allowlisted wire modules transitively docless at the source level", () => {
 		// Walk each wire module's RELATIVE import graph inside contracts src (external packages —
-		// arktype, @euroclaw/errors — are not schema-authoring surfaces and are not walked).
+		// arktype, @busyclaw/errors — are not schema-authoring surfaces and are not walked).
 		const walked = new Set<string>();
 		const collect = (file: string): void => {
 			if (walked.has(file)) return;

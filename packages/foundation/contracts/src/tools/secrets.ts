@@ -1,9 +1,9 @@
 // The one-door secret resolver — `secrets.get(name)` (docs/plans/secrets-provider-registry.md). Every
 // subsystem (the tool invoker, sandbox egress, channels) resolves credentials through a single
-// canonical NAME, so an org's alias/provider is respected once, not remembered per-subsystem. euroclaw
+// canonical NAME, so an org's alias/provider is respected once, not remembered per-subsystem. busyclaw
 // stores NO secret values: a `SecretProvider` resolves each on demand from where it actually lives
 // (env / vault / SSM …). These are plain-TS ports (behaviour, not boundary data — no schema); the
-// providers + reader impl live in @euroclaw/secrets. The reader returns secret MATERIAL only; HOW to
+// providers + reader impl live in @busyclaw/secrets. The reader returns secret MATERIAL only; HOW to
 // apply it (apiKey-in-header-named-X, bearer, basic) is read from the registered spec's own
 // `securitySchemes`, never from the reader. Token-minting flows (OAuth client-credentials, refresh)
 // live INSIDE a provider's `get` — it returns a fresh token like any other material.
@@ -26,7 +26,7 @@ export type ResolveContext = {
 	principal?: Principal;
 };
 
-/** A secret backend (Executor's `CredentialProvider`): where values actually live. euroclaw lists
+/** A secret backend (Executor's `CredentialProvider`): where values actually live. busyclaw lists
  *  these as deployment infra and resolves through them — it never holds the value itself. */
 export type SecretProvider = {
 	/** The provider KEY — what a connection references and an audit records. The factory defaults it
@@ -36,7 +36,7 @@ export type SecretProvider = {
 	/** Resolve `ref` (the backend key, AFTER alias remap) to material, or `null` when this provider
 	 *  has no value for it. THROW for infrastructure failure — never coerce an outage into a miss. */
 	get: (ref: string, ctx: ResolveContext) => Promise<SecretMaterial | null>;
-	/** Per-provider remap of euroclaw's canonical name → this backend's key
+	/** Per-provider remap of busyclaw's canonical name → this backend's key
 	 *  (`{ CANONICAL_NAME: backendKey }`). Pass-through when absent (zero config in the happy path). */
 	aliases?: Record<string, string>;
 	/** get-only vs set/delete/list — declared, not assumed. `env` is get-only (`manage: false`). */

@@ -1,10 +1,10 @@
-// Finding and loading the host's euroclaw config.
+// Finding and loading the host's busyclaw config.
 //
 // Better Auth's CLI resolves `auth.ts` and reads `auth.options` off the assembled instance. We
 // accept EITHER shape, because hosts genuinely have both:
 //
 //   export const claw = createClaw({ … })        → read `claw.$tables`, the merged declaration
-//   export const config = { … }                  → project it here with getEuroclawTables
+//   export const config = { … }                  → project it here with getBusyclawTables
 //
 // The claw path is the better-auth ergonomic: point at the module the app already has. The config
 // path matters when there is no assembled claw to reach for — a schema-only repo, or a CI step that
@@ -18,8 +18,8 @@
 
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { SchemaDeclaration } from "@euroclaw/contracts";
-import { getEuroclawTables } from "euroclaw";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
+import { getBusyclawTables } from "busyclaw";
 import { createJiti } from "jiti";
 
 /**
@@ -68,12 +68,12 @@ export type LoadedSchema = {
 
 /** Where we look when `--config` is not given, in order. */
 const CANDIDATES = [
-	"euroclaw.config.ts",
-	"euroclaw.config.js",
-	"euroclaw.config.mjs",
-	"lib/euroclaw.ts",
-	"src/lib/euroclaw.ts",
-	"app/lib/euroclaw.ts",
+	"busyclaw.config.ts",
+	"busyclaw.config.js",
+	"busyclaw.config.mjs",
+	"lib/busyclaw.ts",
+	"src/lib/busyclaw.ts",
+	"app/lib/busyclaw.ts",
 	"lib/claw.ts",
 	"src/lib/claw.ts",
 ];
@@ -91,7 +91,7 @@ export function findConfigPath(cwd: string, explicit?: string): string {
 		if (existsSync(path)) return path;
 	}
 	throw new Error(
-		`could not find a euroclaw config. Looked for:\n${CANDIDATES.map((c) => `  ${c}`).join("\n")}\nPass --config <path>, or export your createClaw config as \`config\` from one of those files.`,
+		`could not find a busyclaw config. Looked for:\n${CANDIDATES.map((c) => `  ${c}`).join("\n")}\nPass --config <path>, or export your createClaw config as \`config\` from one of those files.`,
 	);
 }
 
@@ -110,7 +110,7 @@ const looksLikeConfig = (value: Record<string, unknown>): boolean =>
 /**
  * Load the module and resolve it to the tables the CLI has to reconcile.
  *
- * Export names tried, in order: `claw`, `config`, `euroclawConfig`, then the default export. The
+ * Export names tried, in order: `claw`, `config`, `busyclawConfig`, then the default export. The
  * module belongs to the host — insisting on one name for a CLI-only convention is not worth a
  * failed run.
  *
@@ -126,7 +126,7 @@ export async function loadSchema(path: string): Promise<LoadedSchema> {
 	// `interopDefault` synthesizes one from the module namespace when a module has no real default
 	// export, so an unrelated module would otherwise arrive here looking like an empty config —
 	// and an empty config projects to the full core schema, which would be a confident wrong answer.
-	for (const key of ["claw", "config", "euroclawConfig", "default"]) {
+	for (const key of ["claw", "config", "busyclawConfig", "default"]) {
 		const candidate = loaded[key];
 		if (!isObject(candidate)) continue;
 		if (
@@ -141,12 +141,12 @@ export async function loadSchema(path: string): Promise<LoadedSchema> {
 			const tables = candidate.$tables;
 			if (!isObject(tables)) {
 				throw new Error(
-					`${path} exports an assembled claw with no \`$tables\`. That means it was built by an older euroclaw than this CLI. Falling back to its plugins alone would silently drop whatever your own \`schema\`/\`redaction\` contribute, so this stops instead — upgrade euroclaw, or export the config object as \`config\`.`,
+					`${path} exports an assembled claw with no \`$tables\`. That means it was built by an older busyclaw than this CLI. Falling back to its plugins alone would silently drop whatever your own \`schema\`/\`redaction\` contribute, so this stops instead — upgrade busyclaw, or export the config object as \`config\`.`,
 				);
 			}
 			// The database is not on the claw (deliberately — it is the config's, and the claw holds
 			// the resolved Adapter). Take it from a config export if one is there too.
-			const beside = loaded.config ?? loaded.euroclawConfig;
+			const beside = loaded.config ?? loaded.busyclawConfig;
 			return {
 				tables: tables as SchemaDeclaration,
 				database: isObject(beside) ? beside.database : undefined,
@@ -156,7 +156,7 @@ export async function loadSchema(path: string): Promise<LoadedSchema> {
 
 		const config = candidate as LoadedConfig;
 		return {
-			tables: getEuroclawTables({
+			tables: getBusyclawTables({
 				plugins: (config.plugins ?? []) as never,
 				schema: config.schema as never,
 				redaction: config.redaction as never,
@@ -166,6 +166,6 @@ export async function loadSchema(path: string): Promise<LoadedSchema> {
 		};
 	}
 	throw new Error(
-		`${path} exports neither a claw nor a euroclaw config. Export one of:\n\n  export const claw = createClaw({ … })      // the CLI reads claw.$tables\n  export const config = { … }                // the object you pass to createClaw`,
+		`${path} exports neither a claw nor a busyclaw config. Export one of:\n\n  export const claw = createClaw({ … })      // the CLI reads claw.$tables\n  export const config = { … }                // the object you pass to createClaw`,
 	);
 }

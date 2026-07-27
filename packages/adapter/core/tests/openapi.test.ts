@@ -4,12 +4,12 @@
 // declared `output` schemas land in the document. The /openapi.json route is OPT-IN and serves the
 // bare document (no envelope).
 
-import type { EuroclawPluginConfigureContext } from "@euroclaw/contracts";
-import { endpoints, route } from "@euroclaw/contracts";
-import { secrets, storedSecretModels } from "@euroclaw/secrets-plugin";
-import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
+import type { BusyclawPluginConfigureContext } from "@busyclaw/contracts";
+import { endpoints, route } from "@busyclaw/contracts";
+import { secrets, storedSecretModels } from "@busyclaw/secrets-plugin";
+import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { type } from "arktype";
-import type { Claw } from "euroclaw";
+import type { Claw } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { clawOpenApi, toRequestHandler } from "../src/index";
 
@@ -22,7 +22,7 @@ function secretsApiOverMemory() {
 	const adapter = entityAdapter(memoryAdapter(), storedSecretModels);
 	const runtime = plugin.configure?.({
 		adapter,
-	} as EuroclawPluginConfigureContext);
+	} as BusyclawPluginConfigureContext);
 	const api = runtime?.api?.(undefined);
 	if (!api) throw new Error("expected the secrets plugin to contribute an api");
 	return api;
@@ -52,7 +52,7 @@ function skillsNamespace() {
 	});
 }
 
-/** The euroclaw doc channel in the wild: rich prose DIVERGING from the error-facing describe()
+/** The busyclaw doc channel in the wild: rich prose DIVERGING from the error-facing describe()
  *  text on the input, a doc-only output, and a describe()-only read for the fallback arm. */
 function docsNamespace() {
 	return endpoints({
@@ -60,11 +60,11 @@ function docsNamespace() {
 			.input(
 				type({ name: "string" })
 					.describe("a docs create request")
-					.configure({ euroclaw: { doc: "Create a documented thing." } }),
+					.configure({ busyclaw: { doc: "Create a documented thing." } }),
 			)
 			.output(
 				type({ id: "string" }).configure({
-					euroclaw: { doc: "The created thing." },
+					busyclaw: { doc: "The created thing." },
 				}),
 			)
 			.authz(null, FIXTURE)
@@ -91,14 +91,14 @@ function objectSchema(schema: unknown): {
 	properties: Record<string, unknown>;
 	required?: string[];
 	description?: string;
-	euroclaw?: unknown;
+	busyclaw?: unknown;
 } {
 	expect(schema).toMatchObject({ type: "object" });
 	return schema as {
 		properties: Record<string, unknown>;
 		required?: string[];
 		description?: string;
-		euroclaw?: unknown;
+		busyclaw?: unknown;
 	};
 }
 
@@ -107,7 +107,7 @@ describe("clawOpenApi — the generated document", () => {
 
 	it("emits OpenAPI 3.1 with honest default info, overridable per option", () => {
 		expect(document.openapi).toBe("3.1.0");
-		expect(document.info).toEqual({ title: "euroclaw api", version: "0.0.0" });
+		expect(document.info).toEqual({ title: "busyclaw api", version: "0.0.0" });
 
 		const titled = clawOpenApi(openApiClaw(), {
 			title: "acme claw",
@@ -181,7 +181,7 @@ describe("clawOpenApi — the generated document", () => {
 		});
 	});
 
-	it("surfaces the euroclaw doc channel as the top-level schema description (docOf precedence)", () => {
+	it("surfaces the busyclaw doc channel as the top-level schema description (docOf precedence)", () => {
 		const create = document.paths["/docs/create"]?.post;
 		const request = objectSchema(
 			create?.requestBody?.content["application/json"].schema,
@@ -190,15 +190,15 @@ describe("clawOpenApi — the generated document", () => {
 		expect(request.description).toBe("Create a documented thing.");
 		// …and the raw namespaced key (arktype emits it as an opaque $ark.* registry reference) is
 		// consumed into `description`, never leaked into the document.
-		expect(request.euroclaw).toBeUndefined();
+		expect(request.busyclaw).toBeUndefined();
 		// The declared output surfaces the same way as the envelope's `data` description.
 		const envelope = objectSchema(
 			create?.responses["200"].content["application/json"].schema,
 		);
 		const data = objectSchema(envelope.properties.data);
 		expect(data.description).toBe("The created thing.");
-		expect(data.euroclaw).toBeUndefined();
-		// No euroclaw.doc ⇒ docOf falls back to the .describe() text (GET parameter arm included).
+		expect(data.busyclaw).toBeUndefined();
+		// No busyclaw.doc ⇒ docOf falls back to the .describe() text (GET parameter arm included).
 		const get = document.paths["/docs/get"]?.get;
 		const parameter = objectSchema(
 			get?.parameters?.[0]?.content["application/json"].schema,
@@ -252,7 +252,7 @@ describe("clawOpenApi — the generated document", () => {
 });
 
 describe("GET /openapi.json — the opt-in route", () => {
-	const specUrl = "https://app.test/api/euroclaw/openapi.json";
+	const specUrl = "https://app.test/api/busyclaw/openapi.json";
 
 	it("is absent by default (no option, no route)", async () => {
 		const handler = toRequestHandler(openApiClaw());

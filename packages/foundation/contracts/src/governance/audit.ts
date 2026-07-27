@@ -1,6 +1,6 @@
 // The audit CONTRACTS: the append-only, hash-chained record schema, the AuditSink port, and the
 // external-anchor shapes. The chain MECHANISM (hashing, createMemoryAudit, verifyAuditChain, the
-// audit after-gate) lives in @euroclaw/core. See docs/architecture/07-approval-and-audit.md.
+// audit after-gate) lives in @busyclaw/core. See docs/architecture/07-approval-and-audit.md.
 
 import { type } from "arktype";
 import { jsonObject } from "../common";
@@ -28,15 +28,15 @@ const AuditInputShape = {
 	"principal?": principal.or("undefined"),
 	/** The claw that produced this action, when it came from a claw run — the ACTOR-KIND fact. Present ⇒
 	 *  agent-produced; absent ⇒ human/direct. `principal` answers *on whose authority* (borrowed); this
-	 *  answers *which agent physically acted*. Stamped spoof-proof by the runtime (`euroclaw__clawId`). */
+	 *  answers *which agent physically acted*. Stamped spoof-proof by the runtime (`busyclaw__clawId`). */
 	"clawId?": OptionalString,
 	/** How the run was triggered — `interactive` (a human present to confirm) | `autonomous` (none), or
 	 *  absent for a non-run entry (a direct privacy event). The supervision axis of the actor-kind; stamped
-	 *  from mechanical fact (`euroclaw__runMode`). The schema accepts the read fact whether set or not. */
+	 *  from mechanical fact (`busyclaw__runMode`). The schema accepts the read fact whether set or not. */
 	"runMode?": OptionalRunMode,
 	/** The approver, on an action executed after a `needs-approval` was granted — the run's principal is
 	 *  the borrowed authority (*who it acted as*), this is *who approved it*. Stamped forge-proof by the
-	 *  runtime from the ApprovalRecord's `decidedBy` on resume (`euroclaw__approvedBy`). */
+	 *  runtime from the ApprovalRecord's `decidedBy` on resume (`busyclaw__approvedBy`). */
 	"decidedBy?": principal.or("undefined"),
 	/** The REDACTED details (tool args, or { messages }) — tokens only, never raw PII. */
 	payload: jsonObject,
@@ -104,7 +104,7 @@ export type AuditHead = typeof auditHead.infer;
 /**
  * A receipt that a head was published to an external witness. `kind`/`proof` are the witness's;
  * the engine treats `proof` as opaque — cryptographically validating it against the witness is the
- * anchor adapter's job (`@euroclaw/anchor-rfc3161` etc.). Validated as untrusted input (it is read
+ * anchor adapter's job (`@busyclaw/anchor-rfc3161` etc.). Validated as untrusted input (it is read
  * back from the `audit_anchor` store at verify time).
  */
 export const anchorProof = type({

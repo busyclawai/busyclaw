@@ -1,24 +1,24 @@
 /**
- * @euroclaw/storage-drizzle — the storage-protocol Adapter port over Drizzle.
+ * @busyclaw/storage-drizzle — the storage-protocol Adapter port over Drizzle.
  * You pass the drizzle `db`, provider (`sqlite` / `pg` / `mysql`), plus a model name → table map.
  *
  * Modeled on Better Auth's Drizzle adapter: https://github.com/better-auth/better-auth —
- * `packages/drizzle-adapter`. The CRUD/where translation here is euroclaw's own, written against
+ * `packages/drizzle-adapter`. The CRUD/where translation here is busyclaw's own, written against
  * Drizzle's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  *
  * Cast inventory (all inherent, exactly two seams): (1) dynamically-resolved columns fed into
  * drizzle's statically-typed operators (`col as never` / `as Parameters<typeof eq>[0]`) — a
  * schema-generic adapter cannot name concrete column types; (2) the one-`as never`-per-method row
- * bridge blessed in the Adapter contract (@euroclaw/contracts storage). Anything outside those two
+ * bridge blessed in the Adapter contract (@busyclaw/contracts storage). Anything outside those two
  * shapes is a smell.
  */
 
-import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	and,
 	asc,
@@ -441,7 +441,7 @@ export function drizzleAdapter(
 }
 
 // The schema GENERATOR — SchemaDeclaration → a Drizzle schema module. Beside the adapter because
-// its column helpers and import paths are Drizzle's; `euroclaw db generate --target drizzle`
+// its column helpers and import paths are Drizzle's; `busyclaw db generate --target drizzle`
 // dispatches here. Emits only; drizzle-kit owns the migration.
 export type { DrizzleGenerateOptions } from "./generate";
 export { generateDrizzleSchema } from "./generate";

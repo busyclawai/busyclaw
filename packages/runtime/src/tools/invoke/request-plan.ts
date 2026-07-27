@@ -7,8 +7,8 @@
 // from `binding.server` alone, and path values are percent-encoded so a value like "../../x" or
 // "a://b" stays inside its path segment and cannot escape into the authority or inject a query.
 
-import type { JsonObject, JsonValue } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import type { JsonObject, JsonValue } from "@busyclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 import type {
 	OpenApiBinding,
 	OpenApiParameterBinding,

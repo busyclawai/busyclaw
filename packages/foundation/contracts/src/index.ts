@@ -1,22 +1,22 @@
-// @euroclaw/contracts — the euroclaw protocol: the governance boundary + plugin contracts, the
-// entity schema DSL, and the port/schema definitions every euroclaw package speaks. One explicit
-// public surface (no `export *`); the engine that runs these contracts is @euroclaw/core.
+// @busyclaw/contracts — the busyclaw protocol: the governance boundary + plugin contracts, the
+// entity schema DSL, and the port/schema definitions every busyclaw package speaks. One explicit
+// public surface (no `export *`); the engine that runs these contracts is @busyclaw/core.
 
 // ── errors ───────────────────────────────────────────────────────────────────
-export type { EuroclawErrorCode, EuroclawErrorInput } from "@euroclaw/errors";
+export type { BusyclawErrorCode, BusyclawErrorInput } from "@busyclaw/errors";
 export {
 	authorizationError,
 	configurationError,
 	conflictError,
-	EuroclawError,
+	BusyclawError,
 	errorMessage,
 	isConflict,
 	stateError,
 	unsupportedOperationError,
 	validationError,
-} from "@euroclaw/errors";
+} from "@busyclaw/errors";
 // ── customer policy slices + the append-only authz change log (slice 6b; durable authz state —
-// bundle loader/version key/shadow engine in @euroclaw/authz, stores in @euroclaw/storage-durable) ──
+// bundle loader/version key/shadow engine in @busyclaw/authz, stores in @busyclaw/storage-durable) ──
 export type {
 	AuthzChangeAppend,
 	AuthzChangeRecord,
@@ -27,8 +27,8 @@ export {
 	authzChangeRecord,
 	authzChangeSchema,
 } from "./authz/change-log";
-// ── authz protocol: the model + policy-engine port (toolkit in @euroclaw/authz, engines in
-// @euroclaw/policy-*) ──
+// ── authz protocol: the model + policy-engine port (toolkit in @busyclaw/authz, engines in
+// @busyclaw/policy-*) ──
 export type { AuthzEntity, EntityDirectory } from "./authz/directory";
 export type { PolicyEngine, PolicyEngineCapabilities } from "./authz/engine";
 // ── the generic shareable-resource ACL (app-authz slice 5): the access_grant entity + store port ──
@@ -193,7 +193,7 @@ export {
 	effectStorageEntity,
 	effectStorageFields,
 } from "./effects";
-// ── sandbox egress: the enforcement port (compiler in @euroclaw/runtime, adapters in plugins) ──
+// ── sandbox egress: the enforcement port (compiler in @busyclaw/runtime, adapters in plugins) ──
 export type {
 	EgressCapability,
 	EgressPlan,
@@ -205,7 +205,7 @@ export type {
 	SandboxEgressAdapter,
 	UnenforcedNote,
 } from "./egress/port";
-// ── the engine protocol: engine-neutral durable execution (impls in @euroclaw/engine-*) ──────
+// ── the engine protocol: engine-neutral durable execution (impls in @busyclaw/engine-*) ──────
 export type {
 	ClawEngineFactory,
 	ClawEngineHandle,
@@ -238,7 +238,7 @@ export type { Event, EventSink } from "./events";
 export { event } from "./events";
 export type { ToolEffectPolicy, ToolGate, ToolGovernance } from "./govern";
 export { govern, toolEffectPolicy, toolGovernance } from "./govern";
-// ── governance ports: approval, audit, redaction (impls live in @euroclaw/core) ─
+// ── governance ports: approval, audit, redaction (impls live in @busyclaw/core) ─
 export type {
 	ApprovalMetadataResolver,
 	ApprovalRecord,
@@ -341,19 +341,19 @@ export {
 	toKebabCase,
 } from "./governance/endpoints";
 export type {
-	EuroclawCronContext,
-	EuroclawCronFlag,
-	EuroclawCronResult,
-	EuroclawCronStatus,
-	EuroclawCronTask,
-	EuroclawHttpMethod,
-	EuroclawPlugin,
-	EuroclawPluginConfigureContext,
-	EuroclawPluginRuntime,
-	EuroclawRoute,
-	EuroclawRouteContext,
-	EuroclawRouteRequest,
-	EuroclawRouteResult,
+	BusyclawCronContext,
+	BusyclawCronFlag,
+	BusyclawCronResult,
+	BusyclawCronStatus,
+	BusyclawCronTask,
+	BusyclawHttpMethod,
+	BusyclawPlugin,
+	BusyclawPluginConfigureContext,
+	BusyclawPluginRuntime,
+	BusyclawRoute,
+	BusyclawRouteContext,
+	BusyclawRouteRequest,
+	BusyclawRouteResult,
 	InferContext,
 	InferPluginApi,
 	InferPluginSchema,
@@ -460,7 +460,7 @@ export type {
 	StandardSchemaV1Like,
 } from "./standard-schema";
 export { hasToJsonSchema, isStandardSchema } from "./standard-schema";
-// ── the storage protocol (implementations live in @euroclaw/storage-*) ────────
+// ── the storage protocol (implementations live in @busyclaw/storage-*) ────────
 export type {
 	Adapter,
 	FieldAttribute,
@@ -479,7 +479,7 @@ export {
 	tableOrder,
 	uniqueConstraints,
 } from "./storage";
-// ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
+// ── streamed-run protocol shape (bridges live in @busyclaw/vendors) ──────────
 export type { TextDeltaStream } from "./stream";
 // ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──
 export type {
@@ -493,7 +493,7 @@ export type {
 	ToolTree,
 } from "./tools/descriptor";
 export {
-	EUROCLAW_TOOL_NAMESPACE,
+	BUSYCLAW_TOOL_NAMESPACE,
 	flattenToolTree,
 	toolDescriptors,
 	toolModelName,
@@ -530,7 +530,7 @@ export type {
 	SpecRegistrationStore,
 } from "./tools/registry-ports";
 // ── secret resolution: the one-door reader (Secrets/SecretProvider/ResolveContext/SecretMaterial/
-//    SecretPointer/SecretDeclaration); providers + reader impl live in @euroclaw/secrets ──
+//    SecretPointer/SecretDeclaration); providers + reader impl live in @busyclaw/secrets ──
 export type {
 	ResolveContext,
 	SecretDeclaration,
@@ -539,7 +539,7 @@ export type {
 	SecretProvider,
 	Secrets,
 } from "./tools/secrets";
-// ── tool sources: what every extractor produces (impls in @euroclaw/runtime) ──
+// ── tool sources: what every extractor produces (impls in @busyclaw/runtime) ──
 export type {
 	SourceDiagnostic,
 	SourceExtraction,

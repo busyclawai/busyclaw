@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/storage-durable",
+	"name": "@busyclaw/storage-durable",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "SQL-backed durable stores (ApprovalStore) over the @euroclaw/storage-core Adapter port \u2014 the bridge between @euroclaw/contracts' ports and any storage adapter.",
+	"description": "SQL-backed durable stores (ApprovalStore) over the @busyclaw/storage-core Adapter port \u2014 the bridge between @busyclaw/contracts' ports and any storage adapter.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,13 +23,13 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"
 	},
 	"devDependencies": {
-		"@euroclaw/storage-kysely": "workspace:*",
+		"@busyclaw/storage-kysely": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"better-sqlite3": "12.11.1",
 		"kysely": "0.29.2"

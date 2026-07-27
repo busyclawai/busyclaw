@@ -17,7 +17,7 @@ import type {
 	PolicyEngine,
 	PolicyRequest,
 	PolicyResult,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 export type ShadowDivergence = {
 	request: PolicyRequest;

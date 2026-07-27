@@ -2,23 +2,23 @@ import {
 	buildAuthzModel,
 	cedarEngine,
 	cedarPolicyPlugin,
-} from "@euroclaw/authz";
-import type { ToolCall } from "@euroclaw/contracts";
-import { createGovernance } from "@euroclaw/core";
+} from "@busyclaw/authz";
+import type { ToolCall } from "@busyclaw/contracts";
+import { createGovernance } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 
 const runEcho = (call: ToolCall) => ({ ran: call.name });
 
 // The trusted seed the runtime does from the authenticated caller — mirrored here by promoting the
-// test's convenient unprefixed `principal` to the stamped `euroclaw__principal` the mapper now reads
+// test's convenient unprefixed `principal` to the stamped `busyclaw__principal` the mapper now reads
 // (audit #7: the mapper NEVER reads the unprefixed key). Runs after createGovernance's stripReserved,
-// exactly like the runtime's resolveGovernanceContext seed and the `euroclaw__role`/config-scope
+// exactly like the runtime's resolveGovernanceContext seed and the `busyclaw__role`/config-scope
 // stamps below.
 const seedPrincipal = (
 	ctx: Record<string, unknown>,
 ): Record<string, unknown> =>
 	typeof ctx.principal === "string"
-		? { ...ctx, euroclaw__principal: ctx.principal }
+		? { ...ctx, busyclaw__principal: ctx.principal }
 		: ctx;
 
 const coreWith = (config: Parameters<typeof cedar>[0]) =>
@@ -28,7 +28,7 @@ const coreWith = (config: Parameters<typeof cedar>[0]) =>
 		runTool: runEcho,
 	});
 
-describe("@euroclaw/policy-cedar — Cedar PDP", () => {
+describe("@busyclaw/policy-cedar — Cedar PDP", () => {
 	it("permit: a tool with a matching permit policy runs", async () => {
 		const core = coreWith({
 			policies: `permit(principal, action == Action::"refund", resource);`,
@@ -136,12 +136,12 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 	it("membership: a resolved team role flows into the Cedar context and drives the decision", async () => {
 		// a policy that only permits when the actor's resolved role is `approver`
 		const policies = `permit(principal, action == Action::"send_offer", resource) when { context.role == "approver" };`;
-		// resolveContext stamps euroclaw__role exactly as the claw's `membership` resolver would (the role
+		// resolveContext stamps busyclaw__role exactly as the claw's `membership` resolver would (the role
 		// came from roleMembership({ roleOf: teamStore.roleOf }) — connecting team membership → the decision)
 		const asRole = (role: string) =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],
-				resolveContext: (ctx) => ({ ...seedPrincipal(ctx), euroclaw__role: role }),
+				resolveContext: (ctx) => ({ ...seedPrincipal(ctx), busyclaw__role: role }),
 				runTool: runEcho,
 			});
 
@@ -167,8 +167,8 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 				// resolveContext stamps the config-scope pair exactly as the claw's resolver would.
 				resolveContext: (ctx) => ({
 					...seedPrincipal(ctx),
-					euroclaw__configScope: "organization",
-					euroclaw__configScopeId: scopeId,
+					busyclaw__configScope: "organization",
+					busyclaw__configScopeId: scopeId,
 				}),
 				runTool: runEcho,
 			});
@@ -185,7 +185,7 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 		);
 		expect(scopeB.status).toBe("denied"); // a different scope → no permit matches
 
-		// A caller cannot forge the scope: euroclaw__ keys are stripped before the trusted stamp.
+		// A caller cannot forge the scope: busyclaw__ keys are stripped before the trusted stamp.
 		const unstamped = createGovernance({
 			plugins: [cedarPolicyPlugin({ policies })],
 			resolveContext: seedPrincipal,
@@ -195,8 +195,8 @@ describe("@euroclaw/policy-cedar — Cedar PDP", () => {
 			{ name: "list_pets", args: {} },
 			{
 				principal: "alice",
-				euroclaw__configScope: "organization",
-				euroclaw__configScopeId: "org-a",
+				busyclaw__configScope: "organization",
+				busyclaw__configScopeId: "org-a",
 			},
 		);
 		expect(forged.status).toBe("denied"); // stripped → context.configScopeId absent → deny
@@ -341,7 +341,7 @@ describe("model-driven cedar — slice 3", () => {
 	});
 });
 
-describe("@euroclaw/policy-cedar — context.server (spoof-proof egress fact)", () => {
+describe("@busyclaw/policy-cedar — context.server (spoof-proof egress fact)", () => {
 	const model = buildAuthzModel([
 		{ id: "petstore.getPet", source: "tool", governance: { access: "read" } },
 	]);

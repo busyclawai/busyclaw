@@ -1,6 +1,6 @@
 // The tool-registry STORE PORTS — the behavioural protocol (verbs) the durable stores satisfy,
 // kept apart from the entity/schema declarations in ./registry. Ports are types only; the impls
-// live in @euroclaw/storage-durable (createRegistryStores).
+// live in @busyclaw/storage-durable (createRegistryStores).
 
 import type { ScopeRef } from "../scope";
 import type {

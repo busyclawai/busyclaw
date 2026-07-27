@@ -1,5 +1,5 @@
-import type { ToolCall } from "@euroclaw/contracts";
-import { createGovernance } from "@euroclaw/core";
+import type { ToolCall } from "@busyclaw/contracts";
+import { createGovernance } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { type AuthWithPermission, betterAuthAccessControl } from "../src/index";
 
@@ -7,7 +7,7 @@ const runEcho = (call: ToolCall) => ({ ran: call.name });
 
 // A stub better-auth: "this user" can execute the resources/actions in `allowed`. hasPermission
 // ignores the headers (real better-auth resolves the user/org/role FROM them) and answers from the
-// requested permission — which is exactly the seam euroclaw delegates to. Records the calls.
+// requested permission — which is exactly the seam busyclaw delegates to. Records the calls.
 function stubAuth(
 	allowed: Record<string, string[]>,
 ): AuthWithPermission & { calls: { headers: Headers }[] } {
@@ -29,7 +29,7 @@ function stubAuth(
 
 const headers = new Headers({ cookie: "session=abc" });
 
-describe("@euroclaw/policy-better-auth — delegates to auth.api.hasPermission", () => {
+describe("@busyclaw/policy-better-auth — delegates to auth.api.hasPermission", () => {
 	it("permits a tool the user has permission for", async () => {
 		const auth = stubAuth({ refund: ["execute"] });
 		const core = createGovernance({

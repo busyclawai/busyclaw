@@ -1,4 +1,4 @@
-import { defineReasonCodes, type EuroclawPlugin } from "@euroclaw/contracts";
+import { defineReasonCodes, type BusyclawPlugin } from "@busyclaw/contracts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { createGovernance } from "../src/index";
 
@@ -21,12 +21,12 @@ const examplePlugin = {
 			handler: () => ({ decision: "permit" as const }),
 		},
 	],
-} satisfies EuroclawPlugin;
+} satisfies BusyclawPlugin;
 
 const costPlugin = {
 	id: "cost",
 	$Infer: {} as { budget: { limitUsd: number } },
-} satisfies EuroclawPlugin;
+} satisfies BusyclawPlugin;
 
 describe("plugin folds — the better-auth pattern (compile-time, checked by tsc)", () => {
 	it("folds $Infer onto ec.$Infer (one and many plugins)", () => {
@@ -80,15 +80,15 @@ describe("plugin folds — the better-auth pattern (compile-time, checked by tsc
 		expect(seen).toBe("pro");
 	});
 
-	it("reserved euroclaw__* context keys cannot be forged by the caller", async () => {
+	it("reserved busyclaw__* context keys cannot be forged by the caller", async () => {
 		const seen: unknown[] = [];
 		const ec = createGovernance();
 		ec.registerGate({
 			id: "identity",
 			matcher: () => true,
 			handler: (_call, ctx) => {
-				seen.push(ctx.euroclaw__principal); // the caller's forged value was stripped → undefined
-				ctx.euroclaw__principal = "real-subject"; // a trusted gate establishes it
+				seen.push(ctx.busyclaw__principal); // the caller's forged value was stripped → undefined
+				ctx.busyclaw__principal = "real-subject"; // a trusted gate establishes it
 				return { decision: "permit" };
 			},
 			sealed: true,
@@ -97,14 +97,14 @@ describe("plugin folds — the better-auth pattern (compile-time, checked by tsc
 			id: "reader",
 			matcher: () => true,
 			handler: (_call, ctx) => {
-				seen.push(ctx.euroclaw__principal); // now reads the trusted value
+				seen.push(ctx.busyclaw__principal); // now reads the trusted value
 				return { decision: "permit" };
 			},
 		});
 
 		await ec.handleToolCall(
 			{ name: "x", args: {} },
-			{ euroclaw__principal: "FORGED" },
+			{ busyclaw__principal: "FORGED" },
 		);
 		expect(seen).toEqual([undefined, "real-subject"]);
 	});

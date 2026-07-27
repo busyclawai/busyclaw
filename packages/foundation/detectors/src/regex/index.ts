@@ -1,7 +1,7 @@
-// @euroclaw/detectors/regex — the deterministic, synchronous PII detector: high-precision spans
+// @busyclaw/detectors/regex — the deterministic, synchronous PII detector: high-precision spans
 // for the categories a pattern reaches EXACTLY. Offsets are plain JavaScript string indices (no
 // code-point conversion — that boundary is Presidio's problem, not this one). Detection is policy,
-// so this lives outside @euroclaw/core; the redactor owns overlap resolution, dedup, and the
+// so this lives outside @busyclaw/core; the redactor owns overlap resolution, dedup, and the
 // mapping store, so a span here is just {where, what, the matched text}.
 //
 // PRECISION over recall, deliberately: over-detection costs one needless placeholder (safe),
@@ -9,8 +9,8 @@
 // Luhn, IBAN mod-97), and phone carries the guards deckerhr's v1 taught — a 7..15 digit gate, a
 // year-range reject ("2021-2026" is employment, not a number), and suppression when the digits
 // live inside a stronger match (an email's local part, a card, an IBAN). Names/addresses/dates
-// are NOT here — they need NER (@euroclaw/detectors/presidio).
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
+// are NOT here — they need NER (@busyclaw/detectors/presidio).
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
 
 // Pragmatic, not RFC 5321 — the RFC grammar matches things no message contains and misses nothing
 // one does. Every quantifier is BOUNDED and the domain labels exclude `.` (dots arrive only via the

@@ -8,7 +8,7 @@
 // Slug regex + size cap run BEFORE extraction: the slug keeps addresses collision-safe (dots are
 // the address separator), and the byte cap is the upload bound the extractor's node budget assumes.
 // The authored, agent-facing register_openapi_spec TOOL lives in the assembly package
-// (packages/euroclaw/src/registry.ts) — runtime may not depend on @euroclaw/vendors; runtime exports
+// (packages/busyclaw/src/registry.ts) — runtime may not depend on @busyclaw/vendors; runtime exports
 // only this flow and the domain-verb action constant.
 
 import {
@@ -22,7 +22,7 @@ import {
 	type SpecRegistrationStore,
 	type ToolGovernance,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
@@ -67,7 +67,7 @@ export type SpecRegistry = {
 
 /**
  * The governed registration verb as an authz action input — typed STRUCTURALLY because runtime does
- * not depend on @euroclaw/authz; the assembly hands this to buildAuthzModel, where AuthzActionInput
+ * not depend on @busyclaw/authz; the assembly hands this to buildAuthzModel, where AuthzActionInput
  * is enforced. "Who may register" is a policy over this action, never a code path.
  */
 export const REGISTER_OPENAPI_SPEC_ACTION: {

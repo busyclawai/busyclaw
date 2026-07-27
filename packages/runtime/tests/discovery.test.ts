@@ -1,7 +1,7 @@
 // The mechanics of `presence: "discoverable"` at the runtime layer: what reaches the provider, what
 // the ingress resolves, and the invariant that a runtime with nothing discoverable is untouched.
 
-import type { ToolDefinitionSet } from "@euroclaw/contracts";
+import type { ToolDefinitionSet } from "@busyclaw/contracts";
 import { jsonSchema, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, govern } from "../src/index";
@@ -76,7 +76,7 @@ function callingModel(
 /** A model that searches once and collects what the search result actually said. */
 function searchingModel(query: string, results: string[]): V2Model {
 	return callingModel(
-		{ name: "euroclaw__search", input: JSON.stringify({ query }) },
+		{ name: "busyclaw__search", input: JSON.stringify({ query }) },
 		{ names: [] },
 		results,
 	);
@@ -115,7 +115,7 @@ describe("discovery — a runtime with nothing discoverable is untouched", () =>
 	it("a reserved-namespace path collides LOUDLY once discovery is active", () => {
 		const ran: string[] = [];
 		const tools: ToolDefinitionSet = {
-			"euroclaw.search": recordingTool(ran, "impostor"),
+			"busyclaw.search": recordingTool(ran, "impostor"),
 			hidden: recordingTool(ran, "hidden", "discoverable"),
 		};
 		expect(() =>
@@ -133,14 +133,14 @@ describe("discovery — a runtime with nothing discoverable is untouched", () =>
 			model: callingModel(null, offered),
 			tools: { hidden: recordingTool(ran, "hidden", "discoverable") },
 			resolveTools: () => ({
-				"euroclaw.search": recordingTool(ran, "impostor"),
+				"busyclaw.search": recordingTool(ran, "impostor"),
 			}),
 			warn: (message) => warnings.push(message),
 		});
 		await runtime.generate("go");
 		expect(offered.names.sort()).toEqual([
-			"euroclaw__execute",
-			"euroclaw__search",
+			"busyclaw__execute",
+			"busyclaw__search",
 		]);
 		expect(
 			warnings.some((message) => message.includes("namespace is reserved")),
@@ -161,8 +161,8 @@ describe("discovery — the provider edge", () => {
 		});
 		await runtime.generate("go");
 		expect(offered.names.sort()).toEqual([
-			"euroclaw__execute",
-			"euroclaw__search",
+			"busyclaw__execute",
+			"busyclaw__search",
 			"readDoc",
 		]);
 	});
@@ -194,7 +194,7 @@ describe("discovery — the provider edge", () => {
 		});
 		expect(
 			projection.resolveCall({
-				name: "euroclaw__execute",
+				name: "busyclaw__execute",
 				input: { path: "docs.admin.publish", args: { id: "d1" } },
 			}),
 		).toEqual({ path: "docs.admin.publish", args: { id: "d1" } });
@@ -202,14 +202,14 @@ describe("discovery — the provider edge", () => {
 		// no longer passes the call through to the meta-tool for its executable to reject.
 		//
 		// Where it fails moved for a governance reason. Passing it through relied on the floor skipping
-		// unmodeled actions; once the floor gates every call, `euroclaw.execute` would reach a policy
+		// unmodeled actions; once the floor gates every call, `busyclaw.execute` would reach a policy
 		// decision — the one thing discovery.ts exists to prevent, because a permit naming it would
 		// unlock every discoverable tool at once. Refusing the broken ENCODING at the ingress keeps the
 		// meta-tool out of every decision, and keeps the two facts distinct: "you named no target" is
 		// not "you may not do that", and only the first tells the model how to fix its call.
-		for (const input of [{ args: {} }, { path: "euroclaw.execute" }]) {
+		for (const input of [{ args: {} }, { path: "busyclaw.execute" }]) {
 			expect(() =>
-				projection.resolveCall({ name: "euroclaw__execute", input }),
+				projection.resolveCall({ name: "busyclaw__execute", input }),
 			).toThrow(/needs the canonical `path`/);
 		}
 	});
@@ -220,7 +220,7 @@ describe("discovery — the provider edge", () => {
 		const runtime = createRuntime({
 			model: callingModel(
 				{
-					name: "euroclaw__execute",
+					name: "busyclaw__execute",
 					input: JSON.stringify({ path: "docs.admin.publish", args: {} }),
 				},
 				offered,

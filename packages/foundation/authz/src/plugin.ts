@@ -1,23 +1,23 @@
-// The scaffolding that turns any PolicyEngine into a euroclaw plugin: a cross-cutting,
+// The scaffolding that turns any PolicyEngine into a busyclaw plugin: a cross-cutting,
 // deny-by-default before-gate that runs `mapCall → engine.authorize → GateDecision` on every
 // matched call. Engine-neutral — it speaks PARC, never Cedar/OPA/better-auth.
 //
 // Each policy plugin declares the REQUEST CONTEXT it needs (its `Ctx`) — Cedar wants a
 // `principal`, better-auth wants `headers`. That `Ctx` is folded onto the claw's `run(prompt, ctx)`
-// (the better-auth $InferContext pattern), so euroclaw invents no identity of its own: you pass
+// (the better-auth $InferContext pattern), so busyclaw invents no identity of its own: you pass
 // exactly what the installed engines ask for, and each reads its own thing.
 
 import type {
-	EuroclawPlugin,
+	BusyclawPlugin,
 	GateDecision,
 	PolicyEngine,
 	PolicyRequest,
 	PolicyResult,
 	ToolCall,
 	TurnContext,
-} from "@euroclaw/contracts";
-import { policyRequest, policyResult } from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { policyRequest, policyResult } from "@busyclaw/contracts";
+import { validationError } from "@busyclaw/errors";
 import { type } from "arktype";
 
 /**
@@ -30,7 +30,7 @@ import { type } from "arktype";
  */
 export type PolicyPlugin<
 	Ctx extends Record<string, unknown> = Record<string, never>,
-> = EuroclawPlugin<"no-cron"> & {
+> = BusyclawPlugin<"no-cron"> & {
 	$InferContext: Ctx;
 };
 
@@ -54,7 +54,7 @@ export type PolicyPluginConfig<Ctx extends Record<string, unknown>> = {
 };
 
 /**
- * Adapt any `PolicyEngine` into a euroclaw plugin. Engines are deny-by-default, so installing
+ * Adapt any `PolicyEngine` into a busyclaw plugin. Engines are deny-by-default, so installing
  * this turns the agent into an allowlist; `Ctx` (inferred from `mapCall`) becomes the context the
  * caller must supply at `run`.
  */

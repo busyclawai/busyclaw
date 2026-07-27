@@ -3,14 +3,14 @@
 // byte-for-byte as the policy wrote it. The declaration and the policy come from DIFFERENT plugins
 // here (escalations() declares the key, cedar() writes the rule), which is the seam's whole point.
 
-import type { EuroclawPlugin } from "@euroclaw/contracts";
-import { userPrincipal } from "@euroclaw/contracts";
-import { createStoredRedactor, noopDetector } from "@euroclaw/core";
-import { cedar } from "@euroclaw/policy-cedar";
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createPiiMappingStore } from "@euroclaw/storage-durable";
+import type { BusyclawPlugin } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
+import { createStoredRedactor, noopDetector } from "@busyclaw/core";
+import { cedar } from "@busyclaw/policy-cedar";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
-import { createClaw, govern } from "euroclaw";
+import { createClaw, govern } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { type Escalation, escalations } from "../src/index";
 
@@ -74,7 +74,7 @@ function clawWith(input: {
 	access: "read" | "write";
 	// `"no-cron"` so the flag survives the helper: erasing it to the default union would make
 	// createClaw ask this test for a cronHandler.
-	plugins: readonly EuroclawPlugin<"no-cron">[];
+	plugins: readonly BusyclawPlugin<"no-cron">[];
 	onRun?: () => void;
 	/** The host's one operator-notice door — what a failing observer is reported through. */
 	warn?: (message: string) => void;

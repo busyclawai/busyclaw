@@ -1,10 +1,10 @@
 // createEffectStore — the EffectStore port (durable idempotency + lease-based execution), backed by
-// any @euroclaw/storage-core Adapter. Persistence goes through `entityDb`: JSON columns (output,
+// any @busyclaw/storage-core Adapter. Persistence goes through `entityDb`: JSON columns (output,
 // error, compensation) are (de)serialized by the schema layer, the storage-only `leaseTokenHash`
 // drops on read (returned:false — absent from the read record type AND the read validator), and
 // every row crossing the adapter boundary is parsed against the effect record schema.
 
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type EffectClaim,
 	type EffectRecord,
@@ -14,12 +14,12 @@ import {
 	jsonValue as jsonValueSchema,
 	stateError,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	type EntityPatch,
 	type EntityWhere,
 	entityDb,
-} from "@euroclaw/storage-core";
+} from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";

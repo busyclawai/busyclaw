@@ -24,7 +24,7 @@ export type EntityFieldMeta = FieldAttribute & {
 	 *  reads as the validation error ("must be <description>") and lands as standard JSON-Schema
 	 *  `description` wherever a derived schema emits `toJsonSchema()`. */
 	description?: string;
-	/** Rich behavioral prose — rides the euroclaw doc meta channel (`{ euroclaw: { doc } }`,
+	/** Rich behavioral prose — rides the busyclaw doc meta channel (`{ busyclaw: { doc } }`,
 	 *  governance/doc.ts) on the materialized field type, read via `docOf`; never part of
 	 *  validation error messages. */
 	doc?: string;
@@ -293,7 +293,7 @@ export const field = {
 	// the boundary validator (`ark = schema`), so the two can never drift the way a hand-set
 	// `jsonObject<T>({ ark })` pair can. The store read IS the boundary — with a real `ark`, the
 	// entity's record schema validates this column on every read, not just "is it json". Use this
-	// where euroclaw OWNS the shape; keep `jsonObject`/`jsonValue` for genuinely opaque payloads.
+	// where busyclaw OWNS the shape; keep `jsonObject`/`jsonValue` for genuinely opaque payloads.
 	// The persisted shape is unchanged (`type: "json"`) — this is a type+validation change, not a
 	// migration. The schema dictates the root, so one constructor covers object- and value-rooted
 	// shapes alike.
@@ -386,7 +386,7 @@ function materializeArk(definition: unknown): Type {
  * describes the INNER type BEFORE the `| undefined` union: a required-field error then reads
  * "must be <description>", an optional union keeps arktype's branch rendering ("… or undefined",
  * unchanged from an undocumented field), and JSON-Schema emission carries the description on the
- * typed branch instead of spamming the union wrapper. `doc` configures the euroclaw meta channel
+ * typed branch instead of spamming the union wrapper. `doc` configures the busyclaw meta channel
  * on the FULL property type — `docOf` reads it off exactly what the derived shape holds. The
  * optional form composes from `ark` (every builder constructs `optionalArk` as `ark | undefined`,
  * so this is the same union); fields without docs never reach this — they stay on the raw
@@ -399,7 +399,7 @@ function documentedField(field: EntityField, optional: boolean): Type {
 	}
 	if (optional) materialized = materialized.or("undefined");
 	if (field.doc !== undefined) {
-		materialized = materialized.configure({ euroclaw: { doc: field.doc } });
+		materialized = materialized.configure({ busyclaw: { doc: field.doc } });
 	}
 	return materialized;
 }

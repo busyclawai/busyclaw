@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/errors",
+	"name": "@busyclaw/errors",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Shared standardized error contract for euroclaw packages.",
+	"description": "Shared standardized error contract for busyclaw packages.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {

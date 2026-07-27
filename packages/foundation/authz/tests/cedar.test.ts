@@ -1,4 +1,4 @@
-import { MODEL_ANNOTATION_MAX_LENGTH } from "@euroclaw/contracts";
+import { MODEL_ANNOTATION_MAX_LENGTH } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	actionEntitiesFromModel,
@@ -117,8 +117,8 @@ describe("modelToCedarSchema — the model rendered as Cedar schema text", () =>
 			...model,
 			entityTypes: [{ type: "Tool", parents: ["McpServer"] }],
 		};
-		const text = modelToCedarSchema(withParents, { namespace: "Euroclaw" });
-		expect(text).toContain("namespace Euroclaw {");
+		const text = modelToCedarSchema(withParents, { namespace: "Busyclaw" });
+		expect(text).toContain("namespace Busyclaw {");
 		expect(text).toContain("entity Tool in [McpServer] tags String;");
 		expect(text).toContain("entity McpServer tags String;");
 	});

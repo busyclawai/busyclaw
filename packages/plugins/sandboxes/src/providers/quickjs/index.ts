@@ -1,9 +1,9 @@
 // The QuickJS provider: model-authored JavaScript in an in-process WebAssembly interpreter, wrapping
-// `@sebastianwessel/quickjs` (sync variant) with euroclaw's audited hardening posture. The wasm
+// `@sebastianwessel/quickjs` (sync variant) with busyclaw's audited hardening posture. The wasm
 // dependency is imported at module top HERE ONLY — this subpath keeps it out of the root import
 // graph (channels subpath-isolation precedent).
 
-import { configurationError } from "@euroclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 import variant from "@jitl/quickjs-ng-wasmfile-release-sync";
 import {
 	createVirtualFileSystem,

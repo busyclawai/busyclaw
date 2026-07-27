@@ -1,0 +1,548 @@
+// slice-0 proof: the governance FLOOR is assembly-internal and ALWAYS-ON. A claw with ZERO policy
+// config is governed by SYSTEM_POSTURE (reads run; an unconfirmed autonomous write → needs-approval),
+// and a `cedar({ policies })` SOURCE merges UNDER the sealed floor (`forbid` wins over the floor's
+// permit; a source `permit` cannot punch through the floor's forbid). No `cedar()` is connected for
+// the engine here — the engine is the assembly's; `cedar()` only contributes policy TEXT.
+
+import type { BusyclawPlugin } from "@busyclaw/contracts";
+import { MODEL_ANNOTATION_MAX_LENGTH } from "@busyclaw/contracts";
+import { createMemoryAudit } from "@busyclaw/core";
+import { cedar } from "@busyclaw/policy-cedar";
+import { runtimeRunOptionsWithCaller } from "@busyclaw/runtime";
+import { jsonSchema, tool } from "ai";
+import { describe, expect, it } from "vitest";
+import { createClaw, govern } from "../src/index";
+import {
+	durableRedactor,
+	owned,
+	type V2Model,
+	withPrincipal,
+} from "./fixtures";
+
+/** A mock model that calls `toolName` once (step 0), then answers "done" (step 1). */
+function toolCallModel(toolName: string): V2Model {
+	let step = 0;
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async () => {
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
+			if (step++ === 0) {
+				return {
+					content: [
+						{
+							type: "tool-call" as const,
+							toolCallId: "c1",
+							toolName,
+							input: "{}",
+						},
+					],
+					finishReason: { unified: "tool-calls" as const, raw: undefined },
+					usage,
+					warnings: [],
+				};
+			}
+			return {
+				content: [{ type: "text" as const, text: "done" }],
+				finishReason: { unified: "stop" as const, raw: undefined },
+				usage,
+				warnings: [],
+			};
+		},
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	};
+}
+
+/** The same, but recording every tool RESULT it is handed back — what the MODEL actually reads. */
+function resultRecordingModel(toolName: string, seen: string[]): V2Model {
+	let step = 0;
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async (options) => {
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
+			for (const message of options.prompt) {
+				if (message.role !== "tool") continue;
+				for (const part of message.content) {
+					if (part.type !== "tool-result") continue;
+					seen.push(
+						part.output.type === "text"
+							? part.output.value
+							: JSON.stringify(part.output),
+					);
+				}
+			}
+			if (step++ === 0) {
+				return {
+					content: [
+						{
+							type: "tool-call" as const,
+							toolCallId: "c1",
+							toolName,
+							input: "{}",
+						},
+					],
+					finishReason: { unified: "tool-calls" as const, raw: undefined },
+					usage,
+					warnings: [],
+				};
+			}
+			return {
+				content: [{ type: "text" as const, text: "done" }],
+				finishReason: { unified: "stop" as const, raw: undefined },
+				usage,
+				warnings: [],
+			};
+		},
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	};
+}
+
+const classedTool = (access: "read" | "write", onRun: () => void) =>
+	govern(
+		tool({
+			description: `${access} a doc`,
+			inputSchema: jsonSchema<Record<string, never>>({
+				type: "object",
+				properties: {},
+			}),
+			execute: async () => {
+				onRun();
+				return { ok: true };
+			},
+		}),
+		{ access },
+	);
+
+const runCtx = { principal: "alice" };
+
+describe("createClaw authz floor (slice 0)", () => {
+	it("zero-source claw: a read-class action runs, an unconfirmed autonomous write → needs-approval", async () => {
+		// A read: the floor permits reads unconditionally → the tool runs, the run completes.
+		let readRan = false;
+		const { db: readDb, redactor: readRedactor } = durableRedactor();
+		const readClaw = owned({
+			database: readDb,
+			redaction: { redactor: readRedactor },
+			model: toolCallModel("readDoc"),
+			tools: { readDoc: classedTool("read", () => (readRan = true)) },
+		});
+		const readResult = await readClaw.api.generate({
+			prompt: "read",
+			ctx: runCtx,
+		});
+		expect(readResult.status).toBe("completed");
+		expect(readRan).toBe(true);
+
+		// A write, run autonomously (the default): the floor forbids an unconfirmed autonomous write,
+		// but confirmation WOULD unblock it → needs-approval, and the tool never ran.
+		let writeRan = false;
+		const { db: writeDb, redactor: writeRedactor } = durableRedactor();
+		const writeClaw = owned({
+			database: writeDb,
+			redaction: { redactor: writeRedactor },
+			model: toolCallModel("writeDoc"),
+			tools: { writeDoc: classedTool("write", () => (writeRan = true)) },
+		});
+		const writeResult = await writeClaw.api.generate({
+			prompt: "write",
+			ctx: runCtx,
+		});
+		expect(writeResult.status).toBe("waiting_approval");
+		expect(writeRan).toBe(false);
+	});
+
+	it("a cedar({ policies }) source merges UNDER the floor: forbid wins, permit can't punch through", async () => {
+		// A source FORBID on a read wins over the floor's permit-reads → denied, the tool never ran.
+		// (The run completes: the model sees the tool denial and answers.)
+		let readRan = false;
+		const { db: readDb, redactor: readRedactor } = durableRedactor();
+		const forbidClaw = owned({
+			database: readDb,
+			redaction: { redactor: readRedactor },
+			model: toolCallModel("readDoc"),
+			tools: { readDoc: classedTool("read", () => (readRan = true)) },
+			plugins: [
+				cedar({
+					policies: `forbid(principal, action == Action::"readDoc", resource);`,
+				}),
+			],
+		});
+		const forbidResult = await forbidClaw.api.generate({
+			prompt: "read",
+			ctx: runCtx,
+		});
+		expect(forbidResult.status).toBe("completed");
+		expect(readRan).toBe(false);
+
+		// A source PERMIT on a write cannot punch through the floor's forbid on an unconfirmed
+		// autonomous write → still needs-approval, the tool never ran.
+		let writeRan = false;
+		const { db: writeDb, redactor: writeRedactor } = durableRedactor();
+		const permitClaw = owned({
+			database: writeDb,
+			redaction: { redactor: writeRedactor },
+			model: toolCallModel("writeDoc"),
+			tools: { writeDoc: classedTool("write", () => (writeRan = true)) },
+			plugins: [
+				cedar({
+					policies: `permit(principal, action == Action::"writeDoc", resource);`,
+				}),
+			],
+		});
+		const permitResult = await permitClaw.api.generate({
+			prompt: "write",
+			ctx: runCtx,
+		});
+		expect(permitResult.status).toBe("waiting_approval");
+		expect(writeRan).toBe(false);
+	});
+});
+
+// Audit #7 — one principal, resolved once, one read. The tool floor's `cedarMapCall` authorizes as the
+// ONE stamped `busyclaw__principal` (seeded by the trusted assembly from the authenticated caller), NEVER
+// the caller-controllable unprefixed `ctx.principal`. Pre-fix, a forged `ctx.principal` drove the Cedar
+// decision while audit recorded the stamped one — decision ≠ record, an impersonation with a divergent
+// audit trail. These prove the divergence is closed.
+describe("identity seam — audit #7 (the stamped principal is the ONE the floor reads)", () => {
+	it("a forged ctx.principal does NOT drive the decision; audit records the stamped principal", async () => {
+		// The inverted #7 repro: a FORGED unprefixed `principal: "admin"` in the ctx, next to the stamped
+		// `busyclaw__principal: "user:bob"` the caller seeds. A slice FORBIDS bob's read (but would let the
+		// forged admin read, since SYSTEM_POSTURE permits reads for any principal).
+		let readRan = false;
+		const audit = createMemoryAudit();
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			redaction: { redactor },
+			audit,
+			model: toolCallModel("readDoc"),
+			tools: { readDoc: classedTool("read", () => (readRan = true)) },
+			plugins: [
+				cedar({
+					policies: `forbid(principal == User::"user:bob", action == Action::"readDoc", resource);`,
+				}),
+			],
+		});
+		// `$context.runtime` runs the SAME assembled floor; the ctx carries the forged `admin`, the caller
+		// option seeds the trusted `user:bob` (post-stripReserved, spoof-proof).
+		const result = await claw.$context.runtime.generate(
+			"read",
+			{ principal: "admin" },
+			runtimeRunOptionsWithCaller(undefined, "user:bob"),
+		);
+		// DENIED — the mapper used the STAMPED bob (whom the forbid targets), not the forged admin (whom
+		// the floor would have let read). Pre-fix (mapper read `ctx.principal`), this read would have RUN.
+		expect(result.status).toBe("completed");
+		expect(readRan).toBe(false);
+		// …and the audit recorded bob — the SAME identity the decision was made as (no divergence).
+		const readEntry = audit.entries().find((entry) => entry.name === "readDoc");
+		expect(readEntry?.status).toBe("denied");
+		expect(readEntry?.principal).toBe("user:bob");
+	});
+
+	it("the caller of a run becomes the floor's principal (the seed, end-to-end through the api)", async () => {
+		// No identity resolver — the ONLY principal source is the authenticated api caller. A slice forbids
+		// that caller's read, so the read denying PROVES the caller became the floor's PARC principal.
+		let readRan = false;
+		const audit = createMemoryAudit();
+		const { db, redactor } = durableRedactor();
+		const claw = withPrincipal(
+			createClaw({
+				database: db,
+				redaction: { redactor },
+				audit,
+				model: toolCallModel("readDoc"),
+				tools: { readDoc: classedTool("read", () => (readRan = true)) },
+				plugins: [
+					cedar({
+						policies: `forbid(principal == User::"user:alice", action == Action::"readDoc", resource);`,
+					}),
+				],
+			}),
+			"user:alice",
+		);
+		// The api caller `{ principal: "user:alice" }` (injected by withPrincipal at arg index 1) is seeded
+		// as `busyclaw__principal` in the trusted context assembly.
+		const result = await claw.api.generate({ prompt: "read", ctx: {} });
+		expect(result.status).toBe("completed");
+		expect(readRan).toBe(false);
+		const readEntry = audit.entries().find((entry) => entry.name === "readDoc");
+		expect(readEntry?.principal).toBe("user:alice");
+	});
+
+	it("no stamped principal → the floor fails CLOSED (a modeled action is refused)", async () => {
+		// No caller, no identity resolver → nothing seeds `busyclaw__principal`. The mapper refuses to
+		// build a request for nobody, so even a floor-permitted read is refused (fail-closed, not permit).
+		let readRan = false;
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			redaction: { redactor },
+			model: toolCallModel("readDoc"),
+			tools: { readDoc: classedTool("read", () => (readRan = true)) },
+		});
+		await expect(claw.$context.runtime.generate("read", {})).rejects.toThrow(
+			/no stamped principal/,
+		);
+		expect(readRan).toBe(false);
+	});
+});
+
+// The plugin-extensible policy-ANNOTATION seam: a plugin declares which Cedar annotation keys it
+// consumes (the annotation analog of a `shareable` kind — the key is opaque to governance, the plugin
+// owns the meaning), and a declared key on a DETERMINING policy rides the decision out to an
+// after-gate. That is how an escalation gets routed without Cedar needing a third decision type.
+describe("policy annotations — declared by plugins, carried on the decision", () => {
+	const escalationPlugin = (seen: string[]): BusyclawPlugin => ({
+		id: "escalation",
+		// The declaration IS the allowlist: only these keys leave the engine.
+		policyAnnotations: [{ key: "escalate" }],
+		policies: [
+			{
+				name: "escalate:accessibility-team",
+				mode: "enforce",
+				cedar: `@escalate("team:accessibility")
+permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
+			},
+		],
+		afterGates: [
+			{
+				id: "escalation-router",
+				matcher: () => true,
+				handler: (_call, _ctx, outcome) => {
+					// The plugin acts on its OWN annotation — here just recording where it would route.
+					if ("annotations" in outcome && outcome.annotations?.escalate) {
+						seen.push(outcome.annotations.escalate);
+					}
+				},
+			},
+		],
+	});
+
+	it("a declared annotation on the deciding policy reaches the after-gate", async () => {
+		const routed: string[] = [];
+		const { db, redactor } = durableRedactor();
+		let ran = false;
+		const claw = owned({
+			database: db,
+			model: toolCallModel("write_doc"),
+			redaction: { redactor },
+			plugins: [escalationPlugin(routed)],
+			tools: {
+				write_doc: govern(
+					tool({
+						description: "write",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => {
+							ran = true;
+							return { ok: true };
+						},
+					}),
+					{ access: "write" },
+				),
+			},
+		});
+
+		// An autonomous write parks (the floor forbids unconfirmed autonomous writes; the slice would
+		// permit it once confirmed) — so the slice is a DETERMINING policy and its @escalate rides out.
+		const result = await claw.api.generate({ prompt: "write" });
+		expect(result.status).toBe("waiting_approval");
+		expect(ran).toBe(false);
+		expect(routed).toContain("team:accessibility");
+	});
+
+	it("an UNDECLARED annotation is inert — the allowlist bounds what enters the log", async () => {
+		const routed: string[] = [];
+		const { db, redactor } = durableRedactor();
+		const plugin = escalationPlugin(routed);
+		const claw = owned({
+			database: db,
+			model: toolCallModel("write_doc"),
+			redaction: { redactor },
+			// Same policy, but the plugin declares NOTHING — so `escalate` never leaves the engine.
+			plugins: [{ ...plugin, policyAnnotations: [] }],
+			tools: {
+				write_doc: govern(
+					tool({
+						description: "write",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => ({ ok: true }),
+					}),
+					{ access: "write" },
+				),
+			},
+		});
+
+		expect((await claw.api.generate({ prompt: "write" })).status).toBe(
+			"waiting_approval",
+		);
+		expect(routed).toEqual([]);
+	});
+});
+
+// The AUDIENCE half of the same seam. Declaring a key says WHAT escapes the engine; `audience` says
+// TO WHOM — and the two readers are strangers: a host annotation is an internal id an after-gate
+// routes on, a model annotation is prose the agent that just got refused is meant to read. This
+// proves the wall in both directions on the one path where both are live at once.
+describe("policy annotations — the audience wall, end to end", () => {
+	const GUIDANCE =
+		"Salary fields need HR approval — ask the requester to route this to People Ops.";
+
+	/** A claw whose only tool is forbidden by a rule that speaks to BOTH audiences at once. */
+	const forbiddenSalaryClaw = (input: {
+		seen: string[];
+		routed: string[];
+		guidance?: string;
+	}) => {
+		const { db, redactor } = durableRedactor();
+		const plugin: BusyclawPlugin = {
+			id: "salary-policy",
+			policyAnnotations: [
+				{ key: "escalate" },
+				{ key: "guidance", audience: "model" },
+			],
+			policies: [
+				{
+					name: "salary:forbid",
+					mode: "enforce",
+					cedar: `@escalate("betterauth:team_eng")
+@guidance("${input.guidance ?? GUIDANCE}")
+forbid(principal, action == Action::"read_salary", resource);`,
+				},
+			],
+			afterGates: [
+				{
+					id: "salary-router",
+					matcher: () => true,
+					handler: (_call, _ctx, outcome) => {
+						if ("annotations" in outcome && outcome.annotations?.escalate) {
+							input.routed.push(outcome.annotations.escalate);
+						}
+					},
+				},
+			],
+		};
+		return owned({
+			database: db,
+			model: resultRecordingModel("read_salary", input.seen),
+			redaction: { redactor },
+			plugins: [plugin],
+			tools: {
+				read_salary: govern(
+					tool({
+						description: "read a salary",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async () => ({ salary: 1 }),
+					}),
+					{ access: "read" },
+				),
+			},
+		});
+	};
+
+	it("a DENIED call hands the model the guidance and keeps the escalation target from it", async () => {
+		const seen: string[] = [];
+		const routed: string[] = [];
+		const claw = forbiddenSalaryClaw({ seen, routed });
+
+		expect((await claw.api.generate({ prompt: "read" })).status).toBe(
+			"completed",
+		);
+		const governance = JSON.parse(seen[0] ?? "{}") as {
+			__governance?: string;
+			annotations?: Record<string, string>;
+		};
+		expect(governance.__governance).toBe("denied");
+		expect(governance.annotations).toEqual({ guidance: GUIDANCE });
+		// The wall, stated as the thing that would actually go wrong: the internal id the host routes
+		// on never appears ANYWHERE in what the model was handed — not under a different key either.
+		expect(seen[0]).not.toContain("betterauth:team_eng");
+		// …and the host lost nothing. The after-gate still gets its target, unchanged.
+		expect(routed).toEqual(["betterauth:team_eng"]);
+	});
+
+	it("a value over the bound fails the ASSEMBLY — the claw never builds", () => {
+		// The bound is enforced where policy text is indexed, which is construction. So an over-long
+		// guidance is a startup failure an author fixes, not a surprise mid-run.
+		expect(() =>
+			forbiddenSalaryClaw({
+				seen: [],
+				routed: [],
+				guidance: "x".repeat(MODEL_ANNOTATION_MAX_LENGTH + 1),
+			}),
+		).toThrow(/@guidance/);
+	});
+});
+
+// H-04's acceptance criterion, stated as three calls a zero-config claw must refuse to just run.
+//
+// The finding was that the floor's action inventory had holes, and a hole read as permission: an
+// action the model did not contain was one the gate never matched, so the call proceeded ungoverned.
+// Each case below is one of the ways an action used to fall out of that inventory.
+describe("the floor's action inventory has no holes (H-04)", () => {
+	it("an UNSTAMPED tool is a write, not an omission", async () => {
+		let ran = false;
+		const { db, redactor } = durableRedactor();
+		// No `access` — the cheapest mistake available, and previously the one that produced an
+		// ungoverned tool: no access class meant no modeled action meant the gate skipped the call.
+		const unstamped = govern(
+			tool({
+				description: "do a thing",
+				inputSchema: jsonSchema<Record<string, never>>({
+					type: "object",
+					properties: {},
+				}),
+				execute: async () => {
+					ran = true;
+					return { ok: true };
+				},
+			}),
+			{},
+		);
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: toolCallModel("doThing"),
+			tools: { doThing: unstamped },
+		});
+
+		const result = await claw.api.generate({ prompt: "go", ctx: runCtx });
+		expect(result.status).toBe("waiting_approval");
+		expect(ran).toBe(false);
+	});
+
+	// The other two cases in H-04's acceptance list are covered where the machinery actually lives:
+	//
+	//   - a DYNAMICALLY REGISTERED operation — tests/secrets-wiring.test.ts. `resolveTools` is
+	//     assembly-owned (derived from the registry stores), not a createClaw option, so the honest
+	//     test is the real path: register an OpenAPI spec, run, and watch the invoker reach the wire.
+	//     Those two cases pass ONLY because the run's registered actions now reach the floor — before
+	//     that they were denied as unmodeled, and the outbound call never happened.
+	//
+	//   - `run_code` — packages/plugins/sandboxes. Its stamp is asserted beside the tool it belongs to.
+});

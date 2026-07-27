@@ -1,5 +1,5 @@
 // The audit MECHANISM: the append-only, hash-chained sink + the chain verifier + the audit
-// after-gate. The record schema and AuditSink/anchor contracts live in @euroclaw/contracts.
+// after-gate. The record schema and AuditSink/anchor contracts live in @busyclaw/contracts.
 // See docs/architecture/07-approval-and-audit.md.
 
 import {
@@ -19,8 +19,8 @@ import {
 	PRINCIPAL_CONTEXT_KEY,
 	type StampedFacts,
 	stampedFacts,
-} from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { validationError } from "@busyclaw/errors";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";

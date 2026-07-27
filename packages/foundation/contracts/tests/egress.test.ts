@@ -11,8 +11,8 @@ import type {
 	UnenforcedNote,
 } from "../src/index";
 
-// The egress port must be reachable from the contracts BARREL — both @euroclaw/runtime (the compiler)
-// and the @euroclaw/sandboxes plugin (the adapters) import it from here, and plugins import
+// The egress port must be reachable from the contracts BARREL — both @busyclaw/runtime (the compiler)
+// and the @busyclaw/sandboxes plugin (the adapters) import it from here, and plugins import
 // foundation-only. These are plain, DOM-free types: this suite constructs a value of each shape as
 // ordinary data / functions with no runtime dependency, proving nothing runtime-only leaked into the
 // port (the "tier check" from the brief).

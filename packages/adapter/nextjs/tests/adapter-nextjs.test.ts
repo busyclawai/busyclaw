@@ -1,8 +1,8 @@
-import type { Claw } from "euroclaw";
+import type { Claw } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { toNextJsHandler } from "../src/index";
 
-describe("@euroclaw/adapter-nextjs", () => {
+describe("@busyclaw/adapter-nextjs", () => {
 	it("returns Next.js route handlers around the core request handler", async () => {
 		const claw = {
 			api: {
@@ -16,7 +16,7 @@ describe("@euroclaw/adapter-nextjs", () => {
 
 		const handlers = toNextJsHandler(claw);
 		const response = await handlers.POST(
-			new Request("https://app.test/api/euroclaw/generate", {
+			new Request("https://app.test/api/busyclaw/generate", {
 				body: JSON.stringify({ prompt: "hello" }),
 				method: "POST",
 			}),

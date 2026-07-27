@@ -1,4 +1,4 @@
-# @euroclaw/core
+# @busyclaw/core
 
 The core product contracts and neutral governance primitives. `createGovernance({})` is a **true inert pass-through** —
 no redaction, no audit, no gates. Everything is **opt-in** (a horizontal governance
@@ -12,7 +12,7 @@ A capability is turned on by providing its **port** — give a `redactor` and re
 give an `audit` sink and audit is on. Omit them and nothing happens.
 
 ```ts
-import { createGovernance, createMemoryRedactor, createMemoryAudit } from "@euroclaw/core"
+import { createGovernance, createMemoryRedactor, createMemoryAudit } from "@busyclaw/core"
 
 // You bring the PII detector (regex, Presidio, an NER model). Governance ships only the noop.
 const emails = (t) => [...t.matchAll(/\S+@\S+/g)].map((m) => ({
@@ -42,15 +42,15 @@ await ec.handleToolCall({ name: "send_invoice", args: { to: "a@b.com", amount: 5
 
 The governance slice is the redaction substrate (Redactor port), an opt-in
 hash-chained audit after-gate (AuditSink port), and the before/after gate pipeline
-with the `sealed` guarantee. A non-EU user takes only what they want; `@euroclaw/eu`
+with the `sealed` guarantee. A non-EU user takes only what they want; `@busyclaw/eu`
 brings redaction + a *sealed* audit gate + policy. Temporal/SQLite hosts, the storage
 adapter (doc 13), and plugins build on this — they don't change it.
 
-`@euroclaw/core` also owns durable Claw domain contracts such as `ClawRecord`,
+`@busyclaw/core` also owns durable Claw domain contracts such as `ClawRecord`,
 `ThreadRecord`, `MessageRecord`, `ToolCallRecord`, `ToolResultRecord`, and their
 store ports. Storage implementations live outside this package.
 
-Run the proof: `pnpm --filter @euroclaw/core test`
+Run the proof: `pnpm --filter @busyclaw/core test`
 
 See `docs/architecture/` — especially 02a (governance + sealed gates), 03 (PII), 04
 (the pipeline), 07 (audit).

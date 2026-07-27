@@ -1,4 +1,4 @@
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	createGovernance,
@@ -24,7 +24,7 @@ const emailDetector: Detector = (text) => {
 	return spans;
 };
 
-describe("euroclaw governance — the model boundary (handleModelCall)", () => {
+describe("busyclaw governance — the model boundary (handleModelCall)", () => {
 	it("redacts the prompt before the model sees it", async () => {
 		let modelSaw: unknown;
 		const ec = createGovernance({

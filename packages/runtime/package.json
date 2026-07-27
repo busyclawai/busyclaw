@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/runtime",
+	"name": "@busyclaw/runtime",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The embeddable governed agent runtime: model loop, tool dispatch, approvals, and context wiring over @euroclaw/core.",
+	"description": "The embeddable governed agent runtime: model loop, tool dispatch, approvals, and context wiring over @busyclaw/core.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,16 +23,16 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/core": "workspace:*",
-		"@euroclaw/egress": "workspace:*",
-		"@euroclaw/storage-durable": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/egress": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"ai": "7.0.22",
 		"arktype": "2.2.0"
 	},
 	"devDependencies": {
-		"@euroclaw/secrets": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*"
+		"@busyclaw/secrets": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*"
 	}
 }

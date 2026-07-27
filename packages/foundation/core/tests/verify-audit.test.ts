@@ -1,4 +1,4 @@
-import type { AnchorProof, AuditEntry } from "@euroclaw/contracts";
+import type { AnchorProof, AuditEntry } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createMemoryAudit, headOf, verifyAuditChain } from "../src/index";
 

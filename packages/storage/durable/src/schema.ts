@@ -1,9 +1,9 @@
-// The table euroclaw's durable stores need, in the declarative SchemaDeclaration format the
+// The table busyclaw's durable stores need, in the declarative SchemaDeclaration format the
 // `generate` CLI turns into migrations. Bare, snake_case, singular names (better-auth's
 // convention — no global prefix); override a physical name per-table via `modelName` if it
 // collides with a host-app table. `id` is the unique required key consumeOne deletes by.
 
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
 import {
 	approvalSchema,
 	effectSchema,
@@ -11,7 +11,7 @@ import {
 	field,
 	piiMappingSchema,
 	runCheckpointSchema,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 export const teamMemberEntity = entity("team_member", {
 	id: field.string({ required: true, primaryKey: true, unique: true }),

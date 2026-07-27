@@ -17,7 +17,7 @@
 // global `fetch` without a custom dispatcher re-resolves at socket time. A caller that needs a hard
 // pin binds its fetch to a dispatcher built from `pinnedAddress`. IP-literal targets have no gap.
 
-import { configurationError } from "@euroclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 
 export type ResolvedAddress = { address: string; family: number };
 
@@ -77,7 +77,7 @@ export async function assertEgressAllowed(
 		const lookup = options.lookup;
 		if (!lookup) {
 			throw configurationError(
-				"egress: no DNS lookup injected — @euroclaw/egress ships no default; pass options.lookup",
+				"egress: no DNS lookup injected — @busyclaw/egress ships no default; pass options.lookup",
 				{ host },
 			);
 		}

@@ -1,5 +1,5 @@
 // `presence: "discoverable"`, made real: a tool that is NOT in the model's toolset, reached instead
-// through two meta-tools in the reserved `euroclaw__` namespace — `search` (what is there, and what
+// through two meta-tools in the reserved `busyclaw__` namespace — `search` (what is there, and what
 // does it take) and `execute` (run the one you found, by its canonical path).
 //
 // DELIBERATELY NOT per-step toolset re-resolution. The alternative design is search-THEN-LOAD: a
@@ -36,23 +36,23 @@
 // uses) and the search call stays an ordinary governed tool call.
 
 import {
-	EUROCLAW_TOOL_NAMESPACE,
+	BUSYCLAW_TOOL_NAMESPACE,
 	type Outcome,
 	stateError,
 	type ToolDefinition,
 	type ToolDefinitionSet,
 	toolDescriptors,
 	toolModelName,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { asSchema, jsonSchema } from "ai";
 import { createToolCatalog, toolEntriesFromTools } from "../catalog";
 
-/** Search discoverable tools. `euroclaw__search` on the wire. */
-export const SEARCH_TOOL_PATH = `${EUROCLAW_TOOL_NAMESPACE}.search`;
-/** Run a discoverable tool by its canonical path. `euroclaw__execute` on the wire. */
-export const EXECUTE_TOOL_PATH = `${EUROCLAW_TOOL_NAMESPACE}.execute`;
+/** Search discoverable tools. `busyclaw__search` on the wire. */
+export const SEARCH_TOOL_PATH = `${BUSYCLAW_TOOL_NAMESPACE}.search`;
+/** Run a discoverable tool by its canonical path. `busyclaw__execute` on the wire. */
+export const EXECUTE_TOOL_PATH = `${BUSYCLAW_TOOL_NAMESPACE}.execute`;
 
-/** The paths euroclaw's own tools occupy — what a host tool or a registered row may not claim. */
+/** The paths busyclaw's own tools occupy — what a host tool or a registered row may not claim. */
 export const DISCOVERY_TOOL_PATHS: readonly string[] = [
 	SEARCH_TOOL_PATH,
 	EXECUTE_TOOL_PATH,
@@ -207,7 +207,7 @@ function discoverableTools(tools: ToolDefinitionSet): ToolDefinitionSet {
 }
 
 function searchTool(discoverable: ToolDefinitionSet): ToolDefinition {
-	// The catalog is the read-path euroclaw already has over tools — a lexical, schema-lazy index
+	// The catalog is the read-path busyclaw already has over tools — a lexical, schema-lazy index
 	// with a coverage gate. Built over the discoverable subset only: an always-tool is in the
 	// context window already, so returning it would spend context re-describing what the model can
 	// see. Schemas come from the descriptors beside it, because catalog summaries drop them.

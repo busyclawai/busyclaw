@@ -3,7 +3,7 @@
 // inspecting what it does. These assert that the shipped adapter is the floor: a bare `fetch`
 // passthrough in this slot would pass every one of these targets straight through.
 
-import type { EgressLookup } from "@euroclaw/egress";
+import type { EgressLookup } from "@busyclaw/egress";
 import { describe, expect, it } from "vitest";
 import { governedFetch } from "../src/fetch";
 

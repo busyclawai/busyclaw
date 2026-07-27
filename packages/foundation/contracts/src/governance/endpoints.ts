@@ -7,7 +7,7 @@
 // (`{ ...ns }`) silently DROPS the metadata — so composition happens on definition records (spread
 // the defs, call `endpoints()` once), never on built namespaces.
 
-import { configurationError } from "@euroclaw/errors";
+import { configurationError } from "@busyclaw/errors";
 import type { ClawApiCaller } from "./principal";
 import type { RouteAuthz, RouteDefinition } from "./route";
 
@@ -19,7 +19,7 @@ import type { RouteAuthz, RouteDefinition } from "./route";
 export type EndpointHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
 /** The boundary validator an endpoint declares — an arktype type in practice, typed as the same
- *  loose callable euroclaw's `ClawApiInputSchema` uses (call it; an errors instance means invalid). */
+ *  loose callable busyclaw's `ClawApiInputSchema` uses (call it; an errors instance means invalid). */
 export type EndpointInputSchema = (input: unknown) => unknown;
 
 /** The declared response schema — an arktype type in practice, typed structurally against its
@@ -103,7 +103,7 @@ export function endpointHttpMethod(name: string): EndpointHttpMethod {
 /** Where `endpoints()` parks its route table on the returned namespace. `Symbol.for`, so duplicated
  *  contract module instances in one dependency graph still read each other's metadata. */
 export const ENDPOINTS_METADATA: unique symbol =
-	Symbol.for("euroclaw.endpoints");
+	Symbol.for("busyclaw.endpoints");
 
 /** Read the declared routes off an api value; `undefined` for anything that isn't an `endpoints()`
  *  namespace (a plain object contribution stays legal — it just isn't routable). */
@@ -138,7 +138,7 @@ function buildNamespace(
 			// A JS caller can omit `input` the types require — refuse at declaration, not first traffic
 			// (a schemaless route would pass unvalidated network input into the handler).
 			if (typeof value.input !== "function") {
-				throw configurationError("euroclaw endpoint has no input schema", {
+				throw configurationError("busyclaw endpoint has no input schema", {
 					endpoint: [...names, name].join("."),
 				});
 			}
@@ -146,7 +146,7 @@ function buildNamespace(
 			// reach here. Refuse at declaration: this is the exact state the whole mechanism exists to
 			// make impossible, and it must not degrade into "no check".
 			if (value.authz === undefined) {
-				throw configurationError("euroclaw endpoint declares no authz", {
+				throw configurationError("busyclaw endpoint declares no authz", {
 					endpoint: [...names, name].join("."),
 					reason:
 						"build routes with `route.input(…).authz(…).handler(…)` — a route must say what it authorizes against",

@@ -1,20 +1,20 @@
 import type {
 	Detector,
 	EffectStore,
-	EuroclawPlugin,
+	BusyclawPlugin,
 	PiiSpan,
-} from "@euroclaw/contracts";
-import { RUN_MODE_CONTEXT_KEY, userPrincipal } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { RUN_MODE_CONTEXT_KEY, userPrincipal } from "@busyclaw/contracts";
 import {
 	createMemoryAudit,
 	createMemoryRedactor,
 	createStoredRedactor,
-} from "@euroclaw/core";
-import { memoryAdapter } from "@euroclaw/storage-core";
+} from "@busyclaw/core";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import {
 	createEffectStore,
 	createPiiMappingStore,
-} from "@euroclaw/storage-durable";
+} from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { governanceToolResult } from "../src/ai-sdk-loop";
@@ -119,7 +119,7 @@ function textOnlyModel(text: string): V2Model {
 	};
 }
 
-describe("@euroclaw/runtime", () => {
+describe("@busyclaw/runtime", () => {
 	it("rejects database-backed approval runtime with non-durable redactor", () => {
 		expect(() =>
 			createRuntime({
@@ -340,7 +340,7 @@ describe("@euroclaw/runtime", () => {
 		const result = await createRuntime({
 			model: textOnlyModel("done"),
 			events: { emit: (event) => events.push(event) },
-		}).generate("hello", { euroclaw__recording: { clawId: "claw-1" } });
+		}).generate("hello", { busyclaw__recording: { clawId: "claw-1" } });
 
 		expect(result.status).toBe("completed");
 		expect(events.every((event) => event.recording === undefined)).toBe(true);
@@ -958,8 +958,8 @@ describe("@euroclaw/runtime", () => {
 
 	it("stamps runMode into the gate context — interactive from options, autonomous by default", async () => {
 		const seen: unknown[] = [];
-		// A gate observes the resolved context — it sees the runtime-stamped euroclaw__runMode.
-		const capture: EuroclawPlugin = {
+		// A gate observes the resolved context — it sees the runtime-stamped busyclaw__runMode.
+		const capture: BusyclawPlugin = {
 			id: "capture-runmode",
 			gates: [
 				{

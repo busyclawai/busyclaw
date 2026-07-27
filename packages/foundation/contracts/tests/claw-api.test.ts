@@ -1,6 +1,6 @@
 // The claw product-api wire protocol: the shared base method-name list (server route table and
 // remote client both derive from it) and the response envelope parser (untrusted network JSON is
-// validated, never cast). The list↔ClawApi equality itself is compile-checked in euroclaw.
+// validated, never cast). The list↔ClawApi equality itself is compile-checked in busyclaw.
 
 import { describe, expect, it } from "vitest";
 import { CLAW_API_METHOD_NAMES, parseClawResponseEnvelope } from "../src/index";
@@ -26,11 +26,11 @@ describe("parseClawResponseEnvelope", () => {
 		).toEqual({ data: { id: "c-1" }, ok: true });
 		expect(
 			parseClawResponseEnvelope({
-				error: { code: "EUROCLAW_VALIDATION_FAILED", message: "bad input" },
+				error: { code: "BUSYCLAW_VALIDATION_FAILED", message: "bad input" },
 				ok: false,
 			}),
 		).toEqual({
-			error: { code: "EUROCLAW_VALIDATION_FAILED", message: "bad input" },
+			error: { code: "BUSYCLAW_VALIDATION_FAILED", message: "bad input" },
 			ok: false,
 		});
 	});

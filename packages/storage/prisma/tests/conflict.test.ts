@@ -1,10 +1,10 @@
 // Does Prisma really raise P2002, shaped the way the detector reads it?
 //
-// This was the branch with the least evidence behind it: @euroclaw/storage-core asserts the code and
+// This was the branch with the least evidence behind it: @busyclaw/storage-core asserts the code and
 // that `meta.target` names the offending columns, both taken from documentation rather than from a
 // client. This package has a real schema, a real SQLite file and the prisma CLI, so it can just ask.
 
-import { asConflict, isUniqueViolation } from "@euroclaw/storage-core";
+import { asConflict, isUniqueViolation } from "@busyclaw/storage-core";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -48,7 +48,7 @@ describe("prisma", () => {
 		expect(isUniqueViolation(error)).toBe(true);
 
 		const conflict = asConflict(error, { model: "approval" });
-		expect(conflict?.code).toBe("EUROCLAW_CONFLICT");
+		expect(conflict?.code).toBe("BUSYCLAW_CONFLICT");
 		// `meta.target` is what the detector reads to say WHICH constraint failed. Asserted here
 		// because its shape is a client detail, not something a hand-built object can vouch for.
 		expect(conflict?.details?.constraint).toBeDefined();

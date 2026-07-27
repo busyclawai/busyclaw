@@ -8,11 +8,11 @@
  * - The run/event/checkpoint/orchestrator shape is informed by NullBoiler:
  *   `/Users/konstantinponomarev/Downloads/nullboiler-main/src/store.zig` and `src/engine.zig`.
  *
- * This is an independent TypeScript implementation over euroclaw's storage Adapter. Runtime history
- * produced here is operational state, not compliance audit; compliance evidence stays in @euroclaw/core.
+ * This is an independent TypeScript implementation over busyclaw's storage Adapter. Runtime history
+ * produced here is operational state, not compliance audit; compliance evidence stays in @busyclaw/core.
  */
 
-import type { Adapter, JsonObject } from "@euroclaw/contracts";
+import type { Adapter, JsonObject } from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	configurationError,
@@ -22,8 +22,8 @@ import {
 	type Principal,
 	stateError,
 	validationError,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type as ark } from "arktype";
@@ -261,7 +261,7 @@ function stringifyJson(value: unknown, label: string): string {
 		}
 		return json;
 	} catch (err) {
-		if (err instanceof Error && err.name === "EuroclawError") throw err;
+		if (err instanceof Error && err.name === "BusyclawError") throw err;
 		throw validationError(`${label} invalid`, errorMessage(err));
 	}
 }
@@ -293,7 +293,7 @@ export function createSqlEngineStore(
 	const runTransaction = adapter.transaction;
 	if (!runTransaction) {
 		throw configurationError(
-			"@euroclaw/engine-sql requires a transactional storage adapter",
+			"@busyclaw/engine-sql requires a transactional storage adapter",
 			{ adapter: adapter.id },
 		);
 	}

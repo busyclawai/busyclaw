@@ -128,48 +128,48 @@ export type Outcome = HandleResult | { status: "error"; reason: string };
 /** Per-turn context bag. Plugins read/write here; identity & reserved keys are folded in by plugins. */
 export type TurnContext = Record<string, unknown>;
 
-// The reserved context-key namespace prefix. Governance OWNS it: keys under `euroclaw__` are stripped
+// The reserved context-key namespace prefix. Governance OWNS it: keys under `busyclaw__` are stripped
 // from caller input and written only by trusted resolution. The engine enforces the strip; the prefix
 // is a contract so plugins (skills' reserved tool names) and the runtime can recognise it.
-export const RESERVED_CONTEXT_PREFIX = "euroclaw__";
+export const RESERVED_CONTEXT_PREFIX = "busyclaw__";
 
-// The well-known reserved context keys (the `euroclaw__` namespace). Governance OWNS the namespace and
+// The well-known reserved context keys (the `busyclaw__` namespace). Governance OWNS the namespace and
 // records the `principal`; the claw's identity/membership wiring populates these. Plugins read them.
-export const PRINCIPAL_CONTEXT_KEY = "euroclaw__principal";
-export const TEAM_CONTEXT_KEY = "euroclaw__team";
-export const ROLE_CONTEXT_KEY = "euroclaw__role";
-export const CLAW_ID_CONTEXT_KEY = "euroclaw__clawId";
-export const THREAD_ID_CONTEXT_KEY = "euroclaw__threadId";
-export const RUN_ID_CONTEXT_KEY = "euroclaw__runId";
-export const SUBJECT_CONTEXT_KEY = "euroclaw__subjectId";
+export const PRINCIPAL_CONTEXT_KEY = "busyclaw__principal";
+export const TEAM_CONTEXT_KEY = "busyclaw__team";
+export const ROLE_CONTEXT_KEY = "busyclaw__role";
+export const CLAW_ID_CONTEXT_KEY = "busyclaw__clawId";
+export const THREAD_ID_CONTEXT_KEY = "busyclaw__threadId";
+export const RUN_ID_CONTEXT_KEY = "busyclaw__runId";
+export const SUBJECT_CONTEXT_KEY = "busyclaw__subjectId";
 // The run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary its durable config belongs to (registered
-// tools, policy slices, the facts overlay). Was a single `euroclaw__organizationId`, which made core
+// tools, policy slices, the facts overlay). Was a single `busyclaw__organizationId`, which made core
 // assert that a boundary is an organization; an organization is a PLUGIN, so the pair is opaque here and
 // some plugin gives the label meaning. DISTINCT from the redaction container below: this is "whose
 // configuration governs this run", that is "which container may rehydrate this placeholder".
-export const CONFIG_SCOPE_CONTEXT_KEY = "euroclaw__configScope";
-export const CONFIG_SCOPE_ID_CONTEXT_KEY = "euroclaw__configScopeId";
+export const CONFIG_SCOPE_CONTEXT_KEY = "busyclaw__configScope";
+export const CONFIG_SCOPE_ID_CONTEXT_KEY = "busyclaw__configScopeId";
 // The redaction CONTAINMENT ref — a polymorphic (scope, scopeId) pointing at the container a
 // redaction happened in (`claw:<clawId>` today, `memory:<kbId>` / `task:<taskId>` later). A PII
 // placeholder rehydrates only within the same container. `scopeId` is a unique entity id, so the
 // container implies its boundary — redaction stays scope-blind (no boundary key anywhere in pii).
-export const SCOPE_CONTEXT_KEY = "euroclaw__scope";
-export const SCOPE_ID_CONTEXT_KEY = "euroclaw__scopeId";
+export const SCOPE_CONTEXT_KEY = "busyclaw__scope";
+export const SCOPE_ID_CONTEXT_KEY = "busyclaw__scopeId";
 // How the run started — stamped by the runtime from mechanical fact (sendMessage/api.generate =
 // interactive; engine/scheduled runs = autonomous), never claimed by a caller. Policies read it
 // to attenuate borrowed authority: an autonomous run has no human present to confirm.
-export const RUN_MODE_CONTEXT_KEY = "euroclaw__runMode";
+export const RUN_MODE_CONTEXT_KEY = "busyclaw__runMode";
 // The approver of an action executed after a granted `needs-approval` — seeded by the runtime on resume
 // from the ApprovalRecord's `decidedBy` (forge-proof, post-strip, only the trusted step sets it; never
 // caller-claimed). The audit records it as `decidedBy` so the compliance chain shows who approved.
-export const APPROVED_BY_CONTEXT_KEY = "euroclaw__approvedBy";
+export const APPROVED_BY_CONTEXT_KEY = "busyclaw__approvedBy";
 
 /**
  * The tools THIS RUN resolved beyond the static set — per-run registrations a boundary supplied
  * through `resolveTools`. Read by the governance floor so a registered tool is a decidable action
  * rather than one the model has never heard of.
  *
- * A SYMBOL, not a `euroclaw__` string key, and the difference is the point. The string keys are
+ * A SYMBOL, not a `busyclaw__` string key, and the difference is the point. The string keys are
  * stripped from caller input and re-stamped by trusted code, which works because they are strings a
  * body could otherwise carry. A symbol cannot survive JSON at all, so there is no forgery to strip:
  * only code holding this exact symbol can write it. `Symbol.for` so duplicated contract copies in one
@@ -179,7 +179,7 @@ export const APPROVED_BY_CONTEXT_KEY = "euroclaw__approvedBy";
  * the runtime should not have to know.
  */
 export const RUN_ACTIONS_CONTEXT_KEY: unique symbol = Symbol.for(
-	"euroclaw.runActions",
+	"busyclaw.runActions",
 );
 
 /** Attach this run's extra tool descriptors to a resolved context (trusted, post-strip). */
@@ -225,31 +225,31 @@ export type StampedFacts = {
 export const stampedFacts = type({
 	// Literal keys — these ARE the *_CONTEXT_KEY constants above (arktype defs need literals;
 	// tests/stamped-facts.test.ts builds its context from the constants to guard drift).
-	"euroclaw__role?": "string",
-	"euroclaw__team?": "string",
-	"euroclaw__clawId?": "string",
-	"euroclaw__configScope?": "string",
-	"euroclaw__configScopeId?": "string",
-	"euroclaw__runMode?": "'interactive' | 'autonomous'",
+	"busyclaw__role?": "string",
+	"busyclaw__team?": "string",
+	"busyclaw__clawId?": "string",
+	"busyclaw__configScope?": "string",
+	"busyclaw__configScopeId?": "string",
+	"busyclaw__runMode?": "'interactive' | 'autonomous'",
 }).pipe(
 	(stamps): StampedFacts => ({
-		...(stamps.euroclaw__role !== undefined
-			? { role: stamps.euroclaw__role }
+		...(stamps.busyclaw__role !== undefined
+			? { role: stamps.busyclaw__role }
 			: {}),
-		...(stamps.euroclaw__team !== undefined
-			? { team: stamps.euroclaw__team }
+		...(stamps.busyclaw__team !== undefined
+			? { team: stamps.busyclaw__team }
 			: {}),
-		...(stamps.euroclaw__clawId !== undefined
-			? { clawId: stamps.euroclaw__clawId }
+		...(stamps.busyclaw__clawId !== undefined
+			? { clawId: stamps.busyclaw__clawId }
 			: {}),
-		...(stamps.euroclaw__configScope !== undefined
-			? { configScope: stamps.euroclaw__configScope }
+		...(stamps.busyclaw__configScope !== undefined
+			? { configScope: stamps.busyclaw__configScope }
 			: {}),
-		...(stamps.euroclaw__configScopeId !== undefined
-			? { configScopeId: stamps.euroclaw__configScopeId }
+		...(stamps.busyclaw__configScopeId !== undefined
+			? { configScopeId: stamps.busyclaw__configScopeId }
 			: {}),
-		...(stamps.euroclaw__runMode !== undefined
-			? { runMode: stamps.euroclaw__runMode }
+		...(stamps.busyclaw__runMode !== undefined
+			? { runMode: stamps.busyclaw__runMode }
 			: {}),
 	}),
 );

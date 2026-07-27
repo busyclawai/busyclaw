@@ -3,8 +3,8 @@
 // compile time an enabled config that passes no database (a runtime configurationError backstops JS /
 // `as any` callers). The storage mirror of the $HasCron→RequireCronHandler fold; models directly on
 // dynamic-secret-aliases.test-d.ts.
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createClaw, type RuntimeConfig } from "euroclaw";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createClaw, type RuntimeConfig } from "busyclaw";
 import { describe, test } from "vitest";
 import { channels } from "../src/index";
 import { telegram } from "../src/telegram/index";

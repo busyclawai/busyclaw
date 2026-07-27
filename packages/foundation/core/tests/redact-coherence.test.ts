@@ -5,8 +5,8 @@ import type {
 	PiiMapping,
 	PiiMappingStore,
 	PiiSpan,
-} from "@euroclaw/contracts";
-import { conflictError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { conflictError } from "@busyclaw/errors";
 import { describe, expect, it, vi } from "vitest";
 import {
 	composeDetectors,

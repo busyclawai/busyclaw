@@ -1,11 +1,11 @@
 // Type tests (vitest typecheck mode). A passing run means each `@ts-expect-error` genuinely errored —
 // this file is the executable spec for the request context the `cedar()` SOURCE folds onto
 // `run(prompt, ctx)`. Audit #7: `cedar()` NO LONGER requires (or types) a caller-supplied `principal`
-// on the ctx. The acting identity is the ONE stamped `euroclaw__principal`, SEEDED by the trusted
+// on the ctx. The acting identity is the ONE stamped `busyclaw__principal`, SEEDED by the trusted
 // context assembly from the authenticated caller — never a caller-typed ctx field (reading that was
 // the #7 impersonation vector). So the fold is an OPEN turn context: nothing is required, and a
 // `principal` key — if a caller still passes one — is inert (the mapper reads only the stamp).
-import { createGovernance } from "@euroclaw/core";
+import { createGovernance } from "@busyclaw/core";
 import { describe, test } from "vitest";
 import { cedar } from "../src/index";
 
@@ -21,7 +21,7 @@ describe("cedar request-context typing", () => {
 			{ notPrincipal: "alice" },
 		);
 		// A `principal` key still type-checks (the ctx is open) but is INERT: the mapper reads only the
-		// stamped euroclaw__principal, so a caller-supplied `principal` never drives the decision (#7).
+		// stamped busyclaw__principal, so a caller-supplied `principal` never drives the decision (#7).
 		void governed.handleToolCall(
 			{ name: "x", args: {} },
 			{ principal: "alice" },

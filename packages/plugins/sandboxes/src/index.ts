@@ -1,10 +1,10 @@
-// @euroclaw/sandboxes — governed code execution behind pluggable isolation providers. This root
+// @busyclaw/sandboxes — governed code execution behind pluggable isolation providers. This root
 // export is the floor contracts, the shared engine, and the run_code tool factory.
 //
 // Deliberately NOT re-exported here (subpath isolation keeps heavy deps out of the root import
 // graph):
-//   import { quickjs } from "@euroclaw/sandboxes/quickjs"        // the wasm interpreter
-//   import { memoryVolumeStore } from "@euroclaw/sandboxes/memory" // a VolumeStore adapter
+//   import { quickjs } from "@busyclaw/sandboxes/quickjs"        // the wasm interpreter
+//   import { memoryVolumeStore } from "@busyclaw/sandboxes/memory" // a VolumeStore adapter
 
 export type {
 	ExecutionContext,

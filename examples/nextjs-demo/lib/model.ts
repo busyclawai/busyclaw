@@ -3,7 +3,7 @@
 // The stand-in exists so `pnpm dev` always boots and the UI is always explorable — but it is
 // SCRIPTED, never a silent downgrade: the app badges which one is live so nobody films a demo
 // believing a real model answered. Env names match the repo's existing live test
-// (packages/euroclaw/tests/azure-live.test.ts).
+// (packages/busyclaw/tests/azure-live.test.ts).
 
 import { createAzure } from "@ai-sdk/azure";
 
@@ -55,7 +55,7 @@ function scriptedModel(): ClawModel {
 
 	return {
 		specificationVersion: "v4",
-		provider: "euroclaw-demo",
+		provider: "busyclaw-demo",
 		modelId: "scripted",
 		supportedUrls: {},
 		doGenerate: async (options: unknown) => ({

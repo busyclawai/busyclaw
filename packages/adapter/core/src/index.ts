@@ -1,31 +1,31 @@
 import type {
 	ClawApiCaller,
 	ClawResponseEnvelope,
-	EuroclawCronResult,
-	EuroclawCronTask,
-	EuroclawPlugin,
-	EuroclawRoute,
-	EuroclawRouteRequest,
-} from "@euroclaw/contracts";
+	BusyclawCronResult,
+	BusyclawCronTask,
+	BusyclawPlugin,
+	BusyclawRoute,
+	BusyclawRouteRequest,
+} from "@busyclaw/contracts";
 import {
 	configurationError,
-	EuroclawError,
+	BusyclawError,
 	errorMessage,
 	parseClawResponseEnvelope,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
-import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "euroclaw";
-import { clawApiRouteList, parseClawApiInput } from "euroclaw";
+import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "busyclaw";
+import { clawApiRouteList, parseClawApiInput } from "busyclaw";
 import { mountedEndpointNamespaces } from "./endpoints";
 import { type ClawOpenApiOptions, clawOpenApi } from "./openapi";
 
 export type ClawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
-// The response envelope is wire PROTOCOL, so it lives in @euroclaw/contracts (the client parses it
+// The response envelope is wire PROTOCOL, so it lives in @busyclaw/contracts (the client parses it
 // without importing any server package); re-exported here for existing consumers.
-export type { ClawResponseEnvelope } from "@euroclaw/contracts";
-export { clawResponseEnvelope } from "@euroclaw/contracts";
+export type { ClawResponseEnvelope } from "@busyclaw/contracts";
+export { clawResponseEnvelope } from "@busyclaw/contracts";
 export type {
 	ClawOpenApiDocument,
 	ClawOpenApiOperation,
@@ -36,7 +36,7 @@ export { clawOpenApi } from "./openapi";
 
 export type ClawRequestHandlerOptions = {
 	basePath?: string;
-	plugins?: readonly EuroclawPlugin[];
+	plugins?: readonly BusyclawPlugin[];
 	/** Opt-in `GET /openapi.json` serving the generated document — absent ⇒ no route. `true` for
 	 *  default info; `{ enabled: true, info }` to title/version the document. */
 	openApi?: true | { enabled: true; info?: ClawOpenApiOptions };
@@ -66,7 +66,7 @@ export type ClawRequestHandlerOptions = {
 	) => ClawApiCaller | undefined | Promise<ClawApiCaller | undefined>;
 };
 
-type CronTaskResult = EuroclawCronResult & { id: string };
+type CronTaskResult = BusyclawCronResult & { id: string };
 
 function json(data: unknown, init?: ResponseInit): Response {
 	return new Response(JSON.stringify(data), {
@@ -79,13 +79,13 @@ function json(data: unknown, init?: ResponseInit): Response {
 }
 
 function statusForError(error: unknown): number {
-	if (error instanceof EuroclawError) {
-		if (error.code === "EUROCLAW_VALIDATION_FAILED") return 400;
-		if (error.code === "EUROCLAW_UNSUPPORTED_OPERATION") return 400;
+	if (error instanceof BusyclawError) {
+		if (error.code === "BUSYCLAW_VALIDATION_FAILED") return 400;
+		if (error.code === "BUSYCLAW_UNSUPPORTED_OPERATION") return 400;
 		// An app-authz denial (the actor floor / owner∪scope∪grant PEP throws this) is a Forbidden —
 		// NOT a masked 500. Without this a fail-closed governed call reads as a server error on the wire
 		// (tripping error alarms / client retries) instead of the deliberate deny it is.
-		if (error.code === "EUROCLAW_AUTHORIZATION_DENIED") return 403;
+		if (error.code === "BUSYCLAW_AUTHORIZATION_DENIED") return 403;
 	}
 	if (error instanceof SyntaxError) return 400;
 	return 500;
@@ -95,9 +95,9 @@ function errorResponse(
 	error: unknown,
 	status = statusForError(error),
 ): Response {
-	// EuroclawError failures carry their stable code onto the wire — the client surfaces it as
+	// BusyclawError failures carry their stable code onto the wire — the client surfaces it as
 	// `error.code` so callers can branch on the code instead of matching message text.
-	const code = error instanceof EuroclawError ? error.code : undefined;
+	const code = error instanceof BusyclawError ? error.code : undefined;
 	return json(
 		{
 			error: {
@@ -124,7 +124,7 @@ function stripBasePath(pathname: string, basePath: string): string | null {
 	return null;
 }
 
-type ResolvedRoute = EuroclawRoute<Claw> & { id: string };
+type ResolvedRoute = BusyclawRoute<Claw> & { id: string };
 
 function routeKey(route: Pick<ResolvedRoute, "method" | "path">): string {
 	return `${route.method} ${normalizePath(route.path)}`;
@@ -211,7 +211,7 @@ function checkRouteConflicts(routes: readonly ResolvedRoute[]): void {
 		const key = conflictKey(route);
 		const previous = seen.get(key);
 		if (previous) {
-			throw configurationError("euroclaw route conflict", {
+			throw configurationError("busyclaw route conflict", {
 				route: route.id ?? key,
 				previous,
 				key,
@@ -236,7 +236,7 @@ function methodFrom(request: Request): ClawHttpMethod | null {
 }
 
 async function readInput(
-	request: EuroclawRouteRequest,
+	request: BusyclawRouteRequest,
 	method: ClawHttpMethod,
 ): Promise<unknown> {
 	if (method === "GET") {
@@ -303,19 +303,19 @@ function apiRoutes(): ResolvedRoute[] {
 function pluginsFrom(
 	claw: Claw,
 	options: ClawRequestHandlerOptions,
-): EuroclawPlugin[] {
+): BusyclawPlugin[] {
 	return [...(claw.$context?.plugins ?? []), ...(options.plugins ?? [])];
 }
 
-function cronTasksFrom(plugins: readonly EuroclawPlugin[]): EuroclawCronTask[] {
+function cronTasksFrom(plugins: readonly BusyclawPlugin[]): BusyclawCronTask[] {
 	return plugins.flatMap((plugin) => [...(plugin.cron ?? [])]);
 }
 
 async function runCronTasks(input: {
 	claw: Claw;
 	limit?: number;
-	request: EuroclawRouteRequest;
-	tasks: readonly EuroclawCronTask[];
+	request: BusyclawRouteRequest;
+	tasks: readonly BusyclawCronTask[];
 }): Promise<CronTaskResult[]> {
 	const results: CronTaskResult[] = [];
 	for (const task of input.tasks) {
@@ -351,7 +351,7 @@ function baseRoutes(
 						path: "/cron",
 						handler: async ({ claw, request }) => {
 							const headerName =
-								cronHandler.headerName ?? "x-euroclaw-cron-secret";
+								cronHandler.headerName ?? "x-busyclaw-cron-secret";
 							if (
 								"secret" in cronHandler &&
 								request.headers.get(headerName) !== cronHandler.secret
@@ -389,7 +389,7 @@ export type ClawClientOptions = {
 };
 
 function normalizeBaseUrl(baseUrl: string | URL | undefined): string {
-	return String(baseUrl ?? "/api/euroclaw").replace(/\/+$/, "");
+	return String(baseUrl ?? "/api/busyclaw").replace(/\/+$/, "");
 }
 
 function routeUrl(baseUrl: string, path: string): string {
@@ -397,7 +397,7 @@ function routeUrl(baseUrl: string, path: string): string {
 }
 
 function withEncodedInput(url: string, input: unknown): string {
-	const parsed = new URL(url, "http://euroclaw.local");
+	const parsed = new URL(url, "http://busyclaw.local");
 	parsed.searchParams.set("input", JSON.stringify(input ?? {}));
 	if (/^https?:\/\//.test(url)) return parsed.toString();
 	return `${parsed.pathname}${parsed.search}${parsed.hash}`;
@@ -434,7 +434,7 @@ async function readClientResponse(response: Response): Promise<unknown> {
 	if (!response.ok || envelope?.ok === false) {
 		throw new Error(
 			envelope?.error?.message ??
-				`euroclaw request failed with status ${response.status}`,
+				`busyclaw request failed with status ${response.status}`,
 		);
 	}
 	return envelope?.data;
@@ -581,7 +581,7 @@ export function toRequestHandler(
 	const routeMap = new Map(
 		staticRoutes.map((route) => [routeKey(route), route]),
 	);
-	const basePath = options.basePath ?? "/api/euroclaw";
+	const basePath = options.basePath ?? "/api/busyclaw";
 
 	return async (request) => {
 		const method = methodFrom(request);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-// The range/floor logic is tested in @euroclaw/egress. This suite covers ONLY the runtime shim:
+// The range/floor logic is tested in @busyclaw/egress. This suite covers ONLY the runtime shim:
 // that it binds node:dns as the default resolver, and that an injected lookup still overrides it.
 // Mock node:dns so the default path is exercised without real DNS.
 vi.mock("node:dns/promises", () => ({

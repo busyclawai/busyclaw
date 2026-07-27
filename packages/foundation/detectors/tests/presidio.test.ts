@@ -1,9 +1,9 @@
 // The Presidio adapter's contract, encoding what we proved against a live analyzer
 // (mcr.microsoft.com/presidio-analyzer:2.2.358). The redactor owns overlap resolution, dedup, and
 // the mapping store, so this detector's whole job is the pure transform from Presidio's wire shape
-// to euroclaw spans: a CLOSED entity→kind map, a score floor, and — the one subtle correctness
+// to busyclaw spans: a CLOSED entity→kind map, a score floor, and — the one subtle correctness
 // point — converting Presidio's Python CODE-POINT offsets to JavaScript UTF-16 indices.
-import { createMemoryRedactor } from "@euroclaw/core";
+import { createMemoryRedactor } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import {
 	codePointToUtf16,
@@ -45,7 +45,7 @@ function fakeFetch(
 }
 
 describe("presidioKindOf — the closed mapping", () => {
-	it("maps the categories euroclaw targets", () => {
+	it("maps the categories busyclaw targets", () => {
 		expect(presidioKindOf("EMAIL_ADDRESS")).toBe("email");
 		expect(presidioKindOf("PHONE_NUMBER")).toBe("phone");
 		expect(presidioKindOf("PERSON")).toBe("name");

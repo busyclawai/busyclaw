@@ -1,4 +1,4 @@
-// Test-only schema — exercises the @euroclaw/storage-prisma adapter against a real SQLite DB.
+// Test-only schema — exercises the @busyclaw/storage-prisma adapter against a real SQLite DB.
 generator client {
   provider = "prisma-client-js"
 }

@@ -13,7 +13,7 @@ import { findConfigPath, loadSchema } from "../src/config";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "euroclaw-cli-"));
+	dir = mkdtempSync(join(tmpdir(), "busyclaw-cli-"));
 });
 afterEach(() => rmSync(dir, { force: true, recursive: true }));
 
@@ -24,25 +24,25 @@ const write = (name: string, source: string): string => {
 };
 
 describe("findConfigPath", () => {
-	it("finds a euroclaw.config.ts in the working directory", () => {
-		const path = write("euroclaw.config.ts", "export const config = {}");
+	it("finds a busyclaw.config.ts in the working directory", () => {
+		const path = write("busyclaw.config.ts", "export const config = {}");
 		expect(findConfigPath(dir)).toBe(path);
 	});
 
 	it("finds a config at a conventional nested location", () => {
 		mkdirSync(join(dir, "lib"), { recursive: true });
-		const path = write("lib/euroclaw.ts", "export const config = {}");
+		const path = write("lib/busyclaw.ts", "export const config = {}");
 		expect(findConfigPath(dir)).toBe(path);
 	});
 
 	it("takes an explicit --config path over the search", () => {
-		write("euroclaw.config.ts", "export const config = {}");
+		write("busyclaw.config.ts", "export const config = {}");
 		const explicit = write("custom.ts", "export const config = {}");
 		expect(findConfigPath(dir, "custom.ts")).toBe(explicit);
 	});
 
 	it("throws naming the paths it looked in when there is no config", () => {
-		expect(() => findConfigPath(dir)).toThrow(/euroclaw\.config\.ts/);
+		expect(() => findConfigPath(dir)).toThrow(/busyclaw\.config\.ts/);
 	});
 
 	it("throws when an explicit --config path does not exist", () => {
@@ -53,7 +53,7 @@ describe("findConfigPath", () => {
 describe("loadSchema", () => {
 	it("reads an exported CONFIG and projects it to tables", async () => {
 		const path = write(
-			"euroclaw.config.ts",
+			"busyclaw.config.ts",
 			`export const config = { redaction: { posture: "raw" } }`,
 		);
 		const loaded = await loadSchema(path);
@@ -65,7 +65,7 @@ describe("loadSchema", () => {
 
 	it("reads an exported CLAW via $tables, preferring it over a config beside it", async () => {
 		const path = write(
-			"euroclaw.config.ts",
+			"busyclaw.config.ts",
 			`export const config = { database: { marker: "from-config" } };
 			 export const claw = { api: {}, $context: {}, $tables: { widget: { fields: {} } } };`,
 		);
@@ -78,7 +78,7 @@ describe("loadSchema", () => {
 
 	it("reads a default export", async () => {
 		const path = write(
-			"euroclaw.config.ts",
+			"busyclaw.config.ts",
 			`export default { redaction: { posture: "raw" } }`,
 		);
 		await expect(loadSchema(path)).resolves.toMatchObject({ source: "config" });
@@ -88,16 +88,16 @@ describe("loadSchema", () => {
 		// An older build. Falling back to $context.plugins would look like it worked while
 		// dropping whatever the host's own schema/redaction contribute.
 		const path = write(
-			"euroclaw.config.ts",
+			"busyclaw.config.ts",
 			`export const claw = { api: {}, $context: { plugins: [] } };`,
 		);
 		await expect(loadSchema(path)).rejects.toThrow(/no `\$tables`/);
 	});
 
 	it("throws when the module exports neither a claw nor a config", async () => {
-		const path = write("euroclaw.config.ts", `export const something = 1`);
+		const path = write("busyclaw.config.ts", `export const something = 1`);
 		await expect(loadSchema(path)).rejects.toThrow(
-			/exports neither a claw nor a euroclaw config/,
+			/exports neither a claw nor a busyclaw config/,
 		);
 	});
 });

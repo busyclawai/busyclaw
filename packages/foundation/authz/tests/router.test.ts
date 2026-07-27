@@ -2,7 +2,7 @@ import type {
 	PolicyEngine,
 	PolicyRequest,
 	PolicyResult,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createOrgPolicyRouter } from "../src/index";
 

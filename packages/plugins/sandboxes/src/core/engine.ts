@@ -1,7 +1,7 @@
 // The shared, provider-agnostic execution engine: code normalization, invoker wrapping (input
 // validation + defect opacity), and result validation. Providers implement isolate mechanics only.
 
-import { validationError } from "@euroclaw/contracts";
+import { validationError } from "@busyclaw/contracts";
 import { type } from "arktype";
 import {
 	type ExecutionContext,
@@ -24,7 +24,7 @@ const host = globalThis as typeof globalThis & {
 
 /**
  * Strip a single wrapping markdown fence (```lang … ```) and trim. Nothing else — the wrapper owns
- * its own TypeScript support, so euroclaw adds no transpile step. Pure and exported for tests.
+ * its own TypeScript support, so busyclaw adds no transpile step. Pure and exported for tests.
  */
 export function normalizeCode(code: string): string {
 	const trimmed = code.trim();

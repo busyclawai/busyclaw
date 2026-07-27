@@ -1,4 +1,4 @@
-import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
+import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	type Channel,

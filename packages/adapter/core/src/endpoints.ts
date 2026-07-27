@@ -2,8 +2,8 @@
 // the route table (index.ts) and the OpenAPI generator (openapi.ts) so the two can never disagree
 // about which namespaces exist or where they prefix.
 
-import type { EndpointRoute } from "@euroclaw/contracts";
-import { endpointRoutesOf, toKebabCase } from "@euroclaw/contracts";
+import type { EndpointRoute } from "@busyclaw/contracts";
+import { endpointRoutesOf, toKebabCase } from "@busyclaw/contracts";
 
 export type MountedEndpoints = {
 	/** Dotted api keys as written (`channels.registrations`) — error messages speak the caller's names. */

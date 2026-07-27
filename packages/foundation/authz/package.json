@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/authz",
+	"name": "@busyclaw/authz",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The euroclaw Cedar decision engine + authz toolkit: the cedar-wasm eval (engine/floor/mapper), the policy-plugin scaffolding, and the authorization-model builder. Protocol lives in @euroclaw/contracts; policy SOURCES live in @euroclaw/policy-*.",
+	"description": "The busyclaw Cedar decision engine + authz toolkit: the cedar-wasm eval (engine/floor/mapper), the policy-plugin scaffolding, and the authorization-model builder. Protocol lives in @busyclaw/contracts; policy SOURCES live in @busyclaw/policy-*.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/authz"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -36,8 +36,8 @@
 	},
 	"dependencies": {
 		"@cedar-policy/cedar-wasm": "4.11.1",
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/errors": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/errors": "workspace:*",
 		"arktype": "2.2.0"
 	}
 }

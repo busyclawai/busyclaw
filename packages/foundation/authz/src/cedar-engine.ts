@@ -1,4 +1,4 @@
-// The Cedar PDP behind the @euroclaw/contracts PolicyEngine port.
+// The Cedar PDP behind the @busyclaw/contracts PolicyEngine port.
 //
 // Every request is evaluated DENY-BY-DEFAULT: nothing runs unless a `permit` matches (an
 // allowlist), and `forbid` overrides `permit`. Conditional `permit ... when
@@ -27,11 +27,11 @@ import type {
 	PolicyAnnotationKind,
 	PolicyRequest,
 	PolicyResult,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	MODEL_ANNOTATION_MAX_LENGTH,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import type { CedarEngine, CedarEngineConfig } from "./cedar-types";
 
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
@@ -42,7 +42,7 @@ const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
  * compliance audit persists — reports WHICH RULE fired instead of a positional `policy3` that shifts
  * whenever a slice is added above it.
  *
- * The names come from euroclaw's OWN structure — a stored slice's `name`, a floor rule's key — never
+ * The names come from busyclaw's OWN structure — a stored slice's `name`, a floor rule's key — never
  * from metadata inside the Cedar source, so nothing has to be annotated for the trail to be legible
  * and the id in the audit is the same handle the policy is managed by. cedar-wasm takes exactly ONE
  * policy per id, so a name whose text holds several policies is split into `<name>#<i>`; a

@@ -1,6 +1,6 @@
 // The Prisma schema generator. Pure: SchemaDeclaration in, source text out — so these assert on the
 // emitted code, and on the two things easiest to get quietly wrong: declaration ORDER and COMPOSITE
-// primary keys, which euroclaw has and Better Auth's generators never see.
+// primary keys, which busyclaw has and Better Auth's generators never see.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,7 +8,7 @@ import {
 	piiMappingSchema,
 	piiSubjectSchema,
 	type SchemaDeclaration,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { generatePrismaSchema } from "../src/generate";
 
@@ -125,7 +125,7 @@ describe("prisma — the real PII vault schema", () => {
 	// The PII tables were the reason this generator needed a keyless escape hatch at all: their key is
 	// (placeholder, scope, scopeId), and while the container columns were nullable it could not be
 	// declared, so both models came out `@@ignore` — absent from the Prisma client, which meant
-	// euroclaw's PII vault could not run on Prisma. Making the container required unblocked it, and
+	// busyclaw's PII vault could not run on Prisma. Making the container required unblocked it, and
 	// this is the test that says so rather than a README paragraph nobody re-reads.
 	it("emits both PII models with a real composite key and no @@ignore", () => {
 		const warnings: string[] = [];
@@ -212,7 +212,7 @@ describe("the emitted schema is accepted by Prisma itself", () => {
 		const { join } = await import("node:path");
 		const { promisify } = await import("node:util");
 
-		const dir = mkdtempSync(join(tmpdir(), "euroclaw-prisma-"));
+		const dir = mkdtempSync(join(tmpdir(), "busyclaw-prisma-"));
 		try {
 			const models = generatePrismaSchema({ schema: SCHEMA });
 			writeFileSync(

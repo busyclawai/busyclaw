@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { type PrismaLike, prismaAdapter, toWhere } from "../src/index";
 
-describe("@euroclaw/storage-prisma — Where → Prisma where", () => {
+describe("@busyclaw/storage-prisma — Where → Prisma where", () => {
 	it("eq, ne, operators, in, contains", () => {
 		expect(toWhere([{ field: "id", value: "x" }])).toEqual({ id: "x" });
 		expect(toWhere([{ field: "x", operator: "ne", value: 1 }])).toEqual({
@@ -90,16 +90,16 @@ describe("@euroclaw/storage-prisma — Where → Prisma where", () => {
 // and say so out loud so a skip is never mistaken for a pass. The pure `toWhere` tests above need no
 // client and always run.
 //
-// `EUROCLAW_REQUIRE_PRISMA=1` turns the skip back into a failure — set it wherever these MUST run (CI),
+// `BUSYCLAW_REQUIRE_PRISMA=1` turns the skip back into a failure — set it wherever these MUST run (CI),
 // so the escape hatch can't quietly hide a genuinely broken client.
 let prisma: PrismaClient;
 const prismaClient = (() => {
 	try {
 		return new PrismaClient();
 	} catch (error) {
-		if (process.env.EUROCLAW_REQUIRE_PRISMA === "1") throw error;
+		if (process.env.BUSYCLAW_REQUIRE_PRISMA === "1") throw error;
 		console.warn(
-			"@euroclaw/storage-prisma: SKIPPING the real-client suite — no generated Prisma client (run `prisma generate`). Set EUROCLAW_REQUIRE_PRISMA=1 to make this a failure.",
+			"@busyclaw/storage-prisma: SKIPPING the real-client suite — no generated Prisma client (run `prisma generate`). Set BUSYCLAW_REQUIRE_PRISMA=1 to make this a failure.",
 		);
 		return undefined;
 	}
@@ -122,7 +122,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(prismaClient === undefined)(
-	"@euroclaw/storage-prisma — adapter against real Prisma (SQLite)",
+	"@busyclaw/storage-prisma — adapter against real Prisma (SQLite)",
 	() => {
 		const a = () => prismaAdapter(prisma as unknown as PrismaLike);
 

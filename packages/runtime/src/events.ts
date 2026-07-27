@@ -7,12 +7,12 @@ import {
 	RESERVED_CONTEXT_PREFIX,
 	type Redactor,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type as ark } from "arktype";
 
 export const RUNTIME_RECORDING_CONTEXT_KEY = `${RESERVED_CONTEXT_PREFIX}recording`;
 export const RUNTIME_RECORDING_OPTION: unique symbol = Symbol(
-	"euroclaw.runtime.recording",
+	"busyclaw.runtime.recording",
 );
 
 export const runtimeRecordingContext = ark({
@@ -275,7 +275,7 @@ async function fanoutRuntimeEvent(
 		} catch (err) {
 			const warn = fanout.warn ?? ((message: string) => console.warn(message));
 			warn(
-				`euroclaw runtime: observer event sink failed on "${event.type}" — ${errorMessage(err)}`,
+				`busyclaw runtime: observer event sink failed on "${event.type}" — ${errorMessage(err)}`,
 			);
 		}
 	}
@@ -332,7 +332,7 @@ async function redactDoorEvent(
 
 /**
  * Adapt the runtime's operational event fan-out to the neutral `EventSink` port handed to plugins
- * via `EuroclawPluginConfigureContext.events`. Plugin-emitted events ride the SAME pipeline as
+ * via `BusyclawPluginConfigureContext.events`. Plugin-emitted events ride the SAME pipeline as
  * runtime events (recording first, then isolated observers); each sink reads `type` and ignores
  * events it doesn't recognise (e.g. the durable sink early-returns), so a plugin event simply
  * lands wherever a sink knows what to do with it. With `redaction` present the payload is

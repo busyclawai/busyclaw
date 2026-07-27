@@ -8,7 +8,7 @@
 // the good news; the bad news is that nothing checks what the door does. A host that reaches for
 // sandbox networking and passes `fetch` straight through gets a guest that can read
 // 169.254.169.254, 127.0.0.1, and every host on the private network, with no error and no audit
-// trail. The floor exists (@euroclaw/egress); it was simply not reachable without knowing to call
+// trail. The floor exists (@busyclaw/egress); it was simply not reachable without knowing to call
 // it. This is that call, written once.
 //
 // NOT default-on, deliberately. Absent an adapter the guest is airgapped, and that stays the
@@ -16,12 +16,12 @@
 // posture, not a stronger one. What changes is that opting IN no longer means opting out of the
 // floor: the safe path is now the short one.
 
-import { configurationError } from "@euroclaw/contracts";
-import type { EgressLookup } from "@euroclaw/egress";
+import { configurationError } from "@busyclaw/contracts";
+import type { EgressLookup } from "@busyclaw/egress";
 import {
 	assertEgressAllowedOnNode,
 	pinnedConnection,
-} from "@euroclaw/egress/node";
+} from "@busyclaw/egress/node";
 import type { SandboxFetch } from "./core/contracts";
 
 export type GovernedFetchOptions = {

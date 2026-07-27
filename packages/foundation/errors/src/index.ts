@@ -1,24 +1,24 @@
-export type EuroclawErrorCode =
-	| "EUROCLAW_AUTHORIZATION_DENIED"
-	| "EUROCLAW_CONFIGURATION_ERROR"
-	| "EUROCLAW_CONFLICT"
-	| "EUROCLAW_STATE_ERROR"
-	| "EUROCLAW_UNSUPPORTED_OPERATION"
-	| "EUROCLAW_VALIDATION_FAILED";
+export type BusyclawErrorCode =
+	| "BUSYCLAW_AUTHORIZATION_DENIED"
+	| "BUSYCLAW_CONFIGURATION_ERROR"
+	| "BUSYCLAW_CONFLICT"
+	| "BUSYCLAW_STATE_ERROR"
+	| "BUSYCLAW_UNSUPPORTED_OPERATION"
+	| "BUSYCLAW_VALIDATION_FAILED";
 
-export type EuroclawErrorInput = {
-	code: EuroclawErrorCode;
+export type BusyclawErrorInput = {
+	code: BusyclawErrorCode;
 	message: string;
 	details?: Record<string, unknown>;
 	cause?: unknown;
 };
 
-export class EuroclawError extends Error {
-	override name = "EuroclawError";
-	readonly code: EuroclawErrorCode;
+export class BusyclawError extends Error {
+	override name = "BusyclawError";
+	readonly code: BusyclawErrorCode;
 	readonly details?: Record<string, unknown>;
 
-	constructor(input: EuroclawErrorInput) {
+	constructor(input: BusyclawErrorInput) {
 		super(`[${input.code}] ${input.message}`, { cause: input.cause });
 		this.code = input.code;
 		this.details = input.details;
@@ -42,9 +42,9 @@ export function validationError(
 	label: string,
 	summary: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_VALIDATION_FAILED",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_VALIDATION_FAILED",
 		message: `${label}: ${summary}`,
 		details: { label, summary, ...details },
 	});
@@ -53,9 +53,9 @@ export function validationError(
 export function configurationError(
 	message: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_CONFIGURATION_ERROR",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_CONFIGURATION_ERROR",
 		message,
 		details,
 	});
@@ -64,9 +64,9 @@ export function configurationError(
 export function stateError(
 	message: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_STATE_ERROR",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_STATE_ERROR",
 		message,
 		details,
 	});
@@ -75,9 +75,9 @@ export function stateError(
 export function unsupportedOperationError(
 	message: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_UNSUPPORTED_OPERATION",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_UNSUPPORTED_OPERATION",
 		message,
 		details,
 	});
@@ -89,9 +89,9 @@ export function unsupportedOperationError(
 export function authorizationError(
 	message: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_AUTHORIZATION_DENIED",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_AUTHORIZATION_DENIED",
 		message,
 		details,
 	});
@@ -113,9 +113,9 @@ export function authorizationError(
 export function conflictError(
 	message: string,
 	details?: Record<string, unknown>,
-): EuroclawError {
-	return new EuroclawError({
-		code: "EUROCLAW_CONFLICT",
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_CONFLICT",
 		message,
 		details,
 	});
@@ -125,7 +125,7 @@ export function conflictError(
  * Whether this is the recoverable one — the read half of {@link conflictError}.
  *
  * Lives here for the same reason the normalization does: a caller writing try-insert →
- * on-conflict-re-read otherwise tests `code === "EUROCLAW_CONFLICT"` by hand, and a caller that
+ * on-conflict-re-read otherwise tests `code === "BUSYCLAW_CONFLICT"` by hand, and a caller that
  * spells the check slightly wrong turns a recoverable race into a crash on a path that had a correct
  * recovery available. One predicate, one place to be right.
  *
@@ -133,6 +133,6 @@ export function conflictError(
  * failure keeps its identity and reaches the caller loud. Never widen this to "looks like a
  * duplicate" — guessing turns a real failure into a silent retry.
  */
-export function isConflict(error: unknown): error is EuroclawError {
-	return error instanceof EuroclawError && error.code === "EUROCLAW_CONFLICT";
+export function isConflict(error: unknown): error is BusyclawError {
+	return error instanceof BusyclawError && error.code === "BUSYCLAW_CONFLICT";
 }

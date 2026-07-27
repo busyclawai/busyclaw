@@ -8,7 +8,7 @@
 // The log IS the version history (a decision can be stamped with the count it evaluated against); the
 // read-side audit API over it is DEFERRED — 6b only writes the log and reads its count.
 //
-// Impl lives in @euroclaw/storage-durable (the store) and the append call sites (createSpecRegistry +
+// Impl lives in @busyclaw/storage-durable (the store) and the append call sites (createSpecRegistry +
 // the overlay/policy-slice store mutations). This module holds the entity + schemas + TYPES; the
 // store port lives next door in ./policy-ports.
 

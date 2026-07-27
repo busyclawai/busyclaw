@@ -2,12 +2,12 @@
 // policies, stored per organization, each in enforce|shadow|off mode, merged OVER the code-owned
 // system posture (deny wins; the floor is sealed). Slices ADD — a forbid or a narrower permit;
 // redefining what an action IS remains the facts overlay's job (one truth per action's facts, vs
-// accumulating rules about what is allowed). RULED: euroclaw stays engine-agnostic — this is the
+// accumulating rules about what is allowed). RULED: busyclaw stays engine-agnostic — this is the
 // durable row + its store port; the bundle loader (loadPolicyBundle), the version key
-// (authzBundleKey), and the shadow engine live in @euroclaw/authz, and the host composes
+// (authzBundleKey), and the shadow engine live in @busyclaw/authz, and the host composes
 // createOrgPolicyRouter with a cedar engineFor.
 //
-// Impl lives in @euroclaw/storage-durable (the store) and @euroclaw/euroclaw (the api); this module
+// Impl lives in @busyclaw/storage-durable (the store) and @busyclaw/busyclaw (the api); this module
 // holds only the entity declaration, arktype record/upsert schemas, and the derived TYPES. The
 // behavioural store port lives next door in ./policy-ports.
 

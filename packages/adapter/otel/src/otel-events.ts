@@ -2,7 +2,7 @@ import type {
 	RuntimeEvent,
 	RuntimeEventSink,
 	RuntimeModelUsage,
-} from "@euroclaw/runtime";
+} from "@busyclaw/runtime";
 import {
 	type Attributes,
 	ROOT_CONTEXT,
@@ -13,13 +13,13 @@ import {
 } from "@opentelemetry/api";
 import {
 	ATTR_ERROR_TYPE,
-	ATTR_EUROCLAW_CHECKPOINT_ID,
-	ATTR_EUROCLAW_CLAW_ID,
-	ATTR_EUROCLAW_REASON_CODE,
-	ATTR_EUROCLAW_RUN_ID,
-	ATTR_EUROCLAW_RUN_OUTCOME,
-	ATTR_EUROCLAW_STEP,
-	ATTR_EUROCLAW_TOOL_OUTCOME,
+	ATTR_BUSYCLAW_CHECKPOINT_ID,
+	ATTR_BUSYCLAW_CLAW_ID,
+	ATTR_BUSYCLAW_REASON_CODE,
+	ATTR_BUSYCLAW_RUN_ID,
+	ATTR_BUSYCLAW_RUN_OUTCOME,
+	ATTR_BUSYCLAW_STEP,
+	ATTR_BUSYCLAW_TOOL_OUTCOME,
 	ATTR_GEN_AI_CONVERSATION_ID,
 	ATTR_GEN_AI_OPERATION_NAME,
 	ATTR_GEN_AI_RESPONSE_FINISH_REASONS,
@@ -45,7 +45,7 @@ type ToolIdentity = { toolCallId: string; toolName: string; step: number };
 /**
  * An observer sink mapping the operational event stream onto OTel spans: one `invoke_agent`
  * root span per runId (opened on `run.started`, or lazily on the first event of an unknown
- * runId — a continuation gets a NEW root span; `euroclaw.run.id` is the cross-trace link),
+ * runId — a continuation gets a NEW root span; `busyclaw.run.id` is the cross-trace link),
  * a retrospective `chat` child per model call, an `execute_tool` child per tool call.
  * Span times come from each event's `createdAt` (durations subtracted for retrospective
  * children), so traces are deterministic and independent of delivery latency.
@@ -64,10 +64,10 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 		const recording = event.recording;
 		const attributes: Attributes = {
 			[ATTR_GEN_AI_OPERATION_NAME]: "invoke_agent",
-			[ATTR_EUROCLAW_RUN_ID]: runId,
+			[ATTR_BUSYCLAW_RUN_ID]: runId,
 		};
 		if (recording !== undefined) {
-			attributes[ATTR_EUROCLAW_CLAW_ID] = recording.clawId;
+			attributes[ATTR_BUSYCLAW_CLAW_ID] = recording.clawId;
 			attributes[ATTR_GEN_AI_CONVERSATION_ID] = recording.threadId;
 		}
 		const root = tracer.startSpan(
@@ -91,7 +91,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 			[ATTR_GEN_AI_OPERATION_NAME]: "execute_tool",
 			[ATTR_GEN_AI_TOOL_NAME]: tool.toolName,
 			[ATTR_GEN_AI_TOOL_CALL_ID]: tool.toolCallId,
-			[ATTR_EUROCLAW_STEP]: tool.step,
+			[ATTR_BUSYCLAW_STEP]: tool.step,
 		};
 	}
 
@@ -179,7 +179,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 				const state = ensureRun(runId, event, timeMs);
 				endRun(runId, state, timeMs, {
 					...usageAttributes(event.usage),
-					[ATTR_EUROCLAW_RUN_OUTCOME]: "waiting_approval",
+					[ATTR_BUSYCLAW_RUN_OUTCOME]: "waiting_approval",
 				});
 				return;
 			}
@@ -187,18 +187,18 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 				const state = ensureRun(runId, event, timeMs);
 				endRun(runId, state, timeMs, {
 					...usageAttributes(event.usage),
-					[ATTR_EUROCLAW_RUN_OUTCOME]: "yielded",
-					[ATTR_EUROCLAW_CHECKPOINT_ID]: event.checkpointId,
+					[ATTR_BUSYCLAW_RUN_OUTCOME]: "yielded",
+					[ATTR_BUSYCLAW_CHECKPOINT_ID]: event.checkpointId,
 				});
 				return;
 			}
 			case "run.denied": {
 				const state = ensureRun(runId, event, timeMs);
 				const attributes: Attributes = {
-					[ATTR_EUROCLAW_RUN_OUTCOME]: "denied",
+					[ATTR_BUSYCLAW_RUN_OUTCOME]: "denied",
 				};
 				if (event.reasonCode !== undefined) {
-					attributes[ATTR_EUROCLAW_REASON_CODE] = event.reasonCode;
+					attributes[ATTR_BUSYCLAW_REASON_CODE] = event.reasonCode;
 				}
 				endRun(runId, state, timeMs, attributes);
 				return;
@@ -230,7 +230,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 				if (open === undefined) return;
 				state.tools.delete(event.toolCallId);
 				// Approvals can take days — a span cannot stay open; the outcome says why it closed.
-				open.setAttribute(ATTR_EUROCLAW_TOOL_OUTCOME, "waiting_approval");
+				open.setAttribute(ATTR_BUSYCLAW_TOOL_OUTCOME, "waiting_approval");
 				open.setStatus({ code: SpanStatusCode.OK });
 				open.end(timeMs);
 				return;
@@ -239,7 +239,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 				const state = ensureRun(runId, event, timeMs);
 				const span = takeToolSpan(state, event, timeMs);
 				if (event.reasonCode !== undefined) {
-					span.setAttribute(ATTR_EUROCLAW_REASON_CODE, event.reasonCode);
+					span.setAttribute(ATTR_BUSYCLAW_REASON_CODE, event.reasonCode);
 				}
 				span.setStatus({ code: SpanStatusCode.ERROR, message: event.reason });
 				span.end(timeMs);
@@ -256,7 +256,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 					span.setAttribute(ATTR_ERROR_TYPE, event.error.name);
 				}
 				if (event.error.reasonCode !== undefined) {
-					span.setAttribute(ATTR_EUROCLAW_REASON_CODE, event.error.reasonCode);
+					span.setAttribute(ATTR_BUSYCLAW_REASON_CODE, event.error.reasonCode);
 				}
 				span.setStatus({
 					code: SpanStatusCode.ERROR,
@@ -273,7 +273,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 					{
 						attributes: {
 							[ATTR_GEN_AI_OPERATION_NAME]: "chat",
-							[ATTR_EUROCLAW_STEP]: event.step,
+							[ATTR_BUSYCLAW_STEP]: event.step,
 							[ATTR_GEN_AI_RESPONSE_FINISH_REASONS]: [event.finishReason],
 							...usageAttributes(event.usage),
 						},
@@ -291,7 +291,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 					{
 						attributes: {
 							[ATTR_GEN_AI_OPERATION_NAME]: "chat",
-							[ATTR_EUROCLAW_STEP]: event.step,
+							[ATTR_BUSYCLAW_STEP]: event.step,
 						},
 						startTime: timeMs - event.durationMs,
 					},
@@ -301,7 +301,7 @@ export function otelEvents(options: OtelEventsOptions): RuntimeEventSink {
 					span.setAttribute(ATTR_ERROR_TYPE, event.error.name);
 				}
 				if (event.error.reasonCode !== undefined) {
-					span.setAttribute(ATTR_EUROCLAW_REASON_CODE, event.error.reasonCode);
+					span.setAttribute(ATTR_BUSYCLAW_REASON_CODE, event.error.reasonCode);
 				}
 				span.setStatus({
 					code: SpanStatusCode.ERROR,

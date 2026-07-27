@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/adapter-core",
+	"name": "@busyclaw/adapter-core",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Protocol-neutral request handler and route plugin foundation for euroclaw adapters.",
+	"description": "Protocol-neutral request handler and route plugin foundation for busyclaw adapters.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,12 +23,12 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
 		"arktype": "2.2.0",
-		"euroclaw": "workspace:*"
+		"busyclaw": "workspace:*"
 	},
 	"devDependencies": {
-		"@euroclaw/secrets-plugin": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*"
+		"@busyclaw/secrets-plugin": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*"
 	}
 }

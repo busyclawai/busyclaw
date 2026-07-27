@@ -1,5 +1,5 @@
 {
-	"name": "@euroclaw/better-auth",
+	"name": "@busyclaw/better-auth",
 	"version": "0.0.0",
 	"type": "module",
 	"description": "The better-auth integration across all three access concerns — identity, membership (org + role), authz — each taking only the function it needs, plus a betterAuthAccess({ auth }) bundle.",
@@ -23,7 +23,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/policy-better-auth": "workspace:*"
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/policy-better-auth": "workspace:*"
 	}
 }

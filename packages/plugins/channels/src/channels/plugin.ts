@@ -1,12 +1,12 @@
 import {
 	configurationError,
-	type EuroclawCronFlag,
-	type EuroclawPlugin,
-	type EuroclawPluginConfigureContext,
-	type EuroclawPluginRuntime,
-	type EuroclawRoute,
-	type EuroclawRouteContext,
-} from "@euroclaw/contracts";
+	type BusyclawCronFlag,
+	type BusyclawPlugin,
+	type BusyclawPluginConfigureContext,
+	type BusyclawPluginRuntime,
+	type BusyclawRoute,
+	type BusyclawRouteContext,
+} from "@busyclaw/contracts";
 import { requireClaw } from "../core/claw";
 import {
 	APP_ENDPOINT_KEY,
@@ -26,7 +26,7 @@ import {
 } from "./store";
 
 export type ChannelsPluginOptions = {
-	/** Plugin id override (default "euroclaw.channels", or "euroclaw.channels.registrations"). */
+	/** Plugin id override (default "busyclaw.channels", or "busyclaw.channels.registrations"). */
 	id?: string;
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
@@ -52,8 +52,8 @@ type ChannelsApi = ChannelRegistrationsPluginApi;
  * narrows to the mode-specific return type below.
  */
 export type ChannelsPlugin<
-	HasCron extends EuroclawCronFlag = EuroclawCronFlag,
-> = EuroclawPlugin<HasCron, readonly string[], ChannelsApi>;
+	HasCron extends BusyclawCronFlag = BusyclawCronFlag,
+> = BusyclawPlugin<HasCron, readonly string[], ChannelsApi>;
 
 /** Registrations enabled at the type level — a literal `true` (a runtime-only boolean falls to the runtime gate). */
 type RegistrationsEnabled<Options> = Options extends {
@@ -66,11 +66,11 @@ type RegistrationsEnabled<Options> = Options extends {
 //   app-bot       → today's plugin (cron derived from the providers' poll flags), no api, no DB gate;
 //   registrations → the registrations api (required $Api, so InferPluginApi picks it up), $HasCron
 //                   "no-cron" (registrations never poll), $RequiresDatabase true (RequireDatabaseForPlugins).
-type AppBotChannelsPlugin<HasCron extends EuroclawCronFlag> = EuroclawPlugin<
+type AppBotChannelsPlugin<HasCron extends BusyclawCronFlag> = BusyclawPlugin<
 	HasCron,
 	readonly string[]
 >;
-type RegistrationsChannelsPlugin = EuroclawPlugin<
+type RegistrationsChannelsPlugin = BusyclawPlugin<
 	"no-cron",
 	readonly string[],
 	ChannelsApi
@@ -290,8 +290,8 @@ function buildAppBotPlugin(
 	// no plugin rebuild, no captured slots. An absent adapter leaves the store undefined and the
 	// handlers fail loud on first traffic (requireStore), exactly as before.
 	const configure = (
-		context: EuroclawPluginConfigureContext,
-	): EuroclawPluginRuntime<ChannelsApi> | undefined => {
+		context: BusyclawPluginConfigureContext,
+	): BusyclawPluginRuntime<ChannelsApi> | undefined => {
 		const store = context.adapter
 			? createChannelEndpointStateStore(context.adapter, { now })
 			: undefined;
@@ -339,7 +339,7 @@ function buildAppBotPlugin(
 
 		const webhookHandler =
 			(keyFrom: (params: Record<string, string>) => string) =>
-			async ({ claw, params, request }: EuroclawRouteContext) => {
+			async ({ claw, params, request }: BusyclawRouteContext) => {
 				const channel = byKey.get(
 					`${params.provider ?? ""}:${keyFrom(params)}`,
 				);
@@ -357,7 +357,7 @@ function buildAppBotPlugin(
 				return { status: result.status, body: result.body };
 			};
 
-		const webhookRoutes: EuroclawRoute[] = [
+		const webhookRoutes: BusyclawRoute[] = [
 			{
 				id: "channels:webhook",
 				method: "POST",
@@ -405,7 +405,7 @@ function buildAppBotPlugin(
 	};
 
 	return {
-		id: options.id ?? "euroclaw.channels",
+		id: options.id ?? "busyclaw.channels",
 		$HasCron: pollTargets.length > 0 ? "has-cron" : "no-cron",
 		schema: channelsModels,
 		// Each app bot's token name is a coverage EXPECTATION (boot warns if unresolvable); registrations

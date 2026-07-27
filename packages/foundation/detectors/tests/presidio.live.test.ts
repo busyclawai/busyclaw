@@ -3,8 +3,8 @@
 // code-point→UTF-16 conversion makes substring-exact.
 //
 //   docker run -p 5002:3000 mcr.microsoft.com/presidio-analyzer:2.2.358
-//   PRESIDIO_URL=http://localhost:5002 pnpm --filter @euroclaw/detectors test
-import { createMemoryRedactor } from "@euroclaw/core";
+//   PRESIDIO_URL=http://localhost:5002 pnpm --filter @busyclaw/detectors test
+import { createMemoryRedactor } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { presidioDetector } from "../src/presidio/index";
 

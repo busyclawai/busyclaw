@@ -5,10 +5,10 @@ import type {
 	EngineContinueRunInput,
 	EngineRunHandle,
 	EngineStartRunInput,
-	EuroclawPlugin,
-} from "@euroclaw/contracts";
-import { drainWork as drainEngineWork } from "@euroclaw/contracts";
-import type { Runtime } from "@euroclaw/runtime";
+	BusyclawPlugin,
+} from "@busyclaw/contracts";
+import { drainWork as drainEngineWork } from "@busyclaw/contracts";
+import type { Runtime } from "@busyclaw/runtime";
 import { addMs, type SqlEngineStore } from "./store";
 import type {
 	SqlEngineWorkerConfig,
@@ -55,7 +55,7 @@ function createSqlEngineHandle(input: {
 		leaseTtlMs: input.config.leaseTtlMs,
 		runtime: input.runtime,
 		store: input.config.store,
-		workerId: input.config.workerId ?? "euroclaw-worker",
+		workerId: input.config.workerId ?? "busyclaw-worker",
 	} satisfies SqlEngineWorkerConfig);
 	return {
 		kind: "sql",
@@ -107,7 +107,7 @@ function createSqlEngineHandle(input: {
 function sqlCronPlugin<const Config extends SqlEngineConfig>(
 	config: Config,
 	engine: SqlEngineHandle,
-): EuroclawPlugin<SqlEngineCronFlag<Config>> {
+): BusyclawPlugin<SqlEngineCronFlag<Config>> {
 	const now = config.store.now;
 	return {
 		id: "engine-sql",

@@ -1,10 +1,10 @@
-// @euroclaw/vendors/ai-sdk — bridge a generic text-delta stream to the AI SDK's client wire
+// @busyclaw/vendors/ai-sdk — bridge a generic text-delta stream to the AI SDK's client wire
 // protocols, so a frontend `useChat` / `useCompletion` talks to any producer of `{ textStream }`.
 //
-// This is deliberately NOT euroclaw-coupled: it takes a plain async-iterable of text plus an
+// This is deliberately NOT busyclaw-coupled: it takes a plain async-iterable of text plus an
 // optional "finished" promise, so `runtime.stream` / `claw.api.stream` satisfy it structurally with
 // no import. The only coupling is to the AI SDK (this package's whole reason to exist).
-import type { TextDeltaStream } from "@euroclaw/contracts";
+import type { TextDeltaStream } from "@busyclaw/contracts";
 import {
 	createTextStreamResponse,
 	createUIMessageStream,

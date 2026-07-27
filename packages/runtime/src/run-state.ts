@@ -3,8 +3,8 @@
 // machinery: keeping it in the tools barrel forced tools/ to reach upward into ../events and
 // ../runtime and mixed loop concerns into the tool subsystem's public surface.
 
-import type { RunMode } from "@euroclaw/contracts";
-import { stateError } from "@euroclaw/contracts";
+import type { RunMode } from "@busyclaw/contracts";
+import { stateError } from "@busyclaw/contracts";
 import type { ModelMessage } from "ai";
 import type { RuntimeRecordingContext } from "./events";
 import type { RuntimeAbortSignal } from "./runtime";
@@ -29,22 +29,22 @@ export type RunState = {
 	runInstanceId?: string;
 	/** The run's identity — the engine run id when it has one (stable across attempts and yield
 	 *  slices), otherwise minted per invocation, because an ad-hoc `generate` still has to be
-	 *  correlatable: it is stamped as `euroclaw__runId` on every gated call and written onto the
+	 *  correlatable: it is stamped as `busyclaw__runId` on every gated call and written onto the
 	 *  approval a parked call leaves behind, which is the only join a claw-less run has. */
 	runId?: string;
-	/** How this run was triggered — stamped into every gated call's context as `euroclaw__runMode`
+	/** How this run was triggered — stamped into every gated call's context as `busyclaw__runMode`
 	 *  (spoof-proof: the runtime sets it from the ENTRY POINT, never the model/caller). Defaults to
 	 *  "autonomous" (fail-closed: an unattended run must not silently pass write policies). */
 	runMode: RunMode;
 	/** The authenticated caller that initiated this run (the api `{ principal }`, threaded from the
 	 *  ENTRY POINT via {@link runtimeRunOptionsWithCaller} — never the model/ctx). When present the
-	 *  trusted context assembly SEEDS it as `euroclaw__principal`, so the run's principal IS the caller
+	 *  trusted context assembly SEEDS it as `busyclaw__principal`, so the run's principal IS the caller
 	 *  (the caller wins over the `identity` resolver, which is the caller-LESS fallback). Absent for
 	 *  autonomous runs (cron/engine resume) — identity resolver / a system principal covers those. */
 	callerPrincipal?: string;
 	/** The approver of a granted `needs-approval` this run is resuming — the ApprovalRecord's `decidedBy`
 	 *  (forge-proof: read from the persisted, PEP-gated approval, never the model/caller). When present the
-	 *  trusted context assembly seeds it as `euroclaw__approvedBy`, so the replayed action's audit records
+	 *  trusted context assembly seeds it as `busyclaw__approvedBy`, so the replayed action's audit records
 	 *  WHO approved it (beside the borrowed `principal`). Absent for a normal (non-resume) run. */
 	approvedBy?: string;
 	currentModelRunner?: () => unknown | Promise<unknown>;

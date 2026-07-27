@@ -1,5 +1,5 @@
-import type { SchemaDeclaration } from "@euroclaw/contracts";
-import { type EntityField, entity, field } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
+import { type EntityField, entity, field } from "@busyclaw/contracts";
 
 // A stored secret is a USER-managed resolution row over the tenancy boundary pair: one row binds a
 // canonical secret name, for one `(scope, scopeId)` boundary (`personal:actorId` |

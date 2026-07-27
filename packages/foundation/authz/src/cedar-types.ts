@@ -1,9 +1,9 @@
 // The Cedar engine's configuration and context types. The engine impl lives in ./cedar-engine, the
 // request mapper + escape-hatch plugin in ./cedar-plugin. (The `cedar()` policy-text SOURCE and its
-// CedarSourceConfig live in @euroclaw/policy-cedar.)
+// CedarSourceConfig live in @busyclaw/policy-cedar.)
 
 import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
-import type { PolicyAnnotationKind } from "@euroclaw/contracts";
+import type { PolicyAnnotationKind } from "@busyclaw/contracts";
 import type { NamedPolicies } from "./policy-bundle";
 import type {
 	AuthzModel,
@@ -12,11 +12,11 @@ import type {
 	PolicyResult,
 	ToolCall,
 	TurnContext,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /**
  * Cedar's request context — the resolved per-call turn context bag. The mapper reads the acting
- * identity from the ONE stamped `euroclaw__principal` (via `PRINCIPAL_CONTEXT_KEY`) and the spoof-proof
+ * identity from the ONE stamped `busyclaw__principal` (via `PRINCIPAL_CONTEXT_KEY`) and the spoof-proof
  * facts (role/team/runMode/…) the trusted assembly stamped; approval state is derived server-side.
  * NOT `{ principal: string }` any more (audit #7): the caller never supplies the principal on `run`'s
  * ctx — it is SEEDED from the authenticated caller in the trusted step — so the `$InferContext` fold
@@ -70,7 +70,7 @@ export type CedarMapCallConfig = {
 	/** The authorization model — switches the mapper to project `context.args` to the action's
 	 *  declared subset and read the resource type from the model. Absent → full args, default types. */
 	model?: AuthzModel;
-	/** Entity type for the mapped principal (from the stamped `euroclaw__principal`). Default "User". */
+	/** Entity type for the mapped principal (from the stamped `busyclaw__principal`). Default "User". */
 	principalType?: string;
 	/** Entity type for the mapped resource (the tool). Default "Tool". */
 	resourceType?: string;
@@ -97,7 +97,7 @@ export type CedarPluginConfig = CedarEngineConfig & {
 	serverForAction?: (actionId: string) => string | undefined;
 	/** Which calls Cedar governs. Default: every call (the allowlist). */
 	matcher?: (call: ToolCall, ctx: CedarContext) => boolean;
-	/** Entity type for the default-mapped principal (from the stamped `euroclaw__principal`). Default "User". */
+	/** Entity type for the default-mapped principal (from the stamped `busyclaw__principal`). Default "User". */
 	principalType?: string;
 	/** Entity type for the default-mapped resource (the tool itself). Default "Tool". */
 	resourceType?: string;

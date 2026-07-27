@@ -1,10 +1,10 @@
-// createTeamStore — invite-based team membership over the @euroclaw/storage-core Adapter. The sibling
+// createTeamStore — invite-based team membership over the @busyclaw/storage-core Adapter. The sibling
 // of createApprovalStore: `invite` opens a pending invite, `accept` consumes it (single-use, via the
 // atomic consumeOne primitive) and creates a member. `roleOf` is what a claw's
 // `roleMembership({ roleOf })` calls to resolve the actor's role on a team → which authz then reads.
 
-import type { Adapter } from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+import type { Adapter } from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import {
 	teamInviteEntity,

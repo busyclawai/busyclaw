@@ -6,8 +6,8 @@ import {
 	errorMessage,
 	stateError,
 	validationError,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityView } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityView } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import type { SecretCipher } from "./crypto";

@@ -1,4 +1,4 @@
-// Isolation hardening — PII THROUGH THE SANDBOX: the euroclaw-defining property. A model-authored
+// Isolation hardening — PII THROUGH THE SANDBOX: the busyclaw-defining property. A model-authored
 // script reasons on placeholders; the real value is reattached only at a trusted tool boundary, and
 // the audit trail stays PII-free. The scripted model mirrors runtime.test.ts: it extracts the
 // {{pii:...}} token from the redacted prompt and emits a run_code call whose `code` embeds that
@@ -11,10 +11,10 @@
 // reads its own code, a nested tool's output, or its console logs. The real leaf tool still sees the
 // rehydrated value at its trusted edge (BLIND-P3 asserts both directions).
 
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
-import { govern } from "@euroclaw/contracts";
-import { createMemoryAudit, createMemoryRedactor } from "@euroclaw/core";
-import { createRuntime } from "@euroclaw/runtime";
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
+import { govern } from "@busyclaw/contracts";
+import { createMemoryAudit, createMemoryRedactor } from "@busyclaw/core";
+import { createRuntime } from "@busyclaw/runtime";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import type { ExecutionResult, Sandbox } from "../src/core/contracts";
@@ -134,7 +134,7 @@ function hexDecode(hex: string): string {
 	return out;
 }
 
-describe("@euroclaw/sandboxes PII through the sandbox", () => {
+describe("@busyclaw/sandboxes PII through the sandbox", () => {
 	// P1 — rehydration at the edge works THROUGH the sandbox: the script passes only the placeholder,
 	// yet the real value is reattached inside the tool, downstream of the sandbox boundary. (P5: this
 	// also confirms the run completes — the token embedded in `code` survived ingest and resolved in

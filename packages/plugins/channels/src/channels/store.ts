@@ -3,8 +3,8 @@ import {
 	type EntityRecord,
 	type EntityUpdateInput,
 	validationError,
-} from "@euroclaw/contracts";
-import { entityView } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { entityView } from "@busyclaw/storage-core";
 import { type } from "arktype";
 import type { ChannelEndpointMode, EndpointEvent } from "../core/contracts";
 import { endpointId } from "../core/id";

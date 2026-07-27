@@ -2,8 +2,8 @@
 // lets each test assert which model actually ran. Construction-time validation (mutually-exclusive
 // model/models, exactly one default, non-empty) is the runtime backstop for the compile-time
 // createClaw guard; the fail-closed unknown-name guard protects JS callers past the type system.
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
-import { createMemoryRedactor } from "@euroclaw/core";
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
+import { createMemoryRedactor } from "@busyclaw/core";
 import type { wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, type RuntimeEvent } from "../src/index";

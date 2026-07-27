@@ -1,7 +1,7 @@
 // Each telegram app bot declares its own token secret name; the `channels` plugin aggregates those
 // into `plugin.secrets.expects`, so the assembly's required-names list enumerates them. Registrations
 // mode declares nothing — a registered bot's token lives in its row, not under a `secrets.get` name.
-import { collectSecretDeclarations } from "euroclaw";
+import { collectSecretDeclarations } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { channels } from "../src/index";
 import { telegram } from "../src/telegram/index";
