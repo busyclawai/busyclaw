@@ -203,7 +203,9 @@ describe("@busyclaw/sandboxes host-side resource limits (M-06)", () => {
 		const { output: res } = await executeInSandbox({
 			sandbox: quickjs(),
 			code: [
-				"for (let i = 0; i < 4000; i++) console.log(i);",
+				// Only has to outrun the 1000-line cap; every crossing of the guest→host bridge
+				// costs real time, and this suite runs alongside every other package.
+				"for (let i = 0; i < 1400; i++) console.log(i);",
 				"return 1;",
 			].join("\n"),
 			invoker: noInvoke,

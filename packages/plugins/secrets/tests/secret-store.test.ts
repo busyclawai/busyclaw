@@ -864,3 +864,76 @@ describe("stored-secrets store — input bounds", () => {
 		).rejects.not.toThrow(/sk-live/);
 	});
 });
+
+// M-13: one resolution key, one row — even when two sets race.
+//
+// `set` used to read, then create or update depending on what it found, with a random id. Two
+// concurrent sets of the same name both missed and both created. The read path uses `findOne`, so
+// which value a lookup served afterwards was arbitrary — a caller who rotated a secret could go on
+// being served the old one, which is the exact failure rotation exists to prevent.
+
+describe("stored-secrets store — one resolution key, one row", () => {
+	it("upserts in place: a re-set rotates the value and keeps the row's identity", async () => {
+		// The row's identity is its boundary and its creator; a re-set moves `value` and nothing else,
+		// which is also what keeps the seal's binding true for the row's whole life.
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
+		let clock = 0;
+		const store = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+			now: () => new Date(1_700_000_000_000 + clock++ * 1000).toISOString(),
+		});
+
+		const first = await store.set({
+			name: "KEPT",
+			value: "v1",
+			createdBy: "user:alice",
+		});
+		const second = await store.set({
+			name: "KEPT",
+			value: "v2",
+			createdBy: "user:alice",
+		});
+
+		expect(second.id).toBe(first.id);
+		expect(second.createdAt).toBe(first.createdAt);
+		expect(second.updatedAt).not.toBe(first.updatedAt);
+		expect(second.value).not.toBe(first.value);
+		expect(await store.list("personal", "user:alice")).toHaveLength(1);
+	});
+
+	it("derives the row id from the natural key, so a rival row is a CONFLICT not a race", async () => {
+		// This is what closes the check-then-create window: `set` no longer reads-then-decides, it
+		// inserts under an id that IS `(scope, scopeId, name)` and treats the conflict as "rotate".
+		// Two boundaries never collide; one boundary can only ever have one row per name.
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
+		const store = createStoredSecretsStore(db, { cipher: cipherFor(TEST_KEY) });
+
+		const alice = await store.set({
+			name: "SHARED_NAME",
+			value: "a",
+			createdBy: "user:alice",
+		});
+		const bob = await store.set({
+			name: "SHARED_NAME",
+			value: "b",
+			createdBy: "user:bob",
+		});
+		const again = await store.set({
+			name: "SHARED_NAME",
+			value: "a2",
+			createdBy: "user:alice",
+		});
+
+		expect(alice.id).not.toBe(bob.id); // different boundary, different row
+		expect(again.id).toBe(alice.id); // same boundary + name, same row
+	});
+
+	// WHAT THIS SUITE CANNOT SHOW, written down rather than left implied.
+	//
+	// A genuinely CONCURRENT set is arbitrated by the database's uniqueness constraint on `id`, and
+	// the memory adapter has no engine to do that — its `enforcesUnique: false` pre-check is itself a
+	// read-then-write, so eight interleaved creates all pass the check before any of them lands and
+	// eight rows appear. That is a property of the test double, not of this store: the design here is
+	// precisely to stop deciding in application code and let the insert be the claim. Proving it needs
+	// a real engine, which the drizzle/MySQL atomicity suite covers for the same pattern.
+});

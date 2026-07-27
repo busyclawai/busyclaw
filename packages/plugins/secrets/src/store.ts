@@ -4,11 +4,13 @@ import {
 	type EntityRecord,
 	type EntitySchemaInput,
 	errorMessage,
+	isConflict,
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
 import { type EntityWhere, entityView } from "@busyclaw/storage-core";
-import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import type { SecretCipher } from "./crypto";
 import {
@@ -59,7 +61,31 @@ export type StoredSecretsStoreOptions = {
 };
 
 const MODEL = "stored_secret";
-const newId = (): string => bytesToHex(randomBytes(16));
+
+/**
+ * The row id for one `(scope, scopeId, name)` — the natural key, hashed.
+ *
+ * M-13. `set` used to read the row, then create or update depending on what it found, with a random
+ * id. Two concurrent sets of the same name both missed and both created, leaving two rows for one
+ * resolution key — and the read path uses `findOne`, so which value a lookup served afterwards was
+ * arbitrary. A caller who rotated a secret could go on being served the old one, which is the exact
+ * failure rotation exists to prevent.
+ *
+ * There is no compound unique in the entity DSL to lean on, but there does not need to be: making
+ * the natural key BE the id borrows the uniqueness the primary key already has. The insert becomes
+ * the claim, the database arbitrates, and a duplicate is a conflict rather than a race two readers
+ * can both win — the same shape the effect ledger, the approval lease and the channel delivery inbox
+ * use, for the same reason.
+ *
+ * Hashed as a JSON array for the same reason the AAD binding is: concatenating the parts would make
+ * `("a","bc",…)` and `("ab","c",…)` collide, and here a collision is one boundary's secret answering
+ * for another's.
+ */
+function rowId(scope: string, scopeId: string, name: string): string {
+	return bytesToHex(
+		sha256(utf8ToBytes(JSON.stringify([scope, scopeId, name]))),
+	);
+}
 
 // ── Enabled-but-not-migrated safety net (the channels-registrations precedent) ───────────────────
 // Connecting the plugin adds `stored_secret` to the generated schema (host runs generate→migrate).
@@ -227,29 +253,15 @@ export function createStoredSecretsStore(
 				scopeId,
 				name: valid.name,
 			});
-			const existing = await findByKey(scope, scopeId, valid.name);
 			const stamp = now();
-			if (existing) {
-				const updated = await guarded(() =>
-					db.update({
-						model: MODEL,
-						where: [{ field: "id", value: existing.id }],
-						// The store owns updatedAt; the value is the only column a re-set rotates.
-						update: { value: sealed, updatedAt: stamp },
-					}),
-				);
-				if (!updated) {
-					throw stateError("stored secret vanished mid-set", {
-						id: existing.id,
-					});
-				}
-				return updated;
-			}
-			return guarded(() =>
-				db.create({
+			const id = rowId(scope, scopeId, valid.name);
+			// CREATE FIRST, update on conflict — not read-then-decide. The id is the natural key, so a
+			// second concurrent set loses the insert instead of minting a rival row.
+			try {
+				return await db.create({
 					model: MODEL,
 					data: {
-						id: newId(),
+						id,
 						createdBy: valid.createdBy,
 						scope,
 						scopeId,
@@ -259,8 +271,24 @@ export function createStoredSecretsStore(
 						createdAt: stamp,
 						updatedAt: stamp,
 					},
-				}),
-			);
+				});
+			} catch (err) {
+				if (!isConflict(err)) return wrapMissingTable(err);
+				// The row already exists — this set is a rotation. Only `value` moves; `createdBy` and
+				// the boundary are the row's identity and stay as first written, which is also what
+				// keeps the seal's binding true for the row's whole life.
+				const updated = await guarded(() =>
+					db.update({
+						model: MODEL,
+						where: [{ field: "id", value: id }],
+						update: { value: sealed, updatedAt: stamp },
+					}),
+				);
+				if (!updated) {
+					throw stateError("stored secret vanished mid-set", { id });
+				}
+				return updated;
+			}
 		},
 
 		async get(scope, scopeId, name) {
