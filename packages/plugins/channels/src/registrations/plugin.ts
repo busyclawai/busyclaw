@@ -24,7 +24,12 @@ import {
 } from "../core/contracts";
 import { dispatchWebhook } from "../core/dispatch";
 import { endpointId } from "../core/id";
-import { channelDeliveryModels, createDeliveryInbox } from "../core/inbox";
+import {
+	channelDeliveryModels,
+	channelOutboxModels,
+	createDeliveryInbox,
+	createDeliveryOutbox,
+} from "../core/inbox";
 import {
 	channelRegistrationLookupInput,
 	channelRegistrationsModels,
@@ -246,6 +251,10 @@ export function buildRegistrationsPlugin(
 		const inbox = context.adapter
 			? createDeliveryInbox(context.adapter, { now })
 			: undefined;
+		// The reply is written here before it is sent, so a crash in between leaves something to finish.
+		const outbox = context.adapter
+			? createDeliveryOutbox(context.adapter, { now })
+			: undefined;
 		const requireStore = (): ChannelRegistrationsStore => {
 			if (!store) {
 				throw configurationError(
@@ -374,6 +383,7 @@ export function buildRegistrationsPlugin(
 					request: inbound,
 					// Registrations require a database, so the claim always has somewhere to live.
 					...(inbox !== undefined ? { inbox } : {}),
+					...(outbox !== undefined ? { outbox } : {}),
 					persist: (event) =>
 						requireStore().record(
 							{ provider: row.provider, endpointKey: row.endpointKey },
@@ -460,7 +470,11 @@ export function buildRegistrationsPlugin(
 		id: options.id ?? "busyclaw.channels.registrations",
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
-		schema: { ...channelRegistrationsModels, ...channelDeliveryModels },
+		schema: {
+			...channelRegistrationsModels,
+			...channelDeliveryModels,
+			...channelOutboxModels,
+		},
 		// The ONE per-kind bit: a data-fetcher, not authz logic. Registering the kind is what makes every
 		// binding above enforceable — owner ∪ scope ∪ grant over the generic `access_grant` table, with no
 		// policy of our own. Read statically off the plugin, so the registry binds before configure runs;

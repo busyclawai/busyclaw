@@ -2,7 +2,7 @@ import type { Secrets } from "@busyclaw/contracts";
 import { buildSecrets, env } from "@busyclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { channelDeliveryModels } from "../src/core/inbox";
+import { channelDeliveryModels, channelOutboxModels } from "../src/core/inbox";
 import { type Channel, channels, channelsModels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
 
@@ -33,6 +33,7 @@ function configured(plugin: ReturnType<typeof channels>, secrets?: Secrets) {
 		adapter: entityAdapter(memoryAdapter(), {
 			...channelsModels,
 			...channelDeliveryModels,
+			...channelOutboxModels,
 		}),
 		secrets,
 	});

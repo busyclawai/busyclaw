@@ -1,3 +1,4 @@
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type AuthzContext,
 	type AuthzTarget,
@@ -8,7 +9,12 @@ import {
 } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { channelDeliveryModels } from "../src/core/inbox";
+import { drainOutbox } from "../src/core/dispatch";
+import {
+	channelDeliveryModels,
+	channelOutboxModels,
+	createDeliveryOutbox,
+} from "../src/core/inbox";
 import {
 	type Channel,
 	type ChannelsPlugin,
@@ -24,6 +30,7 @@ const db = () =>
 	entityAdapter(memoryAdapter(), {
 		...channelRegistrationsModels,
 		...channelDeliveryModels,
+		...channelOutboxModels,
 	});
 
 const now = () => "2026-01-01T00:00:00.000Z";
@@ -136,8 +143,12 @@ function fakeAuthz(
 }
 
 /** Configure the plugin against a bare adapter — what the createClaw assembly does. */
-function configured(plugin: ChannelsPlugin): ChannelsPlugin {
-	const built = plugin.configure?.({ adapter: db() });
+function configured(
+	plugin: ChannelsPlugin,
+	// Pass one when the TEST needs to reach the same rows the plugin writes.
+	adapter: Adapter = db(),
+): ChannelsPlugin {
+	const built = plugin.configure?.({ adapter });
 	if (!built) throw new Error("expected configure to build the plugin");
 	return built;
 }
@@ -873,5 +884,100 @@ describe("a delivery carries the provider's id", () => {
 		// needs a database that honours the constraint.
 		expect(seen).toEqual(["u-1"]);
 		expect(recorded.relayed).toEqual(["u-1"]);
+	});
+});
+
+// De-duplicating the inbound half created a new way to LOSE a reply: the turn runs, the process dies
+// before `send`, and the delivery is already claimed — so the provider's retry correctly declines to
+// re-run it and the answer is simply gone. The outbox is what makes at-most-once inbound and
+// at-least-once outbound hold together.
+describe("a reply is durable before it is sent", () => {
+	const numbered = (send: Channel["send"]) =>
+		fakeChannel({
+			send,
+			parseInbound: ({ request }) => [
+				{
+					deliveryId: request.rawBody,
+					externalConversationId: "chat-1",
+					text: request.rawBody,
+				},
+			],
+		});
+
+	it("keeps the reply owed when the send fails, and drainOutbox finishes it", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const adapter = db();
+		const sent: string[] = [];
+		let failNext = true;
+		const channel = numbered(async ({ message }) => {
+			if (failNext) {
+				failNext = false;
+				throw new Error("telegram unreachable");
+			}
+			sent.push(message.text);
+		});
+		const plugin = configured(
+			channels([channel], { registrations: { enabled: true } }),
+			adapter,
+		);
+		await registrationsApi(plugin).register(
+			{ provider: "fake", endpointKey: "acme-bot", webhookSecret: "hook-1" },
+			fakeAuthz(),
+		);
+		const route = plugin.routes?.[0];
+		if (!route) throw new Error("expected the registrations webhook route");
+
+		// The turn runs and the send fails. The reply is NOT lost — it was written first.
+		await expect(
+			route.handler({
+				claw: fakeClaw(recorded),
+				params: { provider: "fake" },
+				request: webhookRequest({ body: "u-1", secret: "hook-1" }),
+			}),
+		).rejects.toThrow(/telegram unreachable/);
+		expect(sent).toEqual([]);
+
+		const outbox = createDeliveryOutbox(adapter);
+		expect(await outbox.pending()).toMatchObject([
+			{ deliveryId: "u-1", text: "echo:u-1", attempts: 1 },
+		]);
+
+		// The recovery: whatever the deployment runs on a schedule finishes what the crash left owed.
+		const result = await drainOutbox({
+			outbox,
+			channels: new Map([["fake", channel]]),
+			endpointFor: () => ({
+				provider: "fake",
+				endpointKey: "registrations/acme-bot",
+				mode: "webhook" as const,
+			}),
+		});
+		expect(result).toEqual({ sent: 1, failed: 0 });
+		expect(sent).toEqual(["echo:u-1"]);
+		// …and nothing is owed twice.
+		expect(await outbox.pending()).toEqual([]);
+	});
+
+	it("owes nothing once the reply has gone out", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const adapter = db();
+		const plugin = configured(
+			channels([numbered(async () => {})], {
+				registrations: { enabled: true },
+			}),
+			adapter,
+		);
+		await registrationsApi(plugin).register(
+			{ provider: "fake", endpointKey: "acme-bot", webhookSecret: "hook-1" },
+			fakeAuthz(),
+		);
+		const route = plugin.routes?.[0];
+		if (!route) throw new Error("expected the registrations webhook route");
+		await route.handler({
+			claw: fakeClaw(recorded),
+			params: { provider: "fake" },
+			request: webhookRequest({ body: "u-1", secret: "hook-1" }),
+		});
+		expect(await createDeliveryOutbox(adapter).pending()).toEqual([]);
 	});
 });
