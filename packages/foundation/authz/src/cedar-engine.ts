@@ -12,6 +12,16 @@
 // The /nodejs build loads the WASM synchronously (fs.readFileSync) — server-side, no async init.
 
 import type {
+	EntityRef,
+	PolicyAnnotationKind,
+	PolicyRequest,
+	PolicyResult,
+} from "@busyclaw/contracts";
+import {
+	configurationError,
+	MODEL_ANNOTATION_MAX_LENGTH,
+} from "@busyclaw/contracts";
+import type {
 	AuthorizationCall,
 	Entities,
 } from "@cedar-policy/cedar-wasm/nodejs";
@@ -22,16 +32,6 @@ import {
 	policySetTextToParts,
 	policyToJson,
 } from "@cedar-policy/cedar-wasm/nodejs";
-import type {
-	EntityRef,
-	PolicyAnnotationKind,
-	PolicyRequest,
-	PolicyResult,
-} from "@busyclaw/contracts";
-import {
-	configurationError,
-	MODEL_ANNOTATION_MAX_LENGTH,
-} from "@busyclaw/contracts";
 import type { CedarEngine, CedarEngineConfig } from "./cedar-types";
 
 const toUid = (e: EntityRef) => ({ type: e.type, id: e.id });
@@ -75,7 +75,9 @@ function namedPolicySet(
 			claim(name, single);
 			continue;
 		}
-		policies.forEach((policy, index) => claim(`${name}#${index}`, policy));
+		policies.forEach((policy, index) => {
+			claim(`${name}#${index}`, policy);
+		});
 	}
 	return out;
 }

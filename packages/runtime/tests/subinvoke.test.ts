@@ -1,7 +1,7 @@
 import type {
+	BusyclawPlugin,
 	Detector,
 	EffectStore,
-	BusyclawPlugin,
 	HandleResult,
 	PiiSpan,
 } from "@busyclaw/contracts";

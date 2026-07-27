@@ -1,4 +1,4 @@
-import { defineReasonCodes, type BusyclawPlugin } from "@busyclaw/contracts";
+import { type BusyclawPlugin, defineReasonCodes } from "@busyclaw/contracts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { createGovernance } from "../src/index";
 

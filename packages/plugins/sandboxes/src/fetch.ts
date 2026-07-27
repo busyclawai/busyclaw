@@ -42,7 +42,10 @@ const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Read a body under a byte cap, without buffering past it. */
-async function readCapped(response: Response, maxBytes: number): Promise<string> {
+async function readCapped(
+	response: Response,
+	maxBytes: number,
+): Promise<string> {
 	const body = response.body;
 	if (!body) return "";
 	const reader = body.getReader();

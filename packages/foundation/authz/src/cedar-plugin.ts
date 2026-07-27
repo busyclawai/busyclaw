@@ -17,7 +17,6 @@
 // works at evaluation time), and filters `context.args` to the PROJECTED subset (the same walker that
 // rendered the schema, so request validation and reality never disagree).
 
-import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	AuthzModel,
 	PolicyAnnotationKind,
@@ -32,6 +31,7 @@ import {
 	stampedFacts,
 	validationError,
 } from "@busyclaw/contracts";
+import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
 import { type } from "arktype";
 import {
 	actionEntitiesFromModel,

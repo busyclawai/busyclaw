@@ -141,7 +141,10 @@ describe("@busyclaw/policy-cedar — Cedar PDP", () => {
 		const asRole = (role: string) =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],
-				resolveContext: (ctx) => ({ ...seedPrincipal(ctx), busyclaw__role: role }),
+				resolveContext: (ctx) => ({
+					...seedPrincipal(ctx),
+					busyclaw__role: role,
+				}),
 				runTool: runEcho,
 			});
 
@@ -234,7 +237,10 @@ describe("model-driven cedar — slice 3", () => {
 
 	it("the rendered schema parses under cedar-wasm (construction validates it)", () => {
 		expect(() =>
-			cedarPolicyPlugin({ model, policies: `permit(principal, action, resource);` }),
+			cedarPolicyPlugin({
+				model,
+				policies: `permit(principal, action, resource);`,
+			}),
 		).not.toThrow();
 	});
 

@@ -49,7 +49,10 @@ export function loadPolicyBundle(input: {
 	const shadowOnly: Record<string, string> = {};
 	for (const slice of input.slices) {
 		if (slice.mode === "off") continue; // dropped entirely
-		if (live[slice.name] !== undefined || shadowOnly[slice.name] !== undefined) {
+		if (
+			live[slice.name] !== undefined ||
+			shadowOnly[slice.name] !== undefined
+		) {
 			throw configurationError(`duplicate policy slice name: ${slice.name}`, {
 				name: slice.name,
 				reason:

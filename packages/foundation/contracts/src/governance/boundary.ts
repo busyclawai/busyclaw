@@ -4,8 +4,8 @@
 
 import { type } from "arktype";
 import type { JsonObject } from "../common";
-import type { ToolDescriptor } from "../tools/descriptor";
 import { jsonObject as jsonObjectSchema } from "../common";
+import type { ToolDescriptor } from "../tools/descriptor";
 
 // ── Data contracts (validate + infer) ───────────────────────────────────────
 

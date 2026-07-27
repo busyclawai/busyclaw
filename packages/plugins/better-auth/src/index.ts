@@ -22,7 +22,9 @@ type GetActiveMember = (input: {
 
 /** Resolve the operator (the `principal`) from a better-auth session — needs only `getSession`. */
 export function betterAuthIdentity(deps: { getSession: GetSession }) {
-	return async (ctx: Record<string, unknown>): Promise<Principal | undefined> => {
+	return async (
+		ctx: Record<string, unknown>,
+	): Promise<Principal | undefined> => {
 		// Tag the host's user id into the `user:<id>` principal at the point it is PRODUCED (matching
 		// sessionIdentity), so the stamped principal is a legible, authorizable identity — never a bare
 		// host id. A blank session ⇒ undefined.
