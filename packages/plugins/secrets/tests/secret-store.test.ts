@@ -9,9 +9,9 @@ import {
 	type Adapter,
 	endpointRoutesOf,
 	userPrincipal,
-} from "@euroclaw/contracts";
-import { buildSecrets, env } from "@euroclaw/secrets";
-import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { buildSecrets, env } from "@busyclaw/secrets";
+import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	createSecretCipher,
@@ -75,7 +75,7 @@ function failingAdapter(message: string): Adapter {
 describe("secrets([], { store: true }) — the plugin shape", () => {
 	it("contributes the table and the data-tier store provider statically", () => {
 		const plugin = secrets([], { store: true });
-		expect(plugin.id).toBe("euroclaw.secrets");
+		expect(plugin.id).toBe("busyclaw.secrets");
 		expect(plugin.$RequiresDatabase).toBe(true);
 		expect(plugin.schema?.stored_secret).toBeDefined();
 		const [provider] = plugin.secrets.providers;
@@ -237,7 +237,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		await expect(
 			provider.get("ANY", { principal: "user:alice" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(
 				/stored_secret table isn't in your database/,
 			),
@@ -250,7 +250,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		await expect(
 			provider.get("ANY", { principal: "user:alice" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/secret store has no database/),
 		});
 	});
@@ -278,7 +278,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		await expect(
 			provider.get("PTR", { principal: "user:alice" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/pointers are not supported yet/),
 		});
 	});
@@ -491,10 +491,10 @@ describe("encryption at rest", () => {
 		await expect(
 			provider.get("LOCKED", { principal: "user:alice" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			// secrets.require names the key and fails loud when nothing resolves it.
 			message: expect.stringMatching(
-				/EUROCLAW_SECRET_STORE_KEY.*resolves nowhere/,
+				/BUSYCLAW_SECRET_STORE_KEY.*resolves nowhere/,
 			),
 		});
 	});
@@ -515,7 +515,7 @@ describe("encryption at rest", () => {
 		await expect(
 			provider.get("ROTATED", { principal: "user:alice" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/cannot decrypt stored secret/),
 		});
 	});
@@ -699,7 +699,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		// hands every handler an AuthzContext whose `principal` is already guaranteed present and
 		// non-blank, which is why the handler reads it directly instead of re-deriving it — a local
 		// re-derivation would be the only path that could disagree with the floor. The governed property
-		// (`secrets.set` over HTTP with no resolved caller → 403, with one → 200) is pinned in euroclaw's
+		// (`secrets.set` over HTTP with no resolved caller → 403, with one → 200) is pinned in busyclaw's
 		// plugin-endpoint governance tests, where a real assembled claw exists to enforce it.
 		//
 		// What this test pins is the LOCAL half: reaching the raw handler without an identity throws and,

@@ -1,7 +1,7 @@
 // The redactor IMPLEMENTATION: PII in → scoped opaque placeholders out, and back again. This is where
-// euroclaw's privacy promise is ENFORCED — the engine only ever hands gates and tools the redacted
+// busyclaw's privacy promise is ENFORCED — the engine only ever hands gates and tools the redacted
 // value. The contracts (PiiMappingStore / Redactor / Detector + the span/mapping schemas) live in
-// @euroclaw/contracts. See docs/architecture/03-pii-and-erasure.md.
+// @busyclaw/contracts. See docs/architecture/03-pii-and-erasure.md.
 
 import {
 	type Detector,
@@ -19,8 +19,8 @@ import {
 	redactionContext,
 	rehydrationContext,
 	type ScopeRef,
-} from "@euroclaw/contracts";
-import { isConflict, validationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { isConflict, validationError } from "@busyclaw/errors";
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";

@@ -21,8 +21,8 @@ import type {
 	Secrets,
 	StampedFacts,
 	UnenforcedNote,
-} from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 
 /** Inputs to the egress compiler. `policy` / `facts` / `secrets` are what the interceptor outbound
  *  consumes (per-request authorize + claim-check in slice 3); the slice-2 compiler itself reads only
@@ -78,7 +78,7 @@ const ALLOWLIST_UNENFORCED: readonly UnenforcedNote[] = [
 	{
 		dimension: "credential-isolation",
 		detail:
-			"the guest process holds its own credentials on this tier; euroclaw cannot claim-check (inject/substitute) them at egress — egress containment, not credential isolation",
+			"the guest process holds its own credentials on this tier; busyclaw cannot claim-check (inject/substitute) them at egress — egress containment, not credential isolation",
 	},
 ];
 

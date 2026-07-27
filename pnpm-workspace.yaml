@@ -6,7 +6,7 @@ packages:
   - "packages/plugins/*"
   - "packages/plugins/policies/*"
   - "packages/engines/*"
-  # Runnable integration demos. They consume the PUBLIC surface only (euroclaw, the adapters,
+  # Runnable integration demos. They consume the PUBLIC surface only (busyclaw, the adapters,
   # the client) — never a package's internals — so a demo that stops compiling is a real signal
   # about the product surface, not about the demo.
   - "examples/*"

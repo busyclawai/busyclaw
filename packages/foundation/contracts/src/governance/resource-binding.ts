@@ -1,6 +1,6 @@
 // How a governed method declares the shared resource it acts on — the app-authz PEP reads this to
 // resolve the (kind, id) it loads for the generic owner∪scope∪grant check. The binding is CO-LOCATED
-// with the method's own def (the base api route def in `euroclaw`, or a plugin `endpoints()` def), NOT
+// with the method's own def (the base api route def in `busyclaw`, or a plugin `endpoints()` def), NOT
 // a separate parallel map — the "derive from the api itself" principle. Because it rides the def, it is
 // TYPE-CHECKED against that method's INPUT: `idKey`/`kindKey` must be keys of the input, or it does not
 // compile. A method with NO binding is not resource-anchored (it acts within the caller's personal

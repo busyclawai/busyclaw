@@ -21,7 +21,7 @@ function summaryOf(result: unknown): string {
 	throw new Error("expected validation to fail");
 }
 
-describe("euroclaw core — entity-derived schemas", () => {
+describe("busyclaw core — entity-derived schemas", () => {
 	it("derives approval/effect/PII storage schemas from entity fields", () => {
 		expect(approvalSchema.approval.fields.args).toMatchObject({
 			type: "json",

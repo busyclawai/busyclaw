@@ -1,6 +1,6 @@
-import { conflictError } from "@euroclaw/contracts";
-import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
-import { kyselyAdapter } from "@euroclaw/storage-kysely";
+import { conflictError } from "@busyclaw/contracts";
+import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
+import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";

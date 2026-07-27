@@ -3,8 +3,8 @@ import type {
 	PolicyRequest,
 	PolicyResult,
 	ToolCall,
-} from "@euroclaw/contracts";
-import { govern } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { govern } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	actionInputsFromTools,
@@ -13,7 +13,7 @@ import {
 } from "../src/index";
 
 // Unit-level: exercises the gate the plugin contributes directly (the full pipeline path is
-// covered by @euroclaw/policy-cedar's integration tests through createGovernance).
+// covered by @busyclaw/policy-cedar's integration tests through createGovernance).
 
 const fakeEngine = (
 	decide: (action: string) => PolicyResult,

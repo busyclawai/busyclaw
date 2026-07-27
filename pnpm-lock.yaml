@@ -29,33 +29,33 @@ importers:
       '@ai-sdk/react':
         specifier: 4.0.23
         version: 4.0.23(react@19.2.7)(zod@4.4.3)
-      '@euroclaw/adapter-core':
+      '@busyclaw/adapter-core':
         specifier: workspace:*
         version: link:../../packages/adapter/core
-      '@euroclaw/adapter-nextjs':
+      '@busyclaw/adapter-nextjs':
         specifier: workspace:*
         version: link:../../packages/adapter/nextjs
-      '@euroclaw/client':
+      '@busyclaw/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../packages/foundation/contracts
-      '@euroclaw/detectors':
+      '@busyclaw/detectors':
         specifier: workspace:*
         version: link:../../packages/foundation/detectors
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../packages/storage/core
-      '@euroclaw/vendors':
+      '@busyclaw/vendors':
         specifier: workspace:*
         version: link:../../packages/foundation/vendors
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../packages/euroclaw
+        version: link:../../packages/busyclaw
       next:
         specifier: 16.2.12
         version: 16.2.12(@opentelemetry/api@1.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -69,7 +69,7 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@euroclaw/cli':
+      '@busyclaw/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@tailwindcss/postcss':
@@ -96,35 +96,35 @@ importers:
 
   packages/adapter/core:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
       arktype:
         specifier: 2.2.0
         version: 2.2.0
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../euroclaw
+        version: link:../../busyclaw
     devDependencies:
-      '@euroclaw/secrets-plugin':
+      '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../../plugins/secrets
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
 
   packages/adapter/nextjs:
     dependencies:
-      '@euroclaw/adapter-core':
+      '@busyclaw/adapter-core':
         specifier: workspace:*
         version: link:../core
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../euroclaw
+        version: link:../../busyclaw
 
   packages/adapter/otel:
     dependencies:
-      '@euroclaw/runtime':
+      '@busyclaw/runtime':
         specifier: workspace:*
         version: link:../../runtime
     devDependencies:
@@ -132,34 +132,86 @@ importers:
         specifier: 1.9.1
         version: 1.9.1
 
-  packages/cli:
+  packages/busyclaw:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/authz':
+        specifier: workspace:*
+        version: link:../foundation/authz
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../foundation/contracts
-      '@euroclaw/storage-drizzle':
+      '@busyclaw/engine-sql':
         specifier: workspace:*
-        version: link:../storage/drizzle
-      '@euroclaw/storage-kysely':
+        version: link:../engines/sql
+      '@busyclaw/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@busyclaw/secrets':
+        specifier: workspace:*
+        version: link:../foundation/secrets
+      '@busyclaw/storage-durable':
+        specifier: workspace:*
+        version: link:../storage/durable
+      '@busyclaw/storage-kysely':
         specifier: workspace:*
         version: link:../storage/kysely
-      '@euroclaw/storage-mongodb':
+      '@busyclaw/vendors':
+        specifier: workspace:*
+        version: link:../foundation/vendors
+      arktype:
+        specifier: 2.2.0
+        version: 2.2.0
+      kysely:
+        specifier: 0.29.2
+        version: 0.29.2
+    devDependencies:
+      '@ai-sdk/azure':
+        specifier: 4.0.18
+        version: 4.0.18(zod@4.4.3)
+      '@busyclaw/core':
+        specifier: workspace:*
+        version: link:../foundation/core
+      '@busyclaw/policy-cedar':
+        specifier: workspace:*
+        version: link:../plugins/policies/cedar
+      '@busyclaw/secrets-plugin':
+        specifier: workspace:*
+        version: link:../plugins/secrets
+      '@busyclaw/storage-core':
+        specifier: workspace:*
+        version: link:../storage/core
+      ai:
+        specifier: 7.0.22
+        version: 7.0.22(zod@4.4.3)
+
+  packages/cli:
+    dependencies:
+      '@busyclaw/contracts':
+        specifier: workspace:*
+        version: link:../foundation/contracts
+      '@busyclaw/storage-drizzle':
+        specifier: workspace:*
+        version: link:../storage/drizzle
+      '@busyclaw/storage-kysely':
+        specifier: workspace:*
+        version: link:../storage/kysely
+      '@busyclaw/storage-mongodb':
         specifier: workspace:*
         version: link:../storage/mongodb
-      '@euroclaw/storage-prisma':
+      '@busyclaw/storage-prisma':
         specifier: workspace:*
         version: link:../storage/prisma
+      busyclaw:
+        specifier: workspace:*
+        version: link:../busyclaw
       commander:
         specifier: 15.0.0
         version: 15.0.0
-      euroclaw:
-        specifier: workspace:*
-        version: link:../euroclaw
       jiti:
         specifier: 2.7.0
         version: 2.7.0
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
       '@types/better-sqlite3':
@@ -183,23 +235,23 @@ importers:
 
   packages/client:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../foundation/contracts
-      '@euroclaw/errors':
+      '@busyclaw/errors':
         specifier: workspace:*
         version: link:../foundation/errors
       nanostores:
         specifier: 1.4.0
         version: 1.4.0
     devDependencies:
-      '@euroclaw/adapter-core':
+      '@busyclaw/adapter-core':
         specifier: workspace:*
         version: link:../adapter/core
-      '@euroclaw/secrets-plugin':
+      '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../plugins/secrets
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
       '@types/react':
@@ -208,9 +260,9 @@ importers:
       '@types/react-dom':
         specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.17)
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../euroclaw
+        version: link:../busyclaw
       happy-dom:
         specifier: 20.10.6
         version: 20.10.6
@@ -223,13 +275,13 @@ importers:
 
   packages/engines/sql:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
-      '@euroclaw/runtime':
+      '@busyclaw/runtime':
         specifier: workspace:*
         version: link:../../runtime
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
       '@noble/hashes':
@@ -239,76 +291,24 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
 
-  packages/euroclaw:
-    dependencies:
-      '@euroclaw/authz':
-        specifier: workspace:*
-        version: link:../foundation/authz
-      '@euroclaw/contracts':
-        specifier: workspace:*
-        version: link:../foundation/contracts
-      '@euroclaw/engine-sql':
-        specifier: workspace:*
-        version: link:../engines/sql
-      '@euroclaw/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-      '@euroclaw/secrets':
-        specifier: workspace:*
-        version: link:../foundation/secrets
-      '@euroclaw/storage-durable':
-        specifier: workspace:*
-        version: link:../storage/durable
-      '@euroclaw/storage-kysely':
-        specifier: workspace:*
-        version: link:../storage/kysely
-      '@euroclaw/vendors':
-        specifier: workspace:*
-        version: link:../foundation/vendors
-      arktype:
-        specifier: 2.2.0
-        version: 2.2.0
-      kysely:
-        specifier: 0.29.2
-        version: 0.29.2
-    devDependencies:
-      '@ai-sdk/azure':
-        specifier: 4.0.18
-        version: 4.0.18(zod@4.4.3)
-      '@euroclaw/core':
-        specifier: workspace:*
-        version: link:../foundation/core
-      '@euroclaw/policy-cedar':
-        specifier: workspace:*
-        version: link:../plugins/policies/cedar
-      '@euroclaw/secrets-plugin':
-        specifier: workspace:*
-        version: link:../plugins/secrets
-      '@euroclaw/storage-core':
-        specifier: workspace:*
-        version: link:../storage/core
-      ai:
-        specifier: 7.0.22
-        version: 7.0.22(zod@4.4.3)
-
   packages/foundation/authz:
     dependencies:
+      '@busyclaw/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@busyclaw/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@cedar-policy/cedar-wasm':
         specifier: 4.11.1
         version: 4.11.1
-      '@euroclaw/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@euroclaw/errors':
-        specifier: workspace:*
-        version: link:../errors
       arktype:
         specifier: 2.2.0
         version: 2.2.0
 
   packages/foundation/contracts:
     dependencies:
-      '@euroclaw/errors':
+      '@busyclaw/errors':
         specifier: workspace:*
         version: link:../errors
       arktype:
@@ -317,10 +317,10 @@ importers:
 
   packages/foundation/core:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@euroclaw/errors':
+      '@busyclaw/errors':
         specifier: workspace:*
         version: link:../errors
       '@noble/hashes':
@@ -332,11 +332,11 @@ importers:
 
   packages/foundation/detectors:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../core
       arktype:
@@ -345,7 +345,7 @@ importers:
 
   packages/foundation/egress:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
       undici:
@@ -356,20 +356,20 @@ importers:
 
   packages/foundation/secrets:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
 
   packages/foundation/vendors:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../core
       arktype:
@@ -378,16 +378,16 @@ importers:
 
   packages/plugins/better-auth:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
-      '@euroclaw/policy-better-auth':
+      '@busyclaw/policy-better-auth':
         specifier: workspace:*
         version: link:../policies/better-auth
 
   packages/plugins/channels:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
       '@noble/hashes':
@@ -397,88 +397,88 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../../foundation/core
-      '@euroclaw/secrets':
+      '@busyclaw/secrets':
         specifier: workspace:*
         version: link:../../foundation/secrets
-      '@euroclaw/secrets-plugin':
+      '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../secrets
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
-      '@euroclaw/storage-durable':
+      '@busyclaw/storage-durable':
         specifier: workspace:*
         version: link:../../storage/durable
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../euroclaw
+        version: link:../../busyclaw
 
   packages/plugins/escalations:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../../foundation/core
-      '@euroclaw/policy-cedar':
+      '@busyclaw/policy-cedar':
         specifier: workspace:*
         version: link:../policies/cedar
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
-      '@euroclaw/storage-durable':
+      '@busyclaw/storage-durable':
         specifier: workspace:*
         version: link:../../storage/durable
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../euroclaw
+        version: link:../../busyclaw
 
   packages/plugins/policies/better-auth:
     dependencies:
-      '@euroclaw/authz':
+      '@busyclaw/authz':
         specifier: workspace:*
         version: link:../../../foundation/authz
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../../foundation/contracts
       better-auth:
         specifier: 1.6.19
         version: 1.6.19(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3))(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.29.2)(pg@8.22.0)(prisma@6.19.3(typescript@6.0.3)))(mongodb@6.21.0)(next@16.2.12(@opentelemetry/api@1.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(prisma@6.19.3(typescript@6.0.3))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@4.1.8(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(happy-dom@20.10.6)(msw@2.14.6(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.16(@types/node@26.1.1)(jiti@2.7.0)))
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../../../foundation/core
 
   packages/plugins/policies/cedar:
     dependencies:
-      '@euroclaw/authz':
+      '@busyclaw/authz':
         specifier: workspace:*
         version: link:../../../foundation/authz
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../../foundation/contracts
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../../../foundation/core
 
   packages/plugins/sandboxes:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
-      '@euroclaw/egress':
+      '@busyclaw/egress':
         specifier: workspace:*
         version: link:../../foundation/egress
       '@jitl/quickjs-ng-wasmfile-release-sync':
@@ -494,28 +494,28 @@ importers:
         specifier: 4.57.8
         version: 4.57.8(tslib@2.8.1)
     devDependencies:
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../../foundation/core
-      '@euroclaw/runtime':
+      '@busyclaw/runtime':
         specifier: workspace:*
         version: link:../../runtime
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
-      euroclaw:
+      busyclaw:
         specifier: workspace:*
-        version: link:../../euroclaw
+        version: link:../../busyclaw
 
   packages/plugins/secrets:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
-      '@euroclaw/secrets':
+      '@busyclaw/secrets':
         specifier: workspace:*
         version: link:../../foundation/secrets
       '@noble/ciphers':
@@ -528,22 +528,22 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
 
   packages/runtime:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../foundation/contracts
-      '@euroclaw/core':
+      '@busyclaw/core':
         specifier: workspace:*
         version: link:../foundation/core
-      '@euroclaw/egress':
+      '@busyclaw/egress':
         specifier: workspace:*
         version: link:../foundation/egress
-      '@euroclaw/storage-durable':
+      '@busyclaw/storage-durable':
         specifier: workspace:*
         version: link:../storage/durable
       '@noble/hashes':
@@ -556,16 +556,16 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@euroclaw/secrets':
+      '@busyclaw/secrets':
         specifier: workspace:*
         version: link:../foundation/secrets
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
 
   packages/storage/core:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
       arktype:
@@ -574,11 +574,11 @@ importers:
 
   packages/storage/drizzle:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
       '@types/better-sqlite3':
@@ -593,10 +593,10 @@ importers:
 
   packages/storage/durable:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
       '@noble/hashes':
@@ -606,7 +606,7 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@euroclaw/storage-kysely':
+      '@busyclaw/storage-kysely':
         specifier: workspace:*
         version: link:../kysely
       '@types/better-sqlite3':
@@ -621,11 +621,11 @@ importers:
 
   packages/storage/kysely:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
       '@types/better-sqlite3':
@@ -640,11 +640,11 @@ importers:
 
   packages/storage/mongodb:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
       mongodb:
@@ -656,11 +656,11 @@ importers:
 
   packages/storage/prisma:
     dependencies:
-      '@euroclaw/contracts':
+      '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
-      '@euroclaw/storage-core':
+      '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
       '@prisma/client':

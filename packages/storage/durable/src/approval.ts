@@ -1,11 +1,11 @@
-// createApprovalStore — the ApprovalStore port, backed by any @euroclaw/storage-core Adapter
+// createApprovalStore — the ApprovalStore port, backed by any @busyclaw/storage-core Adapter
 // (memory / kysely / drizzle / prisma / mongo). The single-use guarantee rides on an atomic
 // approved→consumed transition, so a granted approval resumes exactly once even under concurrent
 // retries. Persistence goes through `entityDb` — the model name drives the row types, and every
 // row crossing the adapter boundary is parsed against the approval record schema (reads are
 // untrusted boundary data), so the store never casts and never hand-rolls read validation.
 
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type ApprovalRecord,
 	type ApprovalStore,
@@ -13,8 +13,8 @@ import {
 	type NewApproval,
 	newApproval as newApprovalSchema,
 	validationError,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 

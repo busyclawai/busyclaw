@@ -1,0 +1,49 @@
+{
+	"name": "busyclaw",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Branded assembly package for busyclaw runtime, governance, and durable engines.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./ai": {
+			"types": "./dist/ai.d.ts",
+			"import": "./dist/ai.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@busyclaw/authz": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/engine-sql": "workspace:*",
+		"@busyclaw/runtime": "workspace:*",
+		"@busyclaw/secrets": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
+		"@busyclaw/storage-kysely": "workspace:*",
+		"@busyclaw/vendors": "workspace:*",
+		"arktype": "2.2.0",
+		"kysely": "0.29.2"
+	},
+	"devDependencies": {
+		"@ai-sdk/azure": "4.0.18",
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/policy-cedar": "workspace:*",
+		"@busyclaw/secrets-plugin": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
+		"ai": "7.0.22"
+	}
+}

@@ -1,5 +1,5 @@
 /**
- * @euroclaw/storage-kysely — the @euroclaw/storage-core Adapter port over a Kysely query builder.
+ * @busyclaw/storage-kysely — the @busyclaw/storage-core Adapter port over a Kysely query builder.
  *
  * `kyselyAdapter` takes either a ready Kysely instance OR a raw driver/pool you already have
  * (a better-sqlite3 `Database`, a `pg` `Pool`, a Kysely `Dialect`, or `{ dialect|db, type }`). Raw
@@ -9,7 +9,7 @@
  * input is rejected up front (create/update rely on RETURNING, which those lack).
  *
  * Modeled on Better Auth's Kysely adapter: https://github.com/better-auth/better-auth —
- * `packages/kysely-adapter`. The CRUD/where translation here is euroclaw's own, written against
+ * `packages/kysely-adapter`. The CRUD/where translation here is busyclaw's own, written against
  * Kysely's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
@@ -18,13 +18,13 @@ import type {
 	Where,
 	WhereClause,
 	WhereOperator,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
 	unsupportedOperationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	type Dialect,
 	type Expression,
@@ -66,7 +66,7 @@ function clauseExpr(w: WhereClause): Expression<boolean> {
 		if (op === "eq") return sql<boolean>`${col} is null`;
 		if (op === "ne") return sql<boolean>`${col} is not null`;
 		throw configurationError(
-			`@euroclaw/storage-kysely: where operator "${op}" cannot compare null`,
+			`@busyclaw/storage-kysely: where operator "${op}" cannot compare null`,
 			{ field: w.field, operator: op },
 		);
 	}
@@ -111,7 +111,7 @@ function whereExpr(where: Where[]): Expression<boolean> | undefined {
 			const inner = members.map((member) => whereExpr([member]));
 			if (inner.length === 0 || inner.some((e) => e === undefined)) {
 				throw configurationError(
-					"@euroclaw/storage-kysely: where group is empty",
+					"@busyclaw/storage-kysely: where group is empty",
 					{},
 				);
 			}
@@ -152,7 +152,7 @@ export type KyselyDatabase =
 function assertSupported(type: KyselyDatabaseType): void {
 	if (type === "mysql" || type === "mssql") {
 		throw unsupportedOperationError(
-			`@euroclaw/storage-kysely: ${type} isn't supported yet — create()/update() rely on RETURNING. Use sqlite or postgres.`,
+			`@busyclaw/storage-kysely: ${type} isn't supported yet — create()/update() rely on RETURNING. Use sqlite or postgres.`,
 			{ databaseType: type },
 		);
 	}
@@ -193,7 +193,7 @@ function toKysely(database: KyselyDatabase): Kysely<DB> {
 	// mysql2 is detectable — fail loudly rather than emit RETURNING it can't run.
 	if ("getConnection" in probe) assertSupported("mysql");
 	throw configurationError(
-		"@euroclaw/storage-kysely: unrecognized `database` — pass a Kysely instance, a Kysely Dialect, a pg Pool, a better-sqlite3 Database, or { dialect, type } / { db, type }.",
+		"@busyclaw/storage-kysely: unrecognized `database` — pass a Kysely instance, a Kysely Dialect, a pg Pool, a better-sqlite3 Database, or { dialect, type } / { db, type }.",
 	);
 }
 
@@ -343,12 +343,12 @@ export function kyselyAdapter(database: KyselyDatabase): Adapter {
 }
 
 // The TYPES generator — SchemaDeclaration → the Kysely `Database` interface, for a host that wants
-// to query euroclaw's tables directly. Derived from the declaration rather than introspected from a
+// to query busyclaw's tables directly. Derived from the declaration rather than introspected from a
 // live database (what kysely-codegen does), so it needs no connection and cannot drift.
 export type { KyselyTypeDialect, KyselyTypesOptions } from "./generate";
 export { generateKyselyTypes } from "./generate";
 // The migration emitter — SchemaDeclaration → DDL, over the same Kysely instance this adapter
-// drives. Lives beside the adapter because DDL is dialect work; consumed by @euroclaw/cli.
+// drives. Lives beside the adapter because DDL is dialect work; consumed by @busyclaw/cli.
 export type {
 	MigrationDialect,
 	MigrationPlan,

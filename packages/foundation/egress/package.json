@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/egress",
+	"name": "@busyclaw/egress",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "euroclaw's outbound egress safety floor: the non-negotiable network guard beneath any policy \u2014 SSRF range rejection (loopback / private / link-local / CGNAT / unspecified, IPv4+IPv6), https-only, and resolve-once address pinning. The root entry is Node-free (the caller injects the DNS resolver); the ./node subpath binds node:dns and a pinned dispatcher.",
+	"description": "busyclaw's outbound egress safety floor: the non-negotiable network guard beneath any policy \u2014 SSRF range rejection (loopback / private / link-local / CGNAT / unspecified, IPv4+IPv6), https-only, and resolve-once address pinning. The root entry is Node-free (the caller injects the DNS resolver); the ./node subpath binds node:dns and a pinned dispatcher.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/egress"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -39,7 +39,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
 		"undici": "8.9.0"
 	}
 }

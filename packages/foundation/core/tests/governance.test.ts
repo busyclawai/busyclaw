@@ -9,7 +9,7 @@ import {
 	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 	userPrincipal,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	createGovernance,
@@ -89,7 +89,7 @@ const emailDetector: Detector = (text) => {
 	return spans;
 };
 
-describe("euroclaw governance — the neutral pipeline", () => {
+describe("busyclaw governance — the neutral pipeline", () => {
 	it("is neutral by default: no redaction, no audit, no gates", async () => {
 		let toolSaw: unknown;
 		const ec = createGovernance({
@@ -673,7 +673,7 @@ describe("euroclaw governance — the neutral pipeline", () => {
 	});
 });
 
-describe("euroclaw governance — the approval after-gate (opt-in, mirrors audit)", () => {
+describe("busyclaw governance — the approval after-gate (opt-in, mirrors audit)", () => {
 	it("persists a needs-approval via the after-gate when a store is configured", async () => {
 		const { store, created } = recordingStore();
 		const ec = createGovernance({ approvalStore: store }).registerGate({
@@ -714,7 +714,7 @@ describe("euroclaw governance — the approval after-gate (opt-in, mirrors audit
 	});
 });
 
-describe("euroclaw governance — durable approval continuation", () => {
+describe("busyclaw governance — durable approval continuation", () => {
 	it("resumes a granted approval: re-runs the stored call, bypassing the gate that demanded it", async () => {
 		const { store } = recordingStore();
 		let toolRan: { name: string; args: Record<string, unknown> } | undefined;
@@ -768,7 +768,7 @@ describe("euroclaw governance — durable approval continuation", () => {
 	});
 });
 
-describe("euroclaw governance — governance reason codes (plugin-supplied; governance fills the reason)", () => {
+describe("busyclaw governance — governance reason codes (plugin-supplied; governance fills the reason)", () => {
 	it("a gate denies with just a reason code; governance fills the reason from $REASON_CODES and audits the reason code", async () => {
 		const ec = createGovernance({
 			audit: createMemoryAudit(),
@@ -881,7 +881,7 @@ describe("euroclaw governance — governance reason codes (plugin-supplied; gove
 	});
 });
 
-describe("euroclaw governance — the resolveContext hook (neutral; the claw composes identity/membership in)", () => {
+describe("busyclaw governance — the resolveContext hook (neutral; the claw composes identity/membership in)", () => {
 	const needsApproval = {
 		id: "g",
 		matcher: () => true,
@@ -891,7 +891,7 @@ describe("euroclaw governance — the resolveContext hook (neutral; the claw com
 	it("a resolveContext hook stamps the principal → recorded on audit + approvals", async () => {
 		const { store } = recordingStore();
 		const ec = createGovernance({
-			resolveContext: (ctx) => ({ ...ctx, euroclaw__principal: "user:alice" }),
+			resolveContext: (ctx) => ({ ...ctx, busyclaw__principal: "user:alice" }),
 			audit: createMemoryAudit(),
 			approvalStore: store,
 		}).registerGate(needsApproval);
@@ -905,12 +905,12 @@ describe("euroclaw governance — the resolveContext hook (neutral; the claw com
 	it("runs AFTER strip — a caller can't forge the principal; the trusted hook wins", async () => {
 		const { store } = recordingStore();
 		const ec = createGovernance({
-			resolveContext: (ctx) => ({ ...ctx, euroclaw__principal: "user:real" }),
+			resolveContext: (ctx) => ({ ...ctx, busyclaw__principal: "user:real" }),
 			approvalStore: store,
 		}).registerGate(needsApproval);
 		await ec.handleToolCall(
 			{ name: "reject", args: {} },
-			{ euroclaw__principal: "FORGED" },
+			{ busyclaw__principal: "FORGED" },
 		);
 		expect((await store.list())[0]?.principal).toBe("user:real");
 	});

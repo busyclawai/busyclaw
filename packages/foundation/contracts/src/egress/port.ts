@@ -1,12 +1,12 @@
 // The egress enforcement PORT — the ONE abstraction every sandbox egress backend implements,
-// GENERIC across all three tiers (blocked / allowlist / interceptor). It sits between euroclaw's
+// GENERIC across all three tiers (blocked / allowlist / interceptor). It sits between busyclaw's
 // Cedar policy (the *what's allowed*) and each backend's native egress mechanism (the *how it's
 // enforced*). Modeled on the PolicyEngine port (authz/engine.ts): a behaviour port plus a declared
 // `capability` the system reads to warn when an org's policy needs enforcement a tier structurally
 // cannot apply — no silent over-claim. Ports are behaviour, not data — plain TS, no schema/arktype
 // (like PolicyEngine and the Secrets reader, these are host-assembled, not values crossing a boundary).
 //
-// DOM-free on purpose: @euroclaw/contracts builds without the DOM lib and plugins import it, so the
+// DOM-free on purpose: @busyclaw/contracts builds without the DOM lib and plugins import it, so the
 // connection-level request / response / socket shapes are STRUCTURAL mirrors (the SandboxFetch
 // convention), never DOM Request/Response/ReadableStream.
 //
@@ -21,7 +21,7 @@ export type EgressTransport = "fetch" | "fetch+connect";
 /** What a backend can enforce — mirrors PolicyEngineCapabilities. The IsolationPosture.network enum
  *  ("blocked" | "allowlist" | "interceptor") already names the same postures. `allowlist` is
  *  host-level via a native firewall (self-hosted Firecracker nftables/CIDR; Vercel SNI is a reference
- *  mechanism); `interceptor` puts euroclaw in the request path (QuickJS in-proc, a Cloudflare
+ *  mechanism); `interceptor` puts busyclaw in the request path (QuickJS in-proc, a Cloudflare
  *  gateway, or a Firecracker transparent proxy). ONE backend may declare EITHER posture per how it is
  *  provisioned — the reason the port stays backend-agnostic. */
 export type EgressCapability =
@@ -82,7 +82,7 @@ export type GovernedOutbound = {
 	) => Promise<GovernedSocket>;
 };
 
-/** What euroclaw computes for ONE execution, matched to the backend's declared capability: no egress;
+/** What busyclaw computes for ONE execution, matched to the backend's declared capability: no egress;
  *  a static host allowlist the backend's firewall enforces; or an in-path governed outbound. One
  *  static plan per execution in v1 (decision 3) — a phased/lifecycle transition can be ADDED later
  *  without breaking this union. */

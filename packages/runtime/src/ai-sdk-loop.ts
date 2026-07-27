@@ -1,10 +1,10 @@
 import {
 	configurationError,
-	EuroclawError,
+	BusyclawError,
 	type HandleResult,
 	stateError,
-} from "@euroclaw/contracts";
-import type { Governance } from "@euroclaw/core";
+} from "@busyclaw/contracts";
+import type { Governance } from "@busyclaw/core";
 import type { LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { generateText, isStepCount, streamText, wrapLanguageModel } from "ai";
 import type {
@@ -30,7 +30,7 @@ export type AiSdkLoopInput = {
 	 * The tool-call INGRESS translation: the wire encoding the provider emitted → the canonical path
 	 * and the target's own args. Applied once, at the top of the call, so governance, dispatch, the
 	 * audit, approvals, effects and the transcript all speak the one canonical id. Two encodings
-	 * arrive here — a flattened wire name, and an `euroclaw__execute` envelope naming a discoverable
+	 * arrive here — a flattened wire name, and an `busyclaw__execute` envelope naming a discoverable
 	 * tool — and neither survives the translation. Absent (or a name nothing declared) leaves the
 	 * call exactly as it arrived.
 	 */
@@ -157,13 +157,13 @@ async function redact<T>(input: AiSdkLoopInput, value: T): Promise<T> {
 	return input.redactValue ? await input.redactValue(value) : value;
 }
 
-// The shared *.failed error payload. `reasonCode` is read only off a euroclaw-minted error's
+// The shared *.failed error payload. `reasonCode` is read only off a busyclaw-minted error's
 // details — the one way a governed decision (e.g. a model-boundary deny) surfaces as a throw —
 // so telemetry can tell "governed no" from "infra broke".
 function errorEventPayload(err: unknown): RuntimeEventError {
 	if (!(err instanceof Error)) return { message: String(err) };
 	const reasonCode =
-		err instanceof EuroclawError ? err.details?.reasonCode : undefined;
+		err instanceof BusyclawError ? err.details?.reasonCode : undefined;
 	return {
 		message: err.message,
 		name: err.name,
@@ -410,7 +410,7 @@ export async function runAiSdkLoop(
 		}
 		if (res.toolCalls.length > 1) {
 			throw stateError(
-				"euroclaw runtime currently supports one tool call per model step",
+				"busyclaw runtime currently supports one tool call per model step",
 				{ toolCallCount: res.toolCalls.length },
 			);
 		}
@@ -422,7 +422,7 @@ export async function runAiSdkLoop(
 		for (const toolCall of res.toolCalls) {
 			abortIfNeeded(input.abortSignal);
 			// THE INGRESS. What arrives is a WIRE encoding: the flattened projection of a path (providers
-			// reject dots), or an `euroclaw__execute` envelope naming a discoverable tool. Resolve it to
+			// reject dots), or an `busyclaw__execute` envelope naming a discoverable tool. Resolve it to
 			// the canonical path and the target's own args ONCE, here, and nothing downstream has to
 			// know either encoding existed: the floor decides on this id, dispatch looks it up, the
 			// audit and the transcript record it, an approval parks under it. That is also what stops
@@ -462,7 +462,7 @@ export async function runAiSdkLoop(
 			const toolStartedAt = Date.now();
 			// Before the gate: a tool this run does not have is not a decision to make.
 			if (input.knownToolPath && !input.knownToolPath(toolPath)) {
-				throw stateError(`euroclaw: no executable tool "${toolPath}"`, {
+				throw stateError(`busyclaw: no executable tool "${toolPath}"`, {
 					toolName: toolPath,
 				});
 			}
@@ -592,7 +592,7 @@ export async function runAiSdkLoop(
 	}
 
 	throw stateError(
-		`euroclaw: maxSteps (${input.maxSteps}) exceeded before the agent reached a final answer`,
+		`busyclaw: maxSteps (${input.maxSteps}) exceeded before the agent reached a final answer`,
 		{ maxSteps: input.maxSteps },
 	);
 }

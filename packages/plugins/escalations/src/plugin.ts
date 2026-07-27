@@ -15,7 +15,7 @@ import {
 	type AfterGate,
 	asPrincipal,
 	CLAW_ID_CONTEXT_KEY,
-	type EuroclawPlugin,
+	type BusyclawPlugin,
 	errorMessage,
 	type Outcome,
 	PRINCIPAL_CONTEXT_KEY,
@@ -25,7 +25,7 @@ import {
 	type RunMode,
 	THREAD_ID_CONTEXT_KEY,
 	type TurnContext,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /** The annotation key this plugin declares and consumes — what a policy writes as `@escalate("…")`. */
 export const ESCALATE_ANNOTATION = "escalate";
@@ -106,7 +106,7 @@ export type EscalationsOptions = {
 	 * own `warn` door, never into the run — but a hang is still a hang.
 	 */
 	onEscalate: (escalation: Escalation) => void | Promise<void>;
-	/** Plugin id override (default "euroclaw.escalations"), which the after-gate's id derives from.
+	/** Plugin id override (default "busyclaw.escalations"), which the after-gate's id derives from.
 	 *  Two installs need two ids — same-id gates replace, they do not stack. */
 	id?: string;
 };
@@ -174,8 +174,8 @@ export function escalations(
 	options: EscalationsOptions,
 	// `"no-cron"` explicitly: the phantom's DEFAULT is the whole flag union, which reads as "might
 	// contribute cron" and would make every host that installs this plugin pass a `cronHandler`.
-): EuroclawPlugin<"no-cron"> {
-	const id = options.id ?? "euroclaw.escalations";
+): BusyclawPlugin<"no-cron"> {
+	const id = options.id ?? "busyclaw.escalations";
 	const gate: AfterGate = {
 		id,
 		// Every boundary: an escalation annotated onto a model-egress forbid is the same fact as one on
@@ -207,7 +207,7 @@ export function escalations(
 				// isolated, warned, never propagated. This handler runs inside governance's `finally`, so
 				// a throw here would surface as the run's failure and mask the real outcome.
 				warn(
-					`euroclaw escalations: onEscalate failed for "${escalation.target}" — ${errorMessage(err)}`,
+					`busyclaw escalations: onEscalate failed for "${escalation.target}" — ${errorMessage(err)}`,
 				);
 			}
 		},

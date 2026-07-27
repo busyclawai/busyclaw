@@ -1,6 +1,6 @@
-import type { Secrets } from "@euroclaw/contracts";
-import { buildSecrets, env } from "@euroclaw/secrets";
-import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
+import type { Secrets } from "@busyclaw/contracts";
+import { buildSecrets, env } from "@busyclaw/secrets";
+import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { type Channel, channels, channelsModels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";

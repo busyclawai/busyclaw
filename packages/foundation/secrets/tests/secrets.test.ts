@@ -1,8 +1,8 @@
 import {
-	EuroclawError,
+	BusyclawError,
 	type ResolveContext,
 	type SecretProvider,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSecrets, env } from "../src/index";
 
@@ -42,7 +42,7 @@ describe("env — the environment provider", () => {
 	it("defaults vars to the env global (globalThis.process.env)", async () => {
 		const store = envGlobal();
 		if (!store) return; // edge runtime without process.env resolves nothing — nothing to assert
-		const key = "EUROCLAW_SECRETS_ENV_PROBE";
+		const key = "BUSYCLAW_SECRETS_ENV_PROBE";
 		store[key] = "probe";
 		try {
 			expect(await env().get(key, {})).toEqual({
@@ -59,7 +59,7 @@ describe("buildSecrets — the one-door resolver", () => {
 	it("defaults to a single env() provider — buildSecrets() reads env", async () => {
 		const store = envGlobal();
 		if (!store) return;
-		const key = "EUROCLAW_SECRETS_DEFAULT_PROBE";
+		const key = "BUSYCLAW_SECRETS_DEFAULT_PROBE";
 		store[key] = "from-env";
 		try {
 			expect(await buildSecrets().get(key)).toEqual({
@@ -183,9 +183,9 @@ describe("buildSecrets — the one-door resolver", () => {
 		} catch (error) {
 			caught = error;
 		}
-		expect(caught).toBeInstanceOf(EuroclawError);
+		expect(caught).toBeInstanceOf(BusyclawError);
 		expect(caught).toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/distinct/),
 		});
 	});
@@ -207,7 +207,7 @@ describe("secrets.require — the fail-loud, kind-narrowing branch", () => {
 	it("throws (configurationError naming the secret) when nothing resolves it", async () => {
 		const secrets = buildSecrets([env({ vars: {} })]);
 		await expect(secrets.require("MISSING")).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/MISSING.*resolves nowhere/),
 		});
 	});
@@ -229,7 +229,7 @@ describe("secrets.require — the fail-loud, kind-narrowing branch", () => {
 		await expect(
 			buildSecrets([basic]).require("CREDS", { kind: "token" }),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/basic material but token was required/),
 		});
 	});

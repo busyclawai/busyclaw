@@ -1,4 +1,4 @@
-// The euroclaw doc meta channel: authoring is plain `.configure({ euroclaw: { doc } })` (typed by
+// The busyclaw doc meta channel: authoring is plain `.configure({ busyclaw: { doc } })` (typed by
 // the ArkEnv augmentation in governance/doc.ts) and every consumer reads through the ONE `docOf`.
 // The runtime spot-check the plan demands lives here: arktype must PRESERVE the namespaced key at
 // runtime — the whole channel rides an undeclared-at-runtime meta key — and attaching it must
@@ -15,24 +15,24 @@ function summaryOf(result: unknown): string {
 }
 
 describe("the doc channel survives arktype at runtime", () => {
-	it("configure({ euroclaw: { doc } }) preserves the key — t.meta carries it", () => {
-		const t = type("string").configure({ euroclaw: { doc: "x" } });
-		expect(t.meta.euroclaw).toEqual({ doc: "x" });
+	it("configure({ busyclaw: { doc } }) preserves the key — t.meta carries it", () => {
+		const t = type("string").configure({ busyclaw: { doc: "x" } });
+		expect(t.meta.busyclaw).toEqual({ doc: "x" });
 	});
 
 	it("leaves validation behavior unchanged", () => {
 		const plain = type("string");
-		const documented = type("string").configure({ euroclaw: { doc: "x" } });
+		const documented = type("string").configure({ busyclaw: { doc: "x" } });
 		expect(documented("hi")).toBe("hi");
 		expect(summaryOf(documented(42))).toBe(summaryOf(plain(42)));
 	});
 });
 
 describe("docOf — the one reader, precedence built in", () => {
-	it("euroclaw.doc beats the described text", () => {
+	it("busyclaw.doc beats the described text", () => {
 		const t = type("string")
 			.describe("a terse summary")
-			.configure({ euroclaw: { doc: "Rich documentation prose." } });
+			.configure({ busyclaw: { doc: "Rich documentation prose." } });
 		expect(docOf(t)).toBe("Rich documentation prose.");
 	});
 
@@ -59,9 +59,9 @@ describe("docOf — the one reader, precedence built in", () => {
 });
 
 describe(".describe() text still drives error messages unchanged", () => {
-	it("attaching euroclaw.doc does not alter the error summary", () => {
+	it("attaching busyclaw.doc does not alter the error summary", () => {
 		const described = type("string").describe("a secret name");
-		const both = described.configure({ euroclaw: { doc: "Rich prose." } });
+		const both = described.configure({ busyclaw: { doc: "Rich prose." } });
 		expect(summaryOf(described(42))).toBe(
 			"must be a secret name (was a number)",
 		);

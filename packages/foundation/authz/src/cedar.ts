@@ -12,7 +12,7 @@ import type {
 	AuthzModel,
 	EntityRef,
 	JsonObject,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { API_ACTION_GROUP, API_ACTION_TYPE, API_CREATE_GROUP } from "./api";
 import { cedarQuote, projectArgs } from "./projection";
 

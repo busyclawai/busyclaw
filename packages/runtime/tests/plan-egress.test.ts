@@ -4,8 +4,8 @@ import type {
 	PolicyEngine,
 	Secrets,
 	StampedFacts,
-} from "@euroclaw/contracts";
-import { buildSecrets } from "@euroclaw/secrets";
+} from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { describe, expect, it } from "vitest";
 import { planEgress } from "../src/index";
 

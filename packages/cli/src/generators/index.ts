@@ -2,8 +2,8 @@
 // (packages/cli/src/generators/index.ts), where the adapter's own `id` picks the generator.
 //
 // ROUTING ONLY. Every line of dialect knowledge lives in the storage package that owns the dialect:
-// the SQL emitter in @euroclaw/storage-kysely, the Drizzle one in @euroclaw/storage-drizzle, the
-// Prisma one in @euroclaw/storage-prisma. So each is tested beside the adapter it serves (and, for
+// the SQL emitter in @busyclaw/storage-kysely, the Drizzle one in @busyclaw/storage-drizzle, the
+// Prisma one in @busyclaw/storage-prisma. So each is tested beside the adapter it serves (and, for
 // Prisma, beside the real schema.prisma its tests can validate against), and adding an adapter means
 // adding a generator next to it plus one line here.
 //
@@ -12,19 +12,19 @@
 // full schema in that ORM's own language and stop, because drizzle-kit and prisma-migrate already
 // own history and are better at it than we would be.
 
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
 import {
 	type DrizzleProvider,
 	generateDrizzleSchema,
-} from "@euroclaw/storage-drizzle";
+} from "@busyclaw/storage-drizzle";
 import {
 	generateKyselyTypes,
 	type KyselyTypeDialect,
-} from "@euroclaw/storage-kysely";
-import { generateMongoIndexes } from "@euroclaw/storage-mongodb";
-import { generatePrismaSchema } from "@euroclaw/storage-prisma";
+} from "@busyclaw/storage-kysely";
+import { generateMongoIndexes } from "@busyclaw/storage-mongodb";
+import { generatePrismaSchema } from "@busyclaw/storage-prisma";
 
-export type { DrizzleProvider } from "@euroclaw/storage-drizzle";
+export type { DrizzleProvider } from "@busyclaw/storage-drizzle";
 
 /** What `db generate` can emit. */
 export const GENERATE_TARGETS = [
@@ -52,11 +52,11 @@ export const TARGET_FOR_ADAPTER: Readonly<Record<string, GenerateTarget>> = {
 
 /** The conventional filename per target, used when `--output` is not given. */
 export const DEFAULT_OUTPUT: Readonly<Record<GenerateTarget, string>> = {
-	sql: "euroclaw.sql",
-	drizzle: "euroclaw-schema.ts",
-	prisma: "euroclaw.prisma",
-	kysely: "euroclaw-db.ts",
-	mongodb: "euroclaw-indexes.mongo.js",
+	sql: "busyclaw.sql",
+	drizzle: "busyclaw-schema.ts",
+	prisma: "busyclaw.prisma",
+	kysely: "busyclaw-db.ts",
+	mongodb: "busyclaw-indexes.mongo.js",
 };
 
 /** Targets that print the whole schema without connecting to anything. A type predicate, so a

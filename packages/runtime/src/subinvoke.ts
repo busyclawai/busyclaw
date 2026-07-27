@@ -1,4 +1,4 @@
-import type { HandleResult } from "@euroclaw/contracts";
+import type { HandleResult } from "@busyclaw/contracts";
 
 /** Governed nested tool invocation, handed to invoker-stamped tools' execute.
  *  Full pipeline (redact → gates → execute → audit); NO effect claim; a

@@ -9,10 +9,10 @@
 // transcripts and approvals all survive a restart, which is what makes the demo filmable and what
 // makes it deployable to a serverless host at all.
 
-import { createClaw } from "euroclaw";
-import { appConnectionString, clawConfig } from "./euroclaw-config";
+import { createClaw } from "busyclaw";
+import { appConnectionString, clawConfig } from "./busyclaw-config";
 
-/** The same object `euroclaw db migrate` reads, so the schema it migrates is the schema this runs. */
+/** The same object `busyclaw db migrate` reads, so the schema it migrates is the schema this runs. */
 export const config = clawConfig(appConnectionString());
 
 function assembleClaw() {
@@ -21,7 +21,7 @@ function assembleClaw() {
 
 export type DemoClaw = ReturnType<typeof assembleClaw>;
 
-const CACHE_KEY = Symbol.for("euroclaw.demo.claw");
+const CACHE_KEY = Symbol.for("busyclaw.demo.claw");
 type ClawCache = { [CACHE_KEY]?: DemoClaw };
 
 function cached(): DemoClaw {

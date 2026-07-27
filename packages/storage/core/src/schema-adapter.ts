@@ -1,11 +1,11 @@
-import type { WhereClause } from "@euroclaw/contracts";
+import type { WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	errorMessage,
 	isWhereGroup,
 	sortByList,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import type {
 	Adapter,
 	FieldAttribute,
@@ -101,7 +101,7 @@ function encodeJsonValue(value: unknown, label: string): string {
 		}
 		return json;
 	} catch (err) {
-		if (err instanceof Error && err.name === "EuroclawError") throw err;
+		if (err instanceof Error && err.name === "BusyclawError") throw err;
 		throw validationError(label, errorMessage(err));
 	}
 }
@@ -272,7 +272,7 @@ function transformWhere(input: {
  *
  * Checked HERE rather than in each adapter: this is the one boundary all five pass through, so the
  * guard cannot be missed by the sixth. Values are typed as scalars at the API edge and every caller
- * inside euroclaw sends one today; this is what keeps that true the day a boundary forwards something
+ * inside busyclaw sends one today; this is what keeps that true the day a boundary forwards something
  * less examined.
  *
  * A NATIVE json column is the one legitimate exception — there an object IS the operand.
@@ -461,7 +461,7 @@ function asRow(value: unknown): Record<string, unknown> {
 
 /**
  * Wrap a physical Adapter with schema-aware model/field mapping, JSON encoding, defaults, and
- * on-update values. Stores keep using logical euroclaw names; the wrapped adapter talks to the
+ * on-update values. Stores keep using logical busyclaw names; the wrapped adapter talks to the
  * backing database in its physical table/column shape.
  */
 export function schemaAdapter(

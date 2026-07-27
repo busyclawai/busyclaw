@@ -1,20 +1,20 @@
-// @euroclaw/client — the vanilla euroclaw client (docs/plans/claw-client-plan.md, slice 2).
+// @busyclaw/client — the vanilla busyclaw client (docs/plans/claw-client-plan.md, slice 2).
 // Base api methods are TABLE-driven off the shared contracts name list (no heuristic, no proxy);
 // plugin namespaces ride the recursive function proxy with the one camelCase→kebab convention and
 // the `get*`/`list*` → GET verb rule — the SAME `toKebabCase`/`endpointHttpMethod` pair the server
 // mounts routes with, so client and server cannot disagree on a path. Zero server runtime in the
-// bundle: `euroclaw` types cross via `import type` only, and contracts VALUES cross only through
+// bundle: `busyclaw` types cross via `import type` only, and contracts VALUES cross only through
 // the docless wire subpaths (the contracts BARREL is import-type-only here — the structural
 // guarantee tests/contracts-wire.test.ts enforces); runtime deps are those subpaths,
-// @euroclaw/errors, and nanostores.
+// @busyclaw/errors, and nanostores.
 
-import { CLAW_API_METHOD_NAMES } from "@euroclaw/contracts/claw-api";
-import type { EndpointHttpMethod } from "@euroclaw/contracts/governance/endpoints";
+import { CLAW_API_METHOD_NAMES } from "@busyclaw/contracts/claw-api";
+import type { EndpointHttpMethod } from "@busyclaw/contracts/governance/endpoints";
 import {
 	endpointHttpMethod,
 	toKebabCase,
-} from "@euroclaw/contracts/governance/endpoints";
-import { configurationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts/governance/endpoints";
+import { configurationError } from "@busyclaw/errors";
 import type { ReadableAtom, WritableAtom } from "nanostores";
 import { createRouteProxy } from "./proxy";
 import { createTransport } from "./transport";
@@ -64,7 +64,7 @@ function requireSignalAtom(
 		typeof candidate.get() !== "boolean"
 	) {
 		throw configurationError(
-			"euroclaw client signal is not a known boolean signal atom",
+			"busyclaw client signal is not a known boolean signal atom",
 			{ referencedBy, signal },
 		);
 	}
@@ -100,7 +100,7 @@ export function createClawClient<
 	const claim = (key: string, owner: string): void => {
 		const previous = owners.get(key);
 		if (previous !== undefined) {
-			throw configurationError("duplicate euroclaw client key", {
+			throw configurationError("duplicate busyclaw client key", {
 				key,
 				owner,
 				previous,
@@ -151,7 +151,7 @@ export function createClawClient<
 		for (const [path, method] of Object.entries(plugin.pathMethods ?? {})) {
 			const previous = pathMethodOwners.get(path);
 			if (previous !== undefined) {
-				throw configurationError("duplicate euroclaw client pathMethods path", {
+				throw configurationError("duplicate busyclaw client pathMethods path", {
 					owner: plugin.id,
 					path,
 					previous,

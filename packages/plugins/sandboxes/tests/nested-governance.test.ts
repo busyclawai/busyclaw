@@ -4,13 +4,13 @@
 // fail-closed guards the nested-invoke design depends on: a script cannot re-enter a capability
 // tool, and a nested needs-approval degrades to a denied value instead of parking a live isolate.
 
-import { createMemoryAudit } from "@euroclaw/core";
+import { createMemoryAudit } from "@busyclaw/core";
 import {
 	createRuntime,
 	govern,
 	NESTED_APPROVAL_UNSUPPORTED,
 	NESTED_INVOKER_TOOL,
-} from "@euroclaw/runtime";
+} from "@busyclaw/runtime";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import type {
@@ -97,7 +97,7 @@ function recordingSandbox(): {
 	};
 }
 
-describe("@euroclaw/sandboxes nested governance", () => {
+describe("@busyclaw/sandboxes nested governance", () => {
 	// N1 — a governed VALUE (denied, with gateId/reason/reasonCode) round-trips intact to the guest:
 	// the bridge carries the governance verdict faithfully, so the script reasons on it. (Complements
 	// escape E7, which checks the argument direction.)

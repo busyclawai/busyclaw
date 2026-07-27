@@ -8,7 +8,7 @@
 // standard-schema library (arktype, zod v4, valibot, …) without depending on one. The marker
 // interface follows the Elysia pattern (minimal, reduced to what inference and validation
 // actually need — not the full spec type); the guards are pure predicates, the same protocol
-// grade as common.ts's JSON guards. Consumers: @euroclaw/vendors/ai-sdk (tool inputSchema
+// grade as common.ts's JSON guards. Consumers: @busyclaw/vendors/ai-sdk (tool inputSchema
 // routing), the authz model builder/generators (projected-args extraction) — the latter must
 // never import a vendor SDK, which is why this seam lives in contracts.
 

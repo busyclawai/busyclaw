@@ -1,5 +1,5 @@
-import { field } from "@euroclaw/contracts";
-import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
+import { field } from "@busyclaw/contracts";
+import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClawsStore } from "../src/claws";
 

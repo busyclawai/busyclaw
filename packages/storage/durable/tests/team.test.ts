@@ -1,5 +1,5 @@
-import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
-import { kyselyAdapter } from "@euroclaw/storage-kysely";
+import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
+import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,7 +95,7 @@ suite(
 		const db = new Kysely<Record<string, Record<string, unknown>>>({
 			dialect: new SqliteDialect({ database: sqlite }),
 		});
-		// The tables `euroclaw generate` will emit from teamSchema.
+		// The tables `busyclaw generate` will emit from teamSchema.
 		sqlite.exec(
 			`CREATE TABLE team_member (id TEXT PRIMARY KEY, team TEXT, userId TEXT, role TEXT, joinedAt TEXT)`,
 		);

@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/storage-mongodb",
+	"name": "@busyclaw/storage-mongodb",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "MongoDB adapter for the @euroclaw/storage-core Adapter port. Patterns adapted from Better Auth (MIT).",
+	"description": "MongoDB adapter for the @busyclaw/storage-core Adapter port. Patterns adapted from Better Auth (MIT).",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,13 +23,13 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@busyclaw/contracts": "workspace:*"
 	},
 	"peerDependencies": {
 		"mongodb": ">=5.0.0"
 	},
 	"devDependencies": {
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"mongodb": "6.21.0",
 		"mongodb-memory-server": "10.4.3"
 	}

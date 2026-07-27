@@ -1,10 +1,10 @@
-import { userPrincipal } from "@euroclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import {
 	createRuntime,
 	type Runtime,
 	type RuntimeModel,
-} from "@euroclaw/runtime";
-import { memoryAdapter } from "@euroclaw/storage-core";
+} from "@busyclaw/runtime";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	createSqlEngineStore,
@@ -57,7 +57,7 @@ function failingModel(message: string): RuntimeModel {
 	};
 }
 
-describe("@euroclaw/engine-sql", () => {
+describe("@busyclaw/engine-sql", () => {
 	it("derives its storage schema from entity fields", () => {
 		expect(sqlEngineSchema.run.fields.input).toMatchObject({
 			type: "json",

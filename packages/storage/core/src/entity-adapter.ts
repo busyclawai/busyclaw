@@ -24,12 +24,12 @@ import type {
 	EntityRecord,
 	SchemaDeclaration,
 	WhereClause,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	entity,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 import { asConflict } from "./conflict";
 import { type SchemaAdapterOptions, schemaAdapter } from "./schema-adapter";

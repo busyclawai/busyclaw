@@ -1,8 +1,8 @@
 import {
 	type ClawRequestHandlerOptions,
 	toRequestHandler,
-} from "@euroclaw/adapter-core";
-import type { Claw } from "euroclaw";
+} from "@busyclaw/adapter-core";
+import type { Claw } from "busyclaw";
 
 export function toNextJsHandler(
 	claw: Claw,

@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/escalations",
+	"name": "@busyclaw/escalations",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The escalations() plugin for euroclaw: declares the `escalate` and `guidance` Cedar policy annotations — a policy that says who should be asked (@escalate(\"betterauth:team_eng\")) reaches the host's onEscalate when a call parks or is denied, and one that says what to do instead (@guidance(\"…\")) reaches the agent. An observer: it changes no decision.",
+	"description": "The escalations() plugin for busyclaw: declares the `escalate` and `guidance` Cedar policy annotations — a policy that says who should be asked (@escalate(\"betterauth:team_eng\")) reaches the host's onEscalate when a call parks or is denied, and one that says what to do instead (@guidance(\"…\")) reaches the agent. An observer: it changes no decision.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/plugins/escalations"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -36,14 +36,14 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@busyclaw/contracts": "workspace:*"
 	},
 	"devDependencies": {
-		"@euroclaw/core": "workspace:*",
-		"@euroclaw/policy-cedar": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*",
-		"@euroclaw/storage-durable": "workspace:*",
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/policy-cedar": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
 		"ai": "7.0.22",
-		"euroclaw": "workspace:*"
+		"busyclaw": "workspace:*"
 	}
 }

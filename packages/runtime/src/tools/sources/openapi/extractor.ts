@@ -12,14 +12,14 @@
 //   membership in semantic groups like "reads"/"writes"; deprecated → "deprecated" group.
 //
 // Adapted from the extraction flow of Executor's openapi plugin (MIT) — see
-// THIRD_PARTY_NOTICES.md; rewritten without Effect and reduced to euroclaw's scope.
+// THIRD_PARTY_NOTICES.md; rewritten without Effect and reduced to busyclaw's scope.
 
 import type {
 	JsonObject,
 	JsonValue,
 	ToolGovernance,
-} from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { validationError } from "@busyclaw/contracts";
 import { type } from "arktype";
 import {
 	HTTP_METHODS,
@@ -387,7 +387,7 @@ function deriveGovernance(
 }
 
 // Resolve the scheme DEFINITIONS an operation's requirements reference, denormalized onto the
-// binding. A referenced scheme that has no definition, or one euroclaw's invoker can't place, is a
+// binding. A referenced scheme that has no definition, or one busyclaw's invoker can't place, is a
 // WARNING — extraction still yields a governed (if uninvokable) tool; the invoker fails loud at call
 // time if a REQUIRED scheme is unsupported. Local $refs on a scheme resolve through the shared node
 // resolver; a remote/circular ref on a scheme drops that scheme (never the operation).

@@ -162,7 +162,7 @@ describe("the wrapper stays the vanilla client", () => {
 		const result = await client.getClaw({ id: "c-1" });
 		expect(result.error).toBeNull();
 		expect(result.data).toEqual({ id: "c-1" });
-		expect(calls[0]?.url).toContain("/api/euroclaw/get-claw?");
+		expect(calls[0]?.url).toContain("/api/busyclaw/get-claw?");
 		expect(client.$store.atoms.pendingApprovals).toBeDefined();
 
 		// Unknown names still route by convention through the inner proxy.
@@ -170,7 +170,7 @@ describe("the wrapper stays the vanilla client", () => {
 			secrets: { set: (input: unknown) => Promise<unknown> };
 		};
 		await namespaced.secrets.set({ name: "NOTION", value: "tok" });
-		expect(calls[1]?.url).toBe("/api/euroclaw/secrets/set");
+		expect(calls[1]?.url).toBe("/api/busyclaw/secrets/set");
 		expect(calls[1]?.init?.method).toBe("POST");
 	});
 
@@ -182,6 +182,6 @@ describe("the wrapper stays the vanilla client", () => {
 					{ getAtoms: () => ({ FooBar: atom(0) }), id: "b" },
 				],
 			}),
-		).toThrow(/duplicate euroclaw client hook key/);
+		).toThrow(/duplicate busyclaw client hook key/);
 	});
 });

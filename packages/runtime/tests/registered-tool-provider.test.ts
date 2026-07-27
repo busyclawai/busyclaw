@@ -3,8 +3,8 @@ import type {
 	RegisteredToolRecord,
 	Secrets,
 	ToolDefinitionSet,
-} from "@euroclaw/contracts";
-import { buildSecrets } from "@euroclaw/secrets";
+} from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { describe, expect, it } from "vitest";
 import { modelToolProjection, toolExecutor } from "../src/tools";
 import { type EgressLookup, pinnedLookup } from "../src/tools/invoke/egress";

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The euroclaw CLI. One command group today — `db` — because there is one thing the runtime cannot
+// The busyclaw CLI. One command group today — `db` — because there is one thing the runtime cannot
 // do for you at boot: create the tables it is about to read.
 
 // NOTE: relative imports in this package carry an explicit `.js` extension. Every other package
@@ -13,23 +13,23 @@ import { type DbCommandOptions, dbGenerate, dbMigrate } from "./commands/db.js";
 const program = new Command();
 
 program
-	.name("euroclaw")
-	.description("euroclaw command line")
+	.name("busyclaw")
+	.description("busyclaw command line")
 	.version("0.0.0")
 	.showHelpAfterError();
 
 const db = program
 	.command("db")
-	.description("schema for the tables your euroclaw config declares");
+	.description("schema for the tables your busyclaw config declares");
 
 db.command("generate")
 	.description(
 		"emit the schema your config declares (sql | drizzle | prisma | kysely)",
 	)
-	.option("-c, --config <path>", "path to the euroclaw config module")
+	.option("-c, --config <path>", "path to the busyclaw config module")
 	.option(
 		"-o, --output <path>",
-		"where to write (sql accumulates in ./euroclaw_migrations/)",
+		"where to write (sql accumulates in ./busyclaw_migrations/)",
 	)
 	.option(
 		"-t, --target <target>",
@@ -51,7 +51,7 @@ db.command("migrate")
 	.description(
 		"apply the SQL to the database (additive only; SQL targets only)",
 	)
-	.option("-c, --config <path>", "path to the euroclaw config module")
+	.option("-c, --config <path>", "path to the busyclaw config module")
 	.option(
 		"-d, --dialect <dialect>",
 		"postgres | sqlite (inferred when possible)",

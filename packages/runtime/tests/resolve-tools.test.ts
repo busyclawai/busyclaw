@@ -1,5 +1,5 @@
-import type { ToolDefinitionSet } from "@euroclaw/contracts";
-import { CONFIG_SCOPE_ID_CONTEXT_KEY } from "@euroclaw/contracts";
+import type { ToolDefinitionSet } from "@busyclaw/contracts";
+import { CONFIG_SCOPE_ID_CONTEXT_KEY } from "@busyclaw/contracts";
 import { jsonSchema, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, govern } from "../src/index";

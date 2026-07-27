@@ -1,21 +1,21 @@
-// The Principal vocabulary: euroclaw's ONE identity concept — an AUTHORIZABLE "on behalf of whom?".
+// The Principal vocabulary: busyclaw's ONE identity concept — an AUTHORIZABLE "on behalf of whom?".
 // It is the same "who" that attribution/audit, authz (Cedar's `principal`), data-scoping, and erasure
 // all key off; authz is its loudest consumer, not its definition. It is NOT the concurrency
-// actor-model — euroclaw's concurrency unit is the run/task, never this. Construct via the helpers and
+// actor-model — busyclaw's concurrency unit is the run/task, never this. Construct via the helpers and
 // discriminate via `parsePrincipal`; never hand-format the tag. See docs/plans/principal-standardization.md.
 
-import { validationError } from "@euroclaw/errors";
+import { validationError } from "@busyclaw/errors";
 import { type } from "arktype";
 
 /**
  * A Principal is an AUTHORIZABLE identity — the thing you could write a Cedar `permit`/`forbid`
  * about, and the "who" attribution/audit, authz, data-scoping, and erasure all key off. It answers
- * *"on behalf of whom?"*, NOT *"which concurrency actor?"* (euroclaw's concurrency unit is the
+ * *"on behalf of whom?"*, NOT *"which concurrency actor?"* (busyclaw's concurrency unit is the
  * run/task, never this).
  *
  * The form is a tagged string `<kind>:<id>` — one legible column — with exactly two kinds:
  * - **`user:<hostUserId>`** — a human the host authenticated (from the `IdentityResolver`).
- * - **`system:<name>`** — a non-human euroclaw actor: `anonymous` (a stranger's bot conversation),
+ * - **`system:<name>`** — a non-human busyclaw actor: `anonymous` (a stranger's bot conversation),
  *   `engine` (autonomous resume/compensation), `migration`. Build with {@link systemPrincipal}; the
  *   well-known one is {@link SYSTEM_ANONYMOUS}.
  *
@@ -48,14 +48,14 @@ export type Principal = string & { readonly __brand: "Principal" };
  * function-intake image of better-auth's server `auth.api.x({ headers })`. Identity travels BESIDE the
  * pure domain input, never inside it: the PEP reads `principal` as the authz subject, and the HTTP
  * adapter's `resolveCaller` seam fills it from the session/token (never the request body). A shared
- * protocol type — euroclaw's api surface (the `WithCaller` transform) and the adapter name ONE caller
+ * protocol type — busyclaw's api surface (the `WithCaller` transform) and the adapter name ONE caller
  * type instead of re-declaring `{ principal? }` at each boundary.
  */
 export type ClawApiCaller = { principal?: Principal };
 
 /**
  * Build the principal for a human the host authenticated: `` `user:${id}` ``. The `id` is the host's
- * own user id (opaque to euroclaw, may itself contain colons, e.g. `auth0|abc`). A blank id is
+ * own user id (opaque to busyclaw, may itself contain colons, e.g. `auth0|abc`). A blank id is
  * rejected — a principal must identify someone. This constructor is a sanctioned brand producer: the
  * value is well-formed by construction, so the brand is stamped without re-parsing.
  */
@@ -71,7 +71,7 @@ export function userPrincipal(id: string): Principal {
 }
 
 /**
- * Build a non-human euroclaw principal: `` `system:${name}` `` (e.g. `system:cron`,
+ * Build a non-human busyclaw principal: `` `system:${name}` `` (e.g. `system:cron`,
  * `system:anonymous`). A blank name is rejected. Prefer the well-known
  * {@link SYSTEM_ANONYMOUS} constants over re-deriving them at each use site.
  */

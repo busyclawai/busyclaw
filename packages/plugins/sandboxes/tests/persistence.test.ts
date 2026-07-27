@@ -6,8 +6,8 @@
 // T1–T3 drive the full runtime (scripted model → run_code) like e2e/pii; T4–T7 exercise the provider
 // and the store directly, where the byte budgets and the envelope contract live.
 
-import { createMemoryAudit } from "@euroclaw/core";
-import { createRuntime } from "@euroclaw/runtime";
+import { createMemoryAudit } from "@busyclaw/core";
+import { createRuntime } from "@busyclaw/runtime";
 import type { wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import type {
@@ -102,7 +102,7 @@ const WRITE = (path: string, content: string) =>
 const READ_OR = (path: string, fallback: string) =>
 	`const fs = await import("node:fs"); try { return fs.readFileSync(${JSON.stringify(path)}, "utf8"); } catch { return ${JSON.stringify(fallback)}; }`;
 
-describe("@euroclaw/sandboxes bounded filesystem persistence", () => {
+describe("@busyclaw/sandboxes bounded filesystem persistence", () => {
 	// T1 — round-trip: run 1 writes /data.txt; run 2 with the SAME volumeRef reads it back. Proves the
 	// snapshot-out (save) then snapshot-in (load) across two separate run_code calls (conversations).
 	it("T1: a file written in one run is readable in the next under the same volumeRef", async () => {

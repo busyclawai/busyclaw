@@ -215,12 +215,12 @@ function build(state: RouteState): BuilderRuntime {
 			// impossible, so it must not degrade into "no check".
 			if (state.authz === undefined) {
 				throw new Error(
-					"euroclaw route: .handler() called before .authz() — every route must declare what it authorizes against",
+					"busyclaw route: .handler() called before .authz() — every route must declare what it authorizes against",
 				);
 			}
 			if (state.input === undefined) {
 				throw new Error(
-					"euroclaw route: .handler() called before .input() — a route with no boundary schema would pass unvalidated network input to the handler",
+					"busyclaw route: .handler() called before .input() — a route with no boundary schema would pass unvalidated network input to the handler",
 				);
 			}
 			const definition: RouteDefinition = {

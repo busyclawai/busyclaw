@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/vendors",
+	"name": "@busyclaw/vendors",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Vendor-coupled authoring glue for euroclaw, one subpath per vendor. `@euroclaw/vendors/ai-sdk`: tool() defines a governed AI-SDK tool in one place — the model-facing definition plus the governance stamp. Feather-light: contracts + the vendor SDK only, no runtime.",
+	"description": "Vendor-coupled authoring glue for busyclaw, one subpath per vendor. `@busyclaw/vendors/ai-sdk`: tool() defines a governed AI-SDK tool in one place — the model-facing definition plus the governance stamp. Feather-light: contracts + the vendor SDK only, no runtime.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/vendors"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -33,11 +33,11 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
 		"ai": "7.0.22"
 	},
 	"devDependencies": {
-		"@euroclaw/core": "workspace:*",
+		"@busyclaw/core": "workspace:*",
 		"arktype": "2.2.0"
 	}
 }

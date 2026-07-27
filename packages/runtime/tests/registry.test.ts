@@ -6,7 +6,7 @@ import type {
 	RegisteredToolStore,
 	SpecRegistrationRecord,
 	SpecRegistrationStore,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createSpecRegistry } from "../src/tools/registry";
 import type { OpenApiExtraction } from "../src/tools/sources/openapi";

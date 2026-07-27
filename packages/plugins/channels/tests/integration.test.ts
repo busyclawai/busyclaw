@@ -1,11 +1,11 @@
-import { field } from "@euroclaw/contracts";
-import { createStoredRedactor, noopDetector } from "@euroclaw/core";
-import { env } from "@euroclaw/secrets";
-import { secrets } from "@euroclaw/secrets-plugin";
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createPiiMappingStore } from "@euroclaw/storage-durable";
+import { field } from "@busyclaw/contracts";
+import { createStoredRedactor, noopDetector } from "@busyclaw/core";
+import { env } from "@busyclaw/secrets";
+import { secrets } from "@busyclaw/secrets-plugin";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import type { wrapLanguageModel } from "ai";
-import { createClaw, getEuroclawTables } from "euroclaw";
+import { createClaw, getBusyclawTables } from "busyclaw";
 import { describe, expect, it, vi } from "vitest";
 import { type Channel, channels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
@@ -44,9 +44,9 @@ function appBot() {
 	return telegram();
 }
 
-describe("channels ↔ euroclaw integration", () => {
-	it("collects each mode's own table via getEuroclawTables", () => {
-		const withPlugins = getEuroclawTables({
+describe("channels ↔ busyclaw integration", () => {
+	it("collects each mode's own table via getBusyclawTables", () => {
+		const withPlugins = getBusyclawTables({
 			plugins: [
 				channels([appBot()]),
 				channels([telegram()], { registrations: { enabled: true } }),
@@ -79,11 +79,11 @@ describe("channels ↔ euroclaw integration", () => {
 
 	it("gates channel_registration on the registrations flag (the opt-in table pattern)", () => {
 		// OFF (app-bot mode) → channel_endpoint, never channel_registration
-		const off = getEuroclawTables({ plugins: [channels([telegram()])] });
+		const off = getBusyclawTables({ plugins: [channels([telegram()])] });
 		expect(off.channel_endpoint).toBeDefined();
 		expect(off.channel_registration).toBeUndefined();
 		// ON (BYO mode) → channel_registration, never channel_endpoint
-		const on = getEuroclawTables({
+		const on = getBusyclawTables({
 			plugins: [channels([telegram()], { registrations: { enabled: true } })],
 		});
 		expect(on.channel_registration).toBeDefined();
@@ -91,7 +91,7 @@ describe("channels ↔ euroclaw integration", () => {
 	});
 
 	it("does not put channel tables in core — only the plugins bring them", () => {
-		const core = getEuroclawTables({});
+		const core = getBusyclawTables({});
 		expect(core.channel_endpoint).toBeUndefined();
 		expect(core.channel_registration).toBeUndefined();
 		expect(core.conversation_binding).toBeDefined();
@@ -113,7 +113,7 @@ describe("channels ↔ euroclaw integration", () => {
 				channels([telegram()], { registrations: { enabled: true } }),
 			],
 		});
-		// the registrations namespace is present (no getEuroclawTables collision at construction)
+		// the registrations namespace is present (no getBusyclawTables collision at construction)
 		expect(claw.api.channels.registrations).toBeDefined();
 
 		// register a user's bot at runtime through the public api, read it back

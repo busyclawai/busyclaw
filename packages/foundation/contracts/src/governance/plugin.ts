@@ -16,7 +16,7 @@
 //   $Infer        — phantom types the plugin introduces        → ec.$Infer        (types only)
 //   $InferContext — context fields the plugin makes available  → typed on ctx     (types only)
 //   $REASON_CODES — reason code → message catalog              → ec.$REASON_CODES (types AND runtime)
-// See docs/research/better-auth/design-lessons-for-euroclaw.md.
+// See docs/research/better-auth/design-lessons-for-busyclaw.md.
 
 import type { ClawsStore } from "../claws/contracts";
 import type { EffectStore } from "../effects";
@@ -33,9 +33,9 @@ import type { AfterGate, BoundaryGate, Gate } from "./boundary";
 import type { ClawApiCaller } from "./principal";
 import type { ReasonCode } from "./reason-codes";
 
-export type EuroclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
-export type EuroclawRouteRequest = {
+export type BusyclawRouteRequest = {
 	method: string;
 	url: string;
 	headers: { get: (name: string) => string | null };
@@ -43,14 +43,14 @@ export type EuroclawRouteRequest = {
 	text: () => Promise<string>;
 };
 
-export type EuroclawRouteResult = {
+export type BusyclawRouteResult = {
 	body?: unknown;
 	headers?: Record<string, string>;
 	status?: number;
 };
 
-export type EuroclawRouteContext<ClawLike = unknown> = {
-	request: EuroclawRouteRequest;
+export type BusyclawRouteContext<ClawLike = unknown> = {
+	request: BusyclawRouteRequest;
 	claw: ClawLike;
 	params: Record<string, string>;
 	/** The one-door secret reader, threaded by the HTTP adapter from the assembled claw so a route
@@ -66,44 +66,44 @@ export type EuroclawRouteContext<ClawLike = unknown> = {
 	caller?: ClawApiCaller;
 };
 
-export type EuroclawRoute<ClawLike = unknown> = {
+export type BusyclawRoute<ClawLike = unknown> = {
 	id?: string;
-	method: EuroclawHttpMethod;
+	method: BusyclawHttpMethod;
 	path: string;
 	handler: (
-		ctx: EuroclawRouteContext<ClawLike>,
-	) => EuroclawRouteResult | Promise<EuroclawRouteResult>;
+		ctx: BusyclawRouteContext<ClawLike>,
+	) => BusyclawRouteResult | Promise<BusyclawRouteResult>;
 };
 
-export type EuroclawCronStatus = "idle" | "processed" | "limit";
+export type BusyclawCronStatus = "idle" | "processed" | "limit";
 
-export type EuroclawCronResult = {
+export type BusyclawCronResult = {
 	processed?: number;
-	status?: EuroclawCronStatus;
+	status?: BusyclawCronStatus;
 	data?: unknown;
 };
 
-export type EuroclawCronContext<ClawLike = unknown> = {
+export type BusyclawCronContext<ClawLike = unknown> = {
 	claw: ClawLike;
-	request?: EuroclawRouteRequest;
+	request?: BusyclawRouteRequest;
 	limit?: number;
 	/** The one-door secret reader, threaded by the HTTP adapter from the assembled claw (same as
-	 *  {@link EuroclawRouteContext}) so a cron handler resolves credentials at CALL time. Optional for
+	 *  {@link BusyclawRouteContext}) so a cron handler resolves credentials at CALL time. Optional for
 	 *  the same reason — the adapter may dispatch with a partial claw. */
 	secrets?: Secrets;
 };
 
-export type EuroclawCronTask<ClawLike = unknown> = {
+export type BusyclawCronTask<ClawLike = unknown> = {
 	id: string;
 	handler: (
-		ctx: EuroclawCronContext<ClawLike>,
-	) => EuroclawCronResult | Promise<EuroclawCronResult>;
+		ctx: BusyclawCronContext<ClawLike>,
+	) => BusyclawCronResult | Promise<BusyclawCronResult>;
 };
 
-export type EuroclawCronFlag = "has-cron" | "no-cron" | "unknown-cron";
+export type BusyclawCronFlag = "has-cron" | "no-cron" | "unknown-cron";
 
 /**
- * A Cedar policy slice a plugin contributes as a policy SOURCE (see {@link EuroclawPlugin.policies}).
+ * A Cedar policy slice a plugin contributes as a policy SOURCE (see {@link BusyclawPlugin.policies}).
  * Structurally the assembly's bundle-loader input — a human label, the raw Cedar text, and the merge
  * mode. `enforce` joins the live set; `shadow` is evaluated but never applied; `off` is dropped. The
  * raw Cedar is UNTRUSTED text: it is parsed only at engine construction, never here.
@@ -189,11 +189,11 @@ export type PolicyAnnotationKind = {
 // adapter. A plugin that owns its own tables (e.g. channels, skills) reads `adapter` and builds its OWN
 // store from it — the assembly passes it in, so core stays agnostic about what plugins exist and never
 // creates a plugin's store. Extra assembly-specific values still ride the index signature.
-export type EuroclawPluginConfigureContext = {
+export type BusyclawPluginConfigureContext = {
 	readonly clawsStore?: ClawsStore;
 	readonly effects?: EffectStore;
 	readonly events?: EventSink;
-	/** The one-door secret reader (`@euroclaw/secrets`, built once by the assembly). A plugin that
+	/** The one-door secret reader (`@busyclaw/secrets`, built once by the assembly). A plugin that
 	 *  calls out (channels, sandbox egress) resolves credentials through `context.secrets.get(name)`
 	 *  rather than holding a token — same injection mechanism as `clawsStore`/`effects`/`events`.
 	 *  REQUIRED: the reader is constitutive (the assembly always builds it over the env default), so a
@@ -232,20 +232,20 @@ export type EuroclawPluginConfigureContext = {
  * BEFORE configure runs, so returning a changed one would silently no-op — making that unrepresentable
  * is the point. Handlers close over the configure `ctx` argument; no mutable-slot capture, no `?.`.
  */
-export type EuroclawPluginRuntime<
+export type BusyclawPluginRuntime<
 	Api extends Record<string, unknown> = Record<never, never>,
 > = {
 	/** Product API namespaces this plugin contributes (the composition layer merges them). */
 	api?: (context: unknown) => Api;
 	/** Adapter routes this plugin contributes. Framework adapters decide how to expose them. */
-	routes?: readonly EuroclawRoute[];
+	routes?: readonly BusyclawRoute[];
 	/** Scheduled work this plugin contributes. Framework adapters expose the cron trigger. */
-	cron?: readonly EuroclawCronTask[];
+	cron?: readonly BusyclawCronTask[];
 };
 
-/** A euroclaw plugin: a plain data object. Only `id` is required. */
-export type EuroclawPlugin<
-	HasCron extends EuroclawCronFlag = EuroclawCronFlag,
+/** A busyclaw plugin: a plain data object. Only `id` is required. */
+export type BusyclawPlugin<
+	HasCron extends BusyclawCronFlag = BusyclawCronFlag,
 	RoutePaths extends readonly string[] = readonly string[],
 	Api extends Record<string, unknown> = Record<never, never>,
 > = {
@@ -320,7 +320,7 @@ export type EuroclawPlugin<
 	 *  namespace: a silently shadowed tool would keep its caller while swapping its governance facts.
 	 *
 	 *  A tool that states no `presence` rides at `discoverable`: it is NOT in the context window, and
-	 *  the model reaches it through the `euroclaw__search` / `euroclaw__execute` meta-tools. So a
+	 *  the model reaches it through the `busyclaw__search` / `busyclaw__execute` meta-tools. So a
 	 *  plugin can ship fifty tools at zero context cost, and the few that matter every turn opt in
 	 *  with `presence: "always"`. Presence is context-window policy and NEVER an access decision —
 	 *  a discoverable tool is authorized on its own canonical path, by the same floor, whether the
@@ -342,25 +342,25 @@ export type EuroclawPlugin<
 	 *  door: that re-enters the very fan-out it observes (loop). */
 	eventSinks?: readonly EventSink[];
 	/** Compose this plugin against host-created stores/context, returning ONLY the RUNTIME half
-	 *  ({@link EuroclawPluginRuntime}) — routes/cron/api built over the store/reader that arrive here.
+	 *  ({@link BusyclawPluginRuntime}) — routes/cron/api built over the store/reader that arrive here.
 	 *  Returns `undefined` when a plugin has nothing runtime to add (a static-only plugin skips
 	 *  `configure` entirely). It CANNOT return changed static fields — that shape is unrepresentable. */
 	configure?: (
-		context: EuroclawPluginConfigureContext,
-	) => EuroclawPluginRuntime<Api> | undefined;
+		context: BusyclawPluginConfigureContext,
+	) => BusyclawPluginRuntime<Api> | undefined;
 	/** Product API namespaces this plugin contributes. The composition layer owns merging/conflicts. */
 	api?: (context: unknown) => Api;
 	/** Adapter routes this plugin contributes. Framework adapters decide how to expose them. */
-	routes?: readonly EuroclawRoute[];
+	routes?: readonly BusyclawRoute[];
 	/** Scheduled work this plugin contributes. Framework adapters expose the cron trigger. */
-	cron?: readonly EuroclawCronTask[];
+	cron?: readonly BusyclawCronTask[];
 };
 
 /** Producer-side narrowing for factories whose plugin's point is offering a secret backend
  *  (a composed integration: provider + routes + schema in ONE plugin). `secrets.providers` is required
- *  and non-empty — a "provider plugin" that provides nothing cannot compile. Assignable to EuroclawPlugin
+ *  and non-empty — a "provider plugin" that provides nothing cannot compile. Assignable to BusyclawPlugin
  *  (an intersection, not a union: the container field stays optional/wide, `plugins: []` stays homogeneous). */
-export type SecretProviderPlugin = EuroclawPlugin & {
+export type SecretProviderPlugin = BusyclawPlugin & {
 	secrets: { providers: readonly [SecretProvider, ...SecretProvider[]] };
 };
 

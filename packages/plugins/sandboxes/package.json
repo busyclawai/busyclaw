@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/sandboxes",
+	"name": "@busyclaw/sandboxes",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Governed code execution for euroclaw: the run_code tool over pluggable isolation providers; QuickJS (WASM, in-process) first.",
+	"description": "Governed code execution for busyclaw: the run_code tool over pluggable isolation providers; QuickJS (WASM, in-process) first.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/plugins/sandboxes"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -44,8 +44,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/egress": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/egress": "workspace:*",
 		"@jitl/quickjs-ng-wasmfile-release-sync": "0.32.0",
 		"@sebastianwessel/quickjs": "3.1.0",
 		"arktype": "2.2.0",
@@ -55,10 +55,10 @@
 		"ai": "^7.0.22"
 	},
 	"devDependencies": {
-		"@euroclaw/core": "workspace:*",
-		"@euroclaw/runtime": "workspace:*",
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/runtime": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"ai": "7.0.22",
-		"euroclaw": "workspace:*"
+		"busyclaw": "workspace:*"
 	}
 }

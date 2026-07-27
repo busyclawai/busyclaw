@@ -1,4 +1,4 @@
-import type { JsonObject } from "@euroclaw/contracts";
+import type { JsonObject } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	normalizeOrigin,

@@ -2,9 +2,9 @@ import type {
 	ResolveContext,
 	SecretMaterial,
 	Secrets,
-} from "@euroclaw/contracts";
-import { EuroclawError } from "@euroclaw/contracts";
-import { buildSecrets } from "@euroclaw/secrets";
+} from "@busyclaw/contracts";
+import { BusyclawError } from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { describe, expect, it } from "vitest";
 import {
 	applyCredentials,
@@ -202,7 +202,7 @@ describe("applyCredentials — failure modes stay distinguishable", () => {
 		await expect(
 			applyCredentials(plan(), binding([{ apiKeyHeader: [] }]), secrets, CTX),
 		).rejects.toMatchObject({
-			code: "EUROCLAW_CONFIGURATION_ERROR",
+			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			details: {
 				source: "petstore",
 				unsatisfied: ["apiKeyHeader (not configured)"],
@@ -219,7 +219,7 @@ describe("applyCredentials — failure modes stay distinguishable", () => {
 			CTX,
 		).catch((e) => e);
 		expect(error).toBeInstanceOf(Error);
-		expect(error).not.toBeInstanceOf(EuroclawError); // distinct from the config error above
+		expect(error).not.toBeInstanceOf(BusyclawError); // distinct from the config error above
 		expect((error as Error).message).toBe("vault unreachable");
 	});
 

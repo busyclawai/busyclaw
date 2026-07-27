@@ -3,7 +3,7 @@
 // convention, the convention proxy (incl. nesting + the thenable guard), pathMethods overrides,
 // the `{ data, error }` contract, signal-toggle refetches, and the fail-loud construction checks.
 
-import type { ApprovalRecord } from "@euroclaw/contracts";
+import type { ApprovalRecord } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import type {
 	ClawClientFetch,
@@ -47,7 +47,7 @@ async function until(check: () => boolean, timeoutMs = 1000): Promise<void> {
 }
 
 function decodedInput(url: string): unknown {
-	const parsed = new URL(url, "http://euroclaw.local");
+	const parsed = new URL(url, "http://busyclaw.local");
 	const encoded = parsed.searchParams.get("input");
 	if (encoded === null) throw new Error(`no ?input= on ${url}`);
 	return JSON.parse(encoded);
@@ -64,7 +64,7 @@ describe("base api calls (table-driven off CLAW_API_METHOD_NAMES)", () => {
 
 		expect(calls).toHaveLength(1);
 		const call = calls[0];
-		expect(call?.url).toBe("/api/euroclaw/create-claw");
+		expect(call?.url).toBe("/api/busyclaw/create-claw");
 		expect(call?.init?.method).toBe("POST");
 		expect(new Headers(call?.init?.headers).get("content-type")).toBe(
 			"application/json",
@@ -81,7 +81,7 @@ describe("base api calls (table-driven off CLAW_API_METHOD_NAMES)", () => {
 			envelopeResponse({ data: [], ok: true }),
 		);
 		const client = createClawClient({
-			baseUrl: "https://app.test/api/euroclaw",
+			baseUrl: "https://app.test/api/busyclaw",
 			fetch,
 		});
 
@@ -90,7 +90,7 @@ describe("base api calls (table-driven off CLAW_API_METHOD_NAMES)", () => {
 		const call = calls[0];
 		expect(call?.init?.method).toBe("GET");
 		expect(call?.init?.body).toBeUndefined();
-		expect(call?.url).toContain("https://app.test/api/euroclaw/list-messages?");
+		expect(call?.url).toContain("https://app.test/api/busyclaw/list-messages?");
 		expect(decodedInput(call?.url ?? "")).toEqual({
 			afterSequence: 2,
 			limit: 5,
@@ -126,7 +126,7 @@ describe("the { data, error } contract — never throws", () => {
 		const { fetch } = recordingFetch(() =>
 			envelopeResponse(
 				{
-					error: { code: "EUROCLAW_STATE_INVALID", message: "claw not found" },
+					error: { code: "BUSYCLAW_STATE_INVALID", message: "claw not found" },
 					ok: false,
 				},
 				{ status: 500 },
@@ -138,7 +138,7 @@ describe("the { data, error } contract — never throws", () => {
 
 		expect(result.data).toBeNull();
 		expect(result.error).toEqual({
-			code: "EUROCLAW_STATE_INVALID",
+			code: "BUSYCLAW_STATE_INVALID",
 			message: "claw not found",
 			status: 500,
 		});
@@ -164,7 +164,7 @@ describe("the { data, error } contract — never throws", () => {
 		const result = await client.getClaw({ id: "c-1" });
 
 		expect(result.error).toEqual({
-			message: "euroclaw request failed with status 502",
+			message: "busyclaw request failed with status 502",
 			status: 502,
 		});
 	});
@@ -217,12 +217,12 @@ describe("plugin namespaces (the recursive function proxy)", () => {
 		await client.secrets.set({ name: "NOTION", value: "tok" });
 		await client.channels.registrations.getByKey({ key: "main" });
 
-		expect(calls[0]?.url).toBe("/api/euroclaw/secrets/set");
+		expect(calls[0]?.url).toBe("/api/busyclaw/secrets/set");
 		expect(calls[0]?.init?.method).toBe("POST");
 		// getByKey reads: GET by the shared get*/list* rule on the LAST camel segment.
 		expect(calls[1]?.init?.method).toBe("GET");
 		expect(calls[1]?.url).toContain(
-			"/api/euroclaw/channels/registrations/get-by-key?",
+			"/api/busyclaw/channels/registrations/get-by-key?",
 		);
 		expect(decodedInput(calls[1]?.url ?? "")).toEqual({ key: "main" });
 	});
@@ -235,7 +235,7 @@ describe("plugin namespaces (the recursive function proxy)", () => {
 
 		const result = await client.skills.packages.create({ name: "notion" });
 
-		expect(calls[0]?.url).toBe("/api/euroclaw/skills/packages/create");
+		expect(calls[0]?.url).toBe("/api/busyclaw/skills/packages/create");
 		expect(calls[0]?.init?.method).toBe("POST");
 		expect(result.data).toEqual({ id: "pkg-1" });
 	});
@@ -432,7 +432,7 @@ describe("fail-loud construction (deviations from better-auth's silent merges)",
 					{ getActions: () => ({ report: () => "b" }), id: "b" },
 				],
 			}),
-		).toThrow(/duplicate euroclaw client key/);
+		).toThrow(/duplicate busyclaw client key/);
 	});
 
 	it("rejects an action shadowing a base api method or a reserved key", () => {
@@ -440,12 +440,12 @@ describe("fail-loud construction (deviations from better-auth's silent merges)",
 			createClawClient({
 				plugins: [{ getActions: () => ({ getClaw: () => null }), id: "a" }],
 			}),
-		).toThrow(/duplicate euroclaw client key/);
+		).toThrow(/duplicate busyclaw client key/);
 		expect(() =>
 			createClawClient({
 				plugins: [{ getActions: () => ({ $fetch: () => null }), id: "a" }],
 			}),
-		).toThrow(/duplicate euroclaw client key/);
+		).toThrow(/duplicate busyclaw client key/);
 	});
 
 	it("rejects duplicate pathMethods entries across plugins", () => {
@@ -456,7 +456,7 @@ describe("fail-loud construction (deviations from better-auth's silent merges)",
 					{ id: "b", pathMethods: { "/x/search": "POST" } },
 				],
 			}),
-		).toThrow(/duplicate euroclaw client pathMethods/);
+		).toThrow(/duplicate busyclaw client pathMethods/);
 	});
 
 	it("fails loud on $store.notify with an unknown signal", () => {

@@ -1,5 +1,5 @@
-import type { JsonObject } from "@euroclaw/contracts";
-import { toolGovernance } from "@euroclaw/contracts";
+import type { JsonObject } from "@busyclaw/contracts";
+import { toolGovernance } from "@busyclaw/contracts";
 import { type } from "arktype";
 import { describe, expect, it } from "vitest";
 import { toolsFromOpenApi } from "../src/index";

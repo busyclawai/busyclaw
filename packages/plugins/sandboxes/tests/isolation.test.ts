@@ -17,7 +17,7 @@ const noInvoke: SandboxToolInvoker = {
 	},
 };
 
-describe("@euroclaw/sandboxes cross-execution isolation", () => {
+describe("@busyclaw/sandboxes cross-execution isolation", () => {
 	// I1 — a global set in one execution does not persist into the next. [P0-if-fails].
 	it("I1: globalThis mutations do not persist across executions", async () => {
 		const sandbox = quickjs();

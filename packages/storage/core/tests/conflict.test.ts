@@ -8,7 +8,7 @@
 // provoke a real violation and assert this function recognises it. Proving it here would mean
 // storage-core taking a dev dependency on four databases to test twenty lines of branching.
 
-import { EuroclawError } from "@euroclaw/contracts";
+import { BusyclawError } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { asConflict, isUniqueViolation } from "../src/conflict";
 
@@ -77,10 +77,10 @@ describe("asConflict", () => {
 		).toBe("scope, hash");
 	});
 
-	it("is a EuroclawError carrying the stable conflict code", () => {
+	it("is a BusyclawError carrying the stable conflict code", () => {
 		const conflict = asConflict({ code: "23505" });
-		expect(conflict).toBeInstanceOf(EuroclawError);
-		expect(conflict?.code).toBe("EUROCLAW_CONFLICT");
+		expect(conflict).toBeInstanceOf(BusyclawError);
+		expect(conflict?.code).toBe("BUSYCLAW_CONFLICT");
 	});
 
 	it("names the model and operation it was given", () => {
@@ -88,7 +88,7 @@ describe("asConflict", () => {
 			{ code: "23505" },
 			{ model: "pii_mapping", operation: "create" },
 		);
-		expect(conflict?.code).toBe("EUROCLAW_CONFLICT");
+		expect(conflict?.code).toBe("BUSYCLAW_CONFLICT");
 		expect(conflict?.message).toContain("pii_mapping");
 		expect(conflict?.details?.operation).toBe("create");
 	});

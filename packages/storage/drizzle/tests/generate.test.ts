@@ -1,8 +1,8 @@
 // The Drizzle schema generator. Pure: SchemaDeclaration in, source text out — so these assert on the
 // emitted code, and on the two things easiest to get quietly wrong: declaration ORDER and COMPOSITE
-// primary keys, which euroclaw has and Better Auth's generators never see.
+// primary keys, which busyclaw has and Better Auth's generators never see.
 
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
 // Imported at module scope, not inside the test. Loading drizzle-orm is slow enough that on a
 // saturated machine it alone exceeded vitest's 5s per-test budget — the test failed for being
 // scheduled badly, not for being wrong. Module loading belongs to the file, not the assertion.

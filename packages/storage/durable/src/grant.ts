@@ -1,10 +1,10 @@
-// createAccessGrantStore — the AccessGrantStore port, backed by any @euroclaw/storage-core Adapter
+// createAccessGrantStore — the AccessGrantStore port, backed by any @busyclaw/storage-core Adapter
 // (memory / kysely / drizzle / prisma / mongo). The generic shareable-resource ACL
 // (docs/plans/app-authz.md §6): ONE table for EVERY shareable kind, org-blind — resourceKind,
 // resourceId, and principalRef are all OPAQUE strings the store never interprets. Rows are IMMUTABLE: a
 // share is a `create`, an unshare a `delete` (grants are DATA, never compiled policy). `listForResource`
 // is the hot path the product-api PEP reads per governed call; it projects each validated row to the
-// PEP's `{ principalRef, level }` shape — the same type @euroclaw/authz renders, so there is no
+// PEP's `{ principalRef, level }` shape — the same type @busyclaw/authz renders, so there is no
 // translation seam. Persistence goes through `entityDb`, so every row crossing the adapter is parsed
 // against the access_grant record schema (reads are untrusted boundary data).
 
@@ -14,13 +14,13 @@ import type {
 	AccessGrantStore,
 	Adapter,
 	NewAccessGrant,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	accessGrantCreateInput,
 	accessGrantFields,
 	validationError,
-} from "@euroclaw/contracts";
-import { entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 

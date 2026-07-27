@@ -4,10 +4,10 @@
 // against the contracts envelope — never cast. Resolves `{ data, error }`, never throws: a
 // transport-level throw (DNS, abort, a broken injected fetch) becomes `error.status: 0`.
 
-import type { ClawResponseEnvelope } from "@euroclaw/contracts/claw-api";
-import { parseClawResponseEnvelope } from "@euroclaw/contracts/claw-api";
-import type { EndpointHttpMethod } from "@euroclaw/contracts/governance/endpoints";
-import { errorMessage } from "@euroclaw/errors";
+import type { ClawResponseEnvelope } from "@busyclaw/contracts/claw-api";
+import { parseClawResponseEnvelope } from "@busyclaw/contracts/claw-api";
+import type { EndpointHttpMethod } from "@busyclaw/contracts/governance/endpoints";
+import { errorMessage } from "@busyclaw/errors";
 import type {
 	ClawClientError,
 	ClawClientOptions,
@@ -28,13 +28,13 @@ export type Transport = (
 ) => Promise<ClawResult<unknown>>;
 
 function normalizeBaseUrl(baseUrl: string | URL | undefined): string {
-	return String(baseUrl ?? "/api/euroclaw").replace(/\/+$/, "");
+	return String(baseUrl ?? "/api/busyclaw").replace(/\/+$/, "");
 }
 
-// A relative base url ("/api/euroclaw") still needs URL's parsing to encode the input param — the
+// A relative base url ("/api/busyclaw") still needs URL's parsing to encode the input param — the
 // throwaway origin makes it absolute for parsing and is stripped again for relative callers.
 function withEncodedInput(url: string, input: unknown): string {
-	const parsed = new URL(url, "http://euroclaw.local");
+	const parsed = new URL(url, "http://busyclaw.local");
 	parsed.searchParams.set("input", JSON.stringify(input ?? {}));
 	if (/^https?:\/\//.test(url)) return parsed.toString();
 	return `${parsed.pathname}${parsed.search}${parsed.hash}`;
@@ -63,7 +63,7 @@ async function readResult(response: Response): Promise<ClawResult<unknown>> {
 			status: response.status,
 			message:
 				envelope?.error?.message ??
-				`euroclaw request failed with status ${response.status}`,
+				`busyclaw request failed with status ${response.status}`,
 			...(envelope?.error?.code !== undefined
 				? { code: envelope.error.code }
 				: {}),

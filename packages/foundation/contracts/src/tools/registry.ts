@@ -8,7 +8,7 @@
 //     model-assembly time (never trusted blindly on read).
 //   facts_overlay     — one per (scope, scopeId, actionId) override: overlay-wins facts a customer
 //     lays over the derived model (loosenings reported, not silently applied).
-// Impl lives in @euroclaw/storage-durable (stores) and @euroclaw/runtime (registration flow); this
+// Impl lives in @busyclaw/storage-durable (stores) and @busyclaw/runtime (registration flow); this
 // module holds only the entity declarations, arktype record/input schemas, and the derived record/
 // input TYPES. The behavioural store ports the stores satisfy live next door in ./registry-ports.
 

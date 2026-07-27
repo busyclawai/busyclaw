@@ -12,8 +12,8 @@ import type {
 	JsonObject,
 	ToolDescriptor,
 	ToolGovernance,
-} from "@euroclaw/contracts";
-import { validationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { validationError } from "@busyclaw/errors";
 
 export type AuthzActionInput = {
 	/** The action id — the tool's canonical path (`petstore.getPet`) or the domain verb. */
@@ -31,7 +31,7 @@ export type AuthzActionInput = {
  * Tool descriptors → action inputs. A descriptor feeds the model DIRECTLY: `path` is the action id
  * and `governance` is already a typed field, so nothing re-reads or re-validates a stamp on the way
  * in. This is the whole payoff of the descriptor collapse — the builder used to be fed by two
- * shape-specific reconcilers (one unwrapping the AI-SDK `euroclaw` passenger, one unwrapping a
+ * shape-specific reconcilers (one unwrapping the AI-SDK `busyclaw` passenger, one unwrapping a
  * storage row), each re-validating what the other had just validated.
  *
  * EVERY descriptor becomes an action, including one with no declared access class — {@link

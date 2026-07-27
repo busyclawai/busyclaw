@@ -1,11 +1,11 @@
-import type { SchemaDeclaration } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
 import {
 	bindConversationClawInput,
 	bindConversationThreadInput,
 	type EntityField,
 	entity,
 	field,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 // A channel registration is a USER-registered bot — the ssoProvider analog: registered at runtime,
 // credentials stored in the row and read back at use, with the organization it belongs to as optional row
@@ -102,7 +102,7 @@ export const registerChannelRegistrationInputOptions = {
 export const registerChannelRegistrationInput = channelRegistrationEntity
 	.schema(registerChannelRegistrationInputOptions)
 	.configure({
-		euroclaw: {
+		busyclaw: {
 			// Operation-level prose only — the per-field semantics (provider/endpointKey/
 			// webhookSecret/organizationId/…) now ride the field map above and flow into this
 			// derived schema's properties, so restating them here would be the drift machine.
@@ -116,7 +116,7 @@ export const channelRegistrationLookupInputOptions = {
 export const channelRegistrationLookupInput = channelRegistrationEntity
 	.schema(channelRegistrationLookupInputOptions)
 	.configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Addresses one registration by its (provider, endpointKey) natural key — the pair is hashed into the row id, so there is no separate lookup index. Backs `getByKey` (read) and `revoke`, which soft-disables the row: it stops resolving webhooks but survives with its audit trail.",
 		},
 	});
@@ -129,7 +129,7 @@ export const listChannelRegistrationsInput = channelRegistrationEntity
 		optional: ["provider", "status"],
 	})
 	.configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Filters the registration list; the supplied fields are AND-combined. `provider` and `status` narrow the set and `organizationId` scopes to one org's bots. The filter columns are picked from the entity so the `status` enum stays a single source of truth with storage.",
 		},
 	});

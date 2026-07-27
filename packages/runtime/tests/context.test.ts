@@ -5,9 +5,9 @@ import {
 	PRINCIPAL_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
 	userPrincipal,
-} from "@euroclaw/contracts";
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createTeamStore } from "@euroclaw/storage-durable";
+} from "@busyclaw/contracts";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createTeamStore } from "@busyclaw/storage-durable";
 import { describe, expect, it } from "vitest";
 import { composeContext, roleMembership, sessionIdentity } from "../src/index";
 

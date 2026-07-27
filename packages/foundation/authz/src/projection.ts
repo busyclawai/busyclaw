@@ -12,7 +12,7 @@
 //   object               → closed Record of its projectable props (recursive)
 //   unions / $ref / anything else → DROPPED
 
-import type { JsonObject, JsonValue } from "@euroclaw/contracts";
+import type { JsonObject, JsonValue } from "@busyclaw/contracts";
 
 export type ProjectedShape =
 	| { kind: "string" }

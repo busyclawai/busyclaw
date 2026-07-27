@@ -1,6 +1,6 @@
 // Durable dedup reads behind deterministic placeholders: findByHash is container-scoped, and the
 // subject junction is a set (re-linking on reuse never duplicates rows).
-import { memoryAdapter } from "@euroclaw/storage-core";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createPiiMappingStore } from "../src/pii";
 

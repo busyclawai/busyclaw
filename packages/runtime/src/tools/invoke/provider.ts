@@ -27,13 +27,13 @@ import type {
 	RegisteredToolRecord,
 	Secrets,
 	ToolDefinitionSet,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	jsonObject,
 	jsonValue,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { jsonSchema } from "ai";
 import { type } from "arktype";
 import { openApiBinding } from "../sources/openapi";

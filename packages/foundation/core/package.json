@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/core",
+	"name": "@busyclaw/core",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The euroclaw governance & privacy kernel: the redactor, hash-chained audit, approval gate, and createGovernance — the non-bypassable pipeline. Re-exports @euroclaw/contracts.",
+	"description": "The busyclaw governance & privacy kernel: the redactor, hash-chained audit, approval gate, and createGovernance — the non-bypassable pipeline. Re-exports @busyclaw/contracts.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/core"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -35,8 +35,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/errors": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/errors": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"
 	}

@@ -1,4 +1,4 @@
-import { govern } from "@euroclaw/contracts";
+import { govern } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	createToolCatalog,

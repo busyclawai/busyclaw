@@ -1,8 +1,8 @@
 // Type tests (vitest typecheck mode). Prove that channels() derives its cron requirement at compile
 // time — app-bot mode from the providers' poll flags, and registrations mode never (webhook-only, so it
 // contributes no cron). A passing run means each @ts-expect-error errored.
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createClaw, type RuntimeConfig } from "euroclaw";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createClaw, type RuntimeConfig } from "busyclaw";
 import { describe, test } from "vitest";
 import { type Channel, channels } from "../src/index";
 import { telegram } from "../src/telegram/index";

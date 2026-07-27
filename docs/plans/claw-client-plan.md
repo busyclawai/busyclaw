@@ -1,4 +1,4 @@
-# @euroclaw/client — the better-auth-shaped client
+# @busyclaw/client — the better-auth-shaped client
 
 Status: **designed 2026-07-13, sequenced BEFORE the ai-sdk-ui bridge** (Konstantin's call: no
 chat DX before the client story exists). Grounded in better-auth source at
@@ -6,17 +6,17 @@ chat DX before the client story exists). Grounded in better-auth source at
 The pattern: a types-only wire (`import type` phantoms), a convention-routed runtime, portable
 nanostores reactivity, framework bindings as thin wrappers.
 
-## What euroclaw already has vs what better-auth had to invent
+## What busyclaw already has vs what better-auth had to invent
 
 - **Explicit route table.** better-auth derives paths by convention only (camelCase→kebab,
   `client/proxy.ts:71`) and infers GET-vs-POST from "has body" (`proxy.ts:30-33`) — a documented
-  footgun they patch with a hard-coded `pathMethods` seed (`client/config.ts:103-108`). euroclaw
+  footgun they patch with a hard-coded `pathMethods` seed (`client/config.ts:103-108`). busyclaw
   already HAS the explicit table: `clawApiRouteList` + `clawApiInputSchemas` + the
   `get*/list* → GET` rule (`api.ts apiMethodPath/apiHttpMethod`). The base client stays
   TABLE-driven (no heuristic, no footgun); only plugin namespaces need the convention.
 - **Type folding.** better-auth's `$InferServerPlugin` phantom (`{} as ReturnType<typeof plugin>`,
   magic-link/client.ts:5-11) carries server types across the boundary with zero runtime import.
-  euroclaw already folds plugin api types server-side (`InferPluginApi<Config>`); the client
+  busyclaw already folds plugin api types server-side (`InferPluginApi<Config>`); the client
   reuses that same machinery from the other end.
 - **The gap.** Plugin api namespaces (`claw.api.secrets.*`, `.skills.*`) are bare closures —
   `api: () => ({ secrets: … })` — with no routes and no input schemas. Nothing remote can reach
@@ -26,7 +26,7 @@ nanostores reactivity, framework bindings as thin wrappers.
 
 **BUILT 2026-07-13.** `endpoints()` lives in contracts (`governance/endpoints.ts`): the returned
 namespace IS the callable api (handlers exposed as-is), the flattened route table rides
-non-enumerably under `ENDPOINTS_METADATA` (`Symbol.for("euroclaw.endpoints")`, read via
+non-enumerably under `ENDPOINTS_METADATA` (`Symbol.for("busyclaw.endpoints")`, read via
 `endpointRoutesOf`). Nested definition records are GROUPS (`skills.packages.create` →
 `/packages/create`); compose by spreading DEFS records — spreading a built namespace drops the
 metadata. `toRequestHandler` walks `claw.api` (plain-object wrappers recurse, so
@@ -61,14 +61,14 @@ api: (context) => ({
   returns the callable namespace; the route metadata rides alongside.
 - Touches the plugin protocol (contracts) → full-suite gate + repo-wide consumer grep.
 
-## Slice 2 — `@euroclaw/client` (vanilla core, new package `packages/client`)
+## Slice 2 — `@busyclaw/client` (vanilla core, new package `packages/client`)
 
 ```ts
-import { createClawClient } from "@euroclaw/client";
+import { createClawClient } from "@busyclaw/client";
 import type { claw } from "~/server/claw";           // TYPE-only — zero server runtime crosses
 
 export const client = createClawClient<typeof claw>({
-  baseUrl: "/api/euroclaw",
+  baseUrl: "/api/busyclaw",
   fetch,                                              // injectable — the busyclaw HostBridge seam
   headers: () => authHeaders(),
   plugins: [secretsClient(), approvalsClient()],
@@ -83,7 +83,7 @@ await client.secrets.set({ name, value });            // plugin namespace, typed
   better-auth's `$InferAuth` option (core/plugin-client.ts:90) is the same move; ours is the
   generic param since `Claw` is already the one exported god-type.
 - **Runtime**: base methods table-driven off `clawApiRouteList` (exists today in adapter-core —
-  MOVES to `@euroclaw/client`; adapter-core keeps a re-export for compat). Plugin namespaces via
+  MOVES to `@busyclaw/client`; adapter-core keeps a re-export for compat). Plugin namespaces via
   the recursive FUNCTION proxy (better-auth `proxy.ts:36-125`): proxy a `function` so every node
   is callable AND navigable, and return `undefined` for `then/catch/finally` or `await` hangs
   (their gotcha #1, `proxy.ts:49-51`).
@@ -103,7 +103,7 @@ await client.secrets.set({ name, value });            // plugin namespace, typed
     kept on non-401 errors.
   - Deviations from better-auth, deliberate: signal-name references FAIL LOUD at client
     construction (their silent-typo gotcha #4, `proxy.ts:102-103` returns early); action-key
-    collisions FAIL LOUD (they use `defu` first-wins, config.ts:170-173 — gotcha #5; euroclaw
+    collisions FAIL LOUD (they use `defu` first-wins, config.ts:170-173 — gotcha #5; busyclaw
     house style is loud duplicates); cross-tab localStorage bus SKIPPED in v1 (gotcha #7 —
     revisit with busyclaw multi-device).
   - v1 atoms: ONE exemplar proving the machinery — `pendingApprovals` (refetch on
@@ -114,7 +114,7 @@ await client.secrets.set({ name, value });            // plugin namespace, typed
   (no fetch lib). Exemplars in-repo: `secretsClient()` (type-only, the magic-link shape) and
   `approvalsClient()` (atoms + listeners, the organization shape, organization/client.ts:85-289).
 
-## Slice 3 — `@euroclaw/client/react`
+## Slice 3 — `@busyclaw/client/react`
 
 One framework binding (his stack): atoms → hooks by the `use${Capitalize(key)}` renaming
 (react/index.ts:80-111), `useStore` on `useSyncExternalStore` with the snapshot guard
@@ -134,7 +134,7 @@ endpoints-namespace discovery into an OpenAPI 3.1 document (arktype `toJsonSchem
 Konstantin's ask (2026-07-13): descriptions on the arktype schemas, OpenAPI exposed later — YES,
 and the reference codebase proves the exact shape: better-auth's `open-api` plugin
 (plugins/open-api/generator.ts) walks its endpoint definitions into an OpenAPI document and
-serves it + a Scalar reference UI. euroclaw's version is cheaper because slice 1 already
+serves it + a Scalar reference UI. busyclaw's version is cheaper because slice 1 already
 declares everything the generator needs:
 
 - **Schemas carry their own docs**: arktype 2.2 metadata (`.describe()` / `.configure({...})`)
@@ -148,7 +148,7 @@ declares everything the generator needs:
   (base methods — input schemas exist today) + every plugin's `endpoints()` metadata. Tags from
   the first path segment; the uniform `clawResponseEnvelope` documents success/error once.
 - **Serving**: opt-in route on `toRequestHandler` — `GET /openapi.json`; a reference UI is a
-  later nicety (better-auth loads Scalar from a CDN — decide against euroclaw's self-contained
+  later nicety (better-auth loads Scalar from a CDN — decide against busyclaw's self-contained
   posture then, not now).
 - **The strategic loop**: `registerOpenApiSpec` already turns OpenAPI documents into governed
   tools — so one claw can register ANOTHER claw's generated spec and call it as governed,
@@ -195,13 +195,13 @@ reference UI joins the adapter option.** Grounded in better-auth plugins/open-ap
 holds ZERO prose — it is generation + serving (GET /open-api/generate-schema + a Scalar
 /reference page with theme/nonce/disable options, index.ts:102-139); doc text comes from zod
 .describe() (generator.ts:161-169) and per-endpoint `metadata.openapi` blocks (generator.ts:215+),
-both colocated with the endpoints. euroclaw mapping: `description`/`output` on endpoints() already
+both colocated with the endpoints. busyclaw mapping: `description`/`output` on endpoints() already
 ARE those channels; richer per-endpoint OpenAPI later = an optional colocated `openapi?: {...}`
 block on the endpoints() entry (their metadata.openapi analog) — NEVER centralized prose (drift
 machine) and NEVER schema prose in contracts (client-bundle guarantee by structure, not by
 tree-shaking). The `doc` ArkEnv meta channel is RETIRED unbuilt. Scalar reference page ships as
 `toRequestHandler(claw, { openApi: { reference: { theme, nonce, path } } })` — adapter-homed
-(euroclaw plugins are foundation-only and cannot import the generator; better-auth plugin-izes it
+(busyclaw plugins are foundation-only and cannot import the generator; better-auth plugin-izes it
 only because everything there is a plugin). CDN-vs-vendored Scalar: explicit decision at build
 time against the self-contained posture.
 
@@ -214,7 +214,7 @@ endpoints() `openapi?:` block, if ever built, carries protocol mechanics only (r
 types) — never prose. "Never leaked to client" is STRUCTURAL (described schemas live in server
 packages the client never imports; the only client-bundled schema is the docless envelope; the
 CLI is a server-side reader like the generator) and becomes ENFORCED via the next micro-slice:
-extend the slice-3 module-graph walk test with a contracts-import ALLOWLIST for @euroclaw/client
+extend the slice-3 module-graph walk test with a contracts-import ALLOWLIST for @busyclaw/client
 (wire modules only — envelope, method names, kebab) so a described schema entering the client
 graph fails CI. Guarantee by test, not by tree-shaking behavior.
 
@@ -223,18 +223,18 @@ NO `declare global` ships — a library-shipped ArkEnv augmentation merges into 
 compilation (their own arktype gains `doc`), and global interface merging is an ownerless shared
 namespace (a second library or future arktype claiming `doc` breaks USER builds). Instead: a
 blessed helper pair in contracts — `doc(t, text)` writing the NAMESPACED meta key
-`{ euroclaw: { doc } }` (one cast inside the helper, the AI-SDK blessed-seam precedent; prefix
-ownership like euroclaw__ context keys and the euroclaw tool stamp) and `docOf(t)` as the typed
+`{ busyclaw: { doc } }` (one cast inside the helper, the AI-SDK blessed-seam precedent; prefix
+ownership like busyclaw__ context keys and the busyclaw tool stamp) and `docOf(t)` as the typed
 reader. Consumers read `docOf(t) ?? t.description`. Zero ambient types, collision-proof,
 user-invisible. Verify at build: arktype preserves unknown meta keys at runtime.
 
 **Mechanics re-amended (2026-07-13, Konstantin: typed extension of the namespaced key, cosmetic
 pollution accepted):** ship the global ArkEnv augmentation FOR THE NAMESPACED KEY —
-`meta(): { euroclaw?: { doc?: string } }` — so authoring is plain typed
-`.configure({ euroclaw: { doc } })` with zero casts; the write-side helper is dropped. The
-collision hazard was the ownerless key, and `euroclaw` as the name removes it; the accepted
+`meta(): { busyclaw?: { doc?: string } }` — so authoring is plain typed
+`.configure({ busyclaw: { doc } })` with zero casts; the write-side helper is dropped. The
+collision hazard was the ownerless key, and `busyclaw` as the name removes it; the accepted
 residue is one clearly-owned optional key in downstream autocomplete. Keep: `docOf(t)` as the ONE
-reader with precedence built in (`meta.euroclaw?.doc ?? description`); the client
+reader with precedence built in (`meta.busyclaw?.doc ?? description`); the client
 import-allowlist test unchanged. Standing rule: the augmented interface is ADDITIVE-ONLY across
 versions (mixed-version node_modules must merge cleanly).
 
@@ -247,7 +247,7 @@ top-level request/response schema `description` (field-level surfacing deferred)
 — verified they cannot):** `EntityFieldMeta` has no doc surface, so entity-DERIVED boundary
 schemas (createClawInput, clawEntity.updateSchema(), channels list filter) are undocumentable —
 the doc-sweep correctly skips them. Fix = the field.json move applied to docs: `field.*` options
-gain `description?` (→ derived schemas .describe()) and `doc?` (→ euroclaw.doc), attached where
+gain `description?` (→ derived schemas .describe()) and `doc?` (→ busyclaw.doc), attached where
 each field materializes as an arktype Type in derivation; every derived record/create/patch
 schema inherits them; docOf/toJsonSchema unchanged. One declaration → type + validator + storage
 + docs. Future note (not built): description as SQL column comments via the generate CLI.
@@ -258,6 +258,6 @@ pass over the entity field maps.
 `EntityFieldMeta`, stripped by `entity().storage` so migrations never move); doc-carrying fields
 materialize in `shapeFor` (`describe` the INNER type before the `| undefined` union — required
 errors read "must be <description>", optional unions keep their branch rendering — with
-`euroclaw.doc` configured on the full property type for `docOf`), every derived
+`busyclaw.doc` configured on the full property type for `docOf`), every derived
 record/create/patch schema inherits them, and the create-input `toJsonSchema()` carries property
 descriptions; second pass documented the claws entity field maps + channels registration fields.

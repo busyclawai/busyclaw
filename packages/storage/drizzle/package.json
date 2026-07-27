@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/storage-drizzle",
+	"name": "@busyclaw/storage-drizzle",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Provider-aware Drizzle adapter for the @euroclaw/storage-core Adapter port. Patterns adapted from Better Auth (MIT).",
+	"description": "Provider-aware Drizzle adapter for the @busyclaw/storage-core Adapter port. Patterns adapted from Better Auth (MIT).",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,13 +23,13 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*"
+		"@busyclaw/contracts": "workspace:*"
 	},
 	"peerDependencies": {
 		"drizzle-orm": ">=0.30.0"
 	},
 	"devDependencies": {
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"better-sqlite3": "12.11.1",
 		"drizzle-orm": "0.45.2"

@@ -39,7 +39,7 @@ beforeEach(() => {
 
 afterEach(() => sqlite.close());
 
-describe("@euroclaw/storage-drizzle — Drizzle adapter (SQLite)", () => {
+describe("@busyclaw/storage-drizzle — Drizzle adapter (SQLite)", () => {
 	it("create + findOne by a where clause", async () => {
 		const a = drizzleAdapter(db, { provider: "sqlite", schema });
 		const created = (await a.create({
@@ -176,7 +176,7 @@ describe("@euroclaw/storage-drizzle — Drizzle adapter (SQLite)", () => {
 	});
 });
 
-describe("@euroclaw/storage-drizzle — where trees, operators, and multi-sort (SQLite)", () => {
+describe("@busyclaw/storage-drizzle — where trees, operators, and multi-sort (SQLite)", () => {
 	const seed = async () => {
 		const a = drizzleAdapter(db, { provider: "sqlite", schema });
 		const rows = [

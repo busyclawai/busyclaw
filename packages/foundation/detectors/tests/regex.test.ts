@@ -4,8 +4,8 @@
 // span costs one needless placeholder, never a leak); noise is the real enemy, so every category
 // here is either shape-anchored (email) or checksum-gated (card Luhn, iban mod-97), and phone
 // carries the year-range/short-run/inside-another-match guards deckerhr's v1 taught.
-import type { PiiSpan } from "@euroclaw/contracts";
-import { createMemoryRedactor } from "@euroclaw/core";
+import type { PiiSpan } from "@busyclaw/contracts";
+import { createMemoryRedactor } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { regexDetector } from "../src/regex/index";
 

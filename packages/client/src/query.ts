@@ -9,7 +9,7 @@
 // fires during SSR (nothing subscribes server-side), and this vanilla core must fetch in
 // node/native hosts — the injectable-fetch seam — where `window` never exists.
 
-import type { EndpointHttpMethod } from "@euroclaw/contracts";
+import type { EndpointHttpMethod } from "@busyclaw/contracts";
 import type { ReadableAtom } from "nanostores";
 import { atom, onMount } from "nanostores";
 import type { ClawClientError, ClawClientFetch } from "./types";

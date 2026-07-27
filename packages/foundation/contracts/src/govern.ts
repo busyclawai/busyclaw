@@ -10,7 +10,7 @@
 // fail OPEN (idempotency "nonee" ≠ "none" → the effect gets auto-retried), so the boundaries that
 // do read untyped governance fail loud through this schema.
 
-import { configurationError } from "@euroclaw/errors";
+import { configurationError } from "@busyclaw/errors";
 import { type } from "arktype";
 import { effectCompensation } from "./effects";
 import type {

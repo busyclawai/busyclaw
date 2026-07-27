@@ -15,8 +15,8 @@ export const policyRequest = type({
 	principal: entityRef,
 	action: entityRef,
 	resource: entityRef,
-	// The euroclaw-standard context facts, typed by NAME — runtime-stamped and spoof-proof
-	// (mapCall reads them from resolution context; caller-supplied euroclaw__ keys are stripped
+	// The busyclaw-standard context facts, typed by NAME — runtime-stamped and spoof-proof
+	// (mapCall reads them from resolution context; caller-supplied busyclaw__ keys are stripped
 	// upstream). Consumers (the org router, engines) read them typed instead of duck-probing.
 	// Engines append their own keys (e.g. the projected `args`) through the index signature.
 	context: {

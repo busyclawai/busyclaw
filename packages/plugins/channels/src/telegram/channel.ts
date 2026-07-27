@@ -2,7 +2,7 @@ import {
 	configurationError,
 	errorMessage,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
@@ -60,7 +60,7 @@ type TelegramConfigBase = {
 };
 
 /**
- * The app bot's config. euroclaw keeps NO token in code: the bot's own token resolves ONLY through
+ * The app bot's config. busyclaw keeps NO token in code: the bot's own token resolves ONLY through
  * the channels plugin's one-door reader — `secrets.get(tokenRef)` (env-backed by default, so an org's
  * aliases/providers are honoured), lazily on the first webhook/send. The two shapes make a multi-bot
  * set impossible to collide on one secret:
@@ -111,7 +111,7 @@ function constantTimeEquals(presented: string | null, expected: string): boolean
  */
 export function telegramWebhookSecret(token: string): string {
 	return bytesToHex(
-		sha256(utf8ToBytes(`euroclaw:telegram:webhook-secret:${token}`)),
+		sha256(utf8ToBytes(`busyclaw:telegram:webhook-secret:${token}`)),
 	);
 }
 
@@ -227,7 +227,7 @@ export function telegram(
 	};
 
 	// The app bot's OWN token, resolved lazily through the one-door reader threaded onto the endpoint
-	// (secrets.get(appTokenSecret)) — euroclaw keeps no token in code, so an org's aliases/providers
+	// (secrets.get(appTokenSecret)) — busyclaw keeps no token in code, so an org's aliases/providers
 	// are honoured. Memoized because one webhook needs it twice — the derived verify secret and the
 	// send client. A resolver THROW (an infra outage) is deliberately NOT memoized, so the next request
 	// retries; a null (unset) is a miss.

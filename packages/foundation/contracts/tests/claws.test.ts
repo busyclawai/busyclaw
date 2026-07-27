@@ -11,7 +11,7 @@ import {
 	toolResultRecord,
 } from "../src/index";
 
-describe("euroclaw core — durable Claw contracts", () => {
+describe("busyclaw core — durable Claw contracts", () => {
 	it("validates the durable claw/thread/message/tool record shapes", () => {
 		const claw = clawRecord({
 			id: "claw-1",

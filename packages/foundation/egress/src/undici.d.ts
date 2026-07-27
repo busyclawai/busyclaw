@@ -1,6 +1,6 @@
 // Minimal ambient typing for the ONE undici surface the egress floor needs: an Agent whose connect
 // step resolves through a supplied `lookup`, so a request can be pinned to the address the floor
-// already vetted. Same rule as node-dns.d.ts next door — euroclaw packages deliberately avoid
+// already vetted. Same rule as node-dns.d.ts next door — busyclaw packages deliberately avoid
 // `@types/node`, and undici's shipped types are written against it, so this types only what is used
 // here rather than pulling the whole of `@types/node` in behind it.
 //

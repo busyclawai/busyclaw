@@ -14,7 +14,7 @@ import {
 	type BoundaryCall,
 	type BoundaryGate,
 	type ContextResolver,
-	type EuroclawPlugin,
+	type BusyclawPlugin,
 	type Gate,
 	gateDecision,
 	type HandleResult,
@@ -34,12 +34,12 @@ import {
 	type ToolRunner,
 	type TurnContext,
 	toolCall,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	stateError,
 	validationError,
-} from "@euroclaw/errors";
+} from "@busyclaw/errors";
 import { type } from "arktype";
 import { approvalGate } from "./approval";
 import { auditGate } from "./audit";
@@ -67,7 +67,7 @@ export type GovernanceConfig = {
 	 */
 	resolveContext?: ContextResolver;
 	/** Plugins — each contributes gates (runtime) and folded types (compile time). */
-	plugins?: readonly EuroclawPlugin[];
+	plugins?: readonly BusyclawPlugin[];
 	/** Executes a permitted tool. Default just echoes the call (no real effect). */
 	runTool?: ToolRunner;
 	/** Invokes the model (LLM). Required to use `handleModelCall`. Keeps governance SDK-agnostic. */
@@ -475,7 +475,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 		async handleModelCall(rawCall, ctxInput) {
 			if (!callModel) {
 				throw configurationError(
-					"handleModelCall requires config.callModel — tell euroclaw how to invoke your model",
+					"handleModelCall requires config.callModel — tell busyclaw how to invoke your model",
 				);
 			}
 			// Validate, strip reserved ctx, redact the prompt at the edge — PII never leaves
@@ -594,7 +594,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			if (valid instanceof type.errors) {
 				throw validationError("invalid tool call", valid.summary);
 			}
-			// Trust seam: a caller cannot forge euroclaw__* identity — stripped, then the configured
+			// Trust seam: a caller cannot forge busyclaw__* identity — stripped, then the configured
 			// resolver (if any) stamps the principal.
 			const ctx = await resolveCtx(ctxInput);
 			// Redact at the edge — only if configured. Otherwise the call passes through.

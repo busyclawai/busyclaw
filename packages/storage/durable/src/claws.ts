@@ -1,4 +1,4 @@
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type AppendMessageInput,
 	appendMessageInput,
@@ -26,8 +26,8 @@ import {
 	toolCallFields,
 	toolResultFields,
 	validationError,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 
@@ -124,7 +124,7 @@ export function createClawsStore(
 		conversation_binding: { fields: conversationBindingFields },
 	});
 	// The merged store create-input schema still validates host/plugin extra fields at the store boundary
-	// (the entity layer's write validation covers the assembled record; this covers the input the euroclaw
+	// (the entity layer's write validation covers the assembled record; this covers the input the busyclaw
 	// handler hands the store). It uses the PERSISTENCE options — `createdBy` is required here because the
 	// handler has already stamped it from the authenticated `{ principal }` (the caller-facing
 	// createClawInput omits it entirely; docs/plans/stamped-fields.md).

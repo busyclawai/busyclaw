@@ -4,8 +4,8 @@
  * licensed under the MIT License. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { SchemaDeclaration } from "@euroclaw/contracts";
-import { entity, field } from "@euroclaw/contracts";
+import type { SchemaDeclaration } from "@busyclaw/contracts";
+import { entity, field } from "@busyclaw/contracts";
 
 const runStatusValues = [
 	"queued",

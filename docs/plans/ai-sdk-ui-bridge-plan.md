@@ -20,12 +20,12 @@ assumes all three.
   Tool parts render as `tool-${toolName}` with states; an approval renders as
   `state: 'approval-requested'` carrying `part.approval.id`, answered by
   `addToolApprovalResponse({ id, approved })`. Client-executed tools use `addToolOutput`.
-- **The approval id is ours to choose** → carry the euroclaw `approvalId` verbatim, and the
+- **The approval id is ours to choose** → carry the busyclaw `approvalId` verbatim, and the
   native client flow round-trips it with zero custom UI plumbing.
 
 ## Slice A — event-driven bridge (no runtime/core changes)
 
-Home: **new package `packages/adapter/ai-sdk` (`@euroclaw/adapter-ai-sdk`)** — mirrors
+Home: **new package `packages/adapter/ai-sdk` (`@busyclaw/adapter-ai-sdk`)** — mirrors
 adapter-nextjs's posture (depends on the product package + peer `ai ^7`). adapter-core stays
 `ai`-free; vendors stays authoring-only.
 
@@ -90,7 +90,7 @@ Mechanics behind that surface:
 
 Tests: broker isolates concurrent runs; golden stream (part order, headers via
 `createUIMessageStreamResponse`, `[DONE]`); raw email never on the default wire; original view
-rehydrates + audits once; approval part carries the euroclaw approvalId and the grant path
+rehydrates + audits once; approval part carries the busyclaw approvalId and the grant path
 streams the continuation; denial → `data-governance`, stream still finishes cleanly.
 
 ## Slice B — true token streaming (runtime work, wire unchanged)

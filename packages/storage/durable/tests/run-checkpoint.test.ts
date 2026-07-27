@@ -1,5 +1,5 @@
-import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
-import { kyselyAdapter } from "@euroclaw/storage-kysely";
+import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
+import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
@@ -91,7 +91,7 @@ suite(
 		const db = new Kysely<Record<string, Record<string, unknown>>>({
 			dialect: new SqliteDialect({ database: sqlite }),
 		});
-		// The `run_checkpoint` table `euroclaw generate` will emit from runCheckpointSchema
+		// The `run_checkpoint` table `busyclaw generate` will emit from runCheckpointSchema
 		// (`metadata` holds JSON).
 		sqlite.exec(
 			`CREATE TABLE run_checkpoint (

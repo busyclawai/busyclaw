@@ -1,8 +1,8 @@
-// @euroclaw/policy-better-auth — govern tool calls with your better-auth app's OWN access control.
+// @busyclaw/policy-better-auth — govern tool calls with your better-auth app's OWN access control.
 //
 // It doesn't re-declare who has which role. It delegates to better-auth's `auth.api.hasPermission`,
 // which resolves everything from the request headers on its own: session → active organization →
-// the member's role(s), including dynamic DB roles → the permission check. euroclaw stores no
+// the member's role(s), including dynamic DB roles → the permission check. busyclaw stores no
 // identity, roles, or org mapping — you forward the headers and it asks "can this user do X?".
 //
 // At request time you pass better-auth's own thing — the request `headers`:
@@ -11,12 +11,12 @@
 // The `auth` param is typed structurally (just `api.hasPermission`), so a real auth WITH the
 // organization plugin satisfies it, an auth WITHOUT it fails to compile, and a test stub needs no DB.
 
-import { createPolicyPlugin, type PolicyPlugin } from "@euroclaw/authz";
+import { createPolicyPlugin, type PolicyPlugin } from "@busyclaw/authz";
 import type {
 	PolicyEngine,
 	PolicyRequest,
 	ToolCall,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /** better-auth's request context: the incoming headers (carrying the session). */
 export type BetterAuthContext = { headers: Headers };
@@ -76,7 +76,7 @@ export type BetterAuthAccessControlConfig = {
 };
 
 /**
- * The better-auth access-control plugin. `euroclaw({ plugins: [betterAuthAccessControl({ auth })] })`
+ * The better-auth access-control plugin. `busyclaw({ plugins: [betterAuthAccessControl({ auth })] })`
  * governs every tool call through your org's permissions, and `run(prompt, { headers })` forwards the
  * request. By default a tool maps to the permission `{ [tool]: ["execute"] }`; override `mapCall` to
  * target the resources/actions your `createAccessControl` statements actually declare.
@@ -104,9 +104,9 @@ export function betterAuthAccessControl(
 	});
 }
 
-export type { PolicyPlugin } from "@euroclaw/authz";
-export { createPolicyPlugin } from "@euroclaw/authz";
+export type { PolicyPlugin } from "@busyclaw/authz";
+export { createPolicyPlugin } from "@busyclaw/authz";
 export type {
 	PolicyEngine,
 	PolicyRequest,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";

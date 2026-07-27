@@ -1,18 +1,18 @@
 {
-	"name": "@euroclaw/contracts",
+	"name": "@busyclaw/contracts",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The euroclaw protocol: governance boundary + plugin contracts, the entity schema DSL, and the port/schema definitions every euroclaw package speaks. Near-zero deps.",
+	"description": "The busyclaw protocol: governance boundary + plugin contracts, the entity schema DSL, and the port/schema definitions every busyclaw package speaks. Near-zero deps.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
-	"homepage": "https://github.com/euroclaw-sh/euroclaw#readme",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/euroclaw-sh/euroclaw.git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
 		"directory": "packages/foundation/contracts"
 	},
 	"bugs": {
-		"url": "https://github.com/euroclaw-sh/euroclaw/issues"
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -43,7 +43,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/errors": "workspace:*",
+		"@busyclaw/errors": "workspace:*",
 		"arktype": "2.2.0"
 	}
 }

@@ -1,9 +1,9 @@
-// @euroclaw/authz — the Cedar decision engine + authz toolkit: the policy-plugin scaffolding, the
+// @busyclaw/authz — the Cedar decision engine + authz toolkit: the policy-plugin scaffolding, the
 // authorization-model builder, the JSON-Schema→Cedar projection, the Cedar renderings of the model,
 // AND the cedar-wasm EVAL (engine, floor engine, request mapper, escape-hatch plugin). The protocol
-// (PolicyEngine port, PARC contracts, model types) lives in @euroclaw/contracts; hot-path enforcement
-// lives in @euroclaw/core; the `cedar()` / `betterAuthPolicy()` policy SOURCES live in
-// @euroclaw/policy-* (they contribute policy TEXT, never the engine).
+// (PolicyEngine port, PARC contracts, model types) lives in @busyclaw/contracts; hot-path enforcement
+// lives in @busyclaw/core; the `cedar()` / `betterAuthPolicy()` policy SOURCES live in
+// @busyclaw/policy-* (they contribute policy TEXT, never the engine).
 
 export type {
 	AccessGrant,

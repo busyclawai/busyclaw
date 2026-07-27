@@ -3,7 +3,7 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { mongoAdapter, toFilter } from "../src/index";
 
-describe("@euroclaw/storage-mongodb — Where → Mongo filter", () => {
+describe("@busyclaw/storage-mongodb — Where → Mongo filter", () => {
 	it("eq, operators, in, contains", () => {
 		expect(toFilter([{ field: "id", value: "x" }])).toEqual({ id: "x" });
 		expect(toFilter([{ field: "seq", operator: "ne", value: 1 }])).toEqual({
@@ -103,7 +103,7 @@ beforeAll(async () => {
 	mongod = await MongoMemoryServer.create();
 	client = new MongoClient(mongod.getUri());
 	await client.connect();
-	db = client.db("euroclaw_test");
+	db = client.db("busyclaw_test");
 }, 120000);
 
 afterAll(async () => {
@@ -116,7 +116,7 @@ afterEach(async () => {
 		await db.collection(c).deleteMany({});
 });
 
-describe("@euroclaw/storage-mongodb — adapter against real MongoDB", () => {
+describe("@busyclaw/storage-mongodb — adapter against real MongoDB", () => {
 	it("create + findOne (and _id is stripped)", async () => {
 		const a = mongoAdapter(db);
 		await a.create({

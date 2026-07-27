@@ -7,7 +7,7 @@ import {
 	type HandleResult,
 	stateError,
 	type ToolDefinition,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { jsonSchema, tool } from "ai";
 import type {
 	ExecutionContext,
@@ -19,7 +19,7 @@ import type {
 import { executeInSandbox } from "./core/engine";
 
 // The governed nested-invoke seam the runtime hands invoker-stamped tools. Typed locally (its shape
-// mirrors @euroclaw/runtime's SubInvoke) so this factory needs no runtime dependency.
+// mirrors @busyclaw/runtime's SubInvoke) so this factory needs no runtime dependency.
 type SubInvoke = (
 	path: string,
 	args: Record<string, unknown>,

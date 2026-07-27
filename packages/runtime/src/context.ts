@@ -13,7 +13,7 @@ import {
 	type ScopeRef,
 	type TurnContext,
 	userPrincipal,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /** Resolves the accountable operator → the `principal` (or undefined). A background run resolves the
  *  principal of whoever DELEGATED the work, never an anonymous scheduler identity: a scheduled run is a

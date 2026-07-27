@@ -5,7 +5,7 @@
 // SQLite branch with nothing added. That claim was asserted in a comment and tested nowhere, which
 // is the kind of thing that is true right up until a version bump makes it false.
 
-import { asConflict, isUniqueViolation } from "@euroclaw/storage-core";
+import { asConflict, isUniqueViolation } from "@busyclaw/storage-core";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
@@ -41,7 +41,7 @@ describe("sqlite through drizzle", () => {
 		// would then need a branch of its own rather than relying on the passthrough.
 		expect(isUniqueViolation(error)).toBe(true);
 		expect(asConflict(error, { model: "claw" })?.code).toBe(
-			"EUROCLAW_CONFLICT",
+			"BUSYCLAW_CONFLICT",
 		);
 	});
 

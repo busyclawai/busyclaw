@@ -1,10 +1,10 @@
-// createRunCheckpointStore — the RunCheckpointStore port, backed by any @euroclaw/storage-core
+// createRunCheckpointStore — the RunCheckpointStore port, backed by any @busyclaw/storage-core
 // Adapter. The single-use guarantee rides on an atomic pending→consumed transition, so a yielded
 // run resumes exactly once even under concurrent continuation claims. Persistence goes through
 // `entityDb` — the metadata JSON column is (de)serialized by the schema layer, and every row
 // crossing the adapter boundary is parsed against the record schema.
 
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type NewRunCheckpoint,
 	newRunCheckpoint as newRunCheckpointSchema,
@@ -12,8 +12,8 @@ import {
 	type RunCheckpointStore,
 	runCheckpointFields,
 	validationError,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 

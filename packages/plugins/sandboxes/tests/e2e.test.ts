@@ -1,5 +1,5 @@
-import { createMemoryAudit } from "@euroclaw/core";
-import { createRuntime, govern } from "@euroclaw/runtime";
+import { createMemoryAudit } from "@busyclaw/core";
+import { createRuntime, govern } from "@busyclaw/runtime";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { runCodeTool } from "../src/index";
@@ -62,7 +62,7 @@ const vSchema = jsonSchema<{ v: string }>({
 	required: ["v"],
 });
 
-describe("@euroclaw/sandboxes run_code end-to-end", () => {
+describe("@busyclaw/sandboxes run_code end-to-end", () => {
 	it("runs a script whose nested tool call is governed and audited alongside run_code", async () => {
 		const runtime = createRuntime({
 			model: callToolOnceModel("run_code", {

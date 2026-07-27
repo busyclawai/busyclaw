@@ -7,7 +7,7 @@
  * - The explicit runtime-task dispatch boundary is informed by NullBoiler's orchestrator/executor split.
  *
  * The worker drives operational runtime state only. Governance decisions and compliance audit remain
- * inside @euroclaw/core via @euroclaw/runtime.
+ * inside @busyclaw/core via @busyclaw/runtime.
  */
 
 import {
@@ -15,14 +15,14 @@ import {
 	stateError,
 	unsupportedOperationError,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	type Runtime,
 	type RuntimeAbortSignal,
 	type RuntimeResult,
 	RuntimeResult as RuntimeResultSchema,
 	runtimeRunOptionsWithCaller,
-} from "@euroclaw/runtime";
+} from "@busyclaw/runtime";
 import { type } from "arktype";
 import type { ClaimedTask, RuntimeTask, SqlEngineStore } from "./store";
 
@@ -141,7 +141,7 @@ async function runTask(
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
 	//
 	// The PRINCIPAL comes from the durable RUN ROW, seeded through the forge-proof symbol option so it
-	// lands as the stamped `euroclaw__principal` the floor reads. A durable run is the same run as the
+	// lands as the stamped `busyclaw__principal` the floor reads. A durable run is the same run as the
 	// one that started it — it is sliced across invocations, not re-authored by the worker — so it must
 	// execute as the identity it was created for, and the run row is the only record of that which
 	// survives the process. It went unnoticed while unstamped tools skipped the floor; with every tool

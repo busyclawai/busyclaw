@@ -1,12 +1,12 @@
 {
-	"name": "@euroclaw/cli",
+	"name": "@busyclaw/cli",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The euroclaw CLI — `euroclaw db generate` / `euroclaw db migrate` over the schema your config declares.",
+	"description": "The busyclaw CLI — `busyclaw db generate` / `busyclaw db migrate` over the schema your config declares.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"bin": {
-		"euroclaw": "./dist/index.mjs"
+		"busyclaw": "./dist/index.mjs"
 	},
 	"exports": {
 		".": {
@@ -26,20 +26,20 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/contracts": "workspace:*",
-		"@euroclaw/storage-drizzle": "workspace:*",
-		"@euroclaw/storage-kysely": "workspace:*",
-		"@euroclaw/storage-mongodb": "workspace:*",
-		"@euroclaw/storage-prisma": "workspace:*",
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/storage-drizzle": "workspace:*",
+		"@busyclaw/storage-kysely": "workspace:*",
+		"@busyclaw/storage-mongodb": "workspace:*",
+		"@busyclaw/storage-prisma": "workspace:*",
 		"commander": "15.0.0",
-		"euroclaw": "workspace:*",
+		"busyclaw": "workspace:*",
 		"jiti": "2.7.0"
 	},
 	"peerDependencies": {
 		"kysely": ">=0.27.0"
 	},
 	"devDependencies": {
-		"@euroclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"@types/node": "26.1.1",
 		"better-sqlite3": "12.11.1",

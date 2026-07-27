@@ -1,16 +1,16 @@
-// @euroclaw/better-auth — the better-auth integration across ALL THREE access concerns:
+// @busyclaw/better-auth — the better-auth integration across ALL THREE access concerns:
 //   identity   → the actor, from `getSession`
 //   membership → the active org + role, from `getActiveMember`
-//   authz      → delegated to `hasPermission` (re-exported from @euroclaw/policy-better-auth)
+//   authz      → delegated to `hasPermission` (re-exported from @busyclaw/policy-better-auth)
 // Each piece takes only the FUNCTION it needs (not the `auth` object), so it's vendor-neutral in
 // shape and testable with a fake. `betterAuthAccess({ auth })` is the convenience that wires all
 // three from one instance — the "specify exactly what you need, not auth" pattern, with one entry.
 
-import { type Principal, userPrincipal } from "@euroclaw/contracts";
+import { type Principal, userPrincipal } from "@busyclaw/contracts";
 import {
 	type BetterAuthAccessControlConfig,
 	betterAuthAccessControl,
-} from "@euroclaw/policy-better-auth";
+} from "@busyclaw/policy-better-auth";
 
 // The minimal slices each concern needs — structural, so any better-auth-shaped instance satisfies them.
 type GetSession = (input: {
@@ -53,7 +53,7 @@ export type BetterAuthLike = BetterAuthAccessControlConfig["auth"] & {
 /**
  * Wire identity + membership + authz from ONE better-auth instance. Spread the pieces into the claw:
  *   const ba = betterAuthAccess({ auth })
- *   euroclaw({ model, identity: ba.identity, membership: ba.membership, plugins: [ba.authz] })
+ *   busyclaw({ model, identity: ba.identity, membership: ba.membership, plugins: [ba.authz] })
  * (Named `betterAuthAccess`, not `betterAuth`, to avoid clashing with better-auth's own `betterAuth`.)
  */
 export function betterAuthAccess(config: { auth: BetterAuthLike }): {
@@ -71,5 +71,5 @@ export function betterAuthAccess(config: { auth: BetterAuthLike }): {
 	};
 }
 
-export type { BetterAuthAccessControlConfig } from "@euroclaw/policy-better-auth";
-export { betterAuthAccessControl } from "@euroclaw/policy-better-auth";
+export type { BetterAuthAccessControlConfig } from "@busyclaw/policy-better-auth";
+export { betterAuthAccessControl } from "@busyclaw/policy-better-auth";

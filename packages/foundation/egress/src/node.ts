@@ -1,6 +1,6 @@
 // The NODE binding for the egress floor — the one place node:dns and a pinning dispatcher are bound.
 //
-// The root entry (`@euroclaw/egress`) stays runtime-agnostic on purpose: it ships no DNS resolver, so
+// The root entry (`@busyclaw/egress`) stays runtime-agnostic on purpose: it ships no DNS resolver, so
 // it runs anywhere and the caller injects resolution. But two consumers — the runtime's HTTP tool
 // invoker and the sandboxes plugin's guest fetch — both run on Node and both need the same two Node
 // things: a default resolver, and a way to make the socket dial the address the floor vetted. Kept in

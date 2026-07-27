@@ -1,6 +1,6 @@
 // The fake business behind the demo: a small support desk with customers, orders, and a refund
 // ledger. Deliberately plain in-memory objects — this stands in for the host app's OWN database,
-// the one euroclaw never touches. Everything governed happens on the way IN and OUT of here.
+// the one busyclaw never touches. Everything governed happens on the way IN and OUT of here.
 //
 // The customer records carry real-shaped PII (names, emails, phones, IBANs) because that is what
 // makes the redaction visible: a tool returns a customer, and what reaches the model is tokens.

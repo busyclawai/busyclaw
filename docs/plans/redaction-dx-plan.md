@@ -36,7 +36,7 @@ host hand-assembles `(scope, scopeId)` where a fat-fingered id silently returns 
   with every `claw.api` method); when app-authz lands, the PEP gates `view` per principal; the
   `eu()` preset may SEAL a gate denying `"original"` outside an approved purpose.
 - Raw-posture rows: `view` is a no-op (nothing mapped) — same code path, no branch.
-Layer: `euroclaw` assembly (config group, claw field, creation API, wiring), `@euroclaw/core` (one small routing-redactor factory). Contracts and runtime UNCHANGED — `createRuntime.redactor` stays the mechanism port.
+Layer: `busyclaw` assembly (config group, claw field, creation API, wiring), `@busyclaw/core` (one small routing-redactor factory). Contracts and runtime UNCHANGED — `createRuntime.redactor` stays the mechanism port.
 
 ## Problem — today's composition is three constructors and a hand-rolled wrapper
 
@@ -101,8 +101,8 @@ createClaw({ database, redaction: { posture: "raw" } });
 
 ## Internals
 
-- `createRoutingRedactor({ strict, postureOf })` lands in `@euroclaw/core` beside `createStoredRedactor` (impl never in contracts; it is a Redactor-over-Redactor combinator: `durable` passthrough, `redactValue` routes, `rehydrateValue` delegates — inert in raw containers by containment).
-- Assembly wiring in `packages/euroclaw/src/index.ts`: resolve `redaction` → a `Redactor` → pass down as the runtime's `redactor`. Claw-field contribution merges into the same `collectModelFields` input as plugin fields.
+- `createRoutingRedactor({ strict, postureOf })` lands in `@busyclaw/core` beside `createStoredRedactor` (impl never in contracts; it is a Redactor-over-Redactor combinator: `durable` passthrough, `redactValue` routes, `rehydrateValue` delegates — inert in raw containers by containment).
+- Assembly wiring in `packages/busyclaw/src/index.ts`: resolve `redaction` → a `Redactor` → pass down as the runtime's `redactor`. Claw-field contribution merges into the same `collectModelFields` input as plugin fields.
 - Optional tiny helper, same slice: `composeDetectors(...detectors)` (concat spans; `cleanSpans` already resolves overlaps) — hosts will want email+phone+… without writing the fold.
 
 ## Rejected alternatives
@@ -118,4 +118,4 @@ Strict: adapter reused (no second adapter accepted anywhere); armed-but-silent w
 
 ## Verification gate
 
-Touches `createClaw` public config type — full turbo typecheck + full test suite + repo-wide grep for `redactor:` usage including tests/ (`packages/euroclaw/tests/fixtures.ts` and runtime tests construct redactors directly against `createRuntime` — those stay valid; only `createClaw({ redactor })` call sites migrate).
+Touches `createClaw` public config type — full turbo typecheck + full test suite + repo-wide grep for `redactor:` usage including tests/ (`packages/busyclaw/tests/fixtures.ts` and runtime tests construct redactors directly against `createRuntime` — those stay valid; only `createClaw({ redactor })` call sites migrate).

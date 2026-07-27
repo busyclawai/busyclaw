@@ -1,11 +1,11 @@
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
-import { govern } from "@euroclaw/contracts";
-import { createStoredRedactor } from "@euroclaw/core";
-import { memoryAdapter } from "@euroclaw/storage-core";
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
+import { govern } from "@busyclaw/contracts";
+import { createStoredRedactor } from "@busyclaw/core";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import {
 	createPiiMappingStore,
 	createRunCheckpointStore,
-} from "@euroclaw/storage-durable";
+} from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, type RuntimeEvent } from "../src/index";

@@ -12,8 +12,8 @@ import {
 	type JsonObject,
 	type ToolGovernance,
 	toolGovernance,
-} from "@euroclaw/contracts";
-import { configurationError, validationError } from "@euroclaw/errors";
+} from "@busyclaw/contracts";
+import { configurationError, validationError } from "@busyclaw/errors";
 import { type } from "arktype";
 import type { AuthzActionInput } from "./build";
 

@@ -1,7 +1,7 @@
 import type {
-	EuroclawPlugin,
-	EuroclawPluginConfigureContext,
-} from "@euroclaw/contracts";
+	BusyclawPlugin,
+	BusyclawPluginConfigureContext,
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { pluginEventSink, type RuntimeEventSink } from "../src/events";
 
@@ -22,14 +22,14 @@ describe("pluginEventSink", () => {
 		const order: string[] = [];
 		const recording = recordingSink({ order, label: "recording" });
 		const observer = recordingSink({ order, label: "observer" });
-		const context: EuroclawPluginConfigureContext = {
+		const context: BusyclawPluginConfigureContext = {
 			events: pluginEventSink({
 				recording: recording.sink,
 				observers: [observer.sink],
 			}),
 		};
 
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "emitter",
 			configure(ctx) {
 				void ctx.events?.emit({ type: "skill.demo", skillId: "s1" });
@@ -107,11 +107,11 @@ describe("pluginEventSink", () => {
 
 	it("leaves a plugin that never touches events untouched", () => {
 		const { sink, observed } = recordingSink();
-		const context: EuroclawPluginConfigureContext = {
+		const context: BusyclawPluginConfigureContext = {
 			events: pluginEventSink({ observers: [sink] }),
 		};
 
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "quiet",
 			configure() {
 				return undefined;
@@ -123,8 +123,8 @@ describe("pluginEventSink", () => {
 	});
 
 	it("works when no events port is provided (optional)", () => {
-		const context: EuroclawPluginConfigureContext = {};
-		const plugin: EuroclawPlugin = {
+		const context: BusyclawPluginConfigureContext = {};
+		const plugin: BusyclawPlugin = {
 			id: "optional",
 			configure(ctx) {
 				void ctx.events?.emit({ type: "skill.demo" });

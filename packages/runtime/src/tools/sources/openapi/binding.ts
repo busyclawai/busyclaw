@@ -1,5 +1,5 @@
 // The OpenAPI source's contracts. An uploaded openapi.json is UNTRUSTED input — the shapes
-// euroclaw actually consumes from it are arktype-validated at the point they're read (the deep
+// busyclaw actually consumes from it are arktype-validated at the point they're read (the deep
 // spec walk itself stays structural: OpenAPI's polymorphism and $refs don't fit a closed
 // schema). What extraction PRODUCES (tool definitions, bindings, diagnostics) is host-facing
 // plain TS — not a boundary.
@@ -8,7 +8,7 @@ import type {
 	SourceDiagnostic,
 	SourceExtraction,
 	SourceTool,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 
 export const HTTP_METHODS = [

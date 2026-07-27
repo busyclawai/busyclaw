@@ -2,7 +2,7 @@ import type {
 	ApprovalStore,
 	AuditSink,
 	EffectStore,
-	EuroclawPlugin,
+	BusyclawPlugin,
 	InferContext,
 	JsonObject,
 	JsonValue,
@@ -11,7 +11,7 @@ import type {
 	TextDeltaStream,
 	ToolDefinitionSet,
 	ToolEffectPolicy,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	type Adapter,
 	APPROVED_BY_CONTEXT_KEY,
@@ -31,13 +31,13 @@ import {
 	THREAD_ID_CONTEXT_KEY,
 	toolModelName,
 	validationError,
-} from "@euroclaw/contracts";
-import { createGovernance, type Governance } from "@euroclaw/core";
+} from "@busyclaw/contracts";
+import { createGovernance, type Governance } from "@busyclaw/core";
 import {
 	createApprovalStore,
 	createEffectStore,
 	createRunCheckpointStore,
-} from "@euroclaw/storage-durable";
+} from "@busyclaw/storage-durable";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { ModelMessage, wrapLanguageModel } from "ai";
@@ -161,14 +161,14 @@ export type RuntimeAbortSignal = { readonly aborted: boolean };
 
 /**
  * The authenticated caller's principal, threaded server-side into a run so the trusted context
- * assembly can SEED it as `euroclaw__principal`. A `unique symbol` key (like {@link
+ * assembly can SEED it as `busyclaw__principal`. A `unique symbol` key (like {@link
  * RUNTIME_RECORDING_OPTION}) so it is forge-proof: a JSON/wire `options` object can never carry it —
  * only trusted host code that imports the symbol (the api handlers, via {@link
  * runtimeRunOptionsWithCaller}) sets it. NEVER a plain field a caller could smuggle through the
  * `generate`/`stream` options pass-through.
  */
 export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
-	"euroclaw.runtime.caller",
+	"busyclaw.runtime.caller",
 );
 
 export type RuntimeRunOptions = {
@@ -181,14 +181,14 @@ export type RuntimeRunOptions = {
 	 * database-backed run checkpoint store.
 	 */
 	deadlineAt?: string;
-	/** How this run was triggered — set by the ENTRY POINT (euroclaw's sendMessage/continueRun stamp
+	/** How this run was triggered — set by the ENTRY POINT (busyclaw's sendMessage/continueRun stamp
 	 *  "interactive"; the engine worker and direct calls leave it unset). Stamped into every gated
-	 *  call as the spoof-proof `euroclaw__runMode` fact. Default "autonomous" — fail-closed, so an
+	 *  call as the spoof-proof `busyclaw__runMode` fact. Default "autonomous" — fail-closed, so an
 	 *  unattended run can't silently satisfy a write policy that a human presence would gate. */
 	runMode?: RunMode;
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
 	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
-	 *  key, forge-proof). Seeded as `euroclaw__principal` by the trusted context assembly. */
+	 *  key, forge-proof). Seeded as `busyclaw__principal` by the trusted context assembly. */
 	readonly [RUNTIME_CALLER_OPTION]?: string;
 };
 
@@ -271,7 +271,7 @@ export type RuntimeConfig = {
 	 *  assembly) redaction/secrets boot warnings all route here; NOT a logger (no levels, no
 	 *  structure, no transport). Default `console.warn`. */
 	warn?: (message: string) => void;
-	plugins?: readonly EuroclawPlugin[];
+	plugins?: readonly BusyclawPlugin[];
 	maxSteps?: number;
 };
 
@@ -364,7 +364,7 @@ export function runtimeRunOptionsWithRecording(
 /**
  * Attach the authenticated caller principal to a run's options via the forge-proof {@link
  * RUNTIME_CALLER_OPTION} symbol — the ONE way the entry point (an api handler, a trusted host call)
- * threads "who initiated this run" into the runtime so the trusted assembly seeds `euroclaw__principal`.
+ * threads "who initiated this run" into the runtime so the trusted assembly seeds `busyclaw__principal`.
  * ALWAYS overrides any inbound value (so a caller-supplied `options` can never smuggle a principal
  * through the `generate`/`stream` pass-through); `undefined` clears it, leaving the run caller-less
  * (the `identity` resolver / a system principal then covers it).
@@ -414,7 +414,7 @@ function toJsonValue(value: unknown, label: string): JsonValue {
 		}
 		parsed = JSON.parse(json) as unknown;
 	} catch (err) {
-		if (err instanceof Error && err.name === "EuroclawError") throw err;
+		if (err instanceof Error && err.name === "BusyclawError") throw err;
 		throw validationError(
 			label,
 			err instanceof Error ? err.message : String(err),
@@ -774,7 +774,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			// registration is data, and is turned away by the merge below instead.
 			if (path in tools) {
 				throw configurationError(
-					`tool "${path}" is in euroclaw's reserved namespace`,
+					`tool "${path}" is in busyclaw's reserved namespace`,
 					{ path },
 				);
 			}
@@ -802,20 +802,20 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		for (const [path, tool] of Object.entries(resolved)) {
 			if (path in declaredTools) {
 				warn(
-					`euroclaw: registered tool "${path}" skipped — a code tool already owns that path`,
+					`busyclaw: registered tool "${path}" skipped — a code tool already owns that path`,
 				);
 				continue;
 			}
 			if (DISCOVERY_TOOL_PATHS.includes(path)) {
 				warn(
-					`euroclaw: registered tool "${path}" skipped — euroclaw's own namespace is reserved`,
+					`busyclaw: registered tool "${path}" skipped — busyclaw's own namespace is reserved`,
 				);
 				continue;
 			}
 			const modelName = toolModelName(path);
 			if (modelNames.has(modelName)) {
 				warn(
-					`euroclaw: registered tool "${path}" skipped — another tool is already offered as "${modelName}"`,
+					`busyclaw: registered tool "${path}" skipped — another tool is already offered as "${modelName}"`,
 				);
 				continue;
 			}
@@ -984,7 +984,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			const resolved = resolveContext ? await resolveContext(ctx) : ctx;
 			stampRunActions(resolved, runActions);
 			// The authenticated caller SEEDS the one canonical principal. Done HERE — the trusted step,
-			// after `stripReserved` cleared any caller-forged `euroclaw__` keys — so the seed can't be
+			// after `stripReserved` cleared any caller-forged `busyclaw__` keys — so the seed can't be
 			// spoofed. The caller IS the run's initiator, so it WINS over the `identity` resolver (which
 			// `resolveContext` may have stamped): the resolver is the caller-LESS fallback (cron/engine
 			// resume → a system principal). Absent caller AND absent resolver → no stamp → the tool floor
@@ -998,7 +998,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			if (state.approvedBy !== undefined) {
 				resolved[APPROVED_BY_CONTEXT_KEY] = state.approvedBy;
 			}
-			// Runtime-stamped, spoof-proof facts (the caller's euroclaw__ keys were already stripped).
+			// Runtime-stamped, spoof-proof facts (the caller's busyclaw__ keys were already stripped).
 			resolved[RUN_MODE_CONTEXT_KEY] = state.runMode;
 			if (state.recording) {
 				resolved[CLAW_ID_CONTEXT_KEY] = state.recording.clawId;
@@ -1074,7 +1074,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				const tool = runTools[call.name];
 				const executeTool = tool && toolExecutor(tool);
 				if (!executeTool) {
-					throw stateError(`euroclaw: no executable tool "${call.name}"`, {
+					throw stateError(`busyclaw: no executable tool "${call.name}"`, {
 						toolName: call.name,
 					});
 				}
@@ -1085,7 +1085,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				// "this needs approval, escalate to X" before it spends a turn discovering it. That is a
 				// DECISION, which needs the turn context — and the turn context does not cross the
 				// tool-execute boundary. So the runtime hands the capability across instead of the
-				// context, exactly the seam `subInvoke` uses, and only to euroclaw's own meta-tool: a
+				// context, exactly the seam `subInvoke` uses, and only to busyclaw's own meta-tool: a
 				// host tool can never claim that reserved path (`withDiscovery` throws, the per-run
 				// merge skips), so this is least authority, not a well-known option name.
 				//
@@ -1113,7 +1113,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				const args = isInvokerTool ? call.args : await rehydrate(call.args);
 				const execute = (abortSignal?: unknown) =>
 					// The runtime's calling convention: the AI-SDK call options plus `subInvoke`, which
-					// euroclaw adds for invoker-stamped capability tools only (least authority). The
+					// busyclaw adds for invoker-stamped capability tools only (least authority). The
 					// descriptor's executable is deliberately untyped in its parameters, so the
 					// extension passes through without the casts the closed AI-SDK type used to force.
 					executeTool(args, {
@@ -1266,7 +1266,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					const tool = runTools[call.name];
 					const executeTool = tool && toolExecutor(tool);
 					if (!executeTool) {
-						throw stateError(`euroclaw: no executable tool "${call.name}"`, {
+						throw stateError(`busyclaw: no executable tool "${call.name}"`, {
 							toolName: call.name,
 						});
 					}
@@ -1275,7 +1275,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						toolCallId: newId("nested"),
 						messages: [],
 						abortSignal: state.abortSignal,
-						// v7 requires the toolsContext channel field; euroclaw injects capabilities
+						// v7 requires the toolsContext channel field; busyclaw injects capabilities
 						// through its own seam, so nested leaf calls run context-less.
 						context: undefined,
 					});

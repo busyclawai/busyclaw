@@ -1,4 +1,4 @@
-import { configurationError, stateError } from "@euroclaw/contracts";
+import { configurationError, stateError } from "@busyclaw/contracts";
 
 export type TelegramFetchResponse = {
 	ok: boolean;

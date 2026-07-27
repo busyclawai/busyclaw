@@ -1,5 +1,5 @@
 // The Cedar EVAL surfaces — the runtime that turns the neutral model + policy TEXT into decisions.
-// Consolidated into @euroclaw/authz beside cedar.ts (the schema renderer these consume) so this
+// Consolidated into @busyclaw/authz beside cedar.ts (the schema renderer these consume) so this
 // package is THE Cedar decision engine:
 //   - `cedarMapCall(config)`     — the default request mapper (tool call → PARC request): stamps the
 //     spoof-proof facts, projects `context.args` to the model's declared subset, and stamps the
@@ -12,7 +12,7 @@
 //     outside the assembly, and for the policy-engine test surface.
 //
 // The `cedar()` policy-TEXT SOURCE (contributes slices under the floor, no eval) lives in
-// @euroclaw/policy-cedar. The AUTHORIZATION MODEL drives the mapper/engine when provided: it renders
+// @busyclaw/policy-cedar. The AUTHORIZATION MODEL drives the mapper/engine when provided: it renders
 // the Cedar schema, merges the action hierarchy into the entities (so `action in Action::"writes"`
 // works at evaluation time), and filters `context.args` to the PROJECTED subset (the same walker that
 // rendered the schema, so request validation and reality never disagree).
@@ -24,14 +24,14 @@ import type {
 	PolicyEngine,
 	PolicyRequest,
 	ToolCall,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	authorizationError,
 	configurationError,
 	PRINCIPAL_CONTEXT_KEY,
 	stampedFacts,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 import {
 	actionEntitiesFromModel,
@@ -69,7 +69,7 @@ function indexModel(model: AuthzModel): Map<string, ModelIndexEntry> {
 
 /**
  * The default request mapper: turn a governed tool call + the request context into a PARC request.
- *   principal = `${principalType}::"${stamped euroclaw__principal}"`, action = `Action::"<tool>"`,
+ *   principal = `${principalType}::"${stamped busyclaw__principal}"`, action = `Action::"<tool>"`,
  *   resource  = `${resourceType}::"<tool>"`, context = `{ args, <approvalFlag>:false, <facts>, … }`.
  * The principal is the ONE stamped identity (never the caller-controllable unprefixed `ctx.principal` —
  * audit #7); absent → fail closed (deny).
@@ -88,9 +88,9 @@ export function cedarMapCall(
 	const modelIndex = config.model ? indexModel(config.model) : undefined;
 
 	return (call: ToolCall, ctx: CedarContext): PolicyRequest => {
-		// The PARC principal is the ONE stamped identity — `euroclaw__principal`, written ONLY by the
+		// The PARC principal is the ONE stamped identity — `busyclaw__principal`, written ONLY by the
 		// trusted context assembly (the caller seed / the identity resolver) AFTER the caller's own
-		// `euroclaw__` keys were stripped. NEVER the caller-controllable unprefixed `ctx.principal`
+		// `busyclaw__` keys were stripped. NEVER the caller-controllable unprefixed `ctx.principal`
 		// (audit #7: reading that let a forged principal drive the Cedar decision while audit/store
 		// recorded the stamped one). Absent → the run carries no authenticated identity: FAIL CLOSED
 		// (deny — a thrown authz error refuses the call), never authorize a modeled action for nobody.
@@ -98,11 +98,11 @@ export function cedarMapCall(
 		if (typeof principal !== "string" || principal.length === 0) {
 			throw authorizationError("tool floor denies: no stamped principal", {
 				reason:
-					"the run has no authenticated identity (euroclaw__principal is unset) — fail closed",
+					"the run has no authenticated identity (busyclaw__principal is unset) — fail closed",
 			});
 		}
 		// The runtime-stamped facts (role/team from membership, clawId/runMode/boundary pair from the
-		// runtime — spoof-proof: caller euroclaw__ keys are stripped upstream), read through the ONE
+		// runtime — spoof-proof: caller busyclaw__ keys are stripped upstream), read through the ONE
 		// typed contracts reader. A garbage stamp is a host config bug: fail loud here, never silently
 		// unstamped.
 		const facts = stampedFacts(ctx);

@@ -1,4 +1,4 @@
-// The code-owned system posture (@euroclaw/authz) compiled through the reference Cedar engine — the
+// The code-owned system posture (@busyclaw/authz) compiled through the reference Cedar engine — the
 // posture is a NAMED set of plain text in authz (no cedar dep there); this is where it meets
 // cedar-wasm. Proves it parses at construction, yields reads-run / writes-confirm / autonomous-floor
 // decisions, and that a decision's determining-policy trail reports the rule's NAME.
@@ -9,8 +9,8 @@ import {
 	buildAuthzModel,
 	cedarEngine,
 	SYSTEM_POSTURE,
-} from "@euroclaw/authz";
-import type { PolicyRequest } from "@euroclaw/contracts";
+} from "@busyclaw/authz";
+import type { PolicyRequest } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 
 const model = buildAuthzModel([

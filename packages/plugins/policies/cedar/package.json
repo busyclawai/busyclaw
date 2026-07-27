@@ -1,8 +1,8 @@
 {
-	"name": "@euroclaw/policy-cedar",
+	"name": "@busyclaw/policy-cedar",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The cedar() policy SOURCE for euroclaw: contributes raw Cedar policy TEXT to the assembly's internal engine (merged under the SYSTEM_POSTURE floor). The Cedar decision engine lives in @euroclaw/authz.",
+	"description": "The cedar() policy SOURCE for busyclaw: contributes raw Cedar policy TEXT to the assembly's internal engine (merged under the SYSTEM_POSTURE floor). The Cedar decision engine lives in @busyclaw/authz.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -23,10 +23,10 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@euroclaw/authz": "workspace:*",
-		"@euroclaw/contracts": "workspace:*"
+		"@busyclaw/authz": "workspace:*",
+		"@busyclaw/contracts": "workspace:*"
 	},
 	"devDependencies": {
-		"@euroclaw/core": "workspace:*"
+		"@busyclaw/core": "workspace:*"
 	}
 }

@@ -5,14 +5,14 @@ import {
 	bindConversationThreadInput,
 	type ClawApiCaller,
 	configurationError,
-	type EuroclawPluginConfigureContext,
-	type EuroclawPluginRuntime,
-	type EuroclawRoute,
-	type EuroclawRouteContext,
+	type BusyclawPluginConfigureContext,
+	type BusyclawPluginRuntime,
+	type BusyclawRoute,
+	type BusyclawRouteContext,
 	endpoints,
 	route,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 import type { ChannelsPlugin, ChannelsPluginOptions } from "../channels/plugin";
 import { requireClaw } from "../core/claw";
@@ -102,7 +102,7 @@ const WEBHOOK_PATH = "/channels/:provider/registrations/webhook";
 
 // Boundary input for the by-id read — the row id, the base api's idInput shape.
 const registrationIdInput = type({ id: "string" }).configure({
-	euroclaw: {
+	busyclaw: {
 		doc: "The row id for the by-id read. The id is the (provider, endpointKey) natural key hashed (`endpointId`), not a random surrogate, so a caller holding the pair can compute it without a prior lookup.",
 	},
 });
@@ -214,8 +214,8 @@ export function buildRegistrationsPlugin(
 	// the management api are built HERE, closing over that store — no plugin rebuild, no captured slots.
 	// An absent adapter leaves the store undefined; every store-backed method fails loud (requireStore).
 	const configure = (
-		context: EuroclawPluginConfigureContext,
-	): EuroclawPluginRuntime<ChannelRegistrationsPluginApi> | undefined => {
+		context: BusyclawPluginConfigureContext,
+	): BusyclawPluginRuntime<ChannelRegistrationsPluginApi> | undefined => {
 		const store = context.adapter
 			? createChannelRegistrationsStore(context.adapter, { now })
 			: undefined;
@@ -267,11 +267,11 @@ export function buildRegistrationsPlugin(
 			return requireStore().register(registration);
 		};
 
-		const webhookRoute: EuroclawRoute = {
+		const webhookRoute: BusyclawRoute = {
 			id: "channels:registrations:webhook",
 			method: "POST",
 			path: WEBHOOK_PATH,
-			handler: async ({ claw, params, request }: EuroclawRouteContext) => {
+			handler: async ({ claw, params, request }: BusyclawRouteContext) => {
 				const channel = byProvider.get(params.provider ?? "");
 				// identify is guaranteed present (asserted at build), but narrow for the type.
 				if (!channel?.identify) {
@@ -355,7 +355,7 @@ export function buildRegistrationsPlugin(
 	};
 
 	return {
-		id: options.id ?? "euroclaw.channels.registrations",
+		id: options.id ?? "busyclaw.channels.registrations",
 		$HasCron: "no-cron",
 		$RequiresDatabase: true,
 		schema: channelRegistrationsModels,

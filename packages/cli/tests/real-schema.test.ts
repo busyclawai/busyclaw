@@ -1,14 +1,14 @@
-// The generators, run against euroclaw's ACTUAL table set rather than a hand-written fixture.
+// The generators, run against busyclaw's ACTUAL table set rather than a hand-written fixture.
 //
 // Each storage package already tests its generator hard — including a real `prisma validate` — but on
 // a fixture written to exercise the generator. A fixture cannot notice that a REAL core table drifted
 // into a shape the target rejects, because the fixture is not the real table. The CLI is the one
-// package that can see both `getEuroclawTables()` and every generator, so the end-to-end assertion
-// lives here: whatever `euroclaw db generate` would emit today, the target accepts.
+// package that can see both `getBusyclawTables()` and every generator, so the end-to-end assertion
+// lives here: whatever `busyclaw db generate` would emit today, the target accepts.
 //
 // This is also where the PII vault's Prisma support is pinned. `pii_mapping` and `pii_subject` were
 // emitted `@@ignore` for as long as their `(placeholder, scope, scopeId)` key was undeclarable — which
-// meant they were absent from the generated client and euroclaw's re-identification store simply could
+// meant they were absent from the generated client and busyclaw's re-identification store simply could
 // not run on Prisma. That is fixed by the container being required, and a keyless core table would
 // silently bring it back.
 
@@ -17,8 +17,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { generatePrismaSchema } from "@euroclaw/storage-prisma";
-import { getEuroclawTables } from "euroclaw";
+import { generatePrismaSchema } from "@busyclaw/storage-prisma";
+import { getBusyclawTables } from "busyclaw";
 import { describe, expect, it } from "vitest";
 
 /** Resolve a locally-installed CLI binary by walking up to the nearest `node_modules/.bin`.
@@ -37,8 +37,8 @@ function binPath(name: string): string {
 	}
 }
 
-/** Exactly what `euroclaw db generate` projects for a host that configured nothing extra. */
-const REAL = getEuroclawTables({});
+/** Exactly what `busyclaw db generate` projects for a host that configured nothing extra. */
+const REAL = getBusyclawTables({});
 
 describe("the real core schema", () => {
 	it("declares a primary key on every table", () => {
@@ -76,14 +76,14 @@ describe("the real core schema", () => {
 			warn: (message) => warnings.push(message),
 		});
 
-		// `@@ignore` means "present in the schema, absent from the client" — a table euroclaw declares
+		// `@@ignore` means "present in the schema, absent from the client" — a table busyclaw declares
 		// and then cannot read or write.
 		expect(code).not.toContain("@@ignore");
 		expect(warnings).toEqual([]);
 	});
 
 	it("passes `prisma validate`", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "euroclaw-real-schema-"));
+		const dir = mkdtempSync(join(tmpdir(), "busyclaw-real-schema-"));
 		try {
 			writeFileSync(
 				join(dir, "schema.prisma"),

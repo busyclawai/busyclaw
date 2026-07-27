@@ -5,8 +5,8 @@
 // shadow slices exist, and the host wraps two engines with createShadowPolicyEngine. No shadow slices
 // ⇒ no candidate ⇒ the live engine is used directly.
 
-import type { ScopeRef } from "@euroclaw/contracts";
-import { configurationError } from "@euroclaw/contracts";
+import type { ScopeRef } from "@busyclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 
 export type PolicySliceLike = {
 	name: string;

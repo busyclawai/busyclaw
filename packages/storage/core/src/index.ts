@@ -1,26 +1,26 @@
 /**
- * @euroclaw/storage-core — the storage Adapter port, the declarative schema format, and a zero-dep
- * in-memory adapter. euroclaw's durable state is narrow — the audit log and pending approvals
+ * @busyclaw/storage-core — the storage Adapter port, the declarative schema format, and a zero-dep
+ * in-memory adapter. busyclaw's durable state is narrow — the audit log and pending approvals
  * (better-auth keeps users/orgs/roles) — but the port is the proven generic CRUD one, so any ORM
- * adapter (`@euroclaw/storage-drizzle`, `-prisma`, `-kysely`, `-mongodb`) plugs in.
+ * adapter (`@busyclaw/storage-drizzle`, `-prisma`, `-kysely`, `-mongodb`) plugs in.
  *
  * The `Adapter` CRUD shape (including the atomic `consumeOne` single-use primitive), the `Where`
  * shape, and the declarative table-schema format are based on Better Auth's database adapter:
  *   https://github.com/better-auth/better-auth — `packages/core/src/db` (`DBAdapter`) and its
  *   plugin schema files (`packages/better-auth/src/plugins/<name>/schema.ts`).
- * euroclaw's port is a leaner subset (no field-mapping / multi-id machinery). MIT, © 2024-present
+ * busyclaw's port is a leaner subset (no field-mapping / multi-id machinery). MIT, © 2024-present
  * Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, SortBy, Where, WhereClause } from "@euroclaw/contracts";
+import type { Adapter, SortBy, Where, WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 // The storage PROTOCOL (Adapter, Where, the declarative schema format) lives in
-// @euroclaw/contracts/storage — plugins type against it without depending on this package. This
+// @busyclaw/contracts/storage — plugins type against it without depending on this package. This
 // package keeps the implementations: schemaAdapter, the memory adapter, and matchWhere.
 export type {
 	Adapter,
@@ -33,8 +33,8 @@ export type {
 	WhereClause,
 	WhereGroup,
 	WhereOperator,
-} from "@euroclaw/contracts";
-export { isWhereGroup, sortByList } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+export { isWhereGroup, sortByList } from "@busyclaw/contracts";
 export {
 	type EntityDb,
 	type EntityModelMap,

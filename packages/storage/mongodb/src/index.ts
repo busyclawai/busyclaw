@@ -1,18 +1,18 @@
 /**
- * @euroclaw/storage-mongodb — the @euroclaw/storage-core Adapter port over a MongoDB database.
+ * @busyclaw/storage-mongodb — the @busyclaw/storage-core Adapter port over a MongoDB database.
  * `consumeOne` uses Mongo's native atomic `findOneAndDelete` — no transaction needed.
  *
  * Modeled on Better Auth's MongoDB adapter: https://github.com/better-auth/better-auth —
- * `packages/mongo-adapter`. The filter/CRUD translation here is euroclaw's own, written against
+ * `packages/mongo-adapter`. The filter/CRUD translation here is busyclaw's own, written against
  * the mongodb driver's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where, WhereClause } from "@euroclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import type { Db, Document, Filter, Sort } from "mongodb";
 
 const MONGO_OP = {
@@ -98,14 +98,14 @@ export function toFilter(where: Where[]): Filter<Document> {
 	return combined ?? {};
 }
 
-/** Strip Mongo's internal `_id` from a returned document (euroclaw rows carry their own `id`). */
+/** Strip Mongo's internal `_id` from a returned document (busyclaw rows carry their own `id`). */
 function strip<T>(doc: Document | null): T | null {
 	if (!doc) return null;
 	const { _id, ...rest } = doc;
 	return rest as T;
 }
 
-/** Adapt a MongoDB `Db` to the storage Adapter port. euroclaw rows carry their own `id` field. */
+/** Adapt a MongoDB `Db` to the storage Adapter port. busyclaw rows carry their own `id` field. */
 export function mongoAdapter(db: Db): Adapter {
 	const col = (model: string) => db.collection(model);
 	return {
@@ -175,6 +175,6 @@ export function mongoAdapter(db: Db): Adapter {
 
 // The index generator — SchemaDeclaration → the `createIndex` calls a declaration implies. Mongo has
 // no DDL, so uniqueness and indexing are the only things a schema can still ask it to enforce;
-// `euroclaw db generate --target mongodb` dispatches here.
+// `busyclaw db generate --target mongodb` dispatches here.
 export type { MongoGenerateOptions, MongoIndexSpec } from "./generate";
 export { generateMongoIndexes, mongoIndexes } from "./generate";

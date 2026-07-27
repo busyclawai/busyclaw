@@ -1,10 +1,10 @@
-import type { ClawApiCaller } from "@euroclaw/contracts";
+import type { ClawApiCaller } from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	endpoints,
 	route,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { type } from "arktype";
 import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 
@@ -15,7 +15,7 @@ import type { StoredSecretRecord, StoredSecretsStore } from "./store";
 //     input.principal)`; none takes a scope/scopeId or a target principal, so a caller can only ever
 //     touch their own rows. That scoping IS the access control in v0: the app-authz PEP that will wrap
 //     claw.api (docs/plans/app-authz.md) is NOT built yet, so the surface is HOST-GATED — the host
-//     authenticates the user and passes `principal` through function-intake, and euroclaw trusts that
+//     authenticates the user and passes `principal` through function-intake, and busyclaw trusts that
 //     principal exactly like the rest of claw.api. Org-wide / admin-tier rows are deferred WITH app-authz.
 //
 //   - VALUES ARE WRITE-ONLY. `set` and `list` return metadata VIEWS only — never the value, nor the
@@ -40,19 +40,19 @@ const nonEmptyString = type("string")
 // route hands the handler no caller yet, so an over-the-wire secrets call fails closed until it lands.)
 export const setSecretInput = type({
 	name: nonEmptyString.configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "The natural-key name component: re-setting the same name for this caller rotates the stored value in place (an upsert on `(personal, caller, name)`) — it never creates a second row.",
 		},
 	}),
 	value: type("string").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Write-only material: the store seals it (AES-256-GCM) before any adapter call, so plaintext is never at rest. It is never returned by set or list and there is no get-plaintext method — it exits solely through the store provider (`secrets.get`).",
 		},
 	}),
 });
 export const deleteSecretInput = type({
 	name: nonEmptyString.configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Delete is idempotent by construction: the store no-ops when `(personal, caller, name)` matches nothing, so deleting an absent or foreign name silently succeeds — only infrastructure failure throws.",
 		},
 	}),

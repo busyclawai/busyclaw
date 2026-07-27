@@ -1,14 +1,14 @@
 // Redact-at-ingress coherence: one value wears ONE token across the model prompt, events, the
 // transcript, and yield checkpoints — and the middleware stays as the fail-closed egress backstop.
 // See docs/plans/redaction-coherence-plan.md (slice 2).
-import type { Detector, PiiSpan } from "@euroclaw/contracts";
-import { govern } from "@euroclaw/contracts";
+import type { Detector, PiiSpan } from "@busyclaw/contracts";
+import { govern } from "@busyclaw/contracts";
 import {
 	createMemoryPiiMappingStore,
 	createStoredRedactor,
-} from "@euroclaw/core";
-import { memoryAdapter } from "@euroclaw/storage-core";
-import { createPiiMappingStore } from "@euroclaw/storage-durable";
+} from "@busyclaw/core";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime } from "../src/runtime";

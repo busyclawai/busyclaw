@@ -3,11 +3,11 @@
 // (route derivation → ?input=/body conventions → boundary validation → envelope) with zero
 // network. `typeof claw` is the only thing that crosses to the client's type side.
 
-import { toRequestHandler } from "@euroclaw/adapter-core";
-import { secrets } from "@euroclaw/secrets-plugin";
-import { memoryAdapter } from "@euroclaw/storage-core";
-import type { Claw } from "euroclaw";
-import { createClaw } from "euroclaw";
+import { toRequestHandler } from "@busyclaw/adapter-core";
+import { secrets } from "@busyclaw/secrets-plugin";
+import { memoryAdapter } from "@busyclaw/storage-core";
+import type { Claw } from "busyclaw";
+import { createClaw } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { createClawClient } from "../src/index";
 import { secretsClient } from "../src/plugins/index";
@@ -57,7 +57,7 @@ function buildClawAndClient() {
 		resolveCaller: () => ({ principal: "user:alice" }),
 	});
 	const client = createClawClient<typeof claw>({
-		baseUrl: "https://app.test/api/euroclaw",
+		baseUrl: "https://app.test/api/busyclaw",
 		fetch: (input, init) => handler(new Request(input, init)),
 		plugins: [secretsClient()],
 	});
@@ -106,7 +106,7 @@ describe("end-to-end: createClaw + toRequestHandler + createClawClient", () => {
 
 		expect(result.data).toBeNull();
 		expect(result.error?.status).toBe(400);
-		expect(result.error?.code).toBe("EUROCLAW_VALIDATION_FAILED");
+		expect(result.error?.code).toBe("BUSYCLAW_VALIDATION_FAILED");
 		expect(result.error?.message).toContain("claw.api.secrets.set input");
 	});
 

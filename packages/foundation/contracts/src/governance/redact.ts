@@ -1,6 +1,6 @@
 // The redaction CONTRACTS: the PII span/mapping schemas, the re-identification store port, and the
 // Redactor port the governance pipeline talks to. The redactor IMPLEMENTATIONS (the actual
-// redact/rehydrate engine) live in @euroclaw/core — privacy is enforced there, not declared here.
+// redact/rehydrate engine) live in @busyclaw/core — privacy is enforced there, not declared here.
 // See docs/architecture/03-pii-and-erasure.md.
 
 import { type } from "arktype";

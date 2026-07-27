@@ -1,7 +1,7 @@
 // The streaming chat endpoint — what `useChat` on the client talks to.
 //
 // Streaming is the one api method with no mounted HTTP route (`ClawApiMethod` excludes it: SSE is a
-// different transport, so euroclaw declines to guess one for you). The host writes that route, and
+// different transport, so busyclaw declines to guess one for you). The host writes that route, and
 // it is this short, because both halves already exist:
 //
 //   await claw.api.stream(...)    → { textStream, result }, deltas ALREADY rehydrated reader-facing
@@ -11,7 +11,7 @@
 // reaches the provider; the deltas are turned back into real values on the way out, by the runtime,
 // with a boundary buffer that will not let a `{{pii:…}}` token be split across two chunks.
 
-import { toUIMessageStreamResponse } from "@euroclaw/vendors/ai-sdk";
+import { toUIMessageStreamResponse } from "@busyclaw/vendors/ai-sdk";
 import { claw } from "@/lib/claw";
 import { DEMO_ONLY_readPrincipal, principalOf } from "@/lib/session";
 

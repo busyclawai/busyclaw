@@ -9,14 +9,14 @@ import type {
 	EndpointHttpMethod,
 	EndpointInputSchema,
 	EndpointRoute,
-} from "@euroclaw/contracts";
-import { docOf } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+import { docOf } from "@busyclaw/contracts";
 import type { JsonSchema } from "arktype";
-import type { Claw } from "euroclaw";
-import { clawApiRouteList } from "euroclaw";
+import type { Claw } from "busyclaw";
+import { clawApiRouteList } from "busyclaw";
 import { mountedEndpointNamespaces } from "./endpoints";
 
-/** `info` for the emitted document. Defaults are honest: euroclaw is pre-alpha, version "0.0.0". */
+/** `info` for the emitted document. Defaults are honest: busyclaw is pre-alpha, version "0.0.0". */
 export type ClawOpenApiOptions = {
 	title?: string;
 	version?: string;
@@ -111,9 +111,9 @@ function schemaJson(schema: EndpointInputSchema | unknown): ClawOpenApiSchema {
 	return schema.toJsonSchema({ dialect: null, fallback: (ctx) => ctx.base });
 }
 
-/** The top-level schema slot with the euroclaw doc channel CONSUMED: `description` becomes
- *  `docOf(schema)` — the rich `euroclaw.doc` prose, falling back to the `.describe()` text, else
- *  whatever the plain emission carried — and the raw `euroclaw` meta key, which arktype serializes
+/** The top-level schema slot with the busyclaw doc channel CONSUMED: `description` becomes
+ *  `docOf(schema)` — the rich `busyclaw.doc` prose, falling back to the `.describe()` text, else
+ *  whatever the plain emission carried — and the raw `busyclaw` meta key, which arktype serializes
  *  as an opaque `$ark.*` registry reference (noise to any document reader), is dropped.
  *  SCOPE: top level only, deliberately. Field-LEVEL doc surfacing inside nested toJsonSchema
  *  output is deferred — arktype usefully emits only UniversalMeta keys (description/title/…) for
@@ -126,7 +126,7 @@ function documentedSchemaJson(
 	if (typeof emitted === "boolean") return emitted;
 	// Fresh from toJsonSchema — never shared, safe to rebuild. The record view exists because
 	// arktype's JsonSchema union is not index-assignable.
-	const { euroclaw: _consumed, ...rest } = emitted as Record<string, unknown>;
+	const { busyclaw: _consumed, ...rest } = emitted as Record<string, unknown>;
 	const doc = docOf(schema);
 	return (
 		doc === undefined ? rest : { ...rest, description: doc }
@@ -174,7 +174,7 @@ function buildOperation(input: {
 							name: "input" as const,
 							in: "query" as const,
 							description:
-								"The call input, JSON-encoded (the euroclaw `?input=<json>` convention).",
+								"The call input, JSON-encoded (the busyclaw `?input=<json>` convention).",
 							content: { "application/json": { schema: inputSchema } },
 						},
 					],
@@ -186,7 +186,7 @@ function buildOperation(input: {
 				}),
 		responses: {
 			"200": {
-				description: "The euroclaw success envelope.",
+				description: "The busyclaw success envelope.",
 				content: {
 					"application/json": { schema: successEnvelopeSchema(input.output) },
 				},
@@ -201,7 +201,7 @@ function buildOperation(input: {
  * adapter's basePath (exactly the paths toRequestHandler mounts under it). Input schemas — and
  * declared endpoint `output` schemas — emit via arktype's `toJsonSchema()`, so field-level
  * `.describe()` metadata flows into the document; the top-level request/response schema
- * `description` reads the euroclaw doc channel through `docOf` (rich `euroclaw.doc` prose over
+ * `description` reads the busyclaw doc channel through `docOf` (rich `busyclaw.doc` prose over
  * the terse `.describe()` text).
  */
 export function clawOpenApi(
@@ -255,7 +255,7 @@ export function clawOpenApi(
 	return {
 		openapi: "3.1.0",
 		info: {
-			title: options.title ?? "euroclaw api",
+			title: options.title ?? "busyclaw api",
 			version: options.version ?? "0.0.0",
 			...(options.description !== undefined
 				? { description: options.description }
@@ -264,11 +264,11 @@ export function clawOpenApi(
 		paths,
 		components: {
 			responses: {
-				// The ONE shared error shape: every 4xx/5xx failure carries the euroclaw error
+				// The ONE shared error shape: every 4xx/5xx failure carries the busyclaw error
 				// envelope, so each operation references this response as its `default`.
 				Error: {
 					description:
-						"The euroclaw error envelope — every 4xx/5xx failure carries it.",
+						"The busyclaw error envelope — every 4xx/5xx failure carries it.",
 					content: {
 						"application/json": {
 							schema: {

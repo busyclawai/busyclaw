@@ -1,6 +1,6 @@
 // The approval after-gate IMPLEMENTATION: persists every needs-approval outcome to the ApprovalStore
 // with the REDACTED call so resume can replay it. The ApprovalStore port + record schema live in
-// @euroclaw/contracts. See docs/architecture/07-approval-and-audit.md.
+// @busyclaw/contracts. See docs/architecture/07-approval-and-audit.md.
 
 import {
 	type AfterGate,
@@ -11,7 +11,7 @@ import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 
 /**
  * The approval after-gate: persists every needs-approval outcome to the ApprovalStore, with the

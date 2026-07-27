@@ -1,7 +1,7 @@
 // The protocol shape of a streamed run: reader-facing text deltas plus an optional promise that
 // settles when the producing run is fully done. Vendor-agnostic on purpose — any producer (the
-// euroclaw runtime's `RuntimeStream`, a test fake, another loop) matches it structurally, and any
-// consumer (the AI SDK response bridges in @euroclaw/vendors, an SSE adapter) accepts it. Kept here,
+// busyclaw runtime's `RuntimeStream`, a test fake, another loop) matches it structurally, and any
+// consumer (the AI SDK response bridges in @busyclaw/vendors, an SSE adapter) accepts it. Kept here,
 // near-zero-dep, so a bridge never has to import a whole engine just to name what it streams.
 
 /**

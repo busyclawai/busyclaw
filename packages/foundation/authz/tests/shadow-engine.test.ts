@@ -3,7 +3,7 @@ import type {
 	PolicyEngineCapabilities,
 	PolicyRequest,
 	PolicyResult,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createShadowPolicyEngine, type ShadowDivergence } from "../src/index";
 

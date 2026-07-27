@@ -5,7 +5,7 @@
  * See THIRD_PARTY_NOTICES.md.
  */
 
-// @euroclaw/vendors/ai-sdk — euroclaw's `tool()`: authoring, in one definition, the canonical
+// @busyclaw/vendors/ai-sdk — busyclaw's `tool()`: authoring, in one definition, the canonical
 // ToolDescriptor. It carries the model-facing surface (description/inputSchema, input inference
 // preserved), the executable (as a `local` invocation), and governance as a FIRST-CLASS field
 // (gate/effect/invoker + the authz-model facts access/groups/resource/audit — what the OpenAPI/MCP
@@ -20,8 +20,8 @@
 // StandardSchemaV1Like / UnwrapSchema): the schema is captured as its own generic and the input
 // type is COMPUTED from it — zod / `jsonSchema()` / lazy pass through the AI SDK's own union;
 // standard-schema libraries are detected by the `~standard` marker. The interop contracts
-// (marker, guards, JSON-Schema capability) live in @euroclaw/contracts/standard-schema — this
-// module owns only the ai-coupled half. Where euroclaw goes beyond Elysia: a tool schema must
+// (marker, guards, JSON-Schema capability) live in @busyclaw/contracts/standard-schema — this
+// module owns only the ai-coupled half. Where busyclaw goes beyond Elysia: a tool schema must
 // also produce the JSON Schema sent to the provider (Elysia keeps standard schemas opaque
 // validators), so bridging is CAPABILITY-based — a standard schema that can emit JSON Schema
 // (arktype's `toJsonSchema()`) is bridged; one that can't fails loud rather than shipping a
@@ -38,7 +38,7 @@ import {
 	type ToolDefinition,
 	type ToolGovernance,
 	type ToolPresence,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	jsonSchema,
 	type Schema,
@@ -64,10 +64,10 @@ export type ToolInput<S> =
 			: never;
 
 /** What `tool()` returns: the canonical descriptor, narrowed to this vendor — an AI-SDK schema and
- *  a `local` invocation whose closure keeps the input/output inference from the schema. euroclaw
+ *  a `local` invocation whose closure keeps the input/output inference from the schema. busyclaw
  *  tools are always executable: the chokepoint requires an executable invocation.
  *
- *  CONTEXT = unknown on the executable: euroclaw tools are context-agnostic — the runtime injects
+ *  CONTEXT = unknown on the executable: busyclaw tools are context-agnostic — the runtime injects
  *  capabilities (subInvoke) through its own blessed seam, never the AI SDK toolsContext channel. */
 export type AuthoredTool<I, O> = ToolDefinition<
 	SdkSchema<I>,
@@ -187,6 +187,6 @@ export type {
 	ToolGovernance,
 	ToolInvocation,
 	ToolPresence,
-} from "@euroclaw/contracts";
-export { govern, hasToJsonSchema, isStandardSchema } from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
+export { govern, hasToJsonSchema, isStandardSchema } from "@busyclaw/contracts";
 export { toTextStreamResponse, toUIMessageStreamResponse } from "./stream";

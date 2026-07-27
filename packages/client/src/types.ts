@@ -7,12 +7,12 @@
 import type {
 	EndpointHttpMethod,
 	UnionToIntersection,
-} from "@euroclaw/contracts";
-import type { Claw } from "euroclaw";
+} from "@busyclaw/contracts";
+import type { Claw } from "busyclaw";
 import type { ReadableAtom } from "nanostores";
 
 /** What a failed call resolves with. `status` is the HTTP status — `0` when the transport itself
- *  failed (fetch threw: DNS, abort, a broken stub). `code` is the server's stable EuroclawErrorCode
+ *  failed (fetch threw: DNS, abort, a broken stub). `code` is the server's stable BusyclawErrorCode
  *  when the envelope carried one. */
 export type ClawClientError = {
 	status: number;
@@ -98,7 +98,7 @@ export type ClawClientPlugin = {
 };
 
 export type ClawClientOptions = {
-	/** Where the claw request handler is mounted (default `/api/euroclaw`). Relative paths are fine
+	/** Where the claw request handler is mounted (default `/api/busyclaw`). Relative paths are fine
 	 *  in browser contexts; node/native hosts pass an absolute origin. */
 	baseUrl?: string | URL;
 	fetch?: ClawFetchLike;
@@ -117,7 +117,7 @@ export type ClawClientOptions = {
  *  module drives inference via `import type` — zero server runtime crosses. */
 export type ClawShape = { api: object };
 
-/** The default `ClawLike` when no generic is passed: euroclaw's base god-type, so a bare
+/** The default `ClawLike` when no generic is passed: busyclaw's base god-type, so a bare
  *  `createClawClient()` still types every base api method (config-shaped widening needs the real
  *  `typeof claw`). */
 export type DefaultClawShape = Claw;

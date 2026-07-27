@@ -1,7 +1,7 @@
 # Redaction coherence — deterministic placeholders, redact-at-ingress, and the model contract
 
 Status: **designed, ready to build**. Three slices, buildable in order; slice 1 is the load-bearing one.
-Layer: `@euroclaw/contracts` (schema + port), `@euroclaw/core` (redactor), `@euroclaw/storage-durable` (store), `@euroclaw/runtime` (loop/middleware), `euroclaw` (system fragment). No new packages.
+Layer: `@busyclaw/contracts` (schema + port), `@busyclaw/core` (redactor), `@busyclaw/storage-durable` (store), `@busyclaw/runtime` (loop/middleware), `busyclaw` (system fragment). No new packages.
 
 ## Problem
 
@@ -30,7 +30,7 @@ One (value, kind, container) → one placeholder, forever (until erased).
 **Chosen mechanism: store lookup-or-mint, NOT hash-derived placeholders.** The placeholder stays random (`randomBytes`); determinism comes from finding the existing mapping before minting. Rationale: rehydration correctness must never depend on key lifecycle. With lookup-or-mint, losing/rotating the index key degrades only dedup (new placeholders start fresh); a placeholder that IS a keyed hash would tie coherence and auditability to key custody and make rotation a semantic break.
 
 - **Schema**: add `originalHash` to `piiMappingFields` (`packages/foundation/contracts/src/governance/redact.ts:50-61`) — `field.string({ required: true, index: true })`. Value = HMAC-SHA256(`kind + "\0" + original`) with a host-supplied index key. Keyed, because an unkeyed hash of low-entropy PII (phone numbers) in the DB is an offline dictionary attack. `@noble/hashes` is already a core dep.
-- **Key**: `createStoredRedactor({ indexKey?: string })` — plain option, host sources it (env / one-door; suggest `EUROCLAW_PII_INDEX_KEY`). **No key → no dedup**: mint random exactly as today and `console.warn` once at construction. Fail-soft and honest; never fail rehydration over the key.
+- **Key**: `createStoredRedactor({ indexKey?: string })` — plain option, host sources it (env / one-door; suggest `BUSYCLAW_PII_INDEX_KEY`). **No key → no dedup**: mint random exactly as today and `console.warn` once at construction. Fail-soft and honest; never fail rehydration over the key.
 - **Port**: `PiiMappingStore` gains `findByHash(originalHash: string, ctx?: RehydrationContext) => PiiMapping | null | Promise<...>` (`contracts/src/governance/redact.ts:87-101`). Container-scoped like `resolve` — cross-container lookups must miss, preserving unlinkability across containers.
 - **Redactor** (`core/src/redact.ts:133-165`): per span → hash → `findByHash` in container → hit: reuse `placeholder`, `save` only to append missing subject rows; miss: mint random, save with hash. Placeholder format gains the kind: `{{pii:<kind>:<hex>}}` — widen `PLACEHOLDER` (`redact.ts:22`) and `newPlaceholder(kind)`.
 - **Durable store** (`packages/storage/durable/src/pii.ts:60+`): implement `findByHash` (indexed read + `sameContainer` filter, same shape as `resolve`); dedup subject-junction rows in `save` (today `db.create` unconditional → duplicates). Memory store (`core/src/redact.ts:35-79`) mirrors with a `hash→placeholder` map per container.
@@ -52,7 +52,7 @@ Net: model prompt = events = audit = checkpoint = sandbox-visible messages, all 
 
 ### Slice 3 — the model contract
 
-When redaction is armed (a detector is present), the assembly appends one fixed system fragment: placeholders are opaque stable tokens of the form `{{pii:<kind>:<id>}}`; the same token always denotes the same value; pass tokens to tools verbatim; never invent or alter one. A constant in the `euroclaw` assembly — no config knob until a real consumer needs to override (lean-config). Tools need nothing: boundary rehydration is already automatic (`governance.ts:348-350`).
+When redaction is armed (a detector is present), the assembly appends one fixed system fragment: placeholders are opaque stable tokens of the form `{{pii:<kind>:<id>}}`; the same token always denotes the same value; pass tokens to tools verbatim; never invent or alter one. A constant in the `busyclaw` assembly — no config knob until a real consumer needs to override (lean-config). Tools need nothing: boundary rehydration is already automatic (`governance.ts:348-350`).
 
 ## Non-goals / standing decisions
 
@@ -65,4 +65,4 @@ Same value twice in one text → one placeholder; across steps → same; across 
 
 ## Verification gate
 
-The port + schema change touches contracts: run FULL `turbo typecheck` + full test suite + repo-wide consumer grep **including tests/** (typecheck skips them). Consumer list as of 2026-07-12: contracts, core, storage-durable, and tests in runtime (`runtime`, `yield`, `subinvoke`), channels (`integration`), sandboxes (`pii-through-sandbox`), euroclaw (`fixtures`), core (`governance`, `model-boundary`), durable (`durable`, `claws`, `run-checkpoint`).
+The port + schema change touches contracts: run FULL `turbo typecheck` + full test suite + repo-wide consumer grep **including tests/** (typecheck skips them). Consumer list as of 2026-07-12: contracts, core, storage-durable, and tests in runtime (`runtime`, `yield`, `subinvoke`), channels (`integration`), sandboxes (`pii-through-sandbox`), busyclaw (`fixtures`), core (`governance`, `model-boundary`), durable (`durable`, `claws`, `run-checkpoint`).

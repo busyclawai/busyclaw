@@ -19,7 +19,7 @@ const fakeAuth = {
 	},
 };
 
-describe("@euroclaw/better-auth — three concerns from one instance, each a function", () => {
+describe("@busyclaw/better-auth — three concerns from one instance, each a function", () => {
 	it("betterAuthIdentity resolves the actor from getSession", async () => {
 		const identity = betterAuthIdentity({
 			getSession: fakeAuth.api.getSession,
@@ -56,7 +56,7 @@ describe("@euroclaw/better-auth — three concerns from one instance, each a fun
 			team: "acme",
 			role: "approver",
 		});
-		// the authz piece is a real euroclaw plugin (a gate-bearing object)
+		// the authz piece is a real busyclaw plugin (a gate-bearing object)
 		expect(typeof ba.authz.id).toBe("string");
 		expect(Array.isArray(ba.authz.gates)).toBe(true);
 	});

@@ -6,7 +6,7 @@
 // The recovery-logic cases use the `email` kind (the generic word book), with fixtures from wordlist.ts:
 // `apache`/`apxche` is a unique single-edit repair; `baacus` repairs ambiguously to {abacus, caucus}
 // through the full-scan path. The `name` kind draws from a separate NAME book and is covered on its own.
-import type { Detector, PiiKind, PiiSpan } from "@euroclaw/contracts";
+import type { Detector, PiiKind, PiiSpan } from "@busyclaw/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createMemoryPiiMappingStore,

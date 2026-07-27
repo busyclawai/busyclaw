@@ -1,7 +1,7 @@
 # Observability — finish the events plane
 
 > Status: **BUILT (2026-07-14)** — slices 1–6: `fe38037` (fan-out split + catalog),
-> `7bdc3a0` (plugin.eventSinks), `9b8260d` (logEvents + @euroclaw/otel), `c49d38f`
+> `7bdc3a0` (plugin.eventSinks), `9b8260d` (logEvents + @busyclaw/otel), `c49d38f`
 > (warn seam + plane-boundary notes), `23924a7` (door redaction), slice 6 (plugin
 > redaction handles) = this commit. Grounded
 > in the docs/research corpus (mastra,
@@ -15,7 +15,7 @@
 ## The model — three planes, two already exist
 
 Every studied claw separates operational observability from compliance audit; mastra makes
-it three structurally separate planes, which is exactly euroclaw's shape already:
+it three structurally separate planes, which is exactly busyclaw's shape already:
 
 1. **Execution state (durable)** — claws rows (`tool_call`, `tool_result`, `checkpoint`,
    `message`) + engine-sql `run`/`task`/`run_event`. Load-bearing; never telemetry.
@@ -56,7 +56,7 @@ Standing invariants the plan preserves:
    `task.lastError` string. No shared shape; model errors reach neither events nor claws
    rows.
 6. **Warn chaos**: 5 scattered `console.warn|error` sites + 2 ad-hoc injectable warn sinks
-   with different signatures (`core/redact.ts:110`, `euroclaw/secrets.ts:41`).
+   with different signatures (`core/redact.ts:110`, `busyclaw/secrets.ts:41`).
 7. **Two overlapping event streams**: runtime `EventSink` (10 kinds, in-memory) vs
    engine-sql `run_event` (5 kinds, durable, engine payloads) — same names, different
    planes, boundary undocumented. (`.posthog-events.json` at the repo root is a third,
@@ -116,7 +116,7 @@ not ordering.
 ### 3. Build plugin.eventSinks — as already specced
 
 docs/plans/plugin-event-sinks.md is settled; build it verbatim:
-`eventSinks?: readonly EventSink[]` on `EuroclawPlugin`, collected statically off
+`eventSinks?: readonly EventSink[]` on `BusyclawPlugin`, collected statically off
 `pluginList` into the observers array, re-entrancy documented (a sink must not emit).
 They land AFTER §1 so plugin sinks are born isolated.
 
@@ -125,7 +125,7 @@ They land AFTER §1 so plugin sinks are born isolated.
 - **`logEvents()`** in the product package — zero-dep pretty dev sink:
   `createClaw({ events: logEvents() })` prints one line per event (kind, runId short,
   tool/step, durationMs, usage). The instant-DX answer to "what is my claw doing".
-- **`@euroclaw/otel`** (new leaf package, `packages/adapter/otel`) — an `EventSink` that
+- **`@busyclaw/otel`** (new leaf package, `packages/adapter/otel`) — an `EventSink` that
   maps the stream onto OTel spans using GenAI semantic conventions: one
   `gen_ai.invoke_agent` root span per `runId` (opened on `run.started`, closed on the
   terminal `run.*`), a `gen_ai.chat` child per `model.completed` (usage/finishReason as
@@ -145,7 +145,7 @@ the default into every existing seam: redaction's `StoredRedactorOptions.warn`, 
 boot-warning sink (its structured `SecretBootWarning` stays; the default formatter routes
 here), the runtime tool-collision warn (`runtime.ts:421`), and the new observer-sink
 failure reports (§1). Not a logger — no levels, no structure, no transport; it's the one
-injectable door for "euroclaw wants to tell the operator something outside the event
+injectable door for "busyclaw wants to tell the operator something outside the event
 stream". Existing per-surface options keep working (they win over the default).
 
 ### Slice 5 (added 2026-07-14) — door redaction
@@ -216,7 +216,7 @@ always present on the context, so plugin code runs unchanged in both modes.
 2. **plugin.eventSinks** (contracts + assembly): the field, the flatMap, the plan's three
    tests (receives runtime + plugin-emitted events; throwing plugin sink harmless;
    configure-closure pattern works).
-3. **Consumers**: `logEvents()` + `@euroclaw/otel` + ledger example. New leaf package;
+3. **Consumers**: `logEvents()` + `@busyclaw/otel` + ledger example. New leaf package;
    no protocol changes.
 4. **Warn seam + boundary docs**: `warn` config threaded through the 5 sites + 2 sinks;
    plane-boundary notes in `contracts/src/events.ts`, `runtime/src/events.ts`, engine

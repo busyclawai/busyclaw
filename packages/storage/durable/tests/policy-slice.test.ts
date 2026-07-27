@@ -1,4 +1,4 @@
-import { memoryAdapter } from "@euroclaw/storage-core";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createRegistryStores } from "../src/registry";
 

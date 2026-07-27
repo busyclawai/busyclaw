@@ -1,12 +1,12 @@
-# euroclaw
+# busyclaw
 
 **An embeddable, governed AI agent runtime.**
 
 > 🚧 **Pre-alpha — not usable yet.** Nothing here is published or stable, APIs change
 > without notice, and there's no security review or support. This README describes where
-> euroclaw is going and what's built so far — **not** something you can integrate today.
+> busyclaw is going and what's built so far — **not** something you can integrate today.
 
-euroclaw is the agent layer you'd otherwise be nervous to build yourself: an autonomous AI
+busyclaw is the agent layer you'd otherwise be nervous to build yourself: an autonomous AI
 runtime that embeds inside your app and acts through *your* auth, *your* database, and *your*
 policy engine. The aim is that every model call and tool call passes through redaction, policy
 gates, optional human approval, and a tamper-evident audit trail — **by construction**, so the
@@ -19,7 +19,7 @@ Governance is the core; compliance regimes (EU GDPR + AI Act, HIPAA, …) are me
 
 Shipping an agent that touches real user data is a minefield — PII leaking to the model, tools
 doing things nobody approved, no record when something goes wrong, and "delete my data" being a
-nightmare. euroclaw's bet is that those controls belong in the runtime's hot path, not in prompt
+nightmare. busyclaw's bet is that those controls belong in the runtime's hot path, not in prompt
 instructions or config you can forget to set:
 
 - **Redact at the edge.** PII is replaced with placeholders the moment it arrives; real values
@@ -90,15 +90,15 @@ data.
 
 ## Not started yet
 
-- **`@euroclaw/eu`** — the GDPR / EU AI-Act compliance plugin (the flagship regime).
-- **`@euroclaw/memory`** — governed recall / write / erase.
-- **`@euroclaw/skills`** — manifest-declared capabilities where `allowed_tools` is enforced
+- **`@busyclaw/eu`** — the GDPR / EU AI-Act compliance plugin (the flagship regime).
+- **`@busyclaw/memory`** — governed recall / write / erase.
+- **`@busyclaw/skills`** — manifest-declared capabilities where `allowed_tools` is enforced
   mechanically, not by prompt text.
 - **More framework adapters** — beyond Next.js (Express, Hono, …).
 - **Risky capabilities** — filesystem, shell, browser, MCP, WASM, each reporting its real
   isolation posture.
 - **A self-firing scheduler** — today's cron is pull/drain only.
-- **A Temporal-based durable engine** (`@euroclaw/engine-temporal`) — for long-running
+- **A Temporal-based durable engine** (`@busyclaw/engine-temporal`) — for long-running
   enterprise workflows, alongside the default SQL engine.
 
 ## License

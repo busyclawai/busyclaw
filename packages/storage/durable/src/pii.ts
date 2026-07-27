@@ -1,12 +1,12 @@
-import type { Adapter } from "@euroclaw/contracts";
+import type { Adapter } from "@busyclaw/contracts";
 import {
 	type PiiMapping,
 	type PiiMappingStore,
 	piiContainer,
 	piiMappingFields,
 	piiSubjectFields,
-} from "@euroclaw/contracts";
-import { type EntityWhere, entityDb } from "@euroclaw/storage-core";
+} from "@busyclaw/contracts";
+import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 
 export type PiiMappingStoreOptions = {
 	/** The table PII mappings live in. Default "pii_mapping". */

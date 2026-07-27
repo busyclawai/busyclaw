@@ -13,7 +13,7 @@ import type { NamedPolicies } from "./policy-bundle";
 //     needs-approval, never a silent run.
 //
 // Depends on runMode ALWAYS being present in the request context — guaranteed two ways: the runtime
-// stamps `euroclaw__runMode` on every gated call (default "autonomous"), and the policy-cedar mapCall
+// stamps `busyclaw__runMode` on every gated call (default "autonomous"), and the policy-cedar mapCall
 // defaults `context.runMode` to "autonomous" when absent. Both matter because cedar-wasm ERRORS on an
 // absent BASE — `context.runMode` when unstamped (a `has`-guarded access over a PRESENT base does
 // not error; re-verified 4.11.1) → an erroring forbid is SILENTLY

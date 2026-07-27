@@ -5,12 +5,12 @@ import {
 	type EntitySchemaInput,
 	errorMessage,
 	validationError,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	type EntityWhere,
 	type EntityWhereClause,
 	entityView,
-} from "@euroclaw/storage-core";
+} from "@busyclaw/storage-core";
 import { type } from "arktype";
 import type { EndpointEvent } from "../core/contracts";
 import { endpointId } from "../core/id";

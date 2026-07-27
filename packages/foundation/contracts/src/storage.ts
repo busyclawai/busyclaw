@@ -1,13 +1,13 @@
 /**
  * The storage protocol — what an adapter IS: generic CRUD over named models, the Where shape, and
  * the declarative table-schema format plugins register through their `schema` slot. Pure types;
- * the implementations (schemaAdapter, memoryAdapter, the ORM adapters) live in @euroclaw/storage-*.
+ * the implementations (schemaAdapter, memoryAdapter, the ORM adapters) live in @busyclaw/storage-*.
  *
  * The `Adapter` CRUD shape (including the atomic `consumeOne` single-use primitive), the `Where`
  * shape, and the declarative table-schema format are based on Better Auth's database adapter:
  *   https://github.com/better-auth/better-auth — `packages/core/src/db` (`DBAdapter`) and its
  *   plugin schema files (`packages/better-auth/src/plugins/<name>/schema.ts`).
- * euroclaw's port is a leaner subset (no field-mapping / multi-id machinery). MIT, © 2024-present
+ * busyclaw's port is a leaner subset (no field-mapping / multi-id machinery). MIT, © 2024-present
  * Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
@@ -76,12 +76,12 @@ export function sortByList(
 
 /**
  * The storage substrate: generic CRUD over named models. An ORM adapter implements this; the
- * memory adapter in @euroclaw/storage-core is the zero-dep default. `consumeOne` is the race-safe
+ * memory adapter in @busyclaw/storage-core is the zero-dep default. `consumeOne` is the race-safe
  * single-use primitive.
  *
  * Reads return `unknown` — honestly: an adapter hands back whatever the database holds, and the
  * port does not pretend otherwise. Row typing + validation live one layer up, in the entity layer
- * (`entityDb`/`entityView` in @euroclaw/storage-core), where the model name drives the type and
+ * (`entityDb`/`entityView` in @busyclaw/storage-core), where the model name drives the type and
  * every row is PARSED against its record schema — the caller-asserted `findOne<T>` generic this
  * port used to carry (better-auth's `DBAdapter` shape) let the type parameter and the model string
  * drift apart, unchecked. The declarative `SchemaDeclaration` below is for migrations (the
@@ -144,7 +144,7 @@ export type FieldAttribute = {
 	 *
 	 * Marking SEVERAL fields in one table is how a COMPOSITE key is declared, and the key's column
 	 * order is their declaration order. That is deliberate rather than a one-per-table rule: not
-	 * every euroclaw table is keyed by a synthetic `id`, and a key that can only be single-column
+	 * every busyclaw table is keyed by a synthetic `id`, and a key that can only be single-column
 	 * would have to be expressed somewhere other than the field it belongs to.
 	 *
 	 * A primary key already implies uniqueness and an index, so `unique`/`index` beside it are

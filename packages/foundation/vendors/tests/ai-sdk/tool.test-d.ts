@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolGovernance } from "@euroclaw/contracts";
+import type { ToolDefinition, ToolGovernance } from "@busyclaw/contracts";
 import { jsonSchema } from "ai";
 import { describe, expectTypeOf, it } from "vitest";
 import { tool } from "../../src/ai-sdk/index";

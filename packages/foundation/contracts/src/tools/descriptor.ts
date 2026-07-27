@@ -1,4 +1,4 @@
-// The canonical tool DESCRIPTOR — the single shape "a tool" has in euroclaw, whatever produced it:
+// The canonical tool DESCRIPTOR — the single shape "a tool" has in busyclaw, whatever produced it:
 // a host's `tool()`, an adopted vendor tool (`govern()`), or a stored registry row. Two properties
 // earn it its keep.
 //
@@ -23,7 +23,7 @@ import type { ToolGovernance } from "../govern";
 /** The canonical path separator — the same one the catalog splits an address on to derive its tree. */
 const PATH_SEPARATOR = ".";
 /** The model-facing name separator. Providers accept `[A-Za-z0-9_-]` only, so the dotted path is
- *  projected onto `__` — the same reserved-namespace marker euroclaw's context keys use. */
+ *  projected onto `__` — the same reserved-namespace marker busyclaw's context keys use. */
 const NAME_SEPARATOR = "__";
 
 /** Whether a tool sits in the model's context window from the first step (`always`) or is reached
@@ -32,10 +32,10 @@ const NAME_SEPARATOR = "__";
  *  decides at call time — a hidden tool is not an ungranted one. */
 export type ToolPresence = "always" | "discoverable";
 
-/** The reserved namespace euroclaw's own tools live in — the discovery meta-tools root here, so
- *  their paths (`euroclaw.search`) project onto the `euroclaw__` prefix the context keys already
+/** The reserved namespace busyclaw's own tools live in — the discovery meta-tools root here, so
+ *  their paths (`busyclaw.search`) project onto the `busyclaw__` prefix the context keys already
  *  reserve. A host or plugin tool landing on one of these paths fails loud where they are minted. */
-export const EUROCLAW_TOOL_NAMESPACE = "euroclaw";
+export const BUSYCLAW_TOOL_NAMESPACE = "busyclaw";
 
 /** The widest function type: every vendor's execute signature is assignable to it (its parameters
  *  are `never`), and the runtime owns the calling convention — it injects capabilities like

@@ -38,7 +38,7 @@ beforeEach(async () => {
 
 afterEach(() => sqlite.close());
 
-describe("@euroclaw/storage-kysely — Kysely adapter (SQLite)", () => {
+describe("@busyclaw/storage-kysely — Kysely adapter (SQLite)", () => {
 	it("create + findOne by a where clause", async () => {
 		const a = kyselyAdapter(db);
 		const created = (await a.create({
@@ -156,7 +156,7 @@ describe("@euroclaw/storage-kysely — Kysely adapter (SQLite)", () => {
 	});
 });
 
-describe("@euroclaw/storage-kysely — accepts a raw driver/dialect, not just a Kysely instance", () => {
+describe("@busyclaw/storage-kysely — accepts a raw driver/dialect, not just a Kysely instance", () => {
 	// All four forms wrap the SAME in-memory sqlite that beforeEach created the tables on.
 	it("a raw better-sqlite3 Database", async () => {
 		const a = kyselyAdapter(sqlite);
@@ -225,7 +225,7 @@ describe("@euroclaw/storage-kysely — accepts a raw driver/dialect, not just a 
 	});
 });
 
-describe("@euroclaw/storage-kysely — where trees, operators, and multi-sort (SQLite)", () => {
+describe("@busyclaw/storage-kysely — where trees, operators, and multi-sort (SQLite)", () => {
 	const seed = async () => {
 		const a = kyselyAdapter(db);
 		const rows = [

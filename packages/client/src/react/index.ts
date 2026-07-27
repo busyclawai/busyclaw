@@ -1,11 +1,11 @@
-// @euroclaw/client/react — the react binding (docs/plans/claw-client-plan.md, slice 3). The
+// @busyclaw/client/react — the react binding (docs/plans/claw-client-plan.md, slice 3). The
 // ENTIRE vanilla runtime is reused as-is: this entry builds the vanilla client, then wraps it in
 // ONE forwarding proxy that additionally answers `use${Capitalize(atomKey)}` for every atom in
 // the runtime registry (`$store.atoms` — plugin `getAtoms` today, core atoms whenever they land)
 // as a `useStore`-backed hook. React must never leak into the root entry: this subpath is the
 // only module graph that imports it, which is what lets `react` stay an OPTIONAL peer.
 
-import { configurationError } from "@euroclaw/errors";
+import { configurationError } from "@busyclaw/errors";
 import { createClawClient as createVanillaClawClient } from "../index";
 import type {
 	ClawClient,
@@ -67,7 +67,7 @@ export function createClawClient<
 	for (const [key, store] of Object.entries(vanilla.$store.atoms)) {
 		const hookKey = `use${capitalize(key)}`;
 		if (hooks.has(hookKey)) {
-			throw configurationError("duplicate euroclaw client hook key", {
+			throw configurationError("duplicate busyclaw client hook key", {
 				atom: key,
 				hook: hookKey,
 			});

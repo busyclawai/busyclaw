@@ -50,7 +50,7 @@ describe("govern() — adopting a foreign tool as a descriptor", () => {
 	});
 
 	it("fails LOUD on a vendor's per-call description function — it has no static value", () => {
-		// The AI SDK allows a description computed from a call context euroclaw does not have.
+		// The AI SDK allows a description computed from a call context busyclaw does not have.
 		// Invoking it with a fabricated context would be a guess; dropping it silently would ship a
 		// tool the model cannot read. Restate it explicitly instead.
 		expect(() =>

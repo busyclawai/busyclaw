@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from "@euroclaw/runtime";
+import type { RuntimeEvent } from "@busyclaw/runtime";
 import {
 	type Attributes,
 	type AttributeValue,
@@ -196,8 +196,8 @@ describe("otelEvents", () => {
 		expect(root.status).toEqual({ code: SpanStatusCode.OK });
 		expect(root.attributes).toMatchObject({
 			"gen_ai.operation.name": "invoke_agent",
-			"euroclaw.run.id": runId,
-			"euroclaw.claw.id": "claw-1",
+			"busyclaw.run.id": runId,
+			"busyclaw.claw.id": "claw-1",
 			"gen_ai.conversation.id": "thread-1",
 			"gen_ai.usage.input_tokens": 31,
 			"gen_ai.usage.output_tokens": 12,
@@ -209,7 +209,7 @@ describe("otelEvents", () => {
 		expect(chat1.status).toBeUndefined();
 		expect(chat1.attributes).toMatchObject({
 			"gen_ai.operation.name": "chat",
-			"euroclaw.step": 0,
+			"busyclaw.step": 0,
 			"gen_ai.response.finish_reasons": ["tool-calls"],
 			"gen_ai.usage.input_tokens": 11,
 			"gen_ai.usage.output_tokens": 5,
@@ -225,7 +225,7 @@ describe("otelEvents", () => {
 			"gen_ai.operation.name": "execute_tool",
 			"gen_ai.tool.name": "send_email",
 			"gen_ai.tool.call.id": "c1",
-			"euroclaw.step": 0,
+			"busyclaw.step": 0,
 		});
 	});
 
@@ -274,13 +274,13 @@ describe("otelEvents", () => {
 		expect(tool.endTime).toBe(T0 + 150);
 		expect(tool.status).toEqual({ code: SpanStatusCode.OK });
 		expect(tool.attributes).toMatchObject({
-			"euroclaw.tool.outcome": "waiting_approval",
+			"busyclaw.tool.outcome": "waiting_approval",
 		});
 		expect(firstRoot.ended).toBe(true);
 		expect(firstRoot.endTime).toBe(T0 + 160);
 		expect(firstRoot.status).toEqual({ code: SpanStatusCode.OK });
 		expect(firstRoot.attributes).toMatchObject({
-			"euroclaw.run.outcome": "waiting_approval",
+			"busyclaw.run.outcome": "waiting_approval",
 			"gen_ai.usage.input_tokens": 3,
 			"gen_ai.usage.output_tokens": 2,
 		});
@@ -312,8 +312,8 @@ describe("otelEvents", () => {
 		expect(secondRoot.startTime).toBe(T0 + DAY);
 		expect(secondRoot.endTime).toBe(T0 + DAY + 10);
 		// Both traces carry the same run id — the cross-trace link.
-		expect(firstRoot.attributes["euroclaw.run.id"]).toBe(runId);
-		expect(secondRoot.attributes["euroclaw.run.id"]).toBe(runId);
+		expect(firstRoot.attributes["busyclaw.run.id"]).toBe(runId);
+		expect(secondRoot.attributes["busyclaw.run.id"]).toBe(runId);
 		expect(secondRoot.attributes).toMatchObject({
 			"gen_ai.usage.input_tokens": 4,
 			"gen_ai.usage.output_tokens": 1,
@@ -359,7 +359,7 @@ describe("otelEvents", () => {
 		});
 		expect(chat.attributes).toMatchObject({
 			"error.type": "TypeError",
-			"euroclaw.step": 1,
+			"busyclaw.step": 1,
 		});
 		// The run dies without a terminal event (model.failed rethrows) — everything closes NOW.
 		expect(tool.ended).toBe(true);
@@ -402,8 +402,8 @@ describe("otelEvents", () => {
 		expect(root.endTime).toBe(T0 + 20);
 		expect(root.status).toEqual({ code: SpanStatusCode.OK });
 		expect(root.attributes).toMatchObject({
-			"euroclaw.run.outcome": "denied",
-			"euroclaw.reason_code": "approval.denied",
+			"busyclaw.run.outcome": "denied",
+			"busyclaw.reason_code": "approval.denied",
 		});
 	});
 

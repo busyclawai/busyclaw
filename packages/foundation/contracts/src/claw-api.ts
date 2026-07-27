@@ -2,14 +2,14 @@
 // on WITHOUT importing the server assembly: the flat base-api method-name list (each name derives
 // its route through the one `toKebabCase`/`endpointHttpMethod` pair in ./governance/endpoints) and
 // the success/error response envelope every adapter response carries. Input SCHEMAS stay server-side
-// (`euroclaw`): the client sends inputs as-is and the boundary validates.
+// (`busyclaw`): the client sends inputs as-is and the boundary validates.
 
 import { type } from "arktype";
 
 /**
  * Every FLAT base `claw.api` method, the ONE source both route tables derive from: the server
- * (`clawApiRouteList` in `euroclaw`) and the remote client (`@euroclaw/client`) map each name to
- * `/<kebab(name)>` + the `get*`/`list*` → GET verb rule. `euroclaw` compile-checks the list against
+ * (`clawApiRouteList` in `busyclaw`) and the remote client (`@busyclaw/client`) map each name to
+ * `/<kebab(name)>` + the `get*`/`list*` → GET verb rule. `busyclaw` compile-checks the list against
  * `keyof ClawApi` in both directions, so a drifted name cannot ship.
  */
 export const CLAW_API_METHOD_NAMES = [
@@ -61,9 +61,9 @@ export const CLAW_API_METHOD_NAMES = [
 export type ClawApiMethodName = (typeof CLAW_API_METHOD_NAMES)[number];
 
 /**
- * The HTTP envelope every euroclaw adapter response carries: success/error around the claw api
+ * The HTTP envelope every busyclaw adapter response carries: success/error around the claw api
  * result. One schema — the server builds it and the client PARSES it (never casting untrusted
- * network JSON). `error.code` is the stable {@link EuroclawErrorCode} when the failure carried one.
+ * network JSON). `error.code` is the stable {@link BusyclawErrorCode} when the failure carried one.
  */
 export const clawResponseEnvelope = type({
 	"ok?": "boolean",

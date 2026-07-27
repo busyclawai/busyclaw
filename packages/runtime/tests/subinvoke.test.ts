@@ -1,20 +1,20 @@
 import type {
 	Detector,
 	EffectStore,
-	EuroclawPlugin,
+	BusyclawPlugin,
 	HandleResult,
 	PiiSpan,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	createMemoryAudit,
 	createMemoryRedactor,
 	createStoredRedactor,
-} from "@euroclaw/core";
-import { memoryAdapter } from "@euroclaw/storage-core";
+} from "@busyclaw/core";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import {
 	createEffectStore,
 	createPiiMappingStore,
-} from "@euroclaw/storage-durable";
+} from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import {
@@ -120,10 +120,10 @@ function invokerTool(run: (subInvoke: SubInvoke) => Promise<unknown>) {
 	);
 }
 
-describe("@euroclaw/runtime subInvoke", () => {
+describe("@busyclaw/runtime subInvoke", () => {
 	it("governs a nested tool call end-to-end and audits both the parent and the nested call", async () => {
 		let nested: HandleResult | undefined;
-		const denyEmail: EuroclawPlugin = {
+		const denyEmail: BusyclawPlugin = {
 			id: "deny-email",
 			gates: [
 				{

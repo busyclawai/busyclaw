@@ -31,7 +31,7 @@ async function hostStillWorks(): Promise<void> {
 	expect(res.error).toBeUndefined();
 }
 
-describe("@euroclaw/sandboxes resource limits", () => {
+describe("@busyclaw/sandboxes resource limits", () => {
 	// R1 — a runaway allocation hits the memory cap as an error VALUE, not a host OOM. [P0-if-fails].
 	it("R1: bounds runaway memory allocation and the host survives", async () => {
 		const { output: res } = await executeInSandbox({

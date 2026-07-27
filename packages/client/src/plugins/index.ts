@@ -2,9 +2,9 @@
 // (a phantom carrying the server namespace, zero runtime), `approvalsClient()` is PURE REACTIVITY
 // (a query atom + the signal that refetches it). Both import server types via `import type` only.
 
-import type { ApprovalRecord } from "@euroclaw/contracts";
-import { toKebabCase } from "@euroclaw/contracts/governance/endpoints";
-import type { SecretsStorePlugin } from "@euroclaw/secrets-plugin";
+import type { ApprovalRecord } from "@busyclaw/contracts";
+import { toKebabCase } from "@busyclaw/contracts/governance/endpoints";
+import type { SecretsStorePlugin } from "@busyclaw/secrets-plugin";
 import { atom } from "nanostores";
 import { createQueryAtom } from "../query";
 import type { ClawClientPlugin } from "../types";
@@ -18,7 +18,7 @@ import type { ClawClientPlugin } from "../types";
  */
 export function secretsClient() {
 	return {
-		id: "euroclaw.secrets",
+		id: "busyclaw.secrets",
 		$InferServerPlugin: {} as SecretsStorePlugin,
 	} satisfies ClawClientPlugin;
 }
@@ -41,7 +41,7 @@ const APPROVAL_MUTATION_PATHS = new Set(
 export function approvalsClient() {
 	const $pendingApprovalsSignal = atom(false);
 	return {
-		id: "euroclaw.approvals",
+		id: "busyclaw.approvals",
 		getAtoms: ($fetch) => ({
 			$pendingApprovalsSignal,
 			pendingApprovals: createQueryAtom<ApprovalRecord[]>({

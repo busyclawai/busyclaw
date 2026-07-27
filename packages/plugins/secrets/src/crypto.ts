@@ -33,7 +33,7 @@
 // downgrade oracle on exactly the attack this closes. Rows written earlier fail to open and must be
 // re-entered.
 
-import { configurationError, errorMessage } from "@euroclaw/contracts";
+import { configurationError, errorMessage } from "@busyclaw/contracts";
 import { gcm } from "@noble/ciphers/aes.js";
 import {
 	bytesToHex,
@@ -46,7 +46,7 @@ import {
 /** The canonical name the master key resolves under (through the one-door reader) when no
  *  `secrets([], { store: { key } })` is configured. The store provider SHORT-CIRCUITS this name to a
  *  miss — the key must come from another provider (env/vault) or config, never from its own table. */
-export const SECRET_STORE_KEY_NAME = "EUROCLAW_SECRET_STORE_KEY";
+export const SECRET_STORE_KEY_NAME = "BUSYCLAW_SECRET_STORE_KEY";
 
 const KEY_BYTES = 32; // AES-256
 const NONCE_BYTES = 12; // the standard 96-bit GCM nonce

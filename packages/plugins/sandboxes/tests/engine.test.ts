@@ -34,7 +34,7 @@ const unusedInvoker: SandboxToolInvoker = {
 	},
 };
 
-describe("@euroclaw/sandboxes engine", () => {
+describe("@busyclaw/sandboxes engine", () => {
 	it("normalizeCode strips a single wrapping fence and leaves plain code untouched", () => {
 		expect(normalizeCode("```js\nreturn 1 + 1\n```")).toBe("return 1 + 1");
 		expect(normalizeCode("```\nfoo()\n```")).toBe("foo()");

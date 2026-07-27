@@ -331,7 +331,7 @@ export const createClawInput = clawEntity.schema(createClawInputOptions);
 // The PERSISTENCE create input the ClawStore takes — the handler has already stamped the owner, so
 // `createdBy` is REQUIRED here and `scope`/`scopeId` optional (the store defaults them to
 // personal/createdBy). This is the store boundary, NOT the caller boundary: the caller sees the narrower
-// createClawInput above; the euroclaw handler stamps `createdBy`/`scope`/`scopeId` from `{ principal }`
+// createClawInput above; the busyclaw handler stamps `createdBy`/`scope`/`scopeId` from `{ principal }`
 // and hands the store this shape.
 export const clawStoreCreateInputOptions = {
 	omit: ["status", "createdAt", "updatedAt"],
@@ -395,7 +395,7 @@ export const createConversationBindingInput = conversationBindingEntity.schema(
 
 // ── the bindConversation protocol (the account-linking analog) ───────────────────────────────────
 // Protocol, not product: these derive purely from the entities above, so they live here — channel
-// plugins validate against them without depending on the euroclaw assembly.
+// plugins validate against them without depending on the busyclaw assembly.
 
 // Claw bind defaults are claw-creation input with `createdBy` OMITTED: bindConversation stamps the
 // creator at bind time from the authenticated `{ principal }` — defaulting to system:anonymous for an
@@ -429,49 +429,49 @@ export const bindConversationThreadInput = threadEntity.schema(
 
 export const bindConversationInput = type({
 	"claw?": bindConversationClawInput.or("undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Nested claw-create input, read ONLY on the create path: when neither clawId nor threadId resolves an existing claw, the bind creates a fresh claw from this. Ignored when binding to an existing claw or thread.",
 		},
 	}),
 	"clawId?": type("string | undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Binds to this existing claw — it becomes the source of truth (its createdBy/scope stand; the nested `claw` input is not read). Takes precedence over a threadId-derived claw.",
 		},
 	}),
 	endpointKey: type("string")
 		.describe("the ingress endpoint the conversation arrived on")
 		.configure({
-			euroclaw: {
+			busyclaw: {
 				doc: "Scopes external conversation ids (they repeat across bots), so it is part of the (provider, endpointKey, externalConversationId) natural key getByExternal looks up for idempotency. Required and explicit — no default, since a silent one would invite cross-endpoint key collisions.",
 			},
 		}),
 	"externalActorId?": type("string | undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "The external sender (a stranger). Recorded on the binding row only — never promoted to the claw's createdBy, which stays a real principal (system:anonymous for an unauthenticated conversation).",
 		},
 	}),
 	externalConversationId: type("string").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Third leg of the (provider, endpointKey, externalConversationId) idempotency key: a repeat bind with the same triple returns the existing binding as a no-op (created=false).",
 		},
 	}),
 	"metadata?": jsonObject.or("undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Opaque pass-through stored verbatim on the binding row; the bind logic never interprets it (pii:'possible' on the row, so erasure can sweep it).",
 		},
 	}),
 	provider: type("string").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "The channel provider (e.g. telegram). First leg of the (provider, endpointKey, externalConversationId) natural key.",
 		},
 	}),
 	"thread?": bindConversationThreadInput.or("undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Nested thread-create input, read ONLY when creating a fresh thread; ignored when a threadId resolves an existing thread. Its clawId is supplied by the bind from the created/resolved claw, never by the caller.",
 		},
 	}),
 	"threadId?": type("string | undefined").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "Binds to this existing thread; its claw becomes the source of truth. If a clawId is also given and the thread's claw differs, the bind throws validationError.",
 		},
 	}),
@@ -481,7 +481,7 @@ export const bindConversationResult = type({
 	binding: conversationBindingRecord,
 	claw: clawRecord,
 	created: type("boolean").configure({
-		euroclaw: {
+		busyclaw: {
 			doc: "false = an existing binding matched the (provider, endpointKey, externalConversationId) natural key and was returned unchanged (idempotent no-op); true = a fresh binding — and possibly a fresh claw and/or thread — was created.",
 		},
 	}),

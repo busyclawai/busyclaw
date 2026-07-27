@@ -1,7 +1,7 @@
 /**
  * SchemaDeclaration → SQL, over Kysely's schema builder.
  *
- * This is the engine behind `@euroclaw/cli`'s `generate` / `migrate`. It lives here, next to the
+ * This is the engine behind `@busyclaw/cli`'s `generate` / `migrate`. It lives here, next to the
  * Kysely adapter, because DDL is dialect work and this package already owns that dependency — and
  * because it takes a plain {@link SchemaDeclaration}, so nothing in storage has to import the
  * assembly to know what tables exist. The CLI supplies the declaration; this file turns it into
@@ -9,9 +9,9 @@
  *
  * Modeled on Better Auth's `getMigrations` (packages/better-auth/src/db/get-migration.ts) — the
  * introspect-diff-create shape, the two-type-map split, and the warn-never-alter rule are theirs.
- * MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md. What differs is euroclaw's:
+ * MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md. What differs is busyclaw's:
  * primary keys are DECLARED (`field.primaryKey`, possibly composite) rather than an implicit `id`
- * column, because not every euroclaw table is keyed by a synthetic id.
+ * column, because not every busyclaw table is keyed by a synthetic id.
  *
  * Three rules make this safe to run against a live database:
  *   1. It only ever ADDS. Missing tables are created, missing columns are added; nothing is
@@ -27,12 +27,12 @@ import type {
 	FieldType,
 	SchemaDeclaration,
 	TableSchema,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	tableOrder,
 	uniqueConstraints,
-} from "@euroclaw/contracts";
+} from "@busyclaw/contracts";
 import type {
 	AlterTableColumnAlteringBuilder,
 	ColumnDataType,
@@ -88,7 +88,7 @@ const EMITTED: Record<MigrationDialect, Record<FieldType, ColumnDataType>> = {
 		number: "double precision",
 		boolean: "boolean",
 		date: "timestamptz",
-		// TEXT, deliberately, not jsonb. euroclaw's storage layer serializes a `json` field itself
+		// TEXT, deliberately, not jsonb. busyclaw's storage layer serializes a `json` field itself
 		// (schema-adapter's `json: "string"` mode, which is what createClaw uses) and demands the
 		// serialized string back on read. A jsonb column makes `pg` return a parsed object, and
 		// decoding then throws — the column type has to match who owns the serialization.
@@ -276,7 +276,7 @@ export async function planMigrations(
 				);
 			} else {
 				warn(
-					`euroclaw migrations: table "${table}" declares no primaryKey field — created without a primary key`,
+					`busyclaw migrations: table "${table}" declares no primaryKey field — created without a primary key`,
 				);
 			}
 			// Named composite-unique groups, as real table constraints. A constraint rather than a
@@ -331,7 +331,7 @@ export async function planMigrations(
 					});
 				if (field.required === true) {
 					warn(
-						`euroclaw migrations: "${table}.${column}" is declared required but is being ADDED to an existing table — it will be nullable in the database (existing rows have no value for it)`,
+						`busyclaw migrations: "${table}.${column}" is declared required but is being ADDED to an existing table — it will be nullable in the database (existing rows have no value for it)`,
 					);
 				}
 				statements.push(alter);
@@ -348,7 +348,7 @@ export async function planMigrations(
 					actual: liveColumn.dataType,
 				});
 				warn(
-					`euroclaw migrations: "${table}.${column}" is "${liveColumn.dataType}" in the database but declared "${field.type}" — NOT changed automatically`,
+					`busyclaw migrations: "${table}.${column}" is "${liveColumn.dataType}" in the database but declared "${field.type}" — NOT changed automatically`,
 				);
 			}
 		}

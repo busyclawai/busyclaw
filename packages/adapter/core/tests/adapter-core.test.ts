@@ -1,16 +1,16 @@
 import type {
-	EuroclawPlugin,
-	EuroclawPluginConfigureContext,
-} from "@euroclaw/contracts";
-import { endpoints, route } from "@euroclaw/contracts";
-import { secrets, storedSecretModels } from "@euroclaw/secrets-plugin";
-import { entityAdapter, memoryAdapter } from "@euroclaw/storage-core";
+	BusyclawPlugin,
+	BusyclawPluginConfigureContext,
+} from "@busyclaw/contracts";
+import { endpoints, route } from "@busyclaw/contracts";
+import { secrets, storedSecretModels } from "@busyclaw/secrets-plugin";
+import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { type } from "arktype";
-import { type Claw, createClaw } from "euroclaw";
+import { type Claw, createClaw } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { createClawClient, toRequestHandler } from "../src/index";
 
-describe("@euroclaw/adapter-core", () => {
+describe("@busyclaw/adapter-core", () => {
 	it("dispatches claw api calls through derived routes", async () => {
 		const claw = {
 			api: {
@@ -20,7 +20,7 @@ describe("@euroclaw/adapter-core", () => {
 		} as unknown as Claw;
 		const handler = toRequestHandler(claw);
 		const post = await handler(
-			new Request("https://app.test/api/euroclaw/create-claw", {
+			new Request("https://app.test/api/busyclaw/create-claw", {
 				body: JSON.stringify({
 					id: "claw-1",
 					createdBy: "user:user-1",
@@ -35,7 +35,7 @@ describe("@euroclaw/adapter-core", () => {
 			ok: true,
 		});
 		const get = await handler(
-			new Request("https://app.test/api/euroclaw/get-claw?id=claw-1", {
+			new Request("https://app.test/api/busyclaw/get-claw?id=claw-1", {
 				method: "GET",
 			}),
 		);
@@ -47,13 +47,13 @@ describe("@euroclaw/adapter-core", () => {
 		});
 		await expect(
 			handler(
-				new Request("https://app.test/api/euroclaw/work", { method: "POST" }),
+				new Request("https://app.test/api/busyclaw/work", { method: "POST" }),
 			).then((response) => response.status),
 		).resolves.toBe(404);
 	});
 
 	it("supports plugin routes and rejects conflicts", async () => {
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "telegram",
 			routes: [
 				{
@@ -67,7 +67,7 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
 		const response = await handler(
-			new Request("https://app.test/api/euroclaw/telegram/webhook", {
+			new Request("https://app.test/api/busyclaw/telegram/webhook", {
 				method: "POST",
 			}),
 		);
@@ -91,7 +91,7 @@ describe("@euroclaw/adapter-core", () => {
 	});
 
 	it("matches a parameterized route and binds path params to ctx.params", async () => {
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "channels",
 			routes: [
 				{
@@ -106,7 +106,7 @@ describe("@euroclaw/adapter-core", () => {
 
 		const response = await handler(
 			new Request(
-				"https://app.test/api/euroclaw/channels/telegram/main/webhook",
+				"https://app.test/api/busyclaw/channels/telegram/main/webhook",
 				{ method: "POST" },
 			),
 		);
@@ -118,7 +118,7 @@ describe("@euroclaw/adapter-core", () => {
 	});
 
 	it("prefers a static route over an overlapping pattern", async () => {
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "channels",
 			routes: [
 				{
@@ -137,7 +137,7 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
 		const response = await handler(
-			new Request("https://app.test/api/euroclaw/channels/telegram/webhook", {
+			new Request("https://app.test/api/busyclaw/channels/telegram/webhook", {
 				method: "POST",
 			}),
 		);
@@ -178,7 +178,7 @@ describe("@euroclaw/adapter-core", () => {
 	});
 
 	it("url-decodes param values and does not over-match on segment count", async () => {
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "channels",
 			routes: [
 				{
@@ -192,7 +192,7 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
 		const decoded = await handler(
-			new Request("https://app.test/api/euroclaw/channels/main%20bot/webhook", {
+			new Request("https://app.test/api/busyclaw/channels/main%20bot/webhook", {
 				method: "POST",
 			}),
 		);
@@ -204,7 +204,7 @@ describe("@euroclaw/adapter-core", () => {
 		// one segment too many must NOT bind to the two-segment pattern
 		const overlong = await handler(
 			new Request(
-				"https://app.test/api/euroclaw/channels/telegram/webhook/extra",
+				"https://app.test/api/busyclaw/channels/telegram/webhook/extra",
 				{ method: "POST" },
 			),
 		);
@@ -213,7 +213,7 @@ describe("@euroclaw/adapter-core", () => {
 
 	it("runs plugin cron tasks through the built-in cron route", async () => {
 		const seen: Array<{ id: string; limit?: number }> = [];
-		const plugin: EuroclawPlugin = {
+		const plugin: BusyclawPlugin = {
 			id: "channel:telegram",
 			cron: [
 				{
@@ -239,11 +239,11 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw);
 
 		const unauthorized = await handler(
-			new Request("https://app.test/api/euroclaw/cron", { method: "POST" }),
+			new Request("https://app.test/api/busyclaw/cron", { method: "POST" }),
 		);
 		const authorized = await handler(
-			new Request("https://app.test/api/euroclaw/cron", {
-				headers: { "x-euroclaw-cron-secret": "secret" },
+			new Request("https://app.test/api/busyclaw/cron", {
+				headers: { "x-busyclaw-cron-secret": "secret" },
 				method: "POST",
 			}),
 		);
@@ -277,7 +277,7 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw);
 
 		const response = await handler(
-			new Request("https://app.test/api/euroclaw/create-claw", {
+			new Request("https://app.test/api/busyclaw/create-claw", {
 				// id must be a string — type-invalid input is rejected before the api is touched
 				body: JSON.stringify({ id: 42 }),
 				method: "POST",
@@ -303,7 +303,7 @@ describe("@euroclaw/adapter-core", () => {
 		} as unknown as Claw;
 		const handler = toRequestHandler(claw);
 		const client = createClawClient({
-			baseUrl: "https://app.test/api/euroclaw",
+			baseUrl: "https://app.test/api/busyclaw",
 			fetch: (input, init) => {
 				fetches++;
 				return handler(new Request(input, init));
@@ -339,7 +339,7 @@ describe("@euroclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw);
 
 		const unauthorized = await handler(
-			new Request("https://app.test/api/euroclaw/cron", { method: "POST" }),
+			new Request("https://app.test/api/busyclaw/cron", { method: "POST" }),
 		);
 
 		expect(unauthorized.status).toBe(401);
@@ -361,7 +361,7 @@ describe("@euroclaw/adapter-core", () => {
 		} as unknown as Claw;
 		const handler = toRequestHandler(claw);
 		const client = createClawClient({
-			baseUrl: "https://app.test/api/euroclaw",
+			baseUrl: "https://app.test/api/busyclaw",
 			fetch: (input, init) => handler(new Request(input, init)),
 		});
 
@@ -380,14 +380,14 @@ function secretsApiOverMemory() {
 	const adapter = entityAdapter(memoryAdapter(), storedSecretModels);
 	const runtime = plugin.configure?.({
 		adapter,
-	} as EuroclawPluginConfigureContext);
+	} as BusyclawPluginConfigureContext);
 	const api = runtime?.api?.(undefined);
 	if (!api) throw new Error("expected the secrets plugin to contribute an api");
 	return api;
 }
 
 function encodedInputUrl(path: string, input: unknown): string {
-	return `https://app.test/api/euroclaw${path}?input=${encodeURIComponent(
+	return `https://app.test/api/busyclaw${path}?input=${encodeURIComponent(
 		JSON.stringify(input),
 	)}`;
 }
@@ -411,7 +411,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		).resolves.toMatchObject({ name: "SEEDED", kind: "value" });
 
 		const set = await handler(
-			new Request("https://app.test/api/euroclaw/secrets/set", {
+			new Request("https://app.test/api/busyclaw/secrets/set", {
 				body: JSON.stringify({ name: "NOTION", value: "tok-1" }),
 				method: "POST",
 			}),
@@ -442,7 +442,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		});
 
 		const remove = await handler(
-			new Request("https://app.test/api/euroclaw/secrets/delete", {
+			new Request("https://app.test/api/busyclaw/secrets/delete", {
 				body: JSON.stringify({ name: "NOTION" }),
 				method: "POST",
 			}),
@@ -464,7 +464,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		});
 
 		const response = await handler(
-			new Request("https://app.test/api/euroclaw/secrets/set", {
+			new Request("https://app.test/api/busyclaw/secrets/set", {
 				// name must be non-empty — rejected by the declared schema, before the handler runs.
 				body: JSON.stringify({ name: "", value: "v" }),
 				method: "POST",
@@ -496,7 +496,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		// Bare query params (the non-input GET fallback) reach the schema as strings.
 		const response = await handler(
 			new Request(
-				"https://app.test/api/euroclaw/channels/registrations/get-by-key?key=main",
+				"https://app.test/api/busyclaw/channels/registrations/get-by-key?key=main",
 				{ method: "GET" },
 			),
 		);
@@ -512,7 +512,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const handler = toRequestHandler(claw);
 
 		const response = await handler(
-			new Request("https://app.test/api/euroclaw/skills/marker", {
+			new Request("https://app.test/api/busyclaw/skills/marker", {
 				method: "POST",
 			}),
 		);
@@ -521,7 +521,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 	it("fails loud when a plugin route collides with a mounted endpoint", () => {
 		const api = secretsApiOverMemory();
-		const rogue: EuroclawPlugin = {
+		const rogue: BusyclawPlugin = {
 			id: "rogue",
 			routes: [
 				{
@@ -577,7 +577,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		});
 
 		const set = await handler(
-			new Request("https://app.test/api/euroclaw/secrets/set", {
+			new Request("https://app.test/api/busyclaw/secrets/set", {
 				body: JSON.stringify({ name: "E2E", value: "v" }),
 				method: "POST",
 			}),
@@ -609,7 +609,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		}) as unknown as Claw;
 		const createClawRequest = (handler: ReturnType<typeof toRequestHandler>) =>
 			handler(
-				new Request("https://app.test/api/euroclaw/create-claw", {
+				new Request("https://app.test/api/busyclaw/create-claw", {
 					body: JSON.stringify({ name: "c" }),
 					method: "POST",
 				}),
@@ -623,7 +623,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const denied = await createClawRequest(toRequestHandler(claw));
 		expect(denied.status).toBe(403);
 		await expect(denied.json()).resolves.toMatchObject({
-			error: { code: "EUROCLAW_AUTHORIZATION_DENIED" },
+			error: { code: "BUSYCLAW_AUTHORIZATION_DENIED" },
 			ok: false,
 		});
 
@@ -665,7 +665,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		}) as unknown as Claw;
 		const setSecret = (handler: ReturnType<typeof toRequestHandler>) =>
 			handler(
-				new Request("https://app.test/api/euroclaw/secrets/set", {
+				new Request("https://app.test/api/busyclaw/secrets/set", {
 					body: JSON.stringify({ name: "E2E", value: "v" }),
 					method: "POST",
 				}),
@@ -675,7 +675,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const denied = await setSecret(toRequestHandler(claw));
 		expect(denied.status).toBe(403);
 		await expect(denied.json()).resolves.toMatchObject({
-			error: { code: "EUROCLAW_AUTHORIZATION_DENIED" },
+			error: { code: "BUSYCLAW_AUTHORIZATION_DENIED" },
 			ok: false,
 		});
 
@@ -711,7 +711,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		});
 
 		const bad = await handler(
-			new Request("https://app.test/api/euroclaw/share-resource", {
+			new Request("https://app.test/api/busyclaw/share-resource", {
 				body: JSON.stringify({
 					resourceKind: "claw",
 					resourceId: "c1",
@@ -723,7 +723,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		);
 		expect(bad.status).toBe(400);
 		await expect(bad.json()).resolves.toMatchObject({
-			error: { code: "EUROCLAW_VALIDATION_FAILED" },
+			error: { code: "BUSYCLAW_VALIDATION_FAILED" },
 			ok: false,
 		});
 	});
