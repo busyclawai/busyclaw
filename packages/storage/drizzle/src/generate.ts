@@ -16,7 +16,11 @@ import type {
 	SchemaDeclaration,
 	TableSchema,
 } from "@euroclaw/contracts";
-import { configurationError, tableOrder } from "@euroclaw/contracts";
+import {
+	configurationError,
+	tableOrder,
+	uniqueConstraints,
+} from "@euroclaw/contracts";
 // Type-only, so the cycle with index.ts (which re-exports this module) is erased at compile time.
 // The provider vocabulary belongs to the ADAPTER CONFIG — one type, rather than a second, narrower
 // copy that would drift the first time the adapter learned a dialect.
@@ -81,6 +85,9 @@ function usedHelpers(
 			}
 		}
 		if (primaryKeyOf(table).length > 1) helpers.add("primaryKey");
+		// `unique(name).on(...)` is the composite form; the single-column one is `.unique()` on the
+		// column itself and needs no import.
+		if ((table.uniques ?? []).length > 0) helpers.add("unique");
 	}
 	return helpers;
 }
@@ -176,6 +183,18 @@ export function generateDrizzleSchema(options: DrizzleGenerateOptions): string {
 		}
 
 		const extras: string[] = [...indexes];
+		for (const constraint of uniqueConstraints(model, table)) {
+			// The extras callback addresses columns by IDENTIFIER, so map the physical names back
+			// through the declaration keys that produced them.
+			const refs = Object.entries(table.fields)
+				.filter(([name, f]) =>
+					constraint.columns.includes(physicalColumn(name, f)),
+				)
+				.map(([name]) => `t.${identifier(name)}`);
+			extras.push(
+				`\tunique(${JSON.stringify(constraint.name)}).on(${refs.join(", ")}),`,
+			);
+		}
 		if (key.length > 1) {
 			extras.push(
 				`\tprimaryKey({ columns: [${key.map((name) => `t.${identifier(name)}`).join(", ")}] }),`,

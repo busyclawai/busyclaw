@@ -16,7 +16,7 @@ import type {
 	SchemaDeclaration,
 	TableSchema,
 } from "@euroclaw/contracts";
-import { tableOrder } from "@euroclaw/contracts";
+import { tableOrder, uniqueConstraints } from "@euroclaw/contracts";
 
 const SCALAR: Record<FieldType, string> = {
 	string: "String",
@@ -136,20 +136,25 @@ export function generatePrismaSchema(options: PrismaGenerateOptions): string {
 		const blockAttrs: string[] = [];
 		if (key.length > 1) blockAttrs.push(`  @@id([${key.join(", ")}])`);
 		// Prisma REQUIRES every model to carry an identifier (@id, @@id, or a @@unique) and refuses to
-		// validate a schema containing one that doesn't. euroclaw has two such tables today —
-		// pii_mapping and pii_subject, whose real key is (placeholder, scope, scopeId) but whose
-		// scope columns are nullable while the container-less redaction state exists. `@@ignore` is
-		// the honest encoding: the rest of the schema stays valid and usable, and these two are
-		// excluded from the Prisma client — which is TRUE, they cannot be driven through Prisma until
-		// that key exists. See contracts/src/governance/redact.ts.
-		if (key.length === 0) {
+		// validate a schema containing one that does not. `@@ignore` is the honest encoding for a
+		// table that declares none: the rest of the schema stays valid and usable, and this one is
+		// excluded from the client — which is TRUE, it cannot be driven through Prisma.
+		if (key.length === 0 && (table.uniques ?? []).length === 0) {
 			blockAttrs.push(
 				"  /// No primary key declared — Prisma cannot model this table yet.",
 				"  @@ignore",
 			);
 			warn(
-				`prisma: "${model}" declares no primaryKey, so it is emitted with @@ignore and will NOT be in the Prisma client. euroclaw's PII vault cannot run on Prisma until that key exists.`,
+				`prisma: "${model}" declares no primaryKey, so it is emitted with @@ignore and will NOT be in the Prisma client.`,
 			);
+		}
+		// Composite uniques. Prisma names constraint members by MODEL FIELD, not by the mapped
+		// column, so these are declaration keys rather than the physical names.
+		for (const constraint of uniqueConstraints(model, table)) {
+			const fields = Object.entries(table.fields)
+				.filter(([name, f]) => constraint.columns.includes(f.fieldName ?? name))
+				.map(([name]) => name);
+			blockAttrs.push(`  @@unique([${fields.join(", ")}])`);
 		}
 		for (const [name, field] of Object.entries(table.fields)) {
 			if (field.index === true && !key.includes(name)) {

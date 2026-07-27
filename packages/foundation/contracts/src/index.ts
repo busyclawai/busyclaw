@@ -7,6 +7,7 @@ export type { EuroclawErrorCode, EuroclawErrorInput } from "@euroclaw/errors";
 export {
 	authorizationError,
 	configurationError,
+	conflictError,
 	EuroclawError,
 	errorMessage,
 	stateError,
@@ -472,7 +473,12 @@ export type {
 	WhereGroup,
 	WhereOperator,
 } from "./storage";
-export { isWhereGroup, sortByList, tableOrder } from "./storage";
+export {
+	isWhereGroup,
+	sortByList,
+	tableOrder,
+	uniqueConstraints,
+} from "./storage";
 // ── streamed-run protocol shape (bridges live in @euroclaw/vendors) ──────────
 export type { TextDeltaStream } from "./stream";
 // ── the canonical tool descriptor: the ONE shape a tool has, whatever produced it ──

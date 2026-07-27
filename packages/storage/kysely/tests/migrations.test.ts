@@ -226,6 +226,83 @@ describe("planMigrations", () => {
 		);
 	});
 
+	it("emits a table-level composite unique the database actually enforces", async () => {
+		const composite = await plan({
+			pii_mapping: {
+				uniques: [["scope", "scopeId", "placeholder"]],
+				fields: {
+					id: { type: "string", required: true, primaryKey: true },
+					scope: { type: "string", required: true },
+					scopeId: { type: "string", required: true },
+					placeholder: { type: "string", required: true },
+				},
+			},
+		});
+
+		const sql = composite.compileMigrations();
+		// ONE constraint over all three, not three single-column ones.
+		expect(sql).toContain(
+			'constraint "pii_mapping_scope_scopeId_placeholder_uq" unique ("scope", "scopeId", "placeholder")',
+		);
+		expect(sql.match(/unique \(/g)).toHaveLength(1);
+		await composite.runMigrations();
+
+		// The point of a constraint over an index: the DATABASE refuses the duplicate.
+		const insert = (id: string) =>
+			db
+				.insertInto("pii_mapping")
+				.values({ id, scope: "claw", scopeId: "c1", placeholder: "{{p}}" })
+				.execute();
+		await insert("a");
+		await expect(insert("b")).rejects.toThrow();
+		// A different container is a different row — the group is what makes that true.
+		await expect(
+			db
+				.insertInto("pii_mapping")
+				.values({
+					id: "c",
+					scope: "claw",
+					scopeId: "c2",
+					placeholder: "{{p}}",
+				})
+				.execute(),
+		).resolves.toBeDefined();
+	});
+
+	it("keeps several `unique: true` fields as SEPARATE constraints", async () => {
+		// Why composition lives on the TABLE: composing these flags would silently merge two unrelated
+		// constraints into one, and every existing declaration relies on them being apart.
+		const separate = await plan({
+			thing: {
+				fields: {
+					id: { type: "string", required: true, primaryKey: true },
+					slug: { type: "string", required: true, unique: true },
+					email: { type: "string", required: true, unique: true },
+				},
+			},
+		});
+		const sql = separate.compileMigrations();
+		expect(sql).toContain('"slug" text not null unique');
+		expect(sql).toContain('"email" text not null unique');
+		// Two inline column constraints, and no composite one grouping them.
+		expect(sql).not.toContain("_uq");
+		expect(sql).not.toMatch(/unique \(/);
+	});
+
+	it("refuses a unique constraint naming a column the table does not have", async () => {
+		await expect(
+			plan({
+				thing: {
+					uniques: [["scope", "typo"]],
+					fields: {
+						id: { type: "string", required: true, primaryKey: true },
+						scope: { type: "string", required: true },
+					},
+				},
+			}),
+		).rejects.toThrow(/names "typo", which is not a field/);
+	});
+
 	it("refuses a primaryKey field that is not required — a key column cannot be NULL", async () => {
 		await expect(
 			plan({
