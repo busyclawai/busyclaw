@@ -8,6 +8,7 @@ import {
 } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
+import { channelDeliveryModels } from "../src/core/inbox";
 import {
 	type Channel,
 	type ChannelsPlugin,
@@ -19,7 +20,11 @@ import { createChannelRegistrationsStore } from "../src/registrations/store";
 
 // Stores and the configure context take the schema-aware adapter the assembly provides in
 // production; tests wrap manually.
-const db = () => entityAdapter(memoryAdapter(), channelRegistrationsModels);
+const db = () =>
+	entityAdapter(memoryAdapter(), {
+		...channelRegistrationsModels,
+		...channelDeliveryModels,
+	});
 
 const now = () => "2026-01-01T00:00:00.000Z";
 
@@ -758,5 +763,52 @@ describe("registrations management is owned, bounded, and credential-free", () =
 		});
 		// Absent ⇒ null ⇒ DENY, like every other loader.
 		await expect(load("no-such-row")).resolves.toBeNull();
+	});
+});
+
+// H-10. A provider retries — on a non-2xx, on a timeout, on its own schedule — and nothing
+// distinguished a retry from a new message. `dispatchWebhook` now claims `(provider, endpointKey,
+// deliveryId)` before the turn runs, and the claim IS the row's insert, so a second attempt at the same
+// delivery loses to the database rather than to a read two processes can both pass.
+//
+// NOT TESTED END-TO-END HERE, and that is a finding rather than an omission: the memory adapter's
+// `create` is an unconditional push (storage/core/src/index.ts:148) — it enforces no declared
+// uniqueness at all. `entityAdapter` normalizes a driver's conflict but cannot raise one the driver
+// never raised, so insert-as-claim silently degrades to "always succeeds" in memory. That is true of
+// every try-create → on-conflict path already in the tree, not just this one, which is why closing it
+// belongs with the adapter contract rather than here.
+describe("a delivery carries the provider's id", () => {
+	it("threads deliveryId from the transport to the dispatch", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const seen: (string | undefined)[] = [];
+		const plugin = registrationsPlugin([
+			fakeChannel({
+				parseInbound: ({ request }) => {
+					const message = {
+						deliveryId: request.rawBody,
+						externalConversationId: "chat-1",
+						text: request.rawBody,
+					};
+					seen.push(message.deliveryId);
+					return [message];
+				},
+			}),
+		]);
+		await registrationsApi(plugin).register(
+			{ provider: "fake", endpointKey: "acme-bot", webhookSecret: "hook-1" },
+			fakeAuthz(),
+		);
+		const route = plugin.routes?.[0];
+		if (!route) throw new Error("expected the registrations webhook route");
+		const result = await route.handler({
+			claw: fakeClaw(recorded),
+			params: { provider: "fake" },
+			request: webhookRequest({ body: "u-1", secret: "hook-1" }),
+		});
+		expect(result.status).toBe(200);
+		// The id reached the dispatch, which is what the claim keys on — the claim's own enforcement
+		// needs a database that honours the constraint.
+		expect(seen).toEqual(["u-1"]);
+		expect(recorded.relayed).toEqual(["u-1"]);
 	});
 });

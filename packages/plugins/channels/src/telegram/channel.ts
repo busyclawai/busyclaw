@@ -148,6 +148,8 @@ function inboundFrom(update: TelegramUpdate): InboundMessage | null {
 	const message = update.message;
 	if (!message?.text) return null;
 	return {
+		// Stable across every retry of this update — telegram's own sequence number for it.
+		deliveryId: String(update.update_id),
 		externalConversationId: String(message.chat.id),
 		externalActorId:
 			message.from?.id !== undefined ? String(message.from.id) : undefined,

@@ -26,6 +26,20 @@ export type InboundRequest = {
 
 /** One normalized inbound message — the parse target every provider produces from its wire format. */
 export type InboundMessage = {
+	/**
+	 * The PROVIDER's own id for this delivery — telegram's `update_id`, and its equivalent elsewhere.
+	 *
+	 * A provider retries: on a non-2xx, on a timeout, on its own schedule. Without an id that is stable
+	 * across those attempts, a retry is indistinguishable from a new message, and the whole turn runs
+	 * again — a second model charge, a second set of tool calls, a second reply, under a new run id.
+	 * Telegram parsed `update_id` and dropped it here, so the one value that could have told them apart
+	 * never left the transport.
+	 *
+	 * Optional because a provider may genuinely not have one; a delivery without an id cannot be
+	 * de-duplicated and says so by omission rather than by a fabricated value that would look unique
+	 * every time.
+	 */
+	deliveryId?: string;
 	externalConversationId: string;
 	externalActorId?: string;
 	text: string;

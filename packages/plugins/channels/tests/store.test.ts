@@ -1,5 +1,6 @@
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
+import { channelDeliveryModels } from "../src/core/inbox";
 import {
 	channelsModels,
 	createChannelEndpointStateStore,
@@ -7,7 +8,11 @@ import {
 } from "../src/index";
 
 // Stores take the schema-aware adapter the assembly provides; tests wrap manually.
-const db = () => entityAdapter(memoryAdapter(), channelsModels);
+const db = () =>
+	entityAdapter(memoryAdapter(), {
+		...channelsModels,
+		...channelDeliveryModels,
+	});
 
 const now = () => "2026-01-01T00:00:00.000Z";
 
