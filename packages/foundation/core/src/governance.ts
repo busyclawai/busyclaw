@@ -9,6 +9,7 @@
 import {
 	type AfterGate,
 	type ApprovalMetadataResolver,
+	type ApprovalRecord,
 	type ApprovalStore,
 	type AuditSink,
 	type BoundaryCall,
@@ -135,13 +136,16 @@ export type Governance<Config extends GovernanceConfig = GovernanceConfig> = {
 		ctx?: Context<Config>,
 	) => Promise<readonly Outcome[]>;
 	/**
-	 * Continue an approved tool call: atomically consume the approval (single-use) and re-run the
-	 * stored call, bypassing the gate that demanded approval. Every other gate + audit still fire.
-	 * Returns the governed result, or `null` if the approval isn't consumable (absent / not granted /
-	 * expired / already used / no store configured).
+	 * Re-run an approved tool call, bypassing the gate that demanded approval. Every other gate + the
+	 * audit still fire.
+	 *
+	 * Takes the RECORD, not an id, because taking it is no longer this layer's job: the execution
+	 * lease belongs to whoever can also finish it and store the terminal result, and that is the
+	 * runtime. When this claimed the approval itself, the runtime had to hand it a fake taker to
+	 * re-run anything already taken — which is precisely how a granted approval became replayable.
 	 */
 	continueRun: (
-		id: string,
+		record: ApprovalRecord,
 		ctx?: Context<Config>,
 	) => Promise<HandleResult | null>;
 	readonly audit?: AuditSink;
@@ -604,11 +608,8 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			return runGoverned({ name: valid.name, args }, ctx);
 		},
 
-		async continueRun(id, ctxInput) {
+		async continueRun(record, ctxInput) {
 			if (!approvalStore) return null;
-			// Atomically take the APPROVED record (single-use — concurrent resumes get exactly one winner).
-			const record = await approvalStore.consume(id);
-			if (!record) return null;
 			const ctx = await resolveCtx(ctxInput);
 			// The stored args are already REDACTED. Re-run the exact call, bypassing the gate that
 			// demanded approval (now granted) — every OTHER gate + the audit still fire.

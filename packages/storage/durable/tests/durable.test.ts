@@ -35,21 +35,70 @@ function suite(
 			expect(listed?.args).toEqual({ to: "{{pii:abc}}" }); // parsed back from JSON, not a string
 		});
 
-		it("grant then consume is single-use, returning the replayable call", async () => {
+		it("grant then claim takes it once, returning the replayable call", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
-			expect(await store.consume(rec.id)).toBeNull(); // not granted yet
+			expect(await store.claim(rec.id, 60_000)).toBeNull(); // not granted yet
 			expect((await store.grant(rec.id, userPrincipal("alice")))?.status).toBe(
 				"approved",
 			);
-			const consumed = await store.consume(rec.id);
-			expect(consumed?.toolName).toBe("send_email");
-			expect(consumed?.args).toEqual({ to: "{{pii:abc}}" }); // the call to re-run
-			expect(await store.consume(rec.id)).toBeNull(); // single-use
-			expect((await store.get(rec.id))?.status).toBe("consumed"); // checkpoint retained
+			const taken = await store.claim(rec.id, 60_000);
+			expect(taken?.record.toolName).toBe("send_email");
+			expect(taken?.record.args).toEqual({ to: "{{pii:abc}}" }); // the call to re-run
+			// While the lease is live nobody else may take it — the single-continuation property.
+			expect(await store.claim(rec.id, 60_000)).toBeNull();
+			expect((await store.get(rec.id))?.status).toBe("executing");
 		});
 
-		it("deny blocks consume, and a decided row can't be re-decided", async () => {
+		it("completes once, and a lost lease cannot write over the winner's result", async () => {
+			const store = createApprovalStore(makeAdapter());
+			const rec = await store.create(base);
+			await store.grant(rec.id, userPrincipal("alice"));
+			const taken = await store.claim(rec.id, 60_000);
+			if (!taken) throw new Error("expected to take the approval");
+
+			expect(
+				await store.complete(rec.id, taken.leaseId, { status: "completed" }),
+			).toMatchObject({ status: "completed", result: { status: "completed" } });
+			// A runner holding a stale lease is refused — otherwise it would overwrite the answer its
+			// replacement already returned to a caller.
+			expect(
+				await store.complete(rec.id, "some-other-lease", { status: "denied" }),
+			).toBeNull();
+			expect((await store.get(rec.id))?.result).toEqual({
+				status: "completed",
+			});
+			// And a finished approval is not takeable at all — it is answered, never re-run.
+			expect(await store.claim(rec.id, 60_000)).toBeNull();
+		});
+
+		it("lets exactly one recovery re-take an execution whose lease LAPSED", async () => {
+			let clock = "2026-06-01T00:00:00.000Z";
+			const store = createApprovalStore(makeAdapter(), { now: () => clock });
+			const rec = await store.create(base);
+			await store.grant(rec.id, userPrincipal("alice"));
+			const first = await store.claim(rec.id, 60_000);
+			if (!first) throw new Error("expected to take the approval");
+
+			// Still inside the lease: this runner may be slow, and a slow runner is not a dead one.
+			clock = "2026-06-01T00:00:30.000Z";
+			expect(await store.claim(rec.id, 60_000)).toBeNull();
+
+			// Lapsed. Exactly one recovery gets it — the whole reason the old code accepted an
+			// already-taken approval, except bounded by the clock instead of open to anyone.
+			clock = "2026-06-01T00:02:00.000Z";
+			const recovered = await Promise.all(
+				Array.from({ length: 5 }, () => store.claim(rec.id, 60_000)),
+			);
+			expect(recovered.filter((r) => r !== null)).toHaveLength(1);
+
+			// The runner that lost its lease can no longer finish.
+			expect(
+				await store.complete(rec.id, first.leaseId, { status: "completed" }),
+			).toBeNull();
+		});
+
+		it("deny blocks a claim, and a decided row can't be re-decided", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
 			expect(
@@ -59,10 +108,10 @@ function suite(
 				reason: "not allowed",
 			});
 			expect(await store.grant(rec.id, userPrincipal("bob"))).toBeNull(); // no longer pending
-			expect(await store.consume(rec.id)).toBeNull();
+			expect(await store.claim(rec.id, 60_000)).toBeNull();
 		});
 
-		it("an expired approval can't be consumed", async () => {
+		it("an expired approval can't be claimed", async () => {
 			const store = createApprovalStore(makeAdapter(), {
 				now: () => "2026-06-01T00:00:00Z",
 			});
@@ -71,15 +120,15 @@ function suite(
 				expiresAt: "2026-01-01T00:00:00Z",
 			});
 			await store.grant(rec.id, userPrincipal("alice"));
-			expect(await store.consume(rec.id)).toBeNull();
+			expect(await store.claim(rec.id, 60_000)).toBeNull();
 		});
 
-		it("consume is race-safe — concurrent resumes, exactly one winner", async () => {
+		it("claim is race-safe — concurrent resumes, exactly one winner", async () => {
 			const store = createApprovalStore(makeAdapter());
 			const rec = await store.create(base);
 			await store.grant(rec.id, userPrincipal("alice"));
 			const results = await Promise.all(
-				Array.from({ length: 5 }, () => store.consume(rec.id)),
+				Array.from({ length: 5 }, () => store.claim(rec.id, 60_000)),
 			);
 			expect(results.filter((r) => r !== null)).toHaveLength(1);
 		});
@@ -382,7 +431,8 @@ suite(
 		sqlite.exec(
 			`CREATE TABLE approval (
 						id TEXT PRIMARY KEY, status TEXT, gateId TEXT, toolName TEXT, args TEXT, reasonCode TEXT, metadata TEXT,
-						principal TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT
+						principal TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT,
+						leaseId TEXT, leaseExpiresAt TEXT, result TEXT
 					)`,
 		);
 		return kyselyAdapter(db);

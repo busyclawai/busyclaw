@@ -114,8 +114,11 @@ describe("createClaw effects", () => {
 		});
 		expect(completedEffect).toMatchObject({ status: "completed" });
 		expect(completedEffect?.output).toBeUndefined();
-		await expect(claw.api.continueRun({ approvalId })).rejects.toThrow(
-			/completed effect output is unavailable/,
+		// A finished approval is answered from the result it stored, so the second resume never asks the
+		// effect ledger for output it deliberately did not keep. That throw was the replay tripping over
+		// a consequence of its own re-execution.
+		expect((await claw.api.continueRun({ approvalId }))?.status).toBe(
+			"completed",
 		);
 		expect(toolRuns).toBe(1);
 	});

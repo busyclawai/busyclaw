@@ -55,11 +55,24 @@ function recordingStore(): { store: ApprovalStore; created: ApprovalRecord[] } {
 			rows.set(id, u);
 			return u;
 		},
-		consume: async (id) => {
+		// The lease, in miniature: take moves approved → executing and hands back an id; a second take
+		// while the lease is live gets nothing; complete stores the terminal result. This double keeps
+		// no clock, so it models "the lease is always live" — the lapsed-lease recovery path is the
+		// durable store's to prove, and it does.
+		claim: async (id) => {
 			const r = rows.get(id);
 			if (r?.status !== "approved") return null;
-			rows.delete(id); // single-use
-			return r;
+			const leaseId = `lease-${n++}`;
+			const u: ApprovalRecord = { ...r, status: "executing", leaseId };
+			rows.set(id, u);
+			return { record: u, leaseId };
+		},
+		complete: async (id, leaseId, result) => {
+			const r = rows.get(id);
+			if (r?.status !== "executing" || r.leaseId !== leaseId) return null;
+			const u: ApprovalRecord = { ...r, status: "completed", result };
+			rows.set(id, u);
+			return u;
 		},
 		list: async (f) =>
 			[...rows.values()].filter(
@@ -749,13 +762,17 @@ describe("busyclaw governance — durable approval continuation", () => {
 			(await store.grant(pending.id, userPrincipal("alice")))?.status,
 		).toBe("approved");
 
-		// 3. resume → the exact call runs, the oversight gate bypassed
-		const r2 = await ec.continueRun(pending.id);
+		// 3. resume → the exact call runs, the oversight gate bypassed. The approval is TAKEN first:
+		// this layer re-runs a record it is handed and no longer decides whether it may be taken —
+		// that is the lease, and it lives where the terminal result can also be stored.
+		const taken = await store.claim(pending.id, 60_000);
+		if (!taken) throw new Error("expected to take the approval");
+		const r2 = await ec.continueRun(taken.record);
 		expect(r2?.status).toBe("ok");
 		expect(toolRan).toEqual({ name: "send_rejection", args: { to: "cand-7" } });
 
-		// 4. single-use: a second resume finds nothing
-		expect(await ec.continueRun(pending.id)).toBeNull();
+		// 4. single continuation: while this one is executing, nobody else may take it.
+		expect(await store.claim(pending.id, 60_000)).toBeNull();
 	});
 
 	it("continueRun returns null when no store is configured", async () => {
@@ -764,7 +781,16 @@ describe("busyclaw governance — durable approval continuation", () => {
 			matcher: () => true,
 			handler: () => ({ decision: "needs-approval", reason: "confirm" }),
 		});
-		expect(await ec.continueRun("nope")).toBeNull();
+		expect(
+			await ec.continueRun({
+				id: "nope",
+				status: "approved",
+				gateId: "oversight",
+				toolName: "x",
+				args: {},
+				createdAt: "t",
+			}),
+		).toBeNull();
 	});
 });
 

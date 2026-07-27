@@ -94,20 +94,70 @@ export function createApprovalStore(
 			});
 		},
 
-		async consume(id) {
+		async claim(id, leaseMs) {
 			const existing = await db.findOne({
 				model: MODEL,
-				where: whereApproved(id),
+				where: [{ field: "id", value: id }],
 			});
 			if (!existing) return null;
+			// A finished approval is answered from its stored result, never re-run — the caller reads
+			// `status`/`result` and does not come here.
+			if (existing.status === "completed") return null;
+			if (existing.status === "executing") {
+				// Somebody is running it. Only a LAPSED lease may be re-taken, and that is the whole
+				// recovery story: a resume that died between taking and finishing left a lease nobody
+				// will clear. Bounded by the clock rather than open to whoever asks twice.
+				if (
+					existing.leaseExpiresAt == null ||
+					existing.leaseExpiresAt >= now()
+				) {
+					return null;
+				}
+			} else if (existing.status !== "approved") {
+				return null;
+			}
 			if (existing.expiresAt != null && existing.expiresAt < now()) return null;
 
-			// Atomic transition of the approved row by id — race-safe single use while preserving
-			// checkpoint metadata for crash recovery.
+			const leaseId = newId();
+			// The WHERE pins the status the read saw, so two concurrent takers cannot both transition:
+			// the loser's update matches no row and it gets null, the same answer it would get from a
+			// live lease. Recovery races are decided here rather than by who wrote last.
+			const taken = await db.update({
+				model: MODEL,
+				where: [
+					{ field: "id", value: id },
+					{ field: "status", value: existing.status, connector: "AND" },
+					...(existing.status === "executing" && existing.leaseId != null
+						? [
+								{
+									field: "leaseId" as const,
+									value: existing.leaseId,
+									connector: "AND" as const,
+								},
+							]
+						: []),
+				],
+				update: {
+					status: "executing",
+					leaseId,
+					leaseExpiresAt: new Date(Date.parse(now()) + leaseMs).toISOString(),
+				},
+			});
+			return taken ? { record: taken, leaseId } : null;
+		},
+
+		async complete(id, leaseId, result) {
+			// Only the CURRENT lease may finish. A runner whose lease lapsed and was re-taken has lost
+			// the right to write a terminal result — otherwise it would overwrite the answer its
+			// replacement already returned to a caller.
 			return db.update({
 				model: MODEL,
-				where: whereApproved(id),
-				update: { status: "consumed" },
+				where: [
+					{ field: "id", value: id },
+					{ field: "status", value: "executing", connector: "AND" },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: { status: "completed", result },
 			});
 		},
 
