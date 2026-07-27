@@ -8,11 +8,19 @@ import {
 } from "@busyclaw/contracts";
 
 // A channel registration is a USER-registered bot — the ssoProvider analog: registered at runtime,
-// credentials stored in the row and read back at use, with the organization it belongs to as optional row
-// DATA (the organizationId analog), never part of transport identity. Registrations are WEBHOOK-ONLY —
-// no poll surface (no mode/cursor/lastPolledAt columns). All registrations of a provider share ONE
-// webhook URL; the row is resolved from the request by its webhookSecret (the provider echoes it — see
-// Channel.identify), so the secret is the INBOUND ROUTING KEY: required and unique per provider.
+// credentials stored in the row and read back at use. Registrations are WEBHOOK-ONLY — no poll surface
+// (no mode/cursor/lastPolledAt columns). All registrations of a provider share ONE webhook URL; the row
+// is resolved from the request by its webhookSecret (the provider echoes it — see Channel.identify), so
+// the secret is the INBOUND ROUTING KEY: required and unique per provider.
+//
+// A registration is a SHAREABLE resource like a claw: `createdBy` + the `(scope, scopeId)` boundary, and
+// the plugin registers the `channel_registration` kind so the generic PEP decides every management call.
+// Before those columns existed the row belonged to nobody, which meant any authenticated caller reached
+// any tenant's bot — read its token, re-point its conversations, revoke it.
+//
+// The boundary REPLACED a bare `organizationId`, which was the same idea spelled org-only: the pair says
+// where this bot's conversations land AND who may manage it, and core reads neither half (an
+// `organization` scope means something to the org plugin, nothing here).
 export const channelRegistrationStatusValues = ["active", "disabled"] as const;
 
 export const channelRegistrationFields = {
@@ -55,12 +63,27 @@ export const channelRegistrationFields = {
 		pii: "redacted",
 		doc: "Inbound routing key and verifier: the provider echoes it on each webhook (e.g. telegram's secret_token) and the row is resolved by matching it, so it must be unique per provider — registering it under a second endpointKey fails loud.",
 	}),
-	// Whose bot this is — the organizationId analog. Merged into the claw bind defaults at dispatch.
-	organizationId: field.string({
+	// Who registered this bot — the accountability and erasure key, never the access boundary. Stamped
+	// from the authenticated caller at register, never read from the body, and never rotated by a
+	// re-registration (a manager rotating credentials does not become the registrant).
+	createdBy: field.principal({
+		required: true,
 		index: true,
-		doc: "When set, dispatch places bound conversations under (scope 'organization', scopeId = organizationId), overriding any scope in the row's claw defaults; when absent the claw defaults decide (personal at create).",
+		immutable: true,
+		doc: "Immutable registrant principal — stamped from the authenticated caller, the accountability key; the access boundary is the separate mutable (scope, scopeId) pair.",
 	}),
-	// Bind defaults for conversations on this registration (sans organization — organizationId above wins).
+	// The access boundary, exactly as a claw carries it. Both halves are opaque here.
+	scope: field.string({
+		required: true,
+		index: true,
+		doc: "Access-boundary KIND, opaque to the core ('personal'/'organization' mean something to plugins, not here); defaults to 'personal' at register.",
+	}),
+	scopeId: field.string({
+		required: true,
+		index: true,
+		doc: "The access boundary's id — with scope it names who may manage this bot AND where its bound conversations land; defaults to createdBy at register (personal until registered into a boundary the caller belongs to).",
+	}),
+	// Bind defaults for conversations on this registration (sans the boundary — the row's own wins).
 	// Schema-first: the bindConversation claw/thread inputs are all-optional, so they hold at rest —
 	// a bad default fails at REGISTER time (and on read), not first at dispatch. The context assembly
 	// still re-validates the MERGED value (the org scope lands on top of these defaults).
@@ -86,10 +109,41 @@ export const channelRegistrationEntity = entity(
 );
 export const channelRegistrationRecord = channelRegistrationEntity.record;
 
-// Registration input: transport identity + credentials + bind scope. State columns (errors,
+// Registration input: transport identity + credentials + bind boundary. State columns (errors,
 // timestamps) and the derived id/status are the store's to write, not the caller's. There is no `mode`
 // input — a registration is always a webhook.
+//
+// `createdBy` is OMITTED, not optional: it is stamped from the authenticated caller in the handler, so a
+// forged body loses to runtime proof. `(scope, scopeId)` stay caller-settable but are not free — an
+// explicit boundary is authorized as membership before the row is written (see the register handler),
+// and an omitted one defaults to the caller's own personal boundary.
 export const registerChannelRegistrationInputOptions = {
+	omit: [
+		"id",
+		"status",
+		"createdBy",
+		"lastError",
+		"lastReceivedAt",
+		"createdAt",
+		"updatedAt",
+	],
+	optional: ["scope", "scopeId"],
+} as const;
+export const registerChannelRegistrationInput = channelRegistrationEntity
+	.schema(registerChannelRegistrationInputOptions)
+	.configure({
+		busyclaw: {
+			// Operation-level prose only — the per-field semantics (provider/endpointKey/
+			// webhookSecret/scope/…) now ride the field map above and flow into this
+			// derived schema's properties, so restating them here would be the drift machine.
+			doc: "Registers a user's bot, or re-registers an existing one — the SSO-provider analog. Idempotent on the (provider, endpointKey) natural key: re-submitting the same key rotates the stored credentials and bind defaults in place and re-activates a revoked row (registration is the trust grant, and re-registering requires manage on the existing row).",
+		},
+	});
+
+// The STORE boundary, one step wider than the caller's: `createdBy` is REQUIRED here because the handler
+// has already stamped it. The two must not be the same schema — the caller must not be able to send the
+// field the handler proves.
+export const createChannelRegistrationOptions = {
 	omit: [
 		"id",
 		"status",
@@ -98,17 +152,11 @@ export const registerChannelRegistrationInputOptions = {
 		"createdAt",
 		"updatedAt",
 	],
+	optional: ["scope", "scopeId"],
 } as const;
-export const registerChannelRegistrationInput = channelRegistrationEntity
-	.schema(registerChannelRegistrationInputOptions)
-	.configure({
-		busyclaw: {
-			// Operation-level prose only — the per-field semantics (provider/endpointKey/
-			// webhookSecret/organizationId/…) now ride the field map above and flow into this
-			// derived schema's properties, so restating them here would be the drift machine.
-			doc: "Registers a user's bot, or re-registers an existing one — the SSO-provider analog. Idempotent on the (provider, endpointKey) natural key: re-submitting the same key rotates the stored credentials and bind defaults in place and re-activates a revoked row (registration is the trust grant).",
-		},
-	});
+export const createChannelRegistrationInput = channelRegistrationEntity.schema(
+	createChannelRegistrationOptions,
+);
 
 export const channelRegistrationLookupInputOptions = {
 	pick: ["provider", "endpointKey"],
@@ -125,12 +173,12 @@ export const channelRegistrationLookupInput = channelRegistrationEntity
 // the HTTP boundary — derived from the entity's own columns so the status enum can't drift.
 export const listChannelRegistrationsInput = channelRegistrationEntity
 	.schema({
-		pick: ["provider", "organizationId", "status"],
-		optional: ["provider", "status"],
+		pick: ["provider", "scope", "scopeId", "status"],
+		optional: ["provider", "scope", "scopeId", "status"],
 	})
 	.configure({
 		busyclaw: {
-			doc: "Filters the registration list; the supplied fields are AND-combined. `provider` and `status` narrow the set and `organizationId` scopes to one org's bots. The filter columns are picked from the entity so the `status` enum stays a single source of truth with storage.",
+			doc: "Filters the registration list; the supplied fields are AND-combined. `provider` and `status` narrow the set and `(scope, scopeId)` narrows to one boundary's bots. The filter only narrows — every row the filter admits is still authorized individually, so a wide filter returns what the caller may read rather than everything. The filter columns are picked from the entity so the `status` enum stays a single source of truth with storage.",
 		},
 	});
 
