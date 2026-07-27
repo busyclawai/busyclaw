@@ -18,6 +18,7 @@ describe("@busyclaw/adapter-nextjs", () => {
 		const response = await handlers.POST(
 			new Request("https://app.test/api/busyclaw/generate", {
 				body: JSON.stringify({ prompt: "hello" }),
+				headers: { "content-type": "application/json" },
 				method: "POST",
 			}),
 		);
