@@ -80,7 +80,27 @@ export const piiMappingFields = {
 	createdAt: field.string({ required: true }),
 } as const;
 
-export const piiMappingEntity = entity("pii_mapping", piiMappingFields);
+/**
+ * One value, one placeholder, per container — enforced by the DATABASE.
+ *
+ * The tuple is (scope, scopeId, originalHash), NOT the placeholder: `placeholder` + `scope` +
+ * `scopeId` are already the composite primary key, so a unique over those would only restate it. Two
+ * concurrent writers never collide on the placeholder — they mint two DIFFERENT ones, which is
+ * exactly why the primary key could not catch this. What they share is the VALUE, and `originalHash`
+ * is what names it.
+ *
+ * The redactor coalesces concurrent mints within one process; this is the half no process can do
+ * alone, because another instance's in-flight insert is invisible to it. `createStoredRedactor`
+ * catches the conflict and adopts the winner's placeholder.
+ *
+ * `originalHash` is optional — a keyless redactor computes none — and every backend in the adapter
+ * set treats NULLs as DISTINCT in a unique index (Postgres, SQLite, MySQL, Mongo), so keyless mode
+ * still writes a row per occurrence, which is its documented behaviour. SQL Server, which treats
+ * them as equal and would reject the second, is not among them.
+ */
+export const piiMappingEntity = entity("pii_mapping", piiMappingFields, {
+	uniques: [["scope", "scopeId", "originalHash"]],
+});
 export const piiMapping = piiMappingEntity.record;
 export type PiiMapping = EntityRecord<typeof piiMappingFields>;
 

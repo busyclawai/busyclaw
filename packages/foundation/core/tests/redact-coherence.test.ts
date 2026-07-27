@@ -1,6 +1,12 @@
 // Deterministic placeholders (lookup-or-mint) + the posture combinators.
 // See docs/plans/redaction-coherence-plan.md and docs/plans/redaction-dx-plan.md.
-import type { Detector, PiiMappingStore, PiiSpan } from "@euroclaw/contracts";
+import type {
+	Detector,
+	PiiMapping,
+	PiiMappingStore,
+	PiiSpan,
+} from "@euroclaw/contracts";
+import { conflictError } from "@euroclaw/errors";
 import { describe, expect, it, vi } from "vitest";
 import {
 	composeDetectors,
@@ -188,6 +194,122 @@ describe("deterministic placeholders (indexKey)", () => {
 		)) as string[];
 
 		expect(new Set(out.flatMap(tokensOf)).size).toBe(2);
+	});
+
+	// ── losing the cross-process race ───────────────────────────────────────────────────────────────
+	// The half the in-process latch cannot cover: another INSTANCE minted for this value a moment
+	// earlier, so the unique on (scope, scopeId, originalHash) rejects our insert. A store that only
+	// swallowed the conflict would leave us holding a placeholder that was never written — a token with
+	// no mapping behind it, which rehydrates as itself into a finished draft. So the winner is adopted.
+
+	const WINNER: PiiMapping = {
+		placeholder: "{{pii:email:winner-token-from-elsewhere}}",
+		original: "a@b.com",
+		originalHash: "hash-of-a@b.com",
+		kind: "email",
+		scope: "claw",
+		scopeId: "a",
+		createdAt: "2026-01-01T00:00:00.000Z",
+	};
+
+	/** A store whose first insert loses, after which the winner is readable. */
+	function losingStore(
+		saveError: unknown = conflictError("unique constraint violated"),
+	): {
+		store: PiiMappingStore;
+		saves: { mapping: PiiMapping; subjectIds?: readonly string[] }[];
+	} {
+		const saves: { mapping: PiiMapping; subjectIds?: readonly string[] }[] = [];
+		let lost = false;
+		return {
+			saves,
+			store: {
+				durable: true,
+				save(mapping, subjectIds) {
+					if (!lost) {
+						lost = true;
+						throw saveError;
+					}
+					saves.push({ mapping, ...(subjectIds ? { subjectIds } : {}) });
+				},
+				// Null until our insert has lost — that is what makes us mint in the first place.
+				findByHash: () => (lost ? WINNER : null),
+				resolve: (placeholder) =>
+					placeholder === WINNER.placeholder ? WINNER.original : null,
+				deleteForSubject: () => {},
+			},
+		};
+	}
+
+	it("a mint that LOSES to another writer adopts the winner's placeholder", async () => {
+		const { store } = losingStore();
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: store,
+			indexKey: "test-key",
+		});
+
+		const out = await redactor.redactValue("email a@b.com", ctx);
+
+		expect(tokensOf(out)[0]).toBe(WINNER.placeholder);
+		// And it round-trips, which is the point: our own minted token never reached the store, so
+		// returning it would have produced a placeholder that rehydrates as itself.
+		expect(await redactor.rehydrateValue(out, ctx)).toBe("email a@b.com");
+	});
+
+	it("the loser still links ITS subjects to the winner's mapping", async () => {
+		// The losing save threw before reaching the junction. A dropped link is a subject whose
+		// erasure would never reach this mapping — the same rule the latch follows.
+		const { store, saves } = losingStore();
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: store,
+			indexKey: "test-key",
+		});
+
+		await redactor.redactValue("email a@b.com", { ...ctx, subjectIds: ["s9"] });
+
+		expect(saves).toHaveLength(1);
+		expect(saves[0]?.mapping.placeholder).toBe(WINNER.placeholder);
+		expect(saves[0]?.subjectIds).toEqual(["s9"]);
+	});
+
+	it("an error that is NOT a conflict is never swallowed", async () => {
+		// Narrow on purpose: treating an unrecognised write failure as a lost race would silently
+		// redact against a mapping that was never stored.
+		const { store } = losingStore(new Error("disk on fire"));
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: store,
+			indexKey: "test-key",
+		});
+
+		await expect(redactor.redactValue("email a@b.com", ctx)).rejects.toThrow(
+			"disk on fire",
+		);
+	});
+
+	it("a conflict whose winner cannot be read back RETHROWS", async () => {
+		// Then it was some other uniqueness on the table, not the race we know how to recover from.
+		// Inventing a placeholder here would be worse than failing.
+		const mappings: PiiMappingStore = {
+			durable: true,
+			save: () => {
+				throw conflictError("unique constraint violated");
+			},
+			findByHash: () => null,
+			resolve: () => null,
+			deleteForSubject: () => {},
+		};
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings,
+			indexKey: "test-key",
+		});
+
+		await expect(redactor.redactValue("email a@b.com", ctx)).rejects.toThrow(
+			/unique constraint violated/,
+		);
 	});
 
 	it("erasure is never undone by dedup: a reappearing value gets a NEW token", async () => {

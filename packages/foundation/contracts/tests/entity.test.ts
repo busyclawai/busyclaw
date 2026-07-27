@@ -35,6 +35,24 @@ describe("euroclaw core — entity-derived schemas", () => {
 		});
 	});
 
+	it("pii_mapping is unique on the VALUE per container, not on the placeholder", () => {
+		// The tuple is load-bearing and is exactly the kind of thing that gets 'simplified' into the
+		// primary key. placeholder + scope + scopeId ARE the primary key, so a unique over those states
+		// nothing new — and it would not catch the race it appears to, because two concurrent writers
+		// mint two DIFFERENT placeholders. What they collide on is the value, which originalHash names.
+		expect(piiMappingSchema.pii_mapping.uniques).toEqual([
+			["scope", "scopeId", "originalHash"],
+		]);
+		expect(
+			uniqueConstraints("pii_mapping", piiMappingSchema.pii_mapping),
+		).toEqual([
+			{
+				name: "pii_mapping_scope_scopeId_originalHash_uq",
+				columns: ["scope", "scopeId", "originalHash"],
+			},
+		]);
+	});
+
 	it("keeps custom JSON field validation on entity records", () => {
 		const invalid = effectRecord({
 			id: "effect-1",
