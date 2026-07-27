@@ -332,6 +332,48 @@ describe("governed read path (view + forgetSubject)", () => {
 		expect(JSON.stringify(stored)).not.toContain("alice@personal.com");
 	});
 
+	// H-07's other half. `toolCall.args`, `toolResult.output`/`error` and `checkpoint.state` are all
+	// annotated `pii: "redacted"` — and the public writers handed caller data straight to the store,
+	// so an authenticated caller could park raw PII inside a STRICT claw. Erasure would then report a
+	// confident success having shredded mappings for a value that was never behind a placeholder.
+	it("tokenizes the low-level artifact writes, not just messages", async () => {
+		const { claw, agent, thread } = await chatClaw();
+		const call = await claw.api.createToolCall({
+			clawId: agent.id,
+			threadId: thread.id,
+			runId: "run-1",
+			toolCallId: "c1",
+			toolName: "send_email",
+			args: { to: "alice@personal.com" },
+		});
+		expect(JSON.stringify(call.args)).not.toContain("alice@personal.com");
+		expect(JSON.stringify(call.args)).toMatch(TOKEN);
+
+		const result = await claw.api.createToolResult({
+			clawId: agent.id,
+			threadId: thread.id,
+			runId: "run-1",
+			toolCallId: "c1",
+			status: "completed",
+			outputMode: "redacted",
+			output: { echoed: "bob@personal.com" },
+		});
+		expect(JSON.stringify(result.output)).not.toContain("bob@personal.com");
+		expect(JSON.stringify(result.output)).toMatch(TOKEN);
+
+		const checkpoint = await claw.api.createCheckpoint({
+			clawId: agent.id,
+			threadId: thread.id,
+			runId: "run-1",
+			kind: "step",
+			state: { note: "carol@personal.com" },
+		});
+		expect(JSON.stringify(checkpoint.state)).not.toContain(
+			"carol@personal.com",
+		);
+		expect(JSON.stringify(checkpoint.state)).toMatch(TOKEN);
+	});
+
 	it("forgetSubject shreds the mappings: the original view degrades to tokens, audited", async () => {
 		const { claw, db, audit, thread } = await chatClaw();
 		const { createPiiMappingStore } = await import("@busyclaw/storage-durable");

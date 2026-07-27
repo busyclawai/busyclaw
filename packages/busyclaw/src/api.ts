@@ -1187,6 +1187,19 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 }): ClawApi<Config> {
 	const { context, newId } = input;
 	const store = () => requireClawsStore(context.clawsStore);
+
+	/**
+	 * Tokenize one artifact column against its claw's container before it is persisted.
+	 *
+	 * ONE place names the container, because naming it twice is how the two halves drift: a value
+	 * minted under `{claw, X}` and read under anything else comes back as a raw placeholder, and
+	 * nothing throws when it does. `undefined` passes through — an absent column is not a value to
+	 * redact, and walking it would only invent one.
+	 */
+	const redactArtifact = async <T>(value: T, clawId: string): Promise<T> =>
+		value === undefined || context.redaction === undefined
+			? value
+			: context.redaction.redact(value, { scope: "claw", scopeId: clawId });
 	const registry = () => requireRegistry(context.registry);
 	const requireRedaction = () => {
 		if (!context.redaction) {
@@ -1405,17 +1418,41 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return { erased };
 		},
 
-		createToolCall: (args) => store().toolCalls.create(args),
+		// The api's write-side ingress for the runtime's ARTIFACTS — same rule `appendMessage` follows,
+		// and for the same reason: these columns are annotated `pii: "redacted"`, and an annotation the
+		// write path ignores is a promise the row does not keep. The runtime's own writes are already
+		// tokenized; it was only the PUBLIC methods that handed caller data straight to the store, so
+		// an authenticated caller could park raw PII inside a claw whose posture is strict — where
+		// `forgetSubject` would then report a confident success having shredded mappings for a value
+		// that was never behind a placeholder.
+		//
+		// Posture-aware through the one handle, so a per-claw `raw` row still passes through, and
+		// already-tokenized text is a no-op — the runtime's own writes cost a walk and change nothing.
+		async createToolCall(args) {
+			const redacted = await redactArtifact(args.args, args.clawId);
+			return store().toolCalls.create({ ...args, args: redacted });
+		},
 		getToolCall: ({ id }) => store().toolCalls.get(id),
 		getToolCallByProviderId: (args) => store().toolCalls.getByToolCallId(args),
 		updateToolCallStatus: ({ id, patch }) =>
 			store().toolCalls.updateStatus(id, patch),
 
-		createToolResult: (args) => store().toolResults.create(args),
+		async createToolResult(args) {
+			// `output` and `error` are separate columns and a result carries one or the other; both are
+			// walked so neither can be the unredacted way in.
+			const [output, error] = await Promise.all([
+				redactArtifact(args.output, args.clawId),
+				redactArtifact(args.error, args.clawId),
+			]);
+			return store().toolResults.create({ ...args, output, error });
+		},
 		getToolResult: ({ id }) => store().toolResults.get(id),
 		listToolResults: (args) => store().toolResults.listForToolCall(args),
 
-		createCheckpoint: (args) => store().checkpoints.create(args),
+		async createCheckpoint(args) {
+			const state = await redactArtifact(args.state, args.clawId);
+			return store().checkpoints.create({ ...args, state });
+		},
 		getCheckpoint: ({ id }) => store().checkpoints.get(id),
 		getLatestCheckpoint: ({ runId }) => store().checkpoints.latestForRun(runId),
 
