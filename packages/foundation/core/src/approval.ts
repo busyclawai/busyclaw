@@ -7,6 +7,9 @@ import {
 	type ApprovalMetadataResolver,
 	type ApprovalStore,
 	asPrincipal,
+	CLAW_ID_CONTEXT_KEY,
+	CONFIG_SCOPE_CONTEXT_KEY,
+	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 } from "@euroclaw/contracts";
 
@@ -36,6 +39,21 @@ export function approvalGate(
 						? asPrincipal(ctx[PRINCIPAL_CONTEXT_KEY])
 						: undefined,
 				reason: outcome.reason,
+				// The access anchor. Stamped from the runtime's recording context — a trusted
+				// post-strip stamp, never anything the call carried — so an approval cannot be
+				// created claiming to belong to a claw its run was never part of.
+				...(typeof ctx[CLAW_ID_CONTEXT_KEY] === "string"
+					? { clawId: ctx[CLAW_ID_CONTEXT_KEY] }
+					: {}),
+				// The TENANT — the second anchor, and the only one a cron-triggered one-off has. Also a
+				// trusted post-strip stamp (the host's configScope resolver writes it).
+				...(typeof ctx[CONFIG_SCOPE_CONTEXT_KEY] === "string" &&
+				typeof ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] === "string"
+					? {
+							scope: ctx[CONFIG_SCOPE_CONTEXT_KEY],
+							scopeId: ctx[CONFIG_SCOPE_ID_CONTEXT_KEY],
+						}
+					: {}),
 				metadata: metadata?.(call.toolCall, ctx, outcome),
 				createdAt: now(),
 			});

@@ -15,7 +15,9 @@ import {
 	userPrincipal,
 } from "@euroclaw/contracts";
 
-/** Resolves the accountable operator → the `principal` (or undefined). `() => SYSTEM_CRON` for background runs. */
+/** Resolves the accountable operator → the `principal` (or undefined). A background run resolves the
+ *  principal of whoever DELEGATED the work, never an anonymous scheduler identity: a scheduled run is a
+ *  claw's run, and its approvals and audit both need a person behind them. */
 export type IdentityResolver = (
 	ctx: TurnContext,
 ) => Principal | undefined | Promise<Principal | undefined>;

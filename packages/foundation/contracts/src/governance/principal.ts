@@ -15,9 +15,14 @@ import { type } from "arktype";
  *
  * The form is a tagged string `<kind>:<id>` — one legible column — with exactly two kinds:
  * - **`user:<hostUserId>`** — a human the host authenticated (from the `IdentityResolver`).
- * - **`system:<name>`** — a non-human euroclaw actor: `cron` (a scheduled run), `anonymous` (a
- *   stranger's bot conversation), `engine` (autonomous resume/compensation), `migration`. Build with
- *   {@link systemPrincipal}; the well-known ones are {@link SYSTEM_CRON} / {@link SYSTEM_ANONYMOUS}.
+ * - **`system:<name>`** — a non-human euroclaw actor: `anonymous` (a stranger's bot conversation),
+ *   `engine` (autonomous resume/compensation), `migration`. Build with {@link systemPrincipal}; the
+ *   well-known one is {@link SYSTEM_ANONYMOUS}.
+ *
+ *   There is deliberately no `system:cron`. A scheduled run is a CLAW's run — a cron tick processes
+ *   due claws — so it carries the claw it belongs to and the principal of whoever delegated the task.
+ *   An anonymous scheduler identity would erase both: the approval it parks would have no owner to
+ *   authorize against, and the audit would say a machine asked for it when a person did.
  *
  * These are NOT principals (they cannot be authorized, so none is ever a Principal): the **agent/claw**
  * (it *wields* a principal — borrowed authority, never its own), an **organization** (a scope/boundary),
@@ -67,7 +72,7 @@ export function userPrincipal(id: string): Principal {
 
 /**
  * Build a non-human euroclaw principal: `` `system:${name}` `` (e.g. `system:cron`,
- * `system:anonymous`). A blank name is rejected. Prefer the well-known {@link SYSTEM_CRON} /
+ * `system:anonymous`). A blank name is rejected. Prefer the well-known
  * {@link SYSTEM_ANONYMOUS} constants over re-deriving them at each use site.
  */
 export function systemPrincipal(name: string): Principal {
@@ -157,7 +162,6 @@ export const principal = type("string").narrow((value, ctx) => {
 });
 
 /** The well-known system principal for a scheduled run. */
-export const SYSTEM_CRON: Principal = systemPrincipal("cron");
 
 /** The well-known system principal for a stranger's (unauthenticated) bot conversation. */
 export const SYSTEM_ANONYMOUS: Principal = systemPrincipal("anonymous");
