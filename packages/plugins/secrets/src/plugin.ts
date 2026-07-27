@@ -15,6 +15,8 @@ import {
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
 	type SecretCipher,
+	type SecretKeyring,
+	secretKeyring,
 } from "./crypto";
 import { storedSecretModels } from "./schema";
 import {
@@ -28,10 +30,17 @@ export const SECRET_STORE_PROVIDER_NAME = "store";
 
 /** The in-app store the `{ store }` option turns on. */
 export type SecretStoreOptions = {
-	/** The at-rest master key: 32 bytes hex-encoded (64 chars), validated loud at construction.
-	 *  Absent ⇒ the plugin resolves `BUSYCLAW_SECRET_STORE_KEY` through the one-door reader captured at
-	 *  configure — lazily, on first seal/open — so the key itself lives in env/vault. */
-	key?: string;
+	/** The at-rest master key(s): 32 bytes hex-encoded (64 chars) each, validated loud at
+	 *  construction. Absent ⇒ the plugin resolves `BUSYCLAW_SECRET_STORE_KEY` through the one-door
+	 *  reader captured at configure — lazily, on first seal/open — so the key itself lives in
+	 *  env/vault.
+	 *
+	 *  ROTATION: pass a LIST. The first key seals every new write; the rest only open, so rows sealed
+	 *  under a retired key keep working while they are re-set one by one. Drop a key once nothing is
+	 *  sealed under it — the key id in each envelope is what makes that checkable rather than hopeful,
+	 *  and a row whose key is missing says so BY ID instead of failing as if it had been tampered
+	 *  with. Through the one-door reader the same list is written comma-separated. */
+	key?: string | readonly string[];
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
 };
@@ -110,10 +119,16 @@ function buildStore(options: SecretStoreOptions): {
 
 	// A config key fails loud HERE (bad config surfaces at construction); the reader path stays lazy —
 	// the one-door reader only exists once configure ran.
-	const configKey =
-		options.key !== undefined ? parseSecretStoreKey(options.key) : undefined;
-	const resolveKey = async (): Promise<Uint8Array> => {
-		if (configKey) return configKey;
+	const configKeyring =
+		options.key !== undefined
+			? secretKeyring(
+					(typeof options.key === "string" ? [options.key] : options.key).map(
+						parseSecretStoreKey,
+					),
+				)
+			: undefined;
+	const resolveKeyring = async (): Promise<SecretKeyring> => {
+		if (configKeyring) return configKeyring;
 		if (!reader) {
 			throw configurationError("secret store has no master key source", {
 				reason:
@@ -125,9 +140,18 @@ function buildStore(options: SecretStoreOptions): {
 		const material = await reader.require(SECRET_STORE_KEY_NAME, {
 			kind: "token",
 		});
-		return parseSecretStoreKey(material.value);
+		// Comma-separated, so one env var carries a whole keyring under the same order rule as config:
+		// first seals, all open. A single key is a list of one, so nothing changes for a deployment
+		// that has not rotated yet.
+		return secretKeyring(
+			material.value
+				.split(",")
+				.map((part) => part.trim())
+				.filter((part) => part.length > 0)
+				.map(parseSecretStoreKey),
+		);
 	};
-	const cipher = createSecretCipher(resolveKey);
+	const cipher = createSecretCipher(resolveKeyring);
 
 	const requireStore = (): StoredSecretsStore => {
 		if (!store) {

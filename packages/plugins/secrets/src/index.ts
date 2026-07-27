@@ -16,6 +16,9 @@ export {
 	SECRET_STORE_KEY_NAME,
 	type SecretBinding,
 	type SecretCipher,
+	type SecretKeyring,
+	secretKeyId,
+	secretKeyring,
 } from "./crypto";
 export {
 	SECRET_STORE_PROVIDER_NAME,

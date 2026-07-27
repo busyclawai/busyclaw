@@ -4,11 +4,12 @@
 // `seal` runs inside the store's write path, `open` inside the provider's read path, and the
 // encoded form is all that ever touches the adapter.
 //
-// Sealed encoding: `hex( nonce(12 bytes) ‖ ciphertext+tag )` — a fresh random 96-bit GCM nonce is
-// generated per seal and prepended, so the row is self-contained (no key/nonce bookkeeping columns)
-// and re-sealing the same plaintext never reuses a nonce. GCM appends its 16-byte auth tag to the
-// ciphertext, so the minimum sealed length is 28 bytes (56 hex chars) — tampering or a wrong key
-// fails authentication loud in `open`.
+// Sealed encoding: `k1.<keyId>.hex( nonce(12 bytes) ‖ ciphertext+tag )` — a fresh random 96-bit GCM
+// nonce is generated per seal and prepended, so the row is self-contained (no nonce bookkeeping
+// column) and re-sealing the same plaintext never reuses a nonce. GCM appends its 16-byte auth tag,
+// so the minimum payload is 28 bytes (56 hex chars) — tampering fails authentication loud in `open`.
+// The `keyId` names WHICH key sealed the row, which is what makes rotation a procedure rather than
+// an outage; see the keyring section below.
 //
 // Every seal is BOUND to the row it belongs to, as GCM additional authenticated data (authenticated,
 // not encrypted). Without it a sealed value is portable: the blob says nothing about where it came
@@ -28,20 +29,23 @@
 // master key can re-seal any value under any binding, and AAD does not pretend otherwise — it is the
 // cheap version of per-boundary keys, not a replacement.
 //
-// PRE-ALPHA HARD CUT: a value sealed before this binding existed is byte-identical to a bound one, so
-// `open` cannot tell them apart and there is no legacy path — accepting one would be a permanent
-// downgrade oracle on exactly the attack this closes. Rows written earlier fail to open and must be
-// re-entered.
+// PRE-ALPHA HARD CUT, twice over. A value sealed before this binding existed is byte-identical to a
+// bound one, so `open` cannot tell them apart and there is no legacy path — accepting one would be a
+// permanent downgrade oracle on exactly the attack this closes. A value sealed before key ids carries
+// no prefix, and guessing which key to try is the ambiguity the id exists to remove. Rows written
+// before either fail to open and must be re-entered.
 
 import { configurationError, errorMessage } from "@busyclaw/contracts";
 import { gcm } from "@noble/ciphers/aes.js";
 import {
 	bytesToHex,
 	bytesToUtf8,
+	concatBytes,
 	hexToBytes,
 	randomBytes,
 	utf8ToBytes,
 } from "@noble/ciphers/utils.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 /** The canonical name the master key resolves under (through the one-door reader) when no
  *  `secrets([], { store: { key } })` is configured. The store provider SHORT-CIRCUITS this name to a
@@ -99,8 +103,58 @@ function bindingAad(binding: SecretBinding): Uint8Array {
 	);
 }
 
+// ── the keyring — M-13 ───────────────────────────────────────────────────────────────────────────
+//
+// The envelope used to be `hex(nonce ‖ ciphertext+tag)` and said nothing about WHICH key sealed it.
+// One key, forever: swapping it made every stored row fail to open, indistinguishably from tampering
+// (the `open` failure below had to name "wrong or rotated master key" first among four causes,
+// because it genuinely could not tell). Rotation was therefore not a procedure — it was an outage
+// plus re-entering every secret by hand, which is the same as saying a leaked key can never be
+// retired.
+//
+// A key ID in the envelope turns that into a routine operation: new writes seal under the active key,
+// old rows keep opening under the key that sealed them, and an operator can see which rows are still
+// on a retired key by reading the ID. The ID is DERIVED from the key — a domain-separated,
+// truncated hash — so no config carries it and no operator can mislabel one. It is not secret: it
+// sits beside the ciphertext it labels, and a hash of 32 random bytes gives an attacker nothing.
+const ENVELOPE_V1 = "k1";
+const KEY_ID_CHARS = 16;
+
+/** The fingerprint naming one key inside an envelope. */
+export function secretKeyId(key: Uint8Array): string {
+	return bytesToHex(
+		sha256(concatBytes(utf8ToBytes("busyclaw.secret-key-id.v1"), key)),
+	).slice(0, KEY_ID_CHARS);
+}
+
+/**
+ * Every key a deployment can OPEN with, and the single one it SEALS with.
+ *
+ * Rotation is: put the new key first. The old one stays in the list so its rows keep opening, and
+ * drops out once nothing is sealed under it any more — which the IDs make checkable rather than
+ * hopeful.
+ */
+export type SecretKeyring = {
+	readonly activeId: string;
+	readonly active: Uint8Array;
+	readonly byId: ReadonlyMap<string, Uint8Array>;
+};
+
+/** Build a keyring from keys in priority order: the FIRST seals, all of them open. */
+export function secretKeyring(keys: readonly Uint8Array[]): SecretKeyring {
+	const active = keys[0];
+	if (!active) {
+		throw configurationError("secret store keyring is empty", {
+			reason: "pass at least one 32-byte master key",
+		});
+	}
+	const byId = new Map<string, Uint8Array>();
+	for (const key of keys) byId.set(secretKeyId(key), key);
+	return { activeId: secretKeyId(active), active, byId };
+}
+
 /** Seal/open stored secret values. One instance per plugin, shared by the store (write path) and
- *  the provider (read path), so both sides always use the same key. Both halves take the row's
+ *  the provider (read path), so both sides always use the same keyring. Both halves take the row's
  *  binding: seal writes it into the tag, open verifies it, so a value moved between rows fails. */
 export type SecretCipher = {
 	seal: (plaintext: string, binding: SecretBinding) => Promise<string>;
@@ -108,33 +162,96 @@ export type SecretCipher = {
 };
 
 /**
- * Build the cipher over a LAZY key resolver — the key is fetched on first seal/open, not at
- * construction (so it can live behind the one-door reader, which isn't consultable until the
- * assembly hands it to `configure`), and memoized on success. A resolver failure propagates loud
- * from every seal/open — with rows present there is no degraded mode, only "fix the key".
+ * How long a resolved keyring is reused before it is fetched again.
+ *
+ * It used to be cached for the life of the PROCESS. That made an upstream rotation — a new key in
+ * the vault the resolver reads — invisible until every host restarted, so the window in which a
+ * withdrawn key was still in use had no bound and no way to observe it. Re-resolving on a timer
+ * gives that window a ceiling; five minutes is short enough that a rotation lands promptly and long
+ * enough that the vault is not on the hot path of every read.
+ */
+const KEYRING_TTL_MS = 5 * 60 * 1000;
+
+export type SecretCipherOptions = { now?: () => number };
+
+/**
+ * Build the cipher over a LAZY keyring resolver — fetched on first seal/open, not at construction
+ * (so it can live behind the one-door reader, which isn't consultable until the assembly hands it to
+ * `configure`), and reused for {@link KEYRING_TTL_MS}. A resolver failure propagates loud from every
+ * seal/open — with rows present there is no degraded mode, only "fix the key".
  */
 export function createSecretCipher(
-	resolveKey: () => Promise<Uint8Array>,
+	resolveKeyring: () => Promise<SecretKeyring>,
+	options: SecretCipherOptions = {},
 ): SecretCipher {
-	let cached: Uint8Array | undefined;
-	const key = async (): Promise<Uint8Array> => {
-		if (!cached) cached = await resolveKey();
-		return cached;
+	const now = options.now ?? (() => Date.now());
+	let cached: { keyring: SecretKeyring; fetchedAt: number } | undefined;
+	let inFlight: Promise<SecretKeyring> | undefined;
+
+	const keyring = async (): Promise<SecretKeyring> => {
+		if (cached && now() - cached.fetchedAt < KEYRING_TTL_MS) {
+			return cached.keyring;
+		}
+		// One fetch at a time: an expiry under concurrent reads would otherwise send every waiting
+		// call to the vault at once, which is a thundering herd aimed at the one dependency that must
+		// stay available for anything to be decryptable at all.
+		if (!inFlight) {
+			inFlight = resolveKeyring()
+				.then((resolved) => {
+					cached = { keyring: resolved, fetchedAt: now() };
+					return resolved;
+				})
+				.finally(() => {
+					inFlight = undefined;
+				});
+		}
+		return inFlight;
 	};
 
 	return {
 		seal: async (plaintext, binding) => {
+			const ring = await keyring();
 			const nonce = randomBytes(NONCE_BYTES);
-			const sealed = gcm(await key(), nonce, bindingAad(binding)).encrypt(
+			const sealed = gcm(ring.active, nonce, bindingAad(binding)).encrypt(
 				utf8ToBytes(plaintext),
 			);
-			return bytesToHex(nonce) + bytesToHex(sealed);
+			// Self-describing: version, the key that sealed it, then the payload. Dots cannot occur
+			// in hex, so the split is unambiguous.
+			return `${ENVELOPE_V1}.${ring.activeId}.${bytesToHex(nonce)}${bytesToHex(sealed)}`;
 		},
 		open: async (sealed, binding) => {
-			const k = await key();
+			const ring = await keyring();
+			const parts = sealed.split(".");
+			// PRE-ALPHA HARD CUT, the same one the binding took: an envelope with no key id predates
+			// the keyring, and guessing which key to try would be exactly the ambiguity the id exists
+			// to remove. Re-enter those rows.
+			if (parts.length !== 3 || parts[0] !== ENVELOPE_V1) {
+				throw configurationError(
+					"stored secret value is not a sealed payload — the row was written outside the store, or predates key ids (pre-alpha: re-enter it)",
+					{ length: sealed.length },
+				);
+			}
+			const keyId = parts[1] ?? "";
+			const payload = parts[2] ?? "";
+			const key = ring.byId.get(keyId);
+			if (!key) {
+				// Nameable, unlike a bare authentication failure: the operator learns WHICH key is
+				// missing, so a rotation that dropped a key still in use is a fixable mistake rather
+				// than a row that has silently become unreadable.
+				throw configurationError(
+					"stored secret was sealed with a key this deployment no longer holds — restore it to the keyring, or re-enter the secret",
+					{
+						keyId,
+						knownKeyIds: [...ring.byId.keys()],
+						scope: binding.scope,
+						scopeId: binding.scopeId,
+						name: binding.name,
+					},
+				);
+			}
 			let bytes: Uint8Array;
 			try {
-				bytes = hexToBytes(sealed);
+				bytes = hexToBytes(payload);
 			} catch {
 				// Shape only, same rule as the key parse — noble's hex error quotes the offending
 				// characters, and here those are stored ciphertext.
@@ -145,20 +262,20 @@ export function createSecretCipher(
 			}
 			try {
 				return bytesToUtf8(
-					gcm(k, bytes.slice(0, NONCE_BYTES), bindingAad(binding)).decrypt(
+					gcm(key, bytes.slice(0, NONCE_BYTES), bindingAad(binding)).decrypt(
 						bytes.slice(NONCE_BYTES),
 					),
 				);
 			} catch (err) {
-				// GCM authentication failed. One of: a wrong/rotated master key, a tampered row, a value
-				// sealed for a DIFFERENT row and moved here (the binding refusing, which is the point), or
-				// a row written before values were bound (pre-alpha — re-enter it). Indistinguishable by
-				// construction, so the message names all four rather than guessing. Loud and actionable —
-				// never ciphertext, never a miss.
+				// GCM authentication failed. The key was the RIGHT one (its id matched), so the causes
+				// left are: a tampered row, or a value sealed for a DIFFERENT row and moved here — the
+				// binding refusing, which is the point. Narrower than it used to be precisely because
+				// the key id removed "wrong or rotated key" from the list.
 				throw configurationError(
-					"cannot decrypt stored secret — wrong or rotated master key, a tampered row, a value sealed for another row, or a row predating value binding",
+					"cannot decrypt stored secret — the row was tampered with, or the value was sealed for another row",
 					{
 						cause: errorMessage(err),
+						keyId,
 						scope: binding.scope,
 						scopeId: binding.scopeId,
 						name: binding.name,
