@@ -1224,6 +1224,35 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	const { context, newId } = input;
 	const store = () => requireClawsStore(context.clawsStore);
 
+	// ── the one seam between base-typed handlers and the config-shaped runtime ───────────────────
+	//
+	// The api object below is checked against `ClawApi` — the BASE contract — and re-presented as
+	// `ClawApi<Config>` in a single cast at the return. That keeps every handler readable at the cost
+	// of one boundary: inside them `ctx` and `options` wear the base types, while `context.runtime`
+	// speaks `Config`. They are the same values at runtime; only the plugin-folded context type and
+	// the model-name union differ, and no handler inspects either.
+	//
+	// These two exist because the previous spelling of that boundary was `as never` at each call —
+	// and `never` is assignable to ANYTHING, so it did not bridge the seam, it deleted the check:
+	// `args.message as never`, a string where a run context belongs, compiled just as quietly.
+	//
+	// What the named form buys, precisely: the unchecked step is one line in one place instead of
+	// eight unexplained ones, and the parameter rejects a value of the wrong SHAPE (that string is
+	// now a compile error). What it does NOT buy: `Config` is opaque inside this factory, so the two
+	// config-shaped results stay mutually assignable and swapping one for the other still compiles.
+	// Note the base ctx type cannot do this job itself — `RunContext<RuntimeConfig>` is
+	// `Record<never, never>`, and in TypeScript a string is assignable to an empty object type.
+
+	const forRuntimeCtx = (
+		ctx: Record<string, unknown> | undefined,
+	): RunContext<Config> | undefined =>
+		ctx as unknown as RunContext<Config> | undefined;
+
+	const forRuntimeOptions = (
+		options: RunOptionsFor<RuntimeConfig> | undefined,
+	): RunOptionsFor<Config> | undefined =>
+		options as unknown as RunOptionsFor<Config> | undefined;
+
 	/**
 	 * Tokenize one artifact column against its claw's container before it is persisted.
 	 *
@@ -1450,7 +1479,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			);
 			const result = await context.runtime.generate(
 				args.message,
-				args.ctx as never,
+				forRuntimeCtx(args.ctx),
 				runOptions,
 			);
 			const response = { result, userMessage };
@@ -1480,7 +1509,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			);
 			const stream = context.runtime.stream(
 				args.message,
-				args.ctx as never,
+				forRuntimeCtx(args.ctx),
 				runOptions,
 			);
 			return { ...stream, userMessage };
@@ -1533,16 +1562,18 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getCheckpoint: ({ id }) => store().checkpoints.get(id),
 		getLatestCheckpoint: ({ runId }) => store().checkpoints.latestForRun(runId),
 
-		// `as never` bridges the base-`satisfies ClawApi` ctx type to the runtime's generic
-		// `RunContext<Config>` — the same bridge `sendMessage` uses. The authenticated caller seeds the
-		// run's principal (`busyclaw__principal`, via the forge-proof caller option); the PEP already
-		// decided the caller may make this call (see authz-pep).
+		// `forRuntimeCtx` / `forRuntimeOptions` carry the base-`satisfies ClawApi` types across to the
+		// runtime's config-shaped ones — see the seam at the top of this factory. The authenticated
+		// caller seeds the run's principal (`busyclaw__principal`, via the forge-proof caller option);
+		// the PEP already decided the caller may make this call (see authz-pep).
 		generate: ({ prompt, ctx, options }, caller?: ClawApiCaller) => {
 			assertNoReservedContext(ctx);
 			return context.runtime.generate(
 				prompt,
-				ctx as never,
-				runtimeRunOptionsWithCaller(options, caller?.principal) as never,
+				forRuntimeCtx(ctx),
+				forRuntimeOptions(
+					runtimeRunOptionsWithCaller(options, caller?.principal),
+				),
 			);
 		},
 		// `async` even though `runtime.stream` returns synchronously: one type describes both this raw
@@ -1553,8 +1584,10 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			assertNoReservedContext(ctx);
 			return context.runtime.stream(
 				prompt,
-				ctx as never,
-				runtimeRunOptionsWithCaller(options, caller?.principal) as never,
+				forRuntimeCtx(ctx),
+				forRuntimeOptions(
+					runtimeRunOptionsWithCaller(options, caller?.principal),
+				),
 			);
 		},
 		async continueRun({ approvalId, ctx, options }, caller?: ClawApiCaller) {
@@ -1576,13 +1609,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			if (!recording) {
 				return context.runtime.continueRun(
 					approvalId,
-					ctx as never,
+					forRuntimeCtx(ctx),
 					continueOptions,
 				);
 			}
 			return context.runtime.continueRun(
 				approvalId,
-				ctx as never,
+				forRuntimeCtx(ctx),
 				runtimeRunOptionsWithRecording(continueOptions, recording),
 			);
 		},
