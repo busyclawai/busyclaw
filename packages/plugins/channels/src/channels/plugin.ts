@@ -1,11 +1,11 @@
 import {
-	configurationError,
 	type BusyclawCronFlag,
 	type BusyclawPlugin,
 	type BusyclawPluginConfigureContext,
 	type BusyclawPluginRuntime,
 	type BusyclawRoute,
 	type BusyclawRouteContext,
+	configurationError,
 } from "@busyclaw/contracts";
 import { requireClaw } from "../core/claw";
 import {

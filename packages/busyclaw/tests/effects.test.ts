@@ -16,9 +16,9 @@ describe("createClaw effects", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{ onExecute: (to) => ({ sent: true, recipient: to }) },
-				),
+				send_email: emailTool({
+					onExecute: (to) => ({ sent: true, recipient: to }),
+				}),
 			},
 		});
 

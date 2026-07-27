@@ -1,11 +1,12 @@
 import type { ClawEngineFactory } from "@busyclaw/contracts";
+import { createMemoryAudit } from "@busyclaw/core";
 import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import { memoryAdapter } from "@busyclaw/storage-core";
-import { createMemoryAudit } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 
 /** The principal `owned()` binds onto every api call — and now what a durable run is stamped with. */
 const OWNER = "user:actor-1";
+
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
@@ -165,9 +166,7 @@ describe("createClaw engine", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{ onExecute: (to) => ({ sent: true, to }) },
-				),
+				send_email: emailTool({ onExecute: (to) => ({ sent: true, to }) }),
 			},
 		});
 

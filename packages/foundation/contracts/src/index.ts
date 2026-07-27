@@ -36,6 +36,8 @@ export type {
 	AccessGrant,
 	AccessGrantPermission,
 	AccessGrantRecord,
+	AccessGrantResourceKey,
+	AccessGrantsByResource,
 	AccessGrantStore,
 	GrantScope,
 	NewAccessGrant,

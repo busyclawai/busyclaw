@@ -3,6 +3,7 @@ import {
 	type AuthzTarget,
 	authorizationError,
 	type Principal,
+	type RouteLevel,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
@@ -86,16 +87,16 @@ function registrationsApi(plugin: ChannelsPlugin): RegistrationsApi {
 	return api.channels.registrations;
 }
 
-/** A test authz context. `allow` decides each imperative `ctx.check` — the default says yes, so a test
+/** A test authz context. `allow` decides each imperative decision — the default says yes, so a test
  *  about registration MECHANICS doesn't restate the authorization model, and the tests that are about
- *  authorization pass a real predicate. Every check is recorded, so a test can assert that the handler
+ *  authorization pass a real predicate. Every decision is recorded, so a test can assert that the handler
  *  ASKED — a check that silently stopped happening is the regression that matters most here. */
 function fakeAuthz(
 	principal: Principal = ALICE,
 	allow: (level: string, target: AuthzTarget) => boolean = () => true,
 ): AuthzContext & { checks: { level: string; target: AuthzTarget }[] } {
 	const checks: { level: string; target: AuthzTarget }[] = [];
-	const check = async (level: string, target: AuthzTarget) => {
+	const enforce = async (level: RouteLevel, target: AuthzTarget) => {
 		checks.push({ level, target });
 		if (!allow(level, target)) {
 			throw authorizationError("app-authz denied (test)", {
@@ -108,21 +109,23 @@ function fakeAuthz(
 		caller: { principal },
 		principal,
 		checks,
-		check,
-		// The real one hoists the scope resolution and bounds concurrency; neither is observable from a
-		// handler, so the double only has to reproduce the CONTRACT — decide each row, drop the ones
-		// that deny, never throw.
-		filter: async (level, rows, target) => {
-			const kept = [];
-			for (const row of rows) {
-				try {
-					await check(level, target(row));
-					kept.push(row);
-				} catch {
-					// dropped, not thrown
+		authz: {
+			enforce,
+			// The real one hoists the scope resolution and the grant read out of the loop and bounds
+			// concurrency; none of that is observable from a handler, so the double only has to reproduce
+			// the CONTRACT — decide each row, drop the ones that deny, never throw.
+			filter: async (level, rows, target) => {
+				const kept = [];
+				for (const row of rows) {
+					try {
+						await enforce(level, target(row));
+						kept.push(row);
+					} catch {
+						// dropped, not thrown
+					}
 				}
-			}
-			return kept;
+				return kept;
+			},
 		},
 	};
 }

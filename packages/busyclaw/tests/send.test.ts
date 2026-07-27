@@ -74,11 +74,7 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{ onExecute: () => ({ sent: true }) },
-					{
-					},
-				),
+				send_email: emailTool({ onExecute: () => ({ sent: true }) }, {}),
 			},
 		});
 		const { api, agent, thread } = await createAgentThread(claw);
@@ -138,14 +134,12 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{
-						onExecute: (to) => {
-							toolSaw = to;
-							return { sent: true, to };
-						},
+				send_email: emailTool({
+					onExecute: (to) => {
+						toolSaw = to;
+						return { sent: true, to };
 					},
-				),
+				}),
 			},
 		});
 		const { api, agent, thread } = await createAgentThread(claw);
@@ -205,11 +199,7 @@ describe("createClaw send", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{ onExecute: () => ({ sent: true }) },
-					{
-					},
-				),
+				send_email: emailTool({ onExecute: () => ({ sent: true }) }, {}),
 			},
 		});
 		const { api, agent, thread } = await createAgentThread(claw);

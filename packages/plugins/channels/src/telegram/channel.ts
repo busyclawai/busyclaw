@@ -93,7 +93,10 @@ export type TelegramConfig =
  * Both sides are hashed to a fixed 32 bytes first, so the comparison length is constant and reveals
  * nothing about the secret's own length either; the XOR-accumulate then always reads every byte.
  */
-function constantTimeEquals(presented: string | null, expected: string): boolean {
+function constantTimeEquals(
+	presented: string | null,
+	expected: string,
+): boolean {
 	if (presented === null) return false;
 	const a = sha256(utf8ToBytes(presented));
 	const b = sha256(utf8ToBytes(expected));

@@ -39,18 +39,17 @@ export type AuthzTarget =
 	| { readonly kind: string; readonly id: string }
 	| { readonly scope: string; readonly scopeId: string };
 
-/** The imperative half, handed to every handler. The declarative `.authz()` gate has already run; this
- *  is for checks that only become expressible once the handler has loaded something. You can always
- *  demand MORE than you declared, never less. */
-export type AuthzContext = {
-	/** The out-of-band caller as received. */
-	readonly caller: ClawApiCaller;
-	/** The caller's principal, guaranteed present and non-blank — the actor floor ran before the
-	 *  handler was entered, so a handler never has to re-check it. Branded, because it IS one: a handler
-	 *  stamping an identity column takes it straight, with no re-parse and no cast to reach the brand. */
-	readonly principal: Principal;
+/**
+ * The two ways to ask the PEP a question mid-handler — `ctx.authz.enforce` for one resource,
+ * `ctx.authz.filter` for many. Grouped under their own key rather than spread onto the context so the
+ * decision surface is one namable thing: a handler reading `ctx.authz.filter(...)` says what it is
+ * doing, and a future third way to ask has an obvious home.
+ */
+export type AuthzDecisions = {
 	/**
-	 * Authorize an additional resource mid-handler. Throws `authorizationError` on deny.
+	 * Authorize an additional resource mid-handler, or throw `authorizationError`. Named `enforce`
+	 * rather than `check` because it does not RETURN a verdict — `if (await ctx.authz.check(…))` would
+	 * await `undefined` and take the denied branch on a permitted call, which is a silent inversion.
 	 *
 	 * Decided as THIS method unless `asMethod` names another. That matters for a LISTING: a listing has
 	 * no id, so it is declared caller-only, so it sits in the `creates` group the sealed baseline
@@ -58,21 +57,22 @@ export type AuthzContext = {
 	 * inherit that permit and pass for everyone. A listing filters by asking the question its SINGLE-ROW
 	 * read asks, so it names that method.
 	 */
-	readonly check: (
+	readonly enforce: (
 		level: RouteLevel,
 		target: AuthzTarget,
 		asMethod?: string,
 	) => Promise<void>;
 	/**
 	 * Authorize MANY resources and return the ones that survive — the listing primitive, and what a
-	 * listing should use instead of `check` in a loop.
+	 * listing should use instead of `enforce` in a loop.
 	 *
-	 * Same decision as {@link check} per row, with three differences that only make sense in bulk:
-	 * the caller's scope memberships are resolved ONCE for the whole set rather than re-asking the
-	 * host's resolver per row; the rows are decided with BOUNDED concurrency, so a thousand-row page
-	 * cannot open a thousand simultaneous reads; and a row that DENIES is dropped rather than thrown,
-	 * because one unreadable row must not fail the page. A row whose decision ERRORS is also dropped —
-	 * fail-closed, the same answer `check` would reach by throwing.
+	 * Same decision as {@link AuthzDecisions.enforce} per row, with three differences that only make sense
+	 * in bulk: the caller's scope memberships are resolved ONCE for the whole set rather than re-asking
+	 * the host's resolver per row, and the grants for every row are fetched in ONE query rather than one
+	 * per row; the rows are decided with BOUNDED concurrency, so a thousand-row page cannot open a
+	 * thousand simultaneous reads; and a row that DENIES is dropped rather than thrown, because one
+	 * unreadable row must not fail the page. A row whose decision ERRORS is also dropped — fail-closed,
+	 * the same answer `enforce` would reach by throwing.
 	 *
 	 * `asMethod` matters here for the same reason it matters on `check`, and more sharply: a listing is
 	 * declared caller-only, so it sits in the `creates` group the sealed baseline permits for any
@@ -87,6 +87,20 @@ export type AuthzContext = {
 		target: (row: T) => AuthzTarget,
 		asMethod?: string,
 	) => Promise<T[]>;
+};
+
+/** The imperative half, handed to every handler. The declarative `.authz()` gate has already run; this
+ *  is for checks that only become expressible once the handler has loaded something. You can always
+ *  demand MORE than you declared, never less. */
+export type AuthzContext = {
+	/** The out-of-band caller as received. */
+	readonly caller: ClawApiCaller;
+	/** The caller's principal, guaranteed present and non-blank — the actor floor ran before the
+	 *  handler was entered, so a handler never has to re-check it. Branded, because it IS one: a handler
+	 *  stamping an identity column takes it straight, with no re-parse and no cast to reach the brand. */
+	readonly principal: Principal;
+	/** Ask the PEP about something the handler has since loaded — see {@link AuthzDecisions}. */
+	readonly authz: AuthzDecisions;
 };
 
 /** The boundary validator a route declares — an arktype type in practice. */

@@ -5,11 +5,12 @@ import type {
 	AppendMessageInput,
 	ApprovalRecord,
 	ApprovalStatus,
+	AuthzContext,
 	AuthzTarget,
 	BindConversationInput,
 	BindConversationResult,
+	BusyclawPlugin,
 	CheckpointRecord,
-	AuthzContext,
 	ClawApiCaller,
 	ClawApiMethodName,
 	ClawEngineHandle,
@@ -28,7 +29,6 @@ import type {
 	EngineRunHandle,
 	EngineRunRecord,
 	EngineStartRunInput,
-	BusyclawPlugin,
 	JsonObject,
 	MessageRecord,
 	PolicySliceRecord,
@@ -1499,25 +1499,16 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// The PEP always supplies the context (the unsafeOpen hatch supplies a permissive one), so
 			// absence means the raw handler was reached around the one door. Empty, not everything.
 			if (!ctx) return [];
-			const rows = (await context.runtime.approvals?.list(args)) ?? [];
-			const visible = await Promise.all(
-				rows.map(async (row) => {
-					try {
-						// Decided as `getApproval` — the single-row read. Asking as `listApprovals`
-						// would inherit the caller-only permit that every listing has and pass for
-						// everyone, which is the filter quietly doing nothing.
-						await ctx.check(
-							"read",
-							{ kind: "approval", id: row.id },
-							"getApproval",
-						);
-						return row;
-					} catch {
-						return undefined;
-					}
-				}),
+			// Decided as `getApproval` — the single-row read. Asking as `listApprovals` would inherit the
+			// caller-only permit that every listing has and pass for everyone, which is the filter quietly
+			// doing nothing. `filter` rather than a `check` loop so the caller's scopes and the whole page's
+			// grants are each fetched once instead of once per row.
+			return ctx.authz.filter(
+				"read",
+				(await context.runtime.approvals?.list(args)) ?? [],
+				(row) => ({ kind: "approval", id: row.id }),
+				"getApproval",
 			);
-			return visible.filter((row) => row !== undefined);
 		},
 
 		getEffect: ({ id }) => requireEffects(context.effects).get(id),

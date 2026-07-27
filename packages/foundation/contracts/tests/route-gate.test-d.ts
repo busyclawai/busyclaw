@@ -32,8 +32,8 @@ export const scoped = route
 export const topUp = route
 	.input(type({ clawId: "string", threadId: "string" }))
 	.authz("use", (i) => ({ kind: "claw", id: i.clawId }))
-	.handler(async (input, authz) => {
-		await authz.check("use", { kind: "thread", id: input.threadId });
+	.handler(async (input, ctx) => {
+		await ctx.authz.enforce("use", { kind: "thread", id: input.threadId });
 		return input.threadId;
 	});
 

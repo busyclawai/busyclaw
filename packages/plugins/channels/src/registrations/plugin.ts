@@ -300,7 +300,11 @@ export function buildRegistrationsPlugin(
 				);
 			}
 			if (scope !== undefined && scopeId !== undefined) {
-				await ctx.check("use", { scope, scopeId }, REGISTRATION_AUTHORITY);
+				await ctx.authz.enforce(
+					"use",
+					{ scope, scopeId },
+					REGISTRATION_AUTHORITY,
+				);
 			}
 			// Re-registration rotates an EXISTING row's credentials and bind defaults and re-activates it.
 			// That is a management operation on someone's bot, not a create: without this check the
@@ -311,7 +315,7 @@ export function buildRegistrationsPlugin(
 				endpointKey: input.endpointKey,
 			});
 			if (existing) {
-				await ctx.check(
+				await ctx.authz.enforce(
 					"manage",
 					{ kind: CHANNEL_REGISTRATION_KIND, id: existing.id },
 					REGISTRATION_AUTHORITY,
@@ -417,7 +421,7 @@ export function buildRegistrationsPlugin(
 									// absent rather than an error — one unreadable row must not fail the page, and
 									// answering "denied" per row would make the listing a probe for other tenants'
 									// registrations. Decided as the single-row read, never as the listing.
-									const visible = await ctx.filter(
+									const visible = await ctx.authz.filter(
 										"read",
 										await requireStore().list(filter),
 										(row) => ({
