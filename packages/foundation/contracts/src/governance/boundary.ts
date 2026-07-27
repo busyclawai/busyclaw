@@ -4,6 +4,7 @@
 
 import { type } from "arktype";
 import type { JsonObject } from "../common";
+import type { ToolDescriptor } from "../tools/descriptor";
 import { jsonObject as jsonObjectSchema } from "../common";
 
 // ── Data contracts (validate + infer) ───────────────────────────────────────
@@ -162,6 +163,44 @@ export const RUN_MODE_CONTEXT_KEY = "euroclaw__runMode";
 // from the ApprovalRecord's `decidedBy` (forge-proof, post-strip, only the trusted step sets it; never
 // caller-claimed). The audit records it as `decidedBy` so the compliance chain shows who approved.
 export const APPROVED_BY_CONTEXT_KEY = "euroclaw__approvedBy";
+
+/**
+ * The tools THIS RUN resolved beyond the static set — per-run registrations a boundary supplied
+ * through `resolveTools`. Read by the governance floor so a registered tool is a decidable action
+ * rather than one the model has never heard of.
+ *
+ * A SYMBOL, not a `euroclaw__` string key, and the difference is the point. The string keys are
+ * stripped from caller input and re-stamped by trusted code, which works because they are strings a
+ * body could otherwise carry. A symbol cannot survive JSON at all, so there is no forgery to strip:
+ * only code holding this exact symbol can write it. `Symbol.for` so duplicated contract copies in one
+ * dependency graph still read each other's.
+ *
+ * It carries DESCRIPTORS, not a built model — the floor owns how a descriptor becomes an action, and
+ * the runtime should not have to know.
+ */
+export const RUN_ACTIONS_CONTEXT_KEY: unique symbol = Symbol.for(
+	"euroclaw.runActions",
+);
+
+/** Attach this run's extra tool descriptors to a resolved context (trusted, post-strip). */
+export function stampRunActions(
+	ctx: Record<string, unknown>,
+	descriptors: readonly ToolDescriptor[],
+): void {
+	if (descriptors.length === 0) return;
+	(ctx as { [RUN_ACTIONS_CONTEXT_KEY]?: readonly ToolDescriptor[] })[
+		RUN_ACTIONS_CONTEXT_KEY
+	] = descriptors;
+}
+
+/** Read them back; empty when the run added nothing to the static set. */
+export function runActionsOf(ctx: unknown): readonly ToolDescriptor[] {
+	if (ctx === null || typeof ctx !== "object") return [];
+	const found = (ctx as { [RUN_ACTIONS_CONTEXT_KEY]?: unknown })[
+		RUN_ACTIONS_CONTEXT_KEY
+	];
+	return Array.isArray(found) ? (found as ToolDescriptor[]) : [];
+}
 
 /** The value vocabulary for `RUN_MODE_CONTEXT_KEY`. */
 export type RunMode = "interactive" | "autonomous";

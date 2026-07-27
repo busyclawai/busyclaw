@@ -4,9 +4,27 @@
 // actually returns — which is dialect-dependent in two places SQLite gets wrong if you assume the
 // declaration's vocabulary carries over: it has no boolean, and no timestamp.
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { SchemaDeclaration } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { generateKyselyTypes } from "../src/generate";
+
+/** Resolve a locally-installed CLI binary by walking up to the nearest `node_modules/.bin`.
+ *  Deliberately NOT `npx`: npx resolves through the npm cache and can shell out to a lookup that
+ *  fails under load — this test passed in isolation and failed with "command not found" only when
+ *  the whole workspace gate ran at once. A path that exists on disk cannot do that. */
+function binPath(name: string): string {
+	let dir = process.cwd();
+	for (;;) {
+		const candidate = join(dir, "node_modules", ".bin", name);
+		if (existsSync(candidate)) return candidate;
+		const parent = dirname(dir);
+		if (parent === dir)
+			throw new Error(`could not resolve the "${name}" binary`);
+		dir = parent;
+	}
+}
 
 const SCHEMA: SchemaDeclaration = {
 	thread: {
@@ -143,8 +161,7 @@ describe("the emitted types actually compile", () => {
 				"utf8",
 			);
 
-			await promisify(execFile)("npx", [
-				"tsc",
+			await promisify(execFile)(binPath("tsc"), [
 				"--noEmit",
 				"--strict",
 				"--skipLibCheck",

@@ -22,6 +22,8 @@ import {
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
+	stampRunActions,
+	toolDescriptors,
 	redactionContextFrom,
 	SCOPE_CONTEXT_KEY,
 	SCOPE_ID_CONTEXT_KEY,
@@ -967,10 +969,20 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		runTools: ToolDefinitionSet = staticTools,
 		redactor: Redactor | undefined = config.redactor,
 	) => {
+		// The tools THIS RUN added beyond the static set. The governance floor compiles its action model
+		// once, from the static tools, so a per-run registration is an action no policy can name — and
+		// the sealed default refuses it. That was invisible while unmodeled calls skipped the gate; with
+		// every call decided, a boundary's registered tools would simply never run. Computed once per
+		// run core, stamped per call onto the context the gate actually receives (core rebuilds it, so
+		// stamping the caller's copy upstream would reach nothing).
+		const runActions = toolDescriptors(runTools).filter(
+			(descriptor) => staticTools[descriptor.path] === undefined,
+		);
 		const resolveGovernanceContext = async (
 			ctx: Record<string, unknown>,
 		): Promise<Record<string, unknown>> => {
 			const resolved = resolveContext ? await resolveContext(ctx) : ctx;
+			stampRunActions(resolved, runActions);
 			// The authenticated caller SEEDS the one canonical principal. Done HERE — the trusted step,
 			// after `stripReserved` cleared any caller-forged `euroclaw__` keys — so the seed can't be
 			// spoofed. The caller IS the run's initiator, so it WINS over the `identity` resolver (which

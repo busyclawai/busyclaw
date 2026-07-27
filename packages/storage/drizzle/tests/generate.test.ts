@@ -3,6 +3,11 @@
 // primary keys, which euroclaw has and Better Auth's generators never see.
 
 import type { SchemaDeclaration } from "@euroclaw/contracts";
+// Imported at module scope, not inside the test. Loading drizzle-orm is slow enough that on a
+// saturated machine it alone exceeded vitest's 5s per-test budget — the test failed for being
+// scheduled badly, not for being wrong. Module loading belongs to the file, not the assertion.
+import * as pgCore from "drizzle-orm/pg-core";
+import * as sqliteCore from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 import { generateDrizzleSchema } from "../src/generate";
 
@@ -112,8 +117,8 @@ describe("the emitted code names REAL drizzle-orm helpers", () => {
 			.filter(Boolean);
 	};
 
-	it("every helper it imports from pg-core exists there", async () => {
-		const core = await import("drizzle-orm/pg-core");
+	it("every helper it imports from pg-core exists there", () => {
+		const core = pgCore;
 		const code = generateDrizzleSchema({ schema: SCHEMA, provider: "pg" });
 		const helpers = helpersIn(code);
 		expect(helpers.length).toBeGreaterThan(0);
@@ -122,8 +127,8 @@ describe("the emitted code names REAL drizzle-orm helpers", () => {
 		}
 	});
 
-	it("every helper it imports from sqlite-core exists there", async () => {
-		const core = await import("drizzle-orm/sqlite-core");
+	it("every helper it imports from sqlite-core exists there", () => {
+		const core = sqliteCore;
 		const code = generateDrizzleSchema({ schema: SCHEMA, provider: "sqlite" });
 		const helpers = helpersIn(code);
 		expect(helpers.length).toBeGreaterThan(0);

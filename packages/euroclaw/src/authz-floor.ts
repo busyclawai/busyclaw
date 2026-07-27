@@ -13,6 +13,7 @@
 // `createOrgPolicyRouter` composition) is a later slice.
 
 import {
+	actionEntitiesFromModel,
 	actionInputsFromTools,
 	buildAuthzModel,
 	cedarFloorEngine,
@@ -26,6 +27,7 @@ import {
 	type EuroclawPlugin,
 	type PolicyEngine,
 	type PolicySourceSlice,
+	runActionsOf,
 	type ToolDefinitionSet,
 	toolDescriptors,
 } from "@euroclaw/contracts";
@@ -116,9 +118,30 @@ export function buildFloorPolicyPlugin(input: {
 	//    gate — only ever sees paths. It used to need an index to reconcile the two, which put a
 	//    second id inside the governance layer; moving the translation to the edge deleted it.
 	const mapCall = cedarMapCall({ model });
+	// 5. Per-RUN actions. The model above is compiled once, from the static tools — but a boundary's
+	//    registered tools arrive per run through `resolveTools`, after that compilation. An action the
+	//    model has never heard of is refused, so without this a registered tool could never run: the
+	//    fallback rule that makes unknown mean no would also make "not yet known" mean no.
+	//
+	//    The runtime stamps this run's extra descriptors onto the resolved context; they become action
+	//    entities merged UNDER the engine's directory, so a run can ADD actions and never redefine one.
+	//    Cached by the descriptor array's identity — one array per run, so this builds once per run
+	//    rather than once per tool call.
+	const runEntities = new WeakMap<object, unknown>();
 	return createPolicyPlugin({
 		engine,
 		mapCall,
+		entitiesFor: (ctx) => {
+			const descriptors = runActionsOf(ctx);
+			if (descriptors.length === 0) return undefined;
+			const cached = runEntities.get(descriptors);
+			if (cached !== undefined) return cached;
+			const built = actionEntitiesFromModel(
+				buildAuthzModel(actionInputsFromTools(descriptors)),
+			);
+			runEntities.set(descriptors, built);
+			return built;
+		},
 		id: FLOOR_POLICY_ID,
 		sealed: true,
 	});
