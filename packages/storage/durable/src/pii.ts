@@ -157,11 +157,12 @@ export function createPiiMappingStore(
 				where: [{ field: "subjectId", value: subjectId }],
 			});
 			const seen = new Set<string>();
+			let erased = 0;
 			for (const row of subjectRows) {
 				const key = JSON.stringify([row.placeholder, row.scope, row.scopeId]);
 				if (seen.has(key)) continue;
 				seen.add(key);
-				await db.deleteMany({
+				erased += await db.deleteMany({
 					model: "pii_mapping",
 					where: mappingWhere(row),
 				});
@@ -170,6 +171,9 @@ export function createPiiMappingStore(
 					where: subjectContainerWhere(row),
 				});
 			}
+			// Mappings shredded, not subject rows: it is the mapping that made a placeholder
+			// rehydratable, so it is the mapping whose removal is the erasure.
+			return erased;
 		},
 	};
 }
