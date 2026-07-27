@@ -457,6 +457,18 @@ function combinedAbortSignal(
 ): RuntimeAbortSignal | undefined {
 	if (!first) return second;
 	if (!second) return first;
+	// Two PLATFORM signals combine into a platform signal, so the pair keeps reaching the model
+	// vendor's `fetch` — aborting cancels the request rather than only tripping the loop's next
+	// cooperative check. A hand-rolled `{ aborted }` on either side (the shim below, a caller's own)
+	// cannot be combined that way, so those fall back to polling both.
+	if (
+		typeof AbortSignal !== "undefined" &&
+		typeof AbortSignal.any === "function" &&
+		first instanceof AbortSignal &&
+		second instanceof AbortSignal
+	) {
+		return AbortSignal.any([first, second]);
+	}
 	return {
 		get aborted() {
 			return first.aborted || second.aborted;
@@ -464,14 +476,21 @@ function combinedAbortSignal(
 	};
 }
 
-type EffectAbortController = {
+/**
+ * A runtime-owned abort source, combined into the caller's own signal. Two of them exist: a lost
+ * effect lease (the heartbeat found the row gone) and a departed stream reader. Prefers the platform
+ * `AbortController` when there is one — a real `AbortSignal` satisfies {@link RuntimeAbortSignal}
+ * structurally AND reaches the model vendor's `fetch`, so aborting there cancels the HTTP request
+ * rather than only tripping the loop's next cooperative check.
+ */
+type RuntimeAbortController = {
 	signal: { aborted: boolean };
 	abort: () => void;
 };
 
-function createEffectAbortController(): EffectAbortController {
+function createRuntimeAbortController(): RuntimeAbortController {
 	const Controller = (
-		globalThis as { AbortController?: new () => EffectAbortController }
+		globalThis as { AbortController?: new () => RuntimeAbortController }
 	).AbortController;
 	if (Controller) return new Controller();
 	const signal = { aborted: false };
@@ -489,7 +508,7 @@ function startEffectHeartbeat(input: {
 	leaseToken: string;
 	leaseTtlMs?: number;
 	now: () => string;
-	abortController: EffectAbortController;
+	abortController: RuntimeAbortController;
 }): () => void {
 	const ttl = input.leaseTtlMs ?? 60_000;
 	const intervalMs = Math.max(250, Math.floor(ttl / 2));
@@ -722,38 +741,88 @@ export type RuntimeStream = TextDeltaStream & {
 	readonly result: Promise<RuntimeResult>;
 };
 
-/** A minimal push→async-iterate queue backing `RuntimeStream.textStream`. */
-function createDeltaQueue(): {
-	push: (value: string) => void;
+/**
+ * How many undelivered deltas the channel holds before the producer has to wait. Not a knob: the
+ * number only has to be large enough that a reader keeping up never feels it, and small enough that
+ * a reader who is NOT keeping up cannot turn a long generation into unbounded heap.
+ */
+const STREAM_DELTA_BUFFER = 512;
+
+/**
+ * The bounded push→async-iterate channel backing `RuntimeStream.textStream`.
+ *
+ * Two properties an unbounded array does not have:
+ *
+ * **Backpressure.** At capacity `push` returns a promise instead of returning, and the vendor's own
+ * `for await` over the model stream awaits it — so a slow reader stops the read from the provider
+ * rather than accumulating in memory. Deltas arrive as fast as a network can deliver them and a
+ * reader can be arbitrarily slower (a browser over a bad link, a disk-backed sink); the gap between
+ * the two rates is the leak, and this is where it is closed.
+ *
+ * **Cancellation.** A consumer that breaks out of its `for await`, or a transport that cancels the
+ * `ReadableStream` wrapping it, runs the generator's `finally` — which is the only signal that
+ * nobody is reading any more. `onCancel` fires there, and only there: a stream that simply ran to
+ * completion has not been cancelled and must not be treated as if it had.
+ */
+function createDeltaChannel(options: { onCancel: () => void }): {
+	push: (value: string) => void | Promise<void>;
 	close: () => void;
 	iterable: AsyncIterable<string>;
 } {
 	const buffer: string[] = [];
-	let wake: (() => void) | undefined;
+	let wakeConsumer: (() => void) | undefined;
+	let wakeProducer: (() => void) | undefined;
 	let closed = false;
+	let cancelled = false;
+
+	const releaseProducer = () => {
+		wakeProducer?.();
+		wakeProducer = undefined;
+	};
+
 	return {
 		push: (value) => {
+			// Nobody is reading. Keeping the delta would only grow a buffer with no exit.
+			if (cancelled) return;
 			buffer.push(value);
-			wake?.();
-			wake = undefined;
+			wakeConsumer?.();
+			wakeConsumer = undefined;
+			if (buffer.length < STREAM_DELTA_BUFFER) return;
+			return new Promise<void>((resolve) => {
+				wakeProducer = resolve;
+			});
 		},
 		close: () => {
 			closed = true;
-			wake?.();
-			wake = undefined;
+			wakeConsumer?.();
+			wakeConsumer = undefined;
 		},
 		iterable: {
 			async *[Symbol.asyncIterator]() {
-				while (true) {
-					const next = buffer.shift();
-					if (next !== undefined) {
-						yield next;
-						continue;
+				let drained = false;
+				try {
+					while (true) {
+						const next = buffer.shift();
+						if (next !== undefined) {
+							if (buffer.length < STREAM_DELTA_BUFFER) releaseProducer();
+							yield next;
+							continue;
+						}
+						if (closed) {
+							drained = true;
+							return;
+						}
+						await new Promise<void>((resolve) => {
+							wakeConsumer = resolve;
+						});
 					}
-					if (closed) return;
-					await new Promise<void>((resolve) => {
-						wake = resolve;
-					});
+				} finally {
+					cancelled = true;
+					buffer.length = 0;
+					// A producer parked on capacity would otherwise wait forever for a reader that has
+					// already gone. Let it run on to its own abort check.
+					releaseProducer();
+					if (!drained) options.onCancel();
 				}
 			},
 		},
@@ -1261,7 +1330,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						status: claim.record.status,
 					});
 				}
-				const abortController = createEffectAbortController();
+				const abortController = createRuntimeAbortController();
 				const stopHeartbeat = startEffectHeartbeat({
 					store: effectStore,
 					effectId: state.currentEffectId,
@@ -1468,7 +1537,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		prompt: string,
 		ctx: Record<string, unknown> | undefined,
 		options: RunOptionsFor<Config> | undefined,
-		onDelta?: (text: string) => void,
+		onDelta?: (text: string) => void | Promise<void>,
 	): Promise<RuntimeResult> => {
 		const state = createRunState();
 		state.runInstanceId = newId("runstate");
@@ -1564,11 +1633,24 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		ctx?: Record<string, unknown>,
 		options?: RunOptionsFor<Config>,
 	): RuntimeStream => {
-		const queue = createDeltaQueue();
-		const result = invoke(prompt, ctx, options, (text) =>
-			queue.push(text),
-		).finally(() => queue.close());
-		return { textStream: queue.iterable, result };
+		// A reader that walks away — the browser tab closes, the transport cancels, the consumer
+		// `break`s — used to leave the run generating for nobody: model tokens billed, tools called,
+		// side effects performed, all for output no one would ever read. The channel's cancellation
+		// trips this signal and the run's existing abort checks stop it at the next boundary.
+		const readerGone = createRuntimeAbortController();
+		const channel = createDeltaChannel({ onCancel: () => readerGone.abort() });
+		const runOptions = {
+			...options,
+			abortSignal: combinedAbortSignal(options?.abortSignal, readerGone.signal),
+		} as RunOptionsFor<Config>;
+		const result = invoke(prompt, ctx, runOptions, (text) =>
+			channel.push(text),
+		).finally(() => channel.close());
+		// Abandoning the stream rejects `result` with the abort — truthfully. A consumer that awaits
+		// it still sees that rejection; this only keeps the one who walked away from tripping an
+		// unhandled-rejection warning for a cancellation they asked for.
+		result.catch(() => {});
+		return { textStream: channel.iterable, result };
 	};
 
 	const continueRun = async (
