@@ -401,6 +401,93 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		return formatPlaceholder(kind, wordCode(book, 4));
 	};
 
+	// ── the concurrency latch ─────────────────────────────────────────────────────────────────────
+	//
+	// Lookup-or-mint below is a read-modify-write, and `walk` runs ARRAY elements through
+	// `Promise.all`. So two elements carrying the same value both miss `findByHash`, both mint, and one
+	// person wears a different token per element — the dedup docstring's three promises (coreference,
+	// stable prompt caching, one row per value) all quietly fail. A message list, a tool-result list, a
+	// list of documents: arrays are the normal payload shape, not an edge case. Sequential paths — the
+	// span loop inside one text, and object keys — were never affected, which is why this survived.
+	//
+	// Coalescing by (container, hash) makes the first caller do the work and the rest await its answer,
+	// so concurrent mints inside one process settle on ONE placeholder.
+	//
+	// Why a latch and not a DERIVED code (the obvious fix — HMAC the container and hash, and two
+	// racers compute the same token without seeing each other): deriving from the value would
+	// resurrect erased tokens. `deleteForSubject` erases by REMOVING the row, and a value that
+	// reappears afterwards must mint fresh so the already-emitted dead token stays permanently inert.
+	// A pure derivation reproduces it exactly. Randomness is load-bearing for erasure here, so the
+	// race gets closed instead of designed away.
+	//
+	// Cleared on settle: a concurrency latch, never a cache. Dedup and erasure keep coming from the
+	// store, which is the only thing that survives a restart.
+	const inFlight = new Map<string, Promise<PiiMapping>>();
+
+	// The mapping for a value: an existing row, or a freshly minted and saved one.
+	const lookupOrMint = async (
+		span: PiiSpan,
+		originalHash: string | undefined,
+		ctx?: RedactionContext,
+	): Promise<PiiMapping> => {
+		const existing =
+			originalHash === undefined
+				? null
+				: await mappings.findByHash(originalHash, ctx);
+		if (existing !== null) {
+			// Same value, possibly a new data-subject — append junction rows only.
+			if (ctx?.subjectIds !== undefined && ctx.subjectIds.length > 0) {
+				await mappings.save(existing, ctx.subjectIds);
+			}
+			return existing;
+		}
+		const minted: PiiMapping = {
+			placeholder: await mintPlaceholder(span.kind, ctx),
+			original: span.value,
+			originalHash,
+			kind: span.kind,
+			...piiContainer(ctx),
+			createdAt: now(),
+		};
+		await mappings.save(minted, ctx?.subjectIds);
+		return minted;
+	};
+
+	const placeholderFor = async (
+		span: PiiSpan,
+		ctx?: RedactionContext,
+	): Promise<string> => {
+		const originalHash = hashOf?.(span.kind, span.value);
+		// No dedup key → every occurrence mints fresh by design, so there is nothing to coalesce.
+		if (originalHash === undefined) {
+			return (await lookupOrMint(span, undefined, ctx)).placeholder;
+		}
+		const container = piiContainer(ctx);
+		const key = JSON.stringify([
+			container.scope,
+			container.scopeId,
+			originalHash,
+		]);
+		const running = inFlight.get(key);
+		if (running !== undefined) {
+			const shared = await running;
+			// Every caller appends its OWN junction rows, not just the one that won the latch: two
+			// concurrent redactions can carry different subjectIds, and a dropped link is a subject
+			// whose erasure would never reach this mapping. Both stores make the append idempotent.
+			if (ctx?.subjectIds !== undefined && ctx.subjectIds.length > 0) {
+				await mappings.save(shared, ctx.subjectIds);
+			}
+			return shared.placeholder;
+		}
+		const pending = lookupOrMint(span, originalHash, ctx);
+		inFlight.set(key, pending);
+		try {
+			return (await pending).placeholder;
+		} finally {
+			inFlight.delete(key);
+		}
+	};
+
 	const redactText = async (
 		text: string,
 		ctx?: RedactionContext,
@@ -422,33 +509,9 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		for (const span of spans) {
 			// Lookup-or-mint: an already-known (value, kind, container) reuses its placeholder, so
 			// every mention wears the same token. The awaited save above the next lookup makes the
-			// dedup hold even for two occurrences inside ONE text.
-			const originalHash = hashOf?.(span.kind, span.value);
-			const existing =
-				originalHash === undefined
-					? null
-					: await mappings.findByHash(originalHash, ctx);
-			let placeholder: string;
-			if (existing) {
-				placeholder = existing.placeholder;
-				// Same value, possibly a new data-subject — append junction rows only.
-				if (ctx?.subjectIds !== undefined && ctx.subjectIds.length > 0) {
-					await mappings.save(existing, ctx.subjectIds);
-				}
-			} else {
-				placeholder = await mintPlaceholder(span.kind, ctx);
-				await mappings.save(
-					{
-						placeholder,
-						original: span.value,
-						originalHash,
-						kind: span.kind,
-						...piiContainer(ctx),
-						createdAt: now(),
-					},
-					ctx?.subjectIds,
-				);
-			}
+			// dedup hold for two occurrences inside ONE text; the latch inside `placeholderFor` is
+			// what makes it hold when the caller walks several texts CONCURRENTLY (arrays do).
+			const placeholder = await placeholderFor(span, ctx);
 			out += text.slice(last, span.start) + placeholder;
 			last = span.end;
 		}

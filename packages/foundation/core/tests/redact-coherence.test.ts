@@ -91,6 +91,105 @@ describe("deterministic placeholders (indexKey)", () => {
 		).toBe("email a@b.com");
 	});
 
+	it("dedup survives CONCURRENCY: an array walks in parallel and still yields one token", async () => {
+		// `walk` runs array elements through Promise.all, so lookup-or-mint genuinely races: every
+		// element missed findByHash and minted its own token, and one person arrived at the model
+		// wearing three. Arrays are the normal payload shape (a message list, a tool-result list), so
+		// this was the common case and not an edge one.
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: createMemoryPiiMappingStore(),
+			indexKey: "test-key",
+		});
+
+		const out = (await redactor.redactValue(
+			["mail a@b.com", "again a@b.com", "third a@b.com"],
+			ctx,
+		)) as string[];
+
+		const tokens = out.flatMap(tokensOf);
+		expect(tokens).toHaveLength(3);
+		expect(new Set(tokens).size).toBe(1);
+		expect(await redactor.rehydrateValue(out, ctx)).toEqual([
+			"mail a@b.com",
+			"again a@b.com",
+			"third a@b.com",
+		]);
+	});
+
+	it("dedup survives concurrent redactValue calls on one container", async () => {
+		// The same race one level up: parallel tool calls, or an event fan-out inside one claw.
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: createMemoryPiiMappingStore(),
+			indexKey: "test-key",
+		});
+
+		const outs = await Promise.all([
+			redactor.redactValue("one a@b.com", ctx),
+			redactor.redactValue("two a@b.com", ctx),
+			redactor.redactValue("three a@b.com", ctx),
+		]);
+
+		expect(new Set(outs.flatMap(tokensOf)).size).toBe(1);
+	});
+
+	it("concurrency does not leak ACROSS containers", async () => {
+		// The latch is keyed by (container, hash). Coalescing must never hand claw b a token minted
+		// for claw a, which would make one claw's placeholder resolve inside the other.
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings: createMemoryPiiMappingStore(),
+			indexKey: "test-key",
+		});
+
+		const [inA, inB] = await Promise.all([
+			redactor.redactValue("email a@b.com", { scope: "claw", scopeId: "a" }),
+			redactor.redactValue("email a@b.com", { scope: "claw", scopeId: "b" }),
+		]);
+
+		expect(tokensOf(inA)[0]).not.toBe(tokensOf(inB)[0]);
+		expect(
+			await redactor.rehydrateValue(inA, { scope: "claw", scopeId: "b" }),
+		).toBe(inA);
+	});
+
+	it("concurrent callers each keep their own subject link, so erasure still reaches the mapping", async () => {
+		// Coalescing means only ONE caller runs lookup-or-mint. If the others dropped their subjectIds
+		// with it, that subject would hold no junction row and deleteForSubject would miss the value
+		// entirely — the token would keep rehydrating after an erasure request.
+		const mappings = createMemoryPiiMappingStore();
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings,
+			indexKey: "test-key",
+		});
+
+		const outs = await Promise.all([
+			redactor.redactValue("a@b.com", { ...ctx, subjectIds: ["s1"] }),
+			redactor.redactValue("a@b.com", { ...ctx, subjectIds: ["s2"] }),
+		]);
+		expect(new Set(outs.flatMap(tokensOf)).size).toBe(1);
+
+		// s2 never won the latch; erasing it must still reach the shared mapping.
+		await mappings.deleteForSubject("s2");
+		expect(await redactor.rehydrateValue(outs[0], ctx)).toBe(outs[0]);
+	});
+
+	it("without indexKey, concurrent occurrences still mint fresh — the latch is not a cache", async () => {
+		const keyless = createStoredRedactor({
+			detector: emailDetector,
+			mappings: createMemoryPiiMappingStore(),
+		});
+
+		const out = (await keyless.redactValue(
+			["mail a@b.com", "again a@b.com"],
+			ctx,
+		)) as string[];
+
+		expect(new Set(out.flatMap(tokensOf)).size).toBe(2);
+	});
+
 	it("erasure is never undone by dedup: a reappearing value gets a NEW token", async () => {
 		const mappings = createMemoryPiiMappingStore();
 		const redactor = createStoredRedactor({
