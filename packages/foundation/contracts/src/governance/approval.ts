@@ -8,6 +8,7 @@ import type { JsonObject as JsonObjectType } from "../common";
 import type { EntityInput, EntityRecord } from "../entity";
 import { entity, field } from "../entity";
 import type { HandleResult, ToolCall, TurnContext } from "./boundary";
+import { type GateDemand, gateDemand } from "./boundary";
 import type { Principal } from "./principal";
 
 // The lifecycle of a granted approval, as a state machine rather than a flag.
@@ -41,7 +42,24 @@ export const approvalFields = {
 		immutable: true,
 	}),
 	status: field.enum(approvalStatusValues, { required: true }),
+	/** The gate whose demand is listed first — kept for display and indexing. The authoritative set is
+	 *  `demands`; this is its head, not a second source of truth. */
 	gateId: field.string({ required: true, immutable: true }),
+	/**
+	 * EVERY demand this approval answers. A call commonly attracts more than one — the policy engine's
+	 * confirmation probe and a tool's own gate are both before-gates — and a human who is shown one of
+	 * them is being asked to decide with the question half-stated. Immutable: what was granted is what
+	 * was shown.
+	 *
+	 * Also the resume's matching set. A gate is no longer skipped by id (which made its deny branch
+	 * unreachable); every gate re-runs and a demand in this set counts as met, so the same gate asking
+	 * a DIFFERENT question is a new question.
+	 */
+	demands: field.json(gateDemand.array(), {
+		required: true,
+		immutable: true,
+		doc: "Every gate demand this approval answers, as shown to the approver — and the set a resume matches against.",
+	}),
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	args: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
 	reasonCode: field.string({ index: true, immutable: true }),

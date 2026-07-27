@@ -11,6 +11,8 @@ import { createPiiMappingStore } from "../src/pii";
 // The stored args are REDACTED (placeholders) — what resume replays.
 const base = {
 	gateId: "oversight",
+	// Every demand this approval answers — `gateId` is its head, kept for display and indexing.
+	demands: [{ gateId: "oversight", reason: "a human must confirm" }],
 	toolName: "send_email",
 	args: { to: "{{pii:abc}}" },
 	createdAt: "2026-01-01T00:00:00Z",
@@ -432,7 +434,7 @@ suite(
 			`CREATE TABLE approval (
 						id TEXT PRIMARY KEY, status TEXT, gateId TEXT, toolName TEXT, args TEXT, reasonCode TEXT, metadata TEXT,
 						principal TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT,
-						leaseId TEXT, leaseExpiresAt TEXT, result TEXT
+						demands TEXT, leaseId TEXT, leaseExpiresAt TEXT, result TEXT
 					)`,
 		);
 		return kyselyAdapter(db);

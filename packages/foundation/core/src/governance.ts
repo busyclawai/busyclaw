@@ -17,6 +17,7 @@ import {
 	type BusyclawPlugin,
 	type ContextResolver,
 	type Gate,
+	type GateDemand,
 	gateDecision,
 	type HandleResult,
 	type InferContext,
@@ -311,13 +312,18 @@ export function createGovernance<const Config extends GovernanceConfig>(
 	async function runBoundaryBeforeGates(
 		call: BoundaryCall,
 		ctx: Record<string, unknown>,
-		input: { bypassGateId?: string; allowApproval: boolean },
+		input: { satisfied?: readonly GateDemand[]; allowApproval: boolean },
 	): Promise<Extract<
 		HandleResult,
 		{ status: "denied" | "needs-approval" }
 	> | null> {
+		// Same shape as the tool gates below: collect, then decide. A boundary gate is part of the same
+		// approval, so it must be able to refuse a call a human already approved for another reason.
+		const demands: GateDemand[] = [];
+		let denial:
+			| Omit<Extract<HandleResult, { status: "denied" }>, "demands">
+			| undefined;
 		for (const gate of boundaryBefore) {
-			if (gate.id === input.bypassGateId) continue;
 			if (!gate.matcher(call, ctx)) continue;
 			const verdict = gateDecision(await gate.handler(call, ctx));
 			if (verdict instanceof type.errors) {
@@ -328,13 +334,14 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				);
 			}
 			if (verdict.decision === "deny") {
-				return {
+				denial ??= {
 					status: "denied",
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
 					...annotationsOf(verdict),
 				};
+				continue;
 			}
 			if (verdict.decision === "needs-approval") {
 				if (!input.allowApproval) {
@@ -343,16 +350,22 @@ export function createGovernance<const Config extends GovernanceConfig>(
 						{ gateId: gate.id },
 					);
 				}
-				return {
-					status: "needs-approval",
+				const demand: GateDemand = {
 					gateId: gate.id,
 					reason: resolveReason(verdict),
-					reasonCode: verdict.reasonCode,
-					...annotationsOf(verdict),
+					...(verdict.reasonCode !== undefined
+						? { reasonCode: verdict.reasonCode }
+						: {}),
 				};
+				if (input.satisfied?.some((met) => sameDemand(met, demand))) continue;
+				demands.push({ ...demand, ...annotationsOf(verdict) });
 			}
 		}
-		return null;
+		if (denial) return { ...denial, demands };
+		if (demands.length === 0) return null;
+		const [first] = demands;
+		if (!first) return null;
+		return { status: "needs-approval", ...first, demands };
 	}
 
 	// The tool before-gates, in order — the DECISION half of the pipeline, factored out so the
@@ -361,13 +374,25 @@ export function createGovernance<const Config extends GovernanceConfig>(
 	async function runToolBeforeGates(
 		call: ToolCall,
 		ctx: Record<string, unknown>,
-		bypassGateId?: string,
+		satisfied?: readonly GateDemand[],
 	): Promise<Extract<
 		HandleResult,
 		{ status: "denied" | "needs-approval" }
 	> | null> {
+		// EVERY matching gate runs, and the outcome is decided after — not by whichever objected first.
+		//
+		// Returning on the first objection meant a human was shown one demand while a second waited
+		// behind it, and a gate that came after an approved one was skipped WHOLESALE: its deny branch
+		// was unreachable on a resume, so a call approved for one reason could no longer be refused for
+		// another. Collecting costs an evaluation per gate on a call that was already doomed; it buys
+		// an outcome that does not depend on registration order and a human who sees the whole question.
+		const demands: GateDemand[] = [];
+		let denial:
+			| (Extract<HandleResult, { status: "denied" }> extends infer D
+					? Omit<D, "demands">
+					: never)
+			| undefined;
 		for (const gate of before) {
-			if (gate.id === bypassGateId) continue; // pre-approved → skip this gate exactly once
 			if (!gate.matcher(call, ctx)) continue;
 			const verdict = gateDecision(await gate.handler(call, ctx));
 			if (verdict instanceof type.errors) {
@@ -378,49 +403,74 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				);
 			}
 			if (verdict.decision === "deny") {
-				return {
+				// First denial wins the REASON — a call is refused once, and the earliest gate to refuse
+				// it is the one that answered. Later gates still run so their demands are reported.
+				denial ??= {
 					status: "denied",
 					gateId: gate.id,
 					reason: resolveReason(verdict),
 					reasonCode: verdict.reasonCode,
 					...annotationsOf(verdict),
 				};
+				continue;
 			}
 			if (verdict.decision === "needs-approval") {
-				// The pipeline only DECIDES. Persisting the pending approval (when a store is configured)
-				// is an observer's job — the approvalGate after-gate, same as audit.
-				return {
-					status: "needs-approval",
+				const demand: GateDemand = {
 					gateId: gate.id,
 					reason: resolveReason(verdict),
-					reasonCode: verdict.reasonCode,
-					...annotationsOf(verdict),
+					...(verdict.reasonCode !== undefined
+						? { reasonCode: verdict.reasonCode }
+						: {}),
 				};
+				// A demand the approval already answers is met. Matched on (gateId, reasonCode) rather
+				// than waved through by gate id: the same gate asking a DIFFERENT question is a new
+				// question, and skipping the gate entirely is what made its deny branch unreachable.
+				if (satisfied?.some((met) => sameDemand(met, demand))) continue;
+				// The pipeline only DECIDES. Persisting the pending approval (when a store is configured)
+				// is an observer's job — the approvalGate after-gate, same as audit.
+				demands.push({ ...demand, ...annotationsOf(verdict) });
 			}
 		}
-		return null;
+		// A denial beats every demand: there is nothing a human could grant that would make this run,
+		// so no approval is parked — but what else was wanted is still reported.
+		if (denial) return { ...denial, demands };
+		if (demands.length === 0) return null;
+		const [first] = demands;
+		if (!first) return null;
+		return { status: "needs-approval", ...first, demands };
+	}
+
+	/** What a granted approval covers — the demands it was shown, which is what its holder agreed to. */
+	function approvedDemands(record: ApprovalRecord): readonly GateDemand[] {
+		return record.demands;
+	}
+
+	/** Two demands are the same question when the same gate asks it for the same reason code. */
+	function sameDemand(a: GateDemand, b: GateDemand): boolean {
+		return a.gateId === b.gateId && a.reasonCode === b.reasonCode;
 	}
 
 	// The governed pipeline over an ALREADY-REDACTED call: boundary-gates → tool-gates → tool → after-gates.
 	// `handleToolCall` feeds it a freshly-redacted call; `continueRun` feeds it the stored call
-	// and passes `bypassGateId` to skip (exactly once) the gate that demanded approval.
+	// and passes the demands the approval ANSWERED — every gate still runs, and a demand it already
+	// covers is met rather than the gate being skipped.
 	async function runGoverned(
 		call: ToolCall,
 		ctx: Record<string, unknown>,
-		bypassGateId?: string,
+		satisfied?: readonly GateDemand[],
 	): Promise<HandleResult> {
 		let outcome: Outcome | null = null;
 		const boundaryCall = toolBoundaryCall(call);
 		try {
 			const boundaryOutcome = await runBoundaryBeforeGates(boundaryCall, ctx, {
 				allowApproval: true,
-				bypassGateId,
+				satisfied,
 			});
 			if (boundaryOutcome) {
 				outcome = boundaryOutcome;
 				return boundaryOutcome;
 			}
-			const gateOutcome = await runToolBeforeGates(call, ctx, bypassGateId);
+			const gateOutcome = await runToolBeforeGates(call, ctx, satisfied);
 			if (gateOutcome) {
 				outcome = gateOutcome;
 				return gateOutcome;
@@ -616,7 +666,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			return runGoverned(
 				{ name: record.toolName, args: record.args },
 				ctx,
-				record.gateId,
+				approvedDemands(record),
 			);
 		},
 

@@ -264,6 +264,8 @@ describe("busyclaw governance — the neutral pipeline", () => {
 		});
 		expect(r).toEqual({
 			status: "denied",
+			// A refusal with nothing else outstanding — the demand list is empty, not absent.
+			demands: [],
 			gateId: "amount-cap",
 			reason: "over cap",
 		});
@@ -300,7 +302,7 @@ describe("busyclaw governance — the neutral pipeline", () => {
 		expect(ran).toBe(false);
 	});
 
-	it("before-gates run in registration order; the first deny wins", async () => {
+	it("runs every gate; the first deny wins the reason", async () => {
 		const seen: string[] = [];
 		const ec = createGovernance();
 		ec.registerGate({
@@ -323,10 +325,16 @@ describe("busyclaw governance — the neutral pipeline", () => {
 		const r = await ec.handleToolCall({ name: "x", args: {} });
 		expect(r).toEqual({
 			status: "denied",
+			// A refusal with nothing else outstanding — the demand list is empty, not absent.
+			demands: [],
 			gateId: "first",
 			reason: "stop here",
 		});
-		expect(seen).toEqual(["first"]); // "second" never ran
+		// Every matching gate RUNS — the outcome is decided after, not by whichever objected first.
+		// Short-circuiting was what made an approved gate's deny branch unreachable on a resume, and
+		// what let a human be shown one demand while a second waited behind it. The cost is an
+		// evaluation on a call that was already refused; gates are decisions, not side effects.
+		expect(seen).toEqual(["first", "second"]);
 	});
 
 	it("boundary gates run before tool gates and can deny tool calls", async () => {
@@ -359,6 +367,8 @@ describe("busyclaw governance — the neutral pipeline", () => {
 
 		expect(result).toEqual({
 			status: "denied",
+			// A refusal with nothing else outstanding — the demand list is empty, not absent.
+			demands: [],
 			gateId: "boundary-gate",
 			reason: "blocked",
 		});
@@ -939,5 +949,217 @@ describe("busyclaw governance — the resolveContext hook (neutral; the claw com
 			{ busyclaw__principal: "FORGED" },
 		);
 		expect((await store.list())[0]?.principal).toBe("user:real");
+	});
+
+	// Two gates, both demanding approval on one call — the ORDINARY shape, not an exotic one: the
+	// policy gate's confirmation probe and a tool's own `govern({ gate })` are both before-gates, so
+	// any governed write tool with its own confirmation in an autonomous run produces exactly this.
+	it("surfaces every demand on one call, not just the first gate to object", async () => {
+		const { store, created } = recordingStore();
+		let toolRan = false;
+		const ec = createGovernance({
+			approvalStore: store,
+			runTool: () => {
+				toolRan = true;
+				return { sent: true };
+			},
+		})
+			.registerGate({
+				id: "policy",
+				matcher: () => true,
+				handler: () => ({
+					decision: "needs-approval",
+					reason: "autonomous write",
+					reasonCode: "unconfirmed_write",
+				}),
+			})
+			.registerGate({
+				id: "tool-confirm",
+				matcher: () => true,
+				handler: () => ({
+					decision: "needs-approval",
+					reason: "the tool wants a human",
+					reasonCode: "tool_confirmation",
+				}),
+			});
+
+		const r = await ec.handleToolCall({ name: "send_email", args: {} });
+		expect(r.status).toBe("needs-approval");
+		expect(toolRan).toBe(false);
+		// ONE approval, carrying BOTH demands. Approving without being told the second exists is a
+		// worse decision, and answering them one resume at a time is a round trip per policy.
+		expect(created).toHaveLength(1);
+		expect(r.status === "needs-approval" ? r.demands : []).toEqual([
+			{
+				gateId: "policy",
+				reason: "autonomous write",
+				reasonCode: "unconfirmed_write",
+			},
+			{
+				gateId: "tool-confirm",
+				reason: "the tool wants a human",
+				reasonCode: "tool_confirmation",
+			},
+		]);
+
+		// …and granting it satisfies BOTH, so the resume runs rather than hitting the second demand
+		// and having nowhere to put it.
+		const [approval] = created;
+		if (!approval) throw new Error("no approval");
+		await store.grant(approval.id, userPrincipal("alice"));
+		const taken = await store.claim(approval.id, 60_000);
+		if (!taken) throw new Error("expected to take the approval");
+		expect((await ec.continueRun(taken.record))?.status).toBe("ok");
+		expect(toolRan).toBe(true);
+	});
+
+	it("a deny anywhere beats every demand, and still reports what else was wanted", async () => {
+		const { store, created } = recordingStore();
+		const ec = createGovernance({ approvalStore: store, runTool: () => ({}) })
+			.registerGate({
+				id: "policy",
+				matcher: () => true,
+				handler: () => ({
+					decision: "needs-approval",
+					reason: "autonomous write",
+					reasonCode: "unconfirmed_write",
+				}),
+			})
+			.registerGate({
+				id: "blocklist",
+				matcher: () => true,
+				handler: () => ({
+					decision: "deny",
+					reason: "recipient is blocked",
+					reasonCode: "blocked_recipient",
+				}),
+			});
+
+		const r = await ec.handleToolCall({ name: "send_email", args: {} });
+		// Denied, even though the FIRST objection was only a demand for approval — order stopped
+		// deciding the outcome. And no approval is parked: there is nothing a human could grant that
+		// would make this call run.
+		expect(r.status).toBe("denied");
+		expect(created).toEqual([]);
+		if (r.status !== "denied") throw new Error("expected denied");
+		expect(r.reasonCode).toBe("blocked_recipient");
+		// The demand is still reported: an operator learns everything that was wrong in one pass
+		// instead of peeling one gate off at a time.
+		expect(r.demands).toEqual([
+			{
+				gateId: "policy",
+				reason: "autonomous write",
+				reasonCode: "unconfirmed_write",
+			},
+		]);
+	});
+
+	// The reason a demand is matched on (gateId, reasonCode) and not waved through by gate id. Skipping
+	// the gate by id was the original hole: whatever it would say NEXT — including a denial — became
+	// unreachable the moment one of its demands was granted.
+	it("does not let an approved demand cover a DIFFERENT question from the same gate", async () => {
+		const { store, created } = recordingStore();
+		let toolRan = false;
+		let calls = 0;
+		const ec = createGovernance({
+			approvalStore: store,
+			runTool: () => {
+				toolRan = true;
+				return { sent: true };
+			},
+		}).registerGate({
+			id: "amounts",
+			matcher: () => true,
+			handler: () => {
+				calls += 1;
+				// First the amount needs a human; by the time the human answers, the recipient has been
+				// blocked. Same gate, different question.
+				return calls === 1
+					? {
+							decision: "needs-approval",
+							reason: "large amount",
+							reasonCode: "large_amount",
+						}
+					: {
+							decision: "deny",
+							reason: "recipient is blocked",
+							reasonCode: "blocked_recipient",
+						};
+			},
+		});
+
+		expect((await ec.handleToolCall({ name: "pay", args: {} })).status).toBe(
+			"needs-approval",
+		);
+		const [approval] = created;
+		if (!approval) throw new Error("no approval");
+		await store.grant(approval.id, userPrincipal("alice"));
+		const taken = await store.claim(approval.id, 60_000);
+		if (!taken) throw new Error("expected to take the approval");
+
+		// The approval answered "large amount". It does not answer "blocked recipient", and the gate
+		// runs to say so — where a skip-by-id would have silenced it and let the payment through.
+		const resumed = await ec.continueRun(taken.record);
+		expect(resumed?.status).toBe("denied");
+		expect(resumed?.status === "denied" ? resumed.reasonCode : undefined).toBe(
+			"blocked_recipient",
+		);
+		expect(toolRan).toBe(false);
+	});
+
+	// The narrower half of the same rule: a SECOND demand from an already-approved gate is a new
+	// question, not a covered one. Matching on gate id alone would silently treat it as answered — the
+	// human agreed to "large amount" and would have unknowingly authorized "new payee" too.
+	it("treats a second demand from an approved gate as a new question", async () => {
+		const { store, created } = recordingStore();
+		let toolRan = false;
+		let calls = 0;
+		const ec = createGovernance({
+			approvalStore: store,
+			runTool: () => {
+				toolRan = true;
+				return { sent: true };
+			},
+		}).registerGate({
+			id: "amounts",
+			matcher: () => true,
+			handler: () => {
+				calls += 1;
+				return calls === 1
+					? {
+							decision: "needs-approval",
+							reason: "large amount",
+							reasonCode: "large_amount",
+						}
+					: {
+							decision: "needs-approval",
+							reason: "payee has never been paid before",
+							reasonCode: "new_payee",
+						};
+			},
+		});
+
+		expect((await ec.handleToolCall({ name: "pay", args: {} })).status).toBe(
+			"needs-approval",
+		);
+		const [approval] = created;
+		if (!approval) throw new Error("no approval");
+		expect(approval.demands).toEqual([
+			{
+				gateId: "amounts",
+				reason: "large amount",
+				reasonCode: "large_amount",
+			},
+		]);
+		await store.grant(approval.id, userPrincipal("alice"));
+		const taken = await store.claim(approval.id, 60_000);
+		if (!taken) throw new Error("expected to take the approval");
+
+		const resumed = await ec.continueRun(taken.record);
+		expect(resumed?.status).toBe("needs-approval");
+		expect(
+			resumed?.status === "needs-approval" ? resumed.reasonCode : undefined,
+		).toBe("new_payee");
+		expect(toolRan).toBe(false);
 	});
 });

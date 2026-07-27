@@ -1316,6 +1316,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			if (target?.governance.invoker === true) {
 				return {
 					status: "denied",
+					demands: [],
 					gateId: "runtime:nested-invoke",
 					reason: `tool "${name}" is a capability tool and cannot be invoked from nested execution`,
 					reasonCode: NESTED_INVOKER_TOOL,
@@ -1334,6 +1335,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			if (result.status === "needs-approval") {
 				return {
 					status: "denied",
+					demands: [],
 					gateId: result.gateId,
 					reason: `tool "${name}" requires approval and cannot be called from nested execution`,
 					reasonCode: NESTED_APPROVAL_UNSUPPORTED,
@@ -1519,6 +1521,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				reason: text,
 				reasonCode: record.reasonCode,
 				status: "denied",
+				demands: [],
 				steps: checkpoint.step + 1,
 				text,
 			};
