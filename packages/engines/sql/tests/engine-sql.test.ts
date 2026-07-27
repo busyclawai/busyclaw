@@ -443,10 +443,14 @@ describe("@busyclaw/engine-sql", () => {
 
 		expect(result.status).toBe("failed");
 		expect(await store.getRun(run.id)).toMatchObject({ status: "failed" });
-		expect(await store.getTask(task.id)).toMatchObject({
-			status: "dead",
-			lastError: "provider down",
-		});
+		// M-08 changed what a failed task RECORDS. `lastError` is durable plaintext — it outlives the
+		// run, rides into the `task.failed` event, and erasure can never reach it — so an unauthored
+		// exception must not travel in it. A driver error carrying SQL, or a provider failure echoing
+		// the content it choked on, would otherwise be written to the database verbatim.
+		const dead = await store.getTask(task.id);
+		expect(dead).toMatchObject({ status: "dead" });
+		expect(dead?.lastError).toMatch(/^internal error \[/);
+		expect(dead?.lastError).not.toContain("provider down");
 		expect((await store.events(run.id)).map((event) => event.type)).toEqual([
 			"run.started",
 			"task.failed",
