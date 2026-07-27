@@ -735,8 +735,17 @@ function createModelSelector(
 	);
 }
 
-/** The streamed result of `runtime.stream`: the shared `TextDeltaStream` protocol shape with a
- *  concrete `result` — a promise of the final governed result (resolves when the run completes). */
+/**
+ * The streamed result of `runtime.stream`: the shared `TextDeltaStream` protocol shape with a
+ * concrete `result` — a promise of the final governed result (resolves when the run completes).
+ *
+ * **Consume it or cancel it.** The channel behind `textStream` is bounded, so a stream nobody reads
+ * fills up and the run PARKS rather than running to completion: `result` never settles and the
+ * provider connection stays open. That is the same contract a `fetch` body has, and it is the right
+ * side of the trade — an ignored stream now stops spending model tokens instead of generating a
+ * whole answer for nobody — but it does mean abandoning one silently is no longer free. Break out of
+ * the loop, or call `textStream[Symbol.asyncIterator]().return()`; either aborts the run.
+ */
 export type RuntimeStream = TextDeltaStream & {
 	readonly result: Promise<RuntimeResult>;
 };
