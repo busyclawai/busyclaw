@@ -29,12 +29,42 @@ import {
 	type PolicySourceSlice,
 	runActionsOf,
 	type ToolDefinitionSet,
+	type ToolDescriptor,
 	toolDescriptors,
 } from "@euroclaw/contracts";
 import { discoveryTools, EXECUTE_TOOL_PATH } from "@euroclaw/runtime";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
 export const FLOOR_POLICY_ID = "policy:floor";
+
+/**
+ * The descriptors the floor turns into policy-nameable ACTIONS — everything except
+ * `euroclaw.execute`.
+ *
+ * That one is a wire ENCODING of a call, not a tool. The ingress unwraps it and the floor decides the
+ * TARGET, so a policy naming `euroclaw.execute` would be inert for real routing while LOOKING like
+ * control over the router — a `forbid` on it blocks nothing, and a `permit(writes)` would sweep it up
+ * with everything else. discovery.ts's header states the invariant this keeps: execute must never be
+ * the thing governance decides on.
+ *
+ * ONE function because the model is built in TWO places — once at assembly from the static tools, and
+ * once per run from the tools a boundary registered. The first version wrote the exclusion out at the
+ * assembly site only, and the per-run path put `execute` straight back: the meta-tools are minted from
+ * whatever set is discoverable, so a claw with nothing statically discoverable and a registered tool
+ * that IS mints them per run. The invariant then held in one configuration and broke in the other,
+ * which is the worst way for a security property to behave. Both callers go through here.
+ *
+ * Exported for its own test: it is a one-line predicate carrying an invariant that already regressed
+ * once by being written out twice, so it is worth pinning directly rather than only through whichever
+ * behaviour happens to notice.
+ */
+export function modelableActions(
+	descriptors: readonly ToolDescriptor[],
+): ToolDescriptor[] {
+	return descriptors.filter(
+		(descriptor) => descriptor.path !== EXECUTE_TOOL_PATH,
+	);
+}
 
 /**
  * Build the always-on floor policy plugin: the ONE internal Cedar engine over `SYSTEM_POSTURE` +
@@ -59,16 +89,12 @@ export function buildFloorPolicyPlugin(input: {
 	//    They are added from the same `discoveryTools` the runtime will build, so the two cannot
 	//    drift: it derives them from the tool set, and returns nothing when none are discoverable.
 	//
-	//    `euroclaw.execute` is the ONE deliberate exclusion. It is a wire ENCODING of a call, not a
-	//    tool: the ingress unwraps it and the floor decides the target, so modeling it would create a
-	//    policy-nameable action whose single permit unlocks everything reachable through the router —
-	//    the hazard discovery.ts exists to prevent. It cannot reach the gate either, because the
-	//    ingress now refuses an envelope it cannot unwrap. Absent from the model, so denied if it ever
-	//    does.
+	//    `euroclaw.execute` is the ONE deliberate exclusion — see {@link modelableActions}.
 	const tools = input.tools ?? {};
-	const { [EXECUTE_TOOL_PATH]: _routed, ...meta } = discoveryTools(tools);
 	const model = buildAuthzModel(
-		actionInputsFromTools(toolDescriptors({ ...tools, ...meta })),
+		actionInputsFromTools(
+			modelableActions(toolDescriptors({ ...tools, ...discoveryTools(tools) })),
+		),
 	);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({
@@ -133,11 +159,12 @@ export function buildFloorPolicyPlugin(input: {
 		mapCall,
 		entitiesFor: (ctx) => {
 			const descriptors = runActionsOf(ctx);
+
 			if (descriptors.length === 0) return undefined;
 			const cached = runEntities.get(descriptors);
 			if (cached !== undefined) return cached;
 			const built = actionEntitiesFromModel(
-				buildAuthzModel(actionInputsFromTools(descriptors)),
+				buildAuthzModel(actionInputsFromTools(modelableActions(descriptors))),
 			);
 			runEntities.set(descriptors, built);
 			return built;

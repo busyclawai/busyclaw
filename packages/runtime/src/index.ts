@@ -87,6 +87,7 @@ export {
 	// of that contract, not an assembly-side opinion (see discovery.ts's header).
 	discoveryTools,
 	EXECUTE_TOOL_PATH,
+	SEARCH_TOOL_PATH,
 	normalizeOrigin,
 	planEgress,
 	REGISTER_OPENAPI_SPEC_ACTION,
