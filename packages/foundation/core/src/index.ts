@@ -23,3 +23,7 @@ export {
 	type RoutingRedactorOptions,
 	type StoredRedactorOptions,
 } from "./redact";
+export {
+	MAX_REQUEST_BODY_BYTES,
+	readRequestBody,
+} from "./request-body";

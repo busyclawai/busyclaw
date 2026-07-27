@@ -7,6 +7,7 @@ import {
 	type BusyclawRouteContext,
 	configurationError,
 } from "@busyclaw/contracts";
+import { readRequestBody } from "@busyclaw/core";
 import { requireClaw } from "../core/claw";
 import {
 	APP_ENDPOINT_KEY,
@@ -363,7 +364,9 @@ function buildAppBotPlugin(
 				if (!channel) {
 					return { status: 404, body: { ok: false, error: "unknown channel" } };
 				}
-				const rawBody = await request.text();
+				// Bounded: this endpoint is reachable by strangers BY DESIGN, so an unbounded read here
+				// is the one an attacker does not even need an account to reach.
+				const rawBody = await readRequestBody(request);
 				const result = await dispatchWebhook({
 					claw: requireClaw(claw),
 					channel,

@@ -14,6 +14,7 @@ import {
 	route,
 	validationError,
 } from "@busyclaw/contracts";
+import { readRequestBody } from "@busyclaw/core";
 import { type } from "arktype";
 import type { ChannelsPlugin, ChannelsPluginOptions } from "../channels/plugin";
 import { requireClaw } from "../core/claw";
@@ -359,7 +360,9 @@ export function buildRegistrationsPlugin(
 					};
 				}
 				// Read the body once, then hand the same bytes to identify (may parse it) and dispatch.
-				const rawBody = await request.text();
+				// Bounded: this endpoint is reachable by strangers BY DESIGN, so an unbounded read here
+				// is the one an attacker does not even need an account to reach.
+				const rawBody = await readRequestBody(request);
 				const inbound = { headers: request.headers, rawBody };
 				const secret = await channel.identify(inbound);
 				if (secret === undefined) {

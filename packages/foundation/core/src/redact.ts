@@ -670,6 +670,65 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		return out + text.slice(last);
 	};
 
+	// ── the walk's budget ────────────────────────────────────────────────────────────────────────
+	//
+	// M-04. Every value crossing this boundary is untrusted — a caller's request body, a model's own
+	// output, a tool result from somebody else's API — and the walk that redacts it had no ceiling on
+	// how deep it would go, how much it would visit, or how much it would do at once. Each is a way
+	// to spend the host's resources with a payload rather than a request:
+	//
+	//   depth  — `[[[[…]]]]` costs two bytes per level, so a 20KB body nests ten thousand deep and
+	//            overflows the stack of an async recursion long before anything notices its size.
+	//   nodes  — one modest document can hold a hundred thousand strings, each a detector call.
+	//   width  — see the array branch: unbounded fan-out onto an out-of-process detector.
+	//
+	// Exceeding a budget THROWS rather than passing the value through. Redaction is the privacy
+	// boundary; a value it declined to walk has not been made safe, and returning it unredacted would
+	// turn a resource limit into a disclosure.
+	const MAX_WALK_DEPTH = 64;
+	const MAX_WALK_NODES = 100_000;
+	const WALK_FANOUT = 16;
+
+	type WalkBudget = { nodes: number };
+
+	const spend = (budget: WalkBudget, depth: number): void => {
+		if (depth > MAX_WALK_DEPTH) {
+			throw validationError(
+				"value is too deeply nested to redact",
+				`nests past ${MAX_WALK_DEPTH} levels`,
+			);
+		}
+		budget.nodes += 1;
+		if (budget.nodes > MAX_WALK_NODES) {
+			throw validationError(
+				"value is too large to redact",
+				`holds more than ${MAX_WALK_NODES} nodes`,
+			);
+		}
+	};
+
+	/** `array.map` with at most {@link WALK_FANOUT} in flight, preserving order. */
+	const mapBounded = async <T>(
+		items: readonly T[],
+		run: (item: T) => Promise<unknown>,
+	): Promise<unknown[]> => {
+		const out = new Array<unknown>(items.length);
+		let next = 0;
+		const worker = async (): Promise<void> => {
+			while (next < items.length) {
+				const index = next;
+				next += 1;
+				const item = items[index];
+				if (item === undefined && !(index in items)) continue;
+				out[index] = await run(item as T);
+			}
+		};
+		await Promise.all(
+			Array.from({ length: Math.min(WALK_FANOUT, items.length) }, worker),
+		);
+		return out;
+	};
+
 	const isRedactableObject = (v: unknown): v is Record<string, unknown> => {
 		if (v === null || typeof v !== "object") return false;
 		const proto = Object.getPrototypeOf(v);
@@ -679,12 +738,23 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	const walk = async (
 		value: unknown,
 		fn: (s: string) => Promise<string>,
+		budget: WalkBudget,
+		depth = 0,
 	): Promise<unknown> => {
+		spend(budget, depth);
 		if (typeof value === "string") return fn(value);
-		if (Array.isArray(value)) return Promise.all(value.map((v) => walk(v, fn)));
+		if (Array.isArray(value)) {
+			// Bounded fan-out, not `Promise.all` over the whole array. Every string reaching `fn` can
+			// be a call to an OUT-OF-PROCESS detector, so an unbounded map turns one 50k-element array
+			// into 50k concurrent requests — a flood aimed at our own dependency, from a value a model
+			// or a caller supplied. The dedup latch in `placeholderFor` is unaffected: it resolves
+			// concurrent lookups of the same value however many run at once.
+			return mapBounded(value, (v) => walk(v, fn, budget, depth + 1));
+		}
 		if (isRedactableObject(value)) {
 			const out: Record<string, unknown> = {};
-			for (const [k, v] of Object.entries(value)) out[k] = await walk(v, fn);
+			for (const [k, v] of Object.entries(value))
+				out[k] = await walk(v, fn, budget, depth + 1);
 			return out;
 		}
 		// Map and Set are CONTAINERS, so they are walked like the other two. They reach here as
@@ -694,12 +764,17 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		// too: a Map keyed by email address is a natural thing to write and leaks exactly as readily.
 		if (value instanceof Map) {
 			const out = new Map<unknown, unknown>();
-			for (const [k, v] of value) out.set(await walk(k, fn), await walk(v, fn));
+			for (const [k, v] of value)
+				out.set(
+					await walk(k, fn, budget, depth + 1),
+					await walk(v, fn, budget, depth + 1),
+				);
 			return out;
 		}
 		if (value instanceof Set) {
 			const out = new Set<unknown>();
-			for (const member of value) out.add(await walk(member, fn));
+			for (const member of value)
+				out.add(await walk(member, fn, budget, depth + 1));
 			return out;
 		}
 		// Numbers, booleans, null, and non-CONTAINER objects (Uint8Array, Date, URL, class instances —
@@ -714,11 +789,16 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		durable: mappings.durable === true,
 		async redactValue<T>(value: T, ctx?: RedactionContext): Promise<T> {
 			const validCtx = validateRedactionContext(ctx);
-			return (await walk(value, (text) => redactText(text, validCtx))) as T;
+			// One budget per call, so the ceiling is on the VALUE rather than on the process.
+			return (await walk(value, (text) => redactText(text, validCtx), {
+				nodes: 0,
+			})) as T;
 		},
 		async rehydrateValue<T>(value: T, ctx?: RehydrationContext): Promise<T> {
 			const validCtx = validateRehydrationContext(ctx);
-			return (await walk(value, (text) => rehydrateText(text, validCtx))) as T;
+			return (await walk(value, (text) => rehydrateText(text, validCtx), {
+				nodes: 0,
+			})) as T;
 		},
 	};
 }

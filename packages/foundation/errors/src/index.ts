@@ -2,6 +2,7 @@ export type BusyclawErrorCode =
 	| "BUSYCLAW_AUTHORIZATION_DENIED"
 	| "BUSYCLAW_CONFIGURATION_ERROR"
 	| "BUSYCLAW_CONFLICT"
+	| "BUSYCLAW_LIMIT_EXCEEDED"
 	| "BUSYCLAW_STATE_ERROR"
 	| "BUSYCLAW_UNSUPPORTED_OPERATION"
 	| "BUSYCLAW_VALIDATION_FAILED";
@@ -116,6 +117,25 @@ export function conflictError(
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_CONFLICT",
+		message,
+		details,
+	});
+}
+
+/**
+ * A resource budget was reached — the request or value is too big, too deep, or too many, and the
+ * host declined to spend what handling it would cost.
+ *
+ * Distinct from {@link validationError} on purpose. "Malformed" invites the caller to fix the value
+ * and retry; "too large" tells them the same value will be refused again, and lets an adapter answer
+ * with a 413 rather than a 400. It is also never a 500: refusing is the system working.
+ */
+export function limitError(
+	message: string,
+	details?: Record<string, unknown>,
+): BusyclawError {
+	return new BusyclawError({
+		code: "BUSYCLAW_LIMIT_EXCEEDED",
 		message,
 		details,
 	});

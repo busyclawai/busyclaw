@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/core": "workspace:*",
 		"arktype": "2.2.0",
 		"busyclaw": "workspace:*"
 	},
