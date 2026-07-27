@@ -24,8 +24,15 @@
 	},
 	"dependencies": {
 		"@busyclaw/authz": "workspace:*",
-		"@busyclaw/contracts": "workspace:*",
-		"better-auth": "1.6.19"
+		"@busyclaw/contracts": "workspace:*"
+	},
+	"peerDependencies": {
+		"better-auth": ">=1.6.22"
+	},
+	"peerDependenciesMeta": {
+		"better-auth": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@busyclaw/core": "workspace:*"
