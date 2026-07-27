@@ -89,7 +89,9 @@ describe("named policies — the determining-policy trail names the RULE", () =>
 		// An unconfirmed autonomous write parks. The trail on a needs-approval is the PROBE's — it names
 		// the rule that WOULD permit once confirmed, not the forbid that blocked it. That is the useful
 		// end: it says which confirmation requirement fired, which is what an escalation routes on.
-		const parked = await e.authorize(req("writeDoc", { runMode: "autonomous" }));
+		const parked = await e.authorize(
+			req("writeDoc", { runMode: "autonomous" }),
+		);
 		expect(parked.decision).toBe("needs-approval");
 		expect(parked.policies).toEqual(["floor:writes-need-confirmation"]);
 	});
@@ -117,7 +119,9 @@ describe("named policies — the determining-policy trail names the RULE", () =>
 		// The probe flips this to needs-approval and the trail carries the slice's own name — nothing had
 		// to be annotated. That is what lets the app route the approval to a queue without inventing a
 		// second decision channel (Cedar itself can only ever answer allow/deny).
-		const parked = await e.authorize(req("writeDoc", { runMode: "autonomous" }));
+		const parked = await e.authorize(
+			req("writeDoc", { runMode: "autonomous" }),
+		);
 		expect(parked.decision).toBe("needs-approval");
 		expect(parked.policies).toContain("escalate:accessibility-team");
 	});

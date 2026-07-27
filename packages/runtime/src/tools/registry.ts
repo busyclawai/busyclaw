@@ -259,7 +259,7 @@ export function createSpecRegistry(
 			};
 			await stores.specRegistrations.upsert({
 				scope: input.scope,
-						scopeId: input.scopeId,
+				scopeId: input.scopeId,
 				source: input.source,
 				specBlob: input.document,
 				contentVersion,
@@ -272,7 +272,7 @@ export function createSpecRegistry(
 			// version bumps and the newly registered surface takes effect on the next decision.
 			await stores.authzChanges?.append({
 				scope: input.scope,
-						scopeId: input.scopeId,
+				scopeId: input.scopeId,
 				kind: "spec_registered",
 				summary: { source: input.source, contentVersion },
 				by: asPrincipal(input.registeredBy),

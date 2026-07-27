@@ -1,8 +1,8 @@
 import type {
 	ApprovalStore,
 	AuditSink,
-	EffectStore,
 	BusyclawPlugin,
+	EffectStore,
 	InferContext,
 	JsonObject,
 	JsonValue,
@@ -22,13 +22,13 @@ import {
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
-	stampRunActions,
-	toolDescriptors,
 	redactionContextFrom,
 	SCOPE_CONTEXT_KEY,
 	SCOPE_ID_CONTEXT_KEY,
+	stampRunActions,
 	stateError,
 	THREAD_ID_CONTEXT_KEY,
+	toolDescriptors,
 	toolModelName,
 	validationError,
 } from "@busyclaw/contracts";
@@ -54,10 +54,10 @@ import {
 	toolEntriesFromTools,
 } from "./catalog";
 import {
+	type ConfigScopeResolver,
 	composeContext,
 	type IdentityResolver,
 	type MembershipResolver,
-	type ConfigScopeResolver,
 } from "./context";
 import {
 	createRuntimeEvent,

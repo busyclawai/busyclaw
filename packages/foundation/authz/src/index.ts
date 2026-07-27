@@ -8,10 +8,10 @@
 export type {
 	AccessGrant,
 	ApiCaller,
-	PrincipalScope,
 	ApiPermissionLevel,
 	ApiResourceShape,
 	DecideApiCallInput,
+	PrincipalScope,
 } from "./api";
 export {
 	API_ACCESS_BASELINE,

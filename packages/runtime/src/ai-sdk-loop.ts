@@ -1,6 +1,6 @@
 import {
-	configurationError,
 	BusyclawError,
+	configurationError,
 	type HandleResult,
 	stateError,
 } from "@busyclaw/contracts";

@@ -125,7 +125,7 @@ export function createRegisteredToolProvider(
 					options.secrets,
 					{
 						scope: context.scope,
-		scopeId: context.scopeId,
+						scopeId: context.scopeId,
 						source: row.source,
 						principal: context.principal,
 					},

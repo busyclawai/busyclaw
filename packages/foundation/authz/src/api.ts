@@ -24,7 +24,6 @@
 // edges are empty until the org plugin resolves scopes and the access_grant table lands) — the
 // POLICY and the RENDERING ship now, the DATA arrives later.
 
-import type { Entities, EntityJson } from "@cedar-policy/cedar-wasm/nodejs";
 import type {
 	AccessGrant,
 	AccessGrantPermission,
@@ -32,6 +31,7 @@ import type {
 	PolicyResult,
 } from "@busyclaw/contracts";
 import { grantReaches } from "@busyclaw/contracts";
+import type { Entities, EntityJson } from "@cedar-policy/cedar-wasm/nodejs";
 import type { CedarEngine } from "./cedar-types";
 import type { NamedPolicies } from "./policy-bundle";
 

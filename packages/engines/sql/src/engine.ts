@@ -1,11 +1,11 @@
 import type {
+	BusyclawPlugin,
 	ClawEngineFactory,
 	ClawEngineHandle,
 	ClawEngineInstance,
 	EngineContinueRunInput,
 	EngineRunHandle,
 	EngineStartRunInput,
-	BusyclawPlugin,
 } from "@busyclaw/contracts";
 import { drainWork as drainEngineWork } from "@busyclaw/contracts";
 import type { Runtime } from "@busyclaw/runtime";

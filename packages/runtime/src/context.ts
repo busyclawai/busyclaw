@@ -3,14 +3,14 @@
 // a JWT decoder, a role lookup — vendor-neutral and testable with a fake.
 
 import {
-	type ContextResolver,
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
+	type ContextResolver,
 	PRINCIPAL_CONTEXT_KEY,
 	type Principal,
 	ROLE_CONTEXT_KEY,
-	TEAM_CONTEXT_KEY,
 	type ScopeRef,
+	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	userPrincipal,
 } from "@busyclaw/contracts";

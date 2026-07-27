@@ -6,9 +6,9 @@
 export type { BusyclawErrorCode, BusyclawErrorInput } from "@busyclaw/errors";
 export {
 	authorizationError,
+	BusyclawError,
 	configurationError,
 	conflictError,
-	BusyclawError,
 	errorMessage,
 	isConflict,
 	stateError,
@@ -37,8 +37,8 @@ export type {
 	AccessGrantPermission,
 	AccessGrantRecord,
 	AccessGrantResourceKey,
-	AccessGrantsByResource,
 	AccessGrantStore,
+	AccessGrantsByResource,
 	GrantScope,
 	NewAccessGrant,
 } from "./authz/grant";

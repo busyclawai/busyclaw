@@ -2,17 +2,17 @@
 // request mapper + escape-hatch plugin in ./cedar-plugin. (The `cedar()` policy-text SOURCE and its
 // CedarSourceConfig live in @busyclaw/policy-cedar.)
 
-import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
-import type { PolicyAnnotationKind } from "@busyclaw/contracts";
-import type { NamedPolicies } from "./policy-bundle";
 import type {
 	AuthzModel,
+	PolicyAnnotationKind,
 	PolicyEngine,
 	PolicyRequest,
 	PolicyResult,
 	ToolCall,
 	TurnContext,
 } from "@busyclaw/contracts";
+import type { Entities } from "@cedar-policy/cedar-wasm/nodejs";
+import type { NamedPolicies } from "./policy-bundle";
 
 /**
  * Cedar's request context — the resolved per-call turn context bag. The mapper reads the acting
@@ -32,10 +32,7 @@ export type CedarContext = TurnContext;
  * only a `PolicyRequest` uses the base overload — `CedarEngine` is a strict widening of `PolicyEngine`.
  */
 export type CedarEngine = PolicyEngine & {
-	authorize: (
-		req: PolicyRequest,
-		entities?: Entities,
-	) => Promise<PolicyResult>;
+	authorize: (req: PolicyRequest, entities?: Entities) => Promise<PolicyResult>;
 };
 
 /** Entities: a static array, or a PROVIDER the engine re-reads per decision (the reload seam). */

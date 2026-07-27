@@ -1,8 +1,8 @@
 import {
-	configurationError,
 	type BusyclawPlugin,
 	type BusyclawPluginConfigureContext,
 	type BusyclawPluginRuntime,
+	configurationError,
 	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,

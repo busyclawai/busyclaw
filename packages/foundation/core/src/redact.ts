@@ -6,11 +6,11 @@
 import {
 	type Detector,
 	type PiiKind,
-	piiKindValues,
 	type PiiMapping,
 	type PiiMappingStore,
 	type PiiSpan,
 	piiContainer,
+	piiKindValues,
 	piiMapping,
 	piiSpans,
 	type RedactionContext,
@@ -324,10 +324,7 @@ function cleanSpans(spans: PiiSpan[], textLength: number): PiiSpan[] {
 // token's body (a digit/hex-run phone-card-id detector can) would corrupt it on a second pass.
 // Dropping every detected span that touches one makes redact(redact(x)) === redact(x) a property
 // of the redactor, not a promise about detector alphabets.
-function withoutPlaceholderOverlaps(
-	spans: PiiSpan[],
-	text: string,
-): PiiSpan[] {
+function withoutPlaceholderOverlaps(spans: PiiSpan[], text: string): PiiSpan[] {
 	const taken: { start: number; end: number }[] = [];
 	for (const match of text.matchAll(PLACEHOLDER)) {
 		const start = match.index ?? 0;
@@ -395,7 +392,8 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		const book = codebookFor(kind);
 		for (let attempt = 0; attempt < 24; attempt++) {
 			const placeholder = formatPlaceholder(kind, wordCode(book, attempt >> 3));
-			if ((await mappings.resolve(placeholder, ctx)) === null) return placeholder;
+			if ((await mappings.resolve(placeholder, ctx)) === null)
+				return placeholder;
 		}
 		// Unreachable in practice; escalate hard rather than risk a within-container collision.
 		return formatPlaceholder(kind, wordCode(book, 4));

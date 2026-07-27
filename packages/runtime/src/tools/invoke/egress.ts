@@ -4,18 +4,18 @@
 // so there is ONE such binding rather than a copy per consumer. This file only re-exports the
 // surface under the runtime's own name, so provider.ts and the runtime barrels are untouched.
 
-export {
-	assertEgressAllowedOnNode as assertEgressAllowed,
-	type PinnedConnection,
-	pinnedConnection,
-	type PinnedLookup,
-	pinnedLookup,
-} from "@busyclaw/egress/node";
-
-export { blockedAddressReason } from "@busyclaw/egress";
 export type {
 	EgressDecision,
 	EgressLookup,
 	EgressOptions,
 	ResolvedAddress,
 } from "@busyclaw/egress";
+
+export { blockedAddressReason } from "@busyclaw/egress";
+export {
+	assertEgressAllowedOnNode as assertEgressAllowed,
+	type PinnedConnection,
+	type PinnedLookup,
+	pinnedConnection,
+	pinnedLookup,
+} from "@busyclaw/egress/node";

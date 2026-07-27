@@ -1,7 +1,7 @@
 import type {
+	BusyclawPlugin,
 	Detector,
 	EffectStore,
-	BusyclawPlugin,
 	PiiSpan,
 } from "@busyclaw/contracts";
 import { RUN_MODE_CONTEXT_KEY, userPrincipal } from "@busyclaw/contracts";

@@ -23,7 +23,9 @@ export type OrgPolicyRouterConfig = {
 	keyFor: (boundary: ScopeRef | undefined) => string | Promise<string>;
 	/** Build the compiled bundle for a config scope (e.g. buildAuthzModel(rows) → cedar({model,
 	 *  policies, entities})). Called once per distinct key; cached. */
-	engineFor: (boundary: ScopeRef | undefined) => PolicyEngine | Promise<PolicyEngine>;
+	engineFor: (
+		boundary: ScopeRef | undefined,
+	) => PolicyEngine | Promise<PolicyEngine>;
 	capabilities?: PolicyEngineCapabilities;
 	/** LRU size. Default 64. */
 	maxBundles?: number;
@@ -61,9 +63,7 @@ export function createOrgPolicyRouter(
 				cache.set(key, cached);
 				pending = cached;
 			} else {
-				pending = Promise.resolve().then(() =>
-					config.engineFor(boundary),
-				);
+				pending = Promise.resolve().then(() => config.engineFor(boundary));
 				cache.set(key, pending);
 				// A failed build must not poison the cache — evict it so the next decision retries.
 				pending.catch(() => {

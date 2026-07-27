@@ -14,8 +14,8 @@
 import {
 	type AfterGate,
 	asPrincipal,
-	CLAW_ID_CONTEXT_KEY,
 	type BusyclawPlugin,
+	CLAW_ID_CONTEXT_KEY,
 	errorMessage,
 	type Outcome,
 	PRINCIPAL_CONTEXT_KEY,
