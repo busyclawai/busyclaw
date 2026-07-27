@@ -340,7 +340,17 @@ export function drizzleAdapter(
 			);
 			const builder = database.update(t).set(update).where(clause);
 			if (provider === "mysql") {
-				await run(builder, provider);
+				// MySQL cannot RETURNING, so the row has to be re-read — but the re-read has to be
+				// EARNED. Ignoring the update result and reading by id reported success no matter what
+				// the conditional predicate did: a compare-and-set that matched zero rows because
+				// another worker got there first still came back with a row, so both workers believed
+				// they had won. Every guarded transition in the durable layer is built on this returning
+				// null when it loses — an approval claim, an effect lease, a task claim, a checkpoint —
+				// and on MySQL none of them did.
+				//
+				// `affectedRows` is the only thing that knows. Exactly one, or the transition was lost.
+				const result = await run(builder, provider);
+				if (affectedRows(result) !== 1) return null;
 				return adapter.findOne({ model, where: [{ field: "id", value: id }] });
 			}
 			const row = await one(builder.returning(), provider);

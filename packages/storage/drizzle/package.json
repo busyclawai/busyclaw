@@ -32,6 +32,7 @@
 		"@busyclaw/storage-core": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"better-sqlite3": "12.11.1",
-		"drizzle-orm": "0.45.2"
+		"drizzle-orm": "0.45.2",
+		"mysql2": "3.23.1"
 	}
 }
