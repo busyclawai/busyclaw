@@ -145,6 +145,11 @@ export function memoryAdapter(): Adapter {
 
 		return {
 			id: "memory",
+			// This adapter is a Map of arrays: it has no engine to reject a duplicate, so it says so and
+			// `entityAdapter` checks before writing. Single-process and single-threaded, which is the
+			// only setting where a pre-check is genuinely sufficient rather than a race with a nicer name.
+			enforcesUnique: false,
+
 			async create({ model, data }) {
 				const row = { ...data } as Record<string, unknown>;
 				table(model).push(row);

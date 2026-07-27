@@ -771,12 +771,75 @@ describe("registrations management is owned, bounded, and credential-free", () =
 // deliveryId)` before the turn runs, and the claim IS the row's insert, so a second attempt at the same
 // delivery loses to the database rather than to a read two processes can both pass.
 //
-// NOT TESTED END-TO-END HERE, and that is a finding rather than an omission: the memory adapter's
-// `create` is an unconditional push (storage/core/src/index.ts:148) — it enforces no declared
-// uniqueness at all. `entityAdapter` normalizes a driver's conflict but cannot raise one the driver
-// never raised, so insert-as-claim silently degrades to "always succeeds" in memory. That is true of
-// every try-create → on-conflict path already in the tree, not just this one, which is why closing it
-// belongs with the adapter contract rather than here.
+// Testable in memory because the adapter now declares that it does NOT arbitrate uniqueness, and
+// `entityAdapter` checks before writing on its behalf — so insert-as-claim behaves the same here as
+// against a real engine. It did not, until it did: the branch that handles losing was unreachable in
+// every test in the tree.
+describe("a delivery is relayed at most once", () => {
+	// The fake numbers its deliveries the way a provider does — the same body twice IS the same
+	// delivery, which is exactly what a retry looks like on the wire.
+	const numbered = () =>
+		fakeChannel({
+			parseInbound: ({ request }) => [
+				{
+					deliveryId: request.rawBody,
+					externalConversationId: "chat-1",
+					text: request.rawBody,
+				},
+			],
+		});
+
+	const registered = async () => {
+		const plugin = registrationsPlugin([numbered()]);
+		await registrationsApi(plugin).register(
+			{ provider: "fake", endpointKey: "acme-bot", webhookSecret: "hook-1" },
+			fakeAuthz(),
+		);
+		const route = plugin.routes?.[0];
+		if (!route) throw new Error("expected the registrations webhook route");
+		return route;
+	};
+
+	it("ignores a retry of a delivery it already handled", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const route = await registered();
+		const deliver = (body: string) =>
+			route.handler({
+				claw: fakeClaw(recorded),
+				params: { provider: "fake" },
+				request: webhookRequest({ body, secret: "hook-1" }),
+			});
+
+		const first = await deliver("u-1");
+		const retry = await deliver("u-1");
+
+		// Both answered 200 — the provider must STOP retrying, and an error would only make it try
+		// harder. What differs is what RAN: one turn, one bind, one reply.
+		expect(first.status).toBe(200);
+		expect(retry.status).toBe(200);
+		expect(recorded.relayed).toEqual(["u-1"]);
+		expect(recorded.binds).toHaveLength(1);
+		// …and the count reports what this endpoint ran, not what arrived at it.
+		expect((retry.body as { data: { processed: number } }).data.processed).toBe(
+			0,
+		);
+	});
+
+	it("still relays a genuinely new delivery", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const route = await registered();
+		const deliver = (body: string) =>
+			route.handler({
+				claw: fakeClaw(recorded),
+				params: { provider: "fake" },
+				request: webhookRequest({ body, secret: "hook-1" }),
+			});
+		await deliver("u-1");
+		await deliver("u-2");
+		expect(recorded.relayed).toEqual(["u-1", "u-2"]);
+	});
+});
+
 describe("a delivery carries the provider's id", () => {
 	it("threads deliveryId from the transport to the dispatch", async () => {
 		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
