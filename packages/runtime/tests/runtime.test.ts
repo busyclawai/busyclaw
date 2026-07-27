@@ -632,19 +632,25 @@ describe("@busyclaw/runtime", () => {
 		expect(toolRan).toBe("alice@personal.com");
 		expect(toolRuns).toBe(1);
 		expect((await runtime.approvals?.get(approval.id))?.status).toBe(
-			"consumed",
+			"completed",
 		);
 		expect(
 			(await runtime.effects?.get(`approval:${approval.id}:tool:c1`))?.status,
 		).toBe("completed");
 
+		// A finished approval is ANSWERED — the stored result comes back verbatim and no model loop
+		// runs. This used to re-enter the loop and only avoid a second tool call because the effect
+		// ledger deduped it, which put the whole guarantee on a ledger that fails open elsewhere.
 		const retry = await runtime.continueRun(approval.id);
-		expect(retry?.status).toBe("completed");
-		expect(retry?.text).toBe("done");
+		expect(retry).toEqual(result);
 		expect(toolRuns).toBe(1);
+		// …and the approval stays finished; a served answer changes nothing.
+		expect((await runtime.approvals?.get(approval.id))?.status).toBe(
+			"completed",
+		);
 	});
 
-	it("does not execute a consumed approval again while its effect is in progress", async () => {
+	it("refuses a second resume while the first still holds the lease", async () => {
 		let toolRuns = 0;
 		let releaseTool: () => void = () => {};
 		const toolStarted = new Promise<void>((resolveStarted) => {
@@ -697,9 +703,9 @@ describe("@busyclaw/runtime", () => {
 		const firstResume = runtime.continueRun(approvalId);
 		await toolStarted;
 
-		await expect(runtime.continueRun(approvalId)).rejects.toThrow(
-			/effect is already in progress/,
-		);
+		// The APPROVAL lease refuses the second resume outright — earlier and stronger than the effect
+		// ledger noticing a duplicate afterwards, because nothing re-enters the model loop at all.
+		expect(await runtime.continueRun(approvalId)).toBeNull();
 		expect(toolRuns).toBe(1);
 
 		unblockTool();
@@ -950,9 +956,12 @@ describe("@busyclaw/runtime", () => {
 		expect(effect?.status).toBe("completed");
 		expect(effect?.output).toBeUndefined();
 
-		await expect(runtime.continueRun(approvalId)).rejects.toThrow(
-			/completed effect output is unavailable/,
-		);
+		// A second resume no longer needs the effect ledger to reconstruct anything: the approval stores
+		// what it produced, so it is answered from there. This used to throw "completed effect output is
+		// unavailable" — a replay running into a ledger that deliberately kept no output for a
+		// `none`-idempotency tool, which is a failure mode the replay itself created.
+		const retry = await runtime.continueRun(approvalId);
+		expect(retry?.status).toBe("completed");
 		expect(toolRuns).toBe(1);
 	});
 

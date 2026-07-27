@@ -10,15 +10,24 @@ import { entity, field } from "../entity";
 import type { HandleResult, ToolCall, TurnContext } from "./boundary";
 import type { Principal } from "./principal";
 
+// The lifecycle of a granted approval, as a state machine rather than a flag.
+//
+// `consumed` used to be the whole story after `approved`, and it conflated two states that behave
+// oppositely: "somebody is running this right now" and "this is finished". Resume accepted a consumed
+// record and re-entered the model loop, so a granted approval was replayable without limit — each
+// replay minting new tool-call ids and new effects. Splitting the two makes the difference expressible:
+// `executing` holds a LEASE (one runner at a time, recoverable only once it lapses) and `completed`
+// holds the terminal RESULT (served back, never re-run).
 const approvalStatusValues = [
 	"pending",
 	"approved",
 	"denied",
-	"consumed",
+	"executing",
+	"completed",
 ] as const;
 
 export const approvalStatus = type(
-	"'pending' | 'approved' | 'denied' | 'consumed'",
+	"'pending' | 'approved' | 'denied' | 'executing' | 'completed'",
 );
 export type ApprovalStatus = (typeof approvalStatusValues)[number];
 
@@ -67,6 +76,28 @@ export const approvalFields = {
 	decidedBy: field.principal(),
 	createdAt: field.string({ required: true, immutable: true }),
 	expiresAt: field.string({ index: true, immutable: true }),
+	// ── the execution lease ──────────────────────────────────────────────────────────────────────
+	// Written when a resume TAKES the approval, cleared when it finishes. Two columns rather than one
+	// timestamp because recovery has to answer two different questions: "has the runner gone away?"
+	// (the expiry) and "am I still the runner?" (the id). A resume that lost its lease to a recovery
+	// must not be able to complete over the top of the one that took it.
+	leaseId: field.string({
+		doc: "Identifies the execution attempt holding this approval. A completion is accepted only from the lease that is current — a runner whose lease lapsed and was re-taken cannot finish over its successor.",
+	}),
+	leaseExpiresAt: field.string({
+		index: true,
+		doc: "When the current execution lease lapses. Until then the approval is being run and a second resume is refused; after it, exactly one recovery may re-take it. Indexed so a sweeper can find abandoned executions.",
+	}),
+	// The terminal result, stored once at completion and served to every later resume. This is what
+	// makes a finished approval idempotent rather than replayable: the second caller gets the first
+	// caller's answer instead of a second execution with new tool-call ids and new effects.
+	//
+	// Format-opaque here on purpose (the runtime owns the result shape, and contracts does not import
+	// runtime); `redacted` because it carries model output.
+	result: field.jsonObject({
+		pii: "redacted",
+		doc: "The run result this approval produced, recorded at completion and returned verbatim to any later resume — a completed approval is answered, never re-executed.",
+	}),
 } as const;
 
 export const approvalEntity = entity("approval", approvalFields);
@@ -110,10 +141,35 @@ export type ApprovalStore = {
 		reason?: string,
 	) => Promise<ApprovalRecord | null>;
 	/**
-	 * Atomically take the single-use APPROVED record by id (race-safe). Returns null if it's absent,
-	 * not approved, expired, or already consumed. This is what makes resume run exactly once.
+	 * Atomically TAKE the approval for execution — the single-continuation primitive. Moves
+	 * `approved → executing`, stamping a fresh `leaseId` and a `leaseExpiresAt` at `now + leaseMs`.
+	 *
+	 * Returns null when the approval cannot be taken: absent, not granted, expired, already
+	 * `completed`, or `executing` under a lease that has NOT yet lapsed (somebody is running it).
+	 *
+	 * A lapsed lease may be re-taken exactly once more, which is the entire recovery story: a resume
+	 * that crashed between taking and finishing leaves a lease nobody will ever clear, and this is how
+	 * the work becomes reachable again. It is bounded by the clock rather than open to anyone who asks
+	 * — the old shape accepted an already-taken approval unconditionally, so "recovery" and "replay it
+	 * as many times as you like" were the same call.
 	 */
-	consume: (id: string) => Promise<ApprovalRecord | null>;
+	claim: (
+		id: string,
+		leaseMs: number,
+	) => Promise<{ record: ApprovalRecord; leaseId: string } | null>;
+	/**
+	 * Finish a taken approval: `executing → completed`, storing the terminal result.
+	 *
+	 * Accepted ONLY from the lease that is still current. A runner whose lease lapsed and was re-taken
+	 * by a recovery has lost the right to finish — otherwise the slow runner and its replacement would
+	 * both write a terminal result, and the second would overwrite the answer already returned to a
+	 * caller. Returns null when the lease is not current.
+	 */
+	complete: (
+		id: string,
+		leaseId: string,
+		result: JsonObjectType,
+	) => Promise<ApprovalRecord | null>;
 	/** List approvals, optionally filtered — the human-review queue reads `{ status: "pending" }`. */
 	list: (filter?: {
 		status?: ApprovalStatus;

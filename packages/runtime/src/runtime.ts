@@ -275,6 +275,16 @@ export type RuntimeConfig = {
 	maxSteps?: number;
 };
 
+/**
+ * How long a resume holds an approval before a recovery may re-take it.
+ *
+ * Generous on purpose: the lease has to outlast the SLOWEST legitimate resume, because the failure it
+ * guards is a runner that died, and the failure it would CAUSE if set too short is a second execution
+ * of a tool that was merely slow. Erring long costs a delayed recovery; erring short costs a duplicate
+ * side effect.
+ */
+const APPROVAL_LEASE_MS = 15 * 60 * 1000;
+
 const ApprovalIds = ark("string").array();
 
 export const RuntimeCompletedResult = ark({
@@ -1529,8 +1539,24 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			});
 			return valid;
 		}
-		if (record.status !== "approved" && record.status !== "consumed")
+		// A FINISHED approval is answered from what it produced, never re-run. This is the replay hole:
+		// resume used to accept an already-taken record and re-enter the model loop, minting new
+		// tool-call ids and new effects every time anyone asked.
+		if (record.status === "completed") {
+			if (record.result === undefined) return null;
+			const stored = RuntimeResult(record.result);
+			if (stored instanceof ark.errors) {
+				throw validationError("stored approval result invalid", stored.summary);
+			}
+			return stored;
+		}
+		if (record.status !== "approved" && record.status !== "executing")
 			return null;
+		// TAKE the lease. Null means it cannot be taken — not granted, expired, or being run right now
+		// by someone whose lease has not lapsed. Recovery of an abandoned execution is the `executing`
+		// case above plus a lapsed lease, and the store decides that, not the caller.
+		const claimed = await approvalStore.claim(id, APPROVAL_LEASE_MS);
+		if (!claimed) return null;
 		const resolvedCtx = await resolveRunContext(ctx, effectiveRecording);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
@@ -1573,18 +1599,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.currentApprovalWaitId = checkpoint.waitId;
 		state.currentEffectId = `approval:${id}:tool:${checkpoint.toolCallId}`;
 
-		const core = createRunCore(
-			state,
-			record.status === "consumed"
-				? {
-						...approvalStore,
-						consume: async (approvalId) => (approvalId === id ? record : null),
-					}
-				: approvalStore,
-			runTools,
-		);
+		// No shim. The old one substituted a consume that always succeeded, so an already-taken
+		// approval could be re-run without limit — the single-use guarantee the store implemented was
+		// deliberately handed a way around itself. The lease is taken above, once, by the layer that
+		// can also finish it.
+		const core = createRunCore(state, approvalStore, runTools);
 		const toolStartedAt = Date.now();
-		const toolResult = await core.continueRun(id, ctx);
+		const toolResult = await core.continueRun(claimed.record, ctx);
 		const toolDurationMs = Date.now() - toolStartedAt;
 		if (!toolResult) return null;
 		if (toolResult.status === "needs-approval") {
@@ -1679,6 +1700,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			);
 		}
 		await emitRunOutcome(emitCtx, valid, runUsage);
+		// Close the lease and record what this approval produced. Every later resume is served this
+		// answer instead of executing again. A `null` here means the lease lapsed mid-run and a
+		// recovery took over — that runner owns the terminal result now, so this one does not
+		// overwrite it, and the caller still gets the result it computed.
+		await approvalStore.complete(id, claimed.leaseId, valid);
 		return valid;
 	};
 
