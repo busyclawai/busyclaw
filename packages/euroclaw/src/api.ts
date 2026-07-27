@@ -1468,8 +1468,42 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			) ?? Promise.resolve(null),
 		getApproval: ({ id }) =>
 			context.runtime.approvals?.get(id) ?? Promise.resolve(null),
-		listApprovals: (args) =>
-			context.runtime.approvals?.list(args) ?? Promise.resolve([]),
+		// A LISTING has no id for the gate to resolve, so the filtering happens here: every row is put
+		// through the same `read` decision `getApproval` would make, and the ones that fail drop out.
+		// Refusing the whole call instead would be wrong in both directions — it would deny a reviewer
+		// with access to some approvals, and it would leak the existence of the rest by their absence
+		// being a permission error rather than an empty list.
+		//
+		// One decision per row. Approval lists are short and a decision is in-memory Cedar over an
+		// already-loaded record; if that stops being true, the answer is a store-level predicate, not a
+		// cheaper check here.
+		listApprovals: async (
+			args?: { status?: ApprovalStatus; principal?: Principal },
+			ctx?: AuthzContext,
+		) => {
+			// The PEP always supplies the context (the unsafeOpen hatch supplies a permissive one), so
+			// absence means the raw handler was reached around the one door. Empty, not everything.
+			if (!ctx) return [];
+			const rows = (await context.runtime.approvals?.list(args)) ?? [];
+			const visible = await Promise.all(
+				rows.map(async (row) => {
+					try {
+						// Decided as `getApproval` — the single-row read. Asking as `listApprovals`
+						// would inherit the caller-only permit that every listing has and pass for
+						// everyone, which is the filter quietly doing nothing.
+						await ctx.check(
+							"read",
+							{ kind: "approval", id: row.id },
+							"getApproval",
+						);
+						return row;
+					} catch {
+						return undefined;
+					}
+				}),
+			);
+			return visible.filter((row) => row !== undefined);
+		},
 
 		getEffect: ({ id }) => requireEffects(context.effects).get(id),
 

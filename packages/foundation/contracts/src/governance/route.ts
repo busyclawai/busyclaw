@@ -48,8 +48,20 @@ export type AuthzContext = {
 	/** The caller's principal, guaranteed present and non-blank — the actor floor ran before the
 	 *  handler was entered, so a handler never has to re-check it. */
 	readonly principal: string;
-	/** Authorize an additional resource mid-handler. Throws `authorizationError` on deny. */
-	readonly check: (level: RouteLevel, target: AuthzTarget) => Promise<void>;
+	/**
+	 * Authorize an additional resource mid-handler. Throws `authorizationError` on deny.
+	 *
+	 * Decided as THIS method unless `asMethod` names another. That matters for a LISTING: a listing has
+	 * no id, so it is declared caller-only, so it sits in the `creates` group the sealed baseline
+	 * permits for any authenticated principal — and a per-row check decided as the listing would
+	 * inherit that permit and pass for everyone. A listing filters by asking the question its SINGLE-ROW
+	 * read asks, so it names that method.
+	 */
+	readonly check: (
+		level: RouteLevel,
+		target: AuthzTarget,
+		asMethod?: string,
+	) => Promise<void>;
 };
 
 /** The boundary validator a route declares — an arktype type in practice. */
