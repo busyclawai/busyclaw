@@ -27,6 +27,9 @@ const anySecret = (value: string): Secrets =>
 	buildSecrets([
 		{
 			name: "test",
+			// The tenant's own credential — data-tier, so a scoped resolution reaches it (deployment
+			// infrastructure deliberately does not; see the secrets package's own tests).
+			tier: "data",
 			capability: { manage: false },
 			get: async () => ({ kind: "token", value }),
 		},

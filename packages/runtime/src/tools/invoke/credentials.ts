@@ -97,9 +97,19 @@ export async function applyCredentials(
 	}
 
 	// No alternative was fully satisfiable and the operation required auth — fail loud, actionably.
+	// This resolution named a tenant, so deployment-wide providers sat it out unless the name was
+	// declared shared. Say so: the likeliest cause of a miss here is a credential that used to arrive
+	// from the environment, and "not configured" alone would send the reader looking in the wrong place.
 	throw configurationError(
 		"registered tool requires a credential that is not configured",
-		{ source: context.source, unsatisfied: unmet },
+		{
+			source: context.source,
+			scope: context.scope,
+			scopeId: context.scopeId,
+			unsatisfied: unmet,
+			reason:
+				"configure this source's credential for the tenant (a data-tier provider, e.g. the secret-store plugin), or — if it is genuinely one credential every tenant shares — list its name in the config provider's `shared`",
+		},
 	);
 }
 

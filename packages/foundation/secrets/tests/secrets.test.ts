@@ -130,6 +130,9 @@ describe("buildSecrets — the one-door resolver", () => {
 			name: "spy",
 			capability: { manage: false },
 			aliases: { CANON: "backend-key" },
+			// A tenant-scoped resolution below, so this config-tier provider only answers for names it
+			// declares shared — the tenancy fence, not part of what this test is about.
+			shared: ["CANON"],
 			get: async (ref, ctx) => {
 				calls.push({ ref, ctx });
 				return null;
@@ -269,6 +272,8 @@ describe("secrets.with — a pre-bound reader", () => {
 		const spy: SecretProvider = {
 			name: "spy",
 			capability: { manage: false },
+			// Shared, so the tenant-scoped ctx below still reaches it — this test is about ctx merging.
+			shared: ["X"],
 			get: async (_ref, ctx) => {
 				calls.push(ctx);
 				return null;
@@ -299,5 +304,77 @@ describe("secrets.with — a pre-bound reader", () => {
 			.with({ principal: "alice" })
 			.require("X", { kind: "token" });
 		expect(calls).toEqual([{ principal: "alice" }]);
+	});
+
+	// M-12. A tenant-scoped miss used to fall through to deployment infrastructure, handing the tenant
+	// the DEPLOYMENT's credential under a name the tenant chose — its quota, its billing, its data
+	// scope. Nothing in the chain marked the difference between "the deployment's key" and "a key".
+	describe("deployment credentials do not answer tenant-scoped resolutions", () => {
+		const deployment = (options: { shared?: readonly string[] } = {}) =>
+			env({ vars: { PETSTORE: "deployment-key" }, ...options });
+
+		it("resolves for an UNSCOPED read — an app bot's token has no tenant to lend to", async () => {
+			const secrets = buildSecrets([deployment()]);
+			expect(await secrets.get("PETSTORE")).toEqual({
+				kind: "token",
+				value: "deployment-key",
+			});
+		});
+
+		it("sits out a tenant-scoped read it never declared shared", async () => {
+			const secrets = buildSecrets([deployment()]);
+			expect(
+				await secrets.get("PETSTORE", {
+					scope: "organization",
+					scopeId: "org-a",
+				}),
+			).toBeNull();
+		});
+
+		it("answers a tenant-scoped read for a name it DOES declare shared", async () => {
+			const secrets = buildSecrets([deployment({ shared: ["PETSTORE"] })]);
+			expect(
+				await secrets.get("PETSTORE", {
+					scope: "organization",
+					scopeId: "org-a",
+				}),
+			).toEqual({ kind: "token", value: "deployment-key" });
+		});
+
+		it("still lets a tenant's OWN credential win, and does not lend one to the next tenant", async () => {
+			const rows: SecretProvider = {
+				name: "rows",
+				tier: "data",
+				capability: { manage: false },
+				get: async (ref, ctx) =>
+					ctx.scopeId === "org-a" && ref === "PETSTORE"
+						? { kind: "token", value: "org-a-key" }
+						: null,
+			};
+			const secrets = buildSecrets([rows, deployment()]);
+			// org-a configured its own — data beats config, unchanged.
+			expect(
+				await secrets.get("PETSTORE", {
+					scope: "organization",
+					scopeId: "org-a",
+				}),
+			).toEqual({ kind: "token", value: "org-a-key" });
+			// org-b configured nothing. It gets NOTHING, not the deployment's key.
+			expect(
+				await secrets.get("PETSTORE", {
+					scope: "organization",
+					scopeId: "org-b",
+				}),
+			).toBeNull();
+		});
+
+		it("treats half a boundary as unscoped — a scope with no id names no tenant", async () => {
+			const secrets = buildSecrets([deployment()]);
+			// Both halves or neither, the same rule the secret-store plugin applies one layer down.
+			expect(await secrets.get("PETSTORE", { scope: "organization" })).toEqual({
+				kind: "token",
+				value: "deployment-key",
+			});
+		});
 	});
 });

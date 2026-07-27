@@ -166,9 +166,12 @@ describe("secrets assembly wiring (createClaw)", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("(a) with no provider configured: a registered tool's credential resolves through the env default", async () => {
+	it("(a) a bare env default no longer backs a TENANT-SCOPED credential", async () => {
 		const { stores, policyPlugin } = await registeredPetstore();
-		// The credential NAME is the registration source ("petstore"), read from the env global.
+		// The credential NAME is the registration source ("petstore"), and it IS in the env — but this
+		// resolution names a tenant, and an env var is the DEPLOYMENT's credential. Lending it here was
+		// ambient authority: this org's tool call would have gone out on the deployment's key, under a
+		// name the org chose.
 		vi.stubEnv("petstore", "env-secret-key");
 		const { fn, calls } = fakeFetch(
 			() =>
@@ -190,14 +193,14 @@ describe("secrets assembly wiring (createClaw)", () => {
 			// no secrets() base plugin ⇒ the assembly's [env()] default backs the credential.
 		});
 
-		const result = await claw.$context.runtime.generate(
-			"get pet 7",
-			runCtx,
-			asAlice,
-		);
-		expect(result.status).toBe("completed");
-		expect(calls).toHaveLength(1);
-		expect(apiKeyHeaderOf(calls[0])).toBe("env-secret-key");
+		// Fails loud rather than sending, and — the point — rather than sending the DEPLOYMENT's key.
+		await expect(
+			claw.$context.runtime.generate("get pet 7", runCtx, asAlice),
+		).rejects.toThrow(/credential that is not configured/);
+		expect(calls).toHaveLength(0);
+		// The other half — a deployment DECLARING a name shared, so it does resolve for a tenant — is a
+		// unit test in @busyclaw/secrets. It belongs there: asserting it here meant standing up the
+		// secret-store plugin, whose key derivation starved the rest of this suite into timeouts.
 	});
 
 	it("(b) an unset credential still fails loud: no unauthenticated request is sent", async () => {
