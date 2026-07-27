@@ -10,6 +10,7 @@
 // So the assertion that matters is the boring one: it is awaitable, and what you get after awaiting
 // actually streams.
 
+import { createMemoryAudit } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
@@ -210,5 +211,70 @@ describe("claw.api.sendMessageAndStream", () => {
 				message: "let me in",
 			}),
 		).rejects.toThrow();
+	});
+});
+
+// M-09: a streamed prompt is egress, and egress is audited.
+//
+// `handleModelCall` runs the after-gates in a `finally`, so a GENERATED call is recorded whatever
+// becomes of it. Streaming had no equivalent moment — the gate said yes and the middleware handed
+// the stream back — so the audit gate, which is an after-gate, never fired. The identical prompt
+// was recorded through `generate` and unrecorded through `stream`, which made the audit trail a
+// statement about which API the caller reached for rather than about what left the deployment.
+
+describe("M-09 — streamed model egress reaches the audit", () => {
+	function entries(audit: ReturnType<typeof createMemoryAudit>) {
+		return audit
+			.entries()
+			.filter((entry) => entry.boundary === "model");
+	}
+
+	it("records a streamed model call, as a generated one already was", async () => {
+		const audit = createMemoryAudit();
+		const claw = owned({ model: streamingModel("one two three"), audit });
+
+		const { textStream, result } = await claw.api.stream({ prompt: "hi" });
+		for await (const _delta of textStream) {
+			// drain
+		}
+		await result;
+
+		expect(entries(audit).length).toBeGreaterThan(0);
+	});
+
+	it("records it even when the reader walks away mid-stream", async () => {
+		// The prompt was SENT the moment the provider was called. Recording only the streams that
+		// ended tidily would leave the trail quietest about exactly the calls worth looking at.
+		const audit = createMemoryAudit();
+		const claw = owned({ model: streamingModel("one two three four"), audit });
+
+		const { textStream, result } = await claw.api.stream({ prompt: "hi" });
+		for await (const _delta of textStream) break;
+		await result.catch(() => {});
+		for (let i = 0; i < 20; i += 1) await new Promise(setImmediate);
+
+		expect(entries(audit).length).toBeGreaterThan(0);
+	});
+
+	// TWO GUARDS HERE ARE NOT PROVEN BY THESE TESTS, and mutation says so: removing the `cancel`
+	// handler, or the once-only latch, leaves all three green.
+	//
+	// The cancel handler covers the SDK cancelling the stream from inside. The test above reaches the
+	// same end by a different road — an ad-hoc stream ABORTS its run when the reader leaves, so the
+	// read throws and the catch settles instead. The latch guards `done` and `cancel` both firing,
+	// which no path here does. Both stay: a missed cancel loses a record of egress that already
+	// happened, and a double settle writes the same call into the chain twice. Neither is held in
+	// place by a test.
+	it("writes ONE record per streamed call, not one per delta", async () => {
+		const audit = createMemoryAudit();
+		const claw = owned({ model: streamingModel("a b c d e f g"), audit });
+
+		const { textStream, result } = await claw.api.stream({ prompt: "hi" });
+		const deltas: string[] = [];
+		for await (const delta of textStream) deltas.push(delta);
+		await result;
+
+		expect(deltas.length).toBeGreaterThan(1);
+		expect(entries(audit)).toHaveLength(1);
 	});
 });

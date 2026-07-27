@@ -110,11 +110,30 @@ export type Governance<Config extends GovernanceConfig = GovernanceConfig> = {
 	 * Gate a model call WITHOUT running it — the streaming counterpart to handleModelCall's
 	 * gate+run bundle. Redacts the prompt, runs the model-boundary before-gates, and returns their
 	 * outcome (`ok` when permitted). The caller (a streaming loop) then streams the model itself.
+	 *
+	 * HALF A LIFECYCLE. `handleModelCall` runs the after-gates in a `finally`, so every generated
+	 * call is audited whatever became of it. This one cannot — the call is still running when it
+	 * returns — so the caller MUST close it with {@link finishModelBoundary} when the stream ends.
 	 */
 	checkModelBoundary: (
 		call: ModelCall,
 		ctx?: Context<Config>,
 	) => Promise<HandleResult>;
+	/**
+	 * Close a lifecycle {@link checkModelBoundary} opened: run the model-boundary after-gates with
+	 * how the stream actually ended.
+	 *
+	 * M-09. Without this, streaming was the one egress path with no after-gate — so the audit gate,
+	 * which is an after-gate, never saw a streamed model call. Every prompt sent through
+	 * `runtime.stream` left the deployment unrecorded while the identical prompt through
+	 * `runtime.generate` was audited, which makes the audit trail a statement about which API the
+	 * caller happened to use rather than about what left.
+	 */
+	finishModelBoundary: (
+		call: ModelCall,
+		outcome: Outcome,
+		ctx?: Context<Config>,
+	) => Promise<void>;
 	/**
 	 * Decide tool calls WITHOUT running them — the tool-side sibling of {@link checkModelBoundary},
 	 * and the substrate for DISCLOSURE (telling the agent what the floor would say before it spends a
@@ -594,7 +613,37 @@ export function createGovernance<const Config extends GovernanceConfig>(
 				{ allowApproval: false },
 			);
 			// Permitted → ok (the caller streams the model); otherwise the gate's deny/needs-approval.
-			return boundaryOutcome ?? { status: "ok", output: undefined };
+			// A DENIAL closes its own lifecycle here: nothing will stream, so there is no later end to
+			// wait for, and leaving it open would drop the record of the refusal itself.
+			if (boundaryOutcome) {
+				await runAfterGates(modelBoundaryCall(call), ctx, boundaryOutcome);
+				return boundaryOutcome;
+			}
+			return { status: "ok", output: undefined };
+		},
+
+		async finishModelBoundary(rawCall, outcome, ctxInput) {
+			const valid = modelCall(rawCall);
+			if (valid instanceof type.errors) {
+				throw validationError("invalid model call", valid.summary);
+			}
+			const ctx = await resolveCtx(ctxInput);
+			// Redacted the same way the opening half redacted it, so the after-gate sees the call it
+			// would have seen through `handleModelCall` — one shape of record, not two.
+			const call: ModelCall = redactionOn
+				? await redactor.redactValue(valid, redactionContextFrom(ctx))
+				: valid;
+			const settled: Outcome =
+				outcome.status === "error" && redactionOn
+					? {
+							status: "error",
+							reason: await redactor.redactValue(
+								outcome.reason,
+								redactionContextFrom(ctx),
+							),
+						}
+					: outcome;
+			await runAfterGates(modelBoundaryCall(call), ctx, settled);
 		},
 
 		async checkToolCalls(rawCalls, ctxInput) {
