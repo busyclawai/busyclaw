@@ -119,6 +119,15 @@ export type ClawSendResult = {
 	userMessage: MessageRecord;
 };
 
+/**
+ * What `sendMessageAndStream` hands back: a `RuntimeStream` — so it drops straight into the AI SDK
+ * response bridges, which accept any `{ textStream }` — plus the user message persisted before the
+ * run started, because a chat UI has to render that beside the reply it is streaming.
+ */
+export type ClawStreamResult = RuntimeStream & {
+	userMessage: MessageRecord;
+};
+
 export const clawCronHandlerSecretConfig = ark({
 	"headerName?": ark("string | undefined").configure({
 		busyclaw: {
@@ -216,6 +225,22 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		view?: MessageView;
 	}) => Promise<MessageRecord[]>;
 	sendMessage: (input: ClawSendInput<Config>) => Promise<ClawSendResult>;
+	/**
+	 * `sendMessage`, with the reply streamed as it is written — same input, same transcript, same
+	 * persistence. In-process only (a live stream has no RPC envelope); needs a streaming vendor.
+	 *
+	 * Named for both halves because it does both, and the sending is the part that outlives the
+	 * reader. Contrast `stream`, which is ad-hoc: no claw, no thread, nothing persisted, so a reader
+	 * who walks away takes the only copy of the answer with them and the run is aborted. Here the run
+	 * is recorded, so a closed tab costs nothing — it detaches, finishes, and the reply is waiting in
+	 * the thread. Reading the stream is how you WATCH the answer; it is not how the answer survives.
+	 *
+	 * A PROMISE of the stream, for the same reason `stream` is: the PEP wraps every method here and
+	 * authorizing is asynchronous, so a denial hands back nothing rather than a live-looking object.
+	 */
+	sendMessageAndStream: (
+		input: ClawSendInput<Config>,
+	) => Promise<ClawStreamResult>;
 
 	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
 	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
@@ -369,10 +394,16 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	}) => Promise<number>;
 };
 
-/** The FLAT, ROUTABLE api methods — the ones the method→route machinery maps. `stream` is excluded:
- *  its `{ textStream, result }` return isn't serializable, so it's an in-process method with no HTTP
- *  route (streaming would need SSE, a separate transport). */
-export type ClawApiMethod = Exclude<keyof ClawApi, "stream">;
+/** The FLAT, ROUTABLE api methods — the ones the method→route machinery maps. The two streaming
+ *  methods are excluded: a live `{ textStream, result }` isn't serializable into an RPC envelope, so
+ *  they are in-process methods with no HTTP route (a wire version needs SSE, a separate transport —
+ *  `@busyclaw/vendors` bridges either of them into one). Leaving the route table does NOT excuse them
+ *  from authorization: {@link NON_ROUTED_API_AUTHZ} derives its keys from this very exclusion, so
+ *  adding a name here fails the build until that name is declared there. */
+export type ClawApiMethod = Exclude<
+	keyof ClawApi,
+	"stream" | "sendMessageAndStream"
+>;
 /** Alias of the shared {@link EndpointHttpMethod} so the flat api and plugin namespaces cannot
  *  disagree on what a verb may be. */
 export type ClawApiHttpMethod = EndpointHttpMethod;
@@ -1020,6 +1051,11 @@ export const NON_ROUTED_API_AUTHZ = {
 	stream: callerOnly(
 		"an ad-hoc stream mints no durable row and runs as the caller — the streaming twin of generate",
 	),
+	// It appends to a claw's transcript, so it is authorized against that claw exactly as
+	// `sendMessage` is — NOT caller-only. Anchoring it on the caller would put it in the group the
+	// sealed baseline permits for any authenticated principal, which is indistinguishable from
+	// having no check at all on a method that writes to a shared row.
+	sendMessageAndStream: on("use", "claw", "clawId"),
 } satisfies {
 	readonly [Method in Exclude<keyof ClawApi, ClawApiMethod>]: ApiRouteAuthz<
 		ClawApiMethodInput<Method & ClawApiMethod>
@@ -1196,6 +1232,62 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * nothing throws when it does. `undefined` passes through — an absent column is not a value to
 	 * redact, and walking it would only invent one.
 	 */
+	/**
+	 * Open a conversational run: persist the user's turn, then build the options that tie the run to
+	 * it. Shared by `sendMessage` and its streaming twin so the two cannot drift.
+	 *
+	 * The recording context is the load-bearing part. It is what puts the answer in the transcript,
+	 * and — since the reader-departure rule keys off exactly that — what decides whether a closed tab
+	 * finishes the run or aborts it. A streaming twin that quietly omitted it would look correct and
+	 * throw away every answer whose reader left.
+	 */
+	const openConversationalRun = async (
+		args: ClawSendInput,
+		caller: ClawApiCaller | undefined,
+	): Promise<{
+		runId: string;
+		userMessage: MessageRecord;
+		runOptions: RunOptionsFor<RuntimeConfig>;
+	}> => {
+		assertNoReservedContext(args.ctx);
+		const runId = args.runId ?? newId("run");
+		// Write-side ingress for the product transcript: the persisted user message is
+		// tokenized like everything else durable (posture-aware per claw row).
+		const userContent = context.redaction
+			? await context.redaction.redact(
+					{ text: args.message },
+					{ scope: "claw", scopeId: args.clawId },
+				)
+			: { text: args.message };
+		const userMessage = await store().messages.append({
+			clawId: args.clawId,
+			content: userContent,
+			runId,
+			role: "user",
+			threadId: args.threadId,
+			visibility: "user",
+		});
+		// A conversational message is a human at the other end → interactive. The chosen model (if
+		// any) rides alongside the server-set recording/runMode options. The authenticated caller
+		// seeds the run's principal (`busyclaw__principal`) — the run IS the caller.
+		const runOptions = {
+			...runtimeRunOptionsWithCaller(
+				runtimeRunOptionsWithRecording(
+					{ runMode: "interactive" },
+					{
+						clawId: args.clawId,
+						runId,
+						threadId: args.threadId,
+						userMessageId: userMessage.id,
+					},
+				),
+				caller?.principal,
+			),
+			model: args.model,
+		};
+		return { runId, userMessage, runOptions };
+	};
+
 	const redactArtifact = async <T>(value: T, clawId: string): Promise<T> =>
 		value === undefined || context.redaction === undefined
 			? value
@@ -1352,46 +1444,14 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		async sendMessage(args, caller?: ClawApiCaller) {
-			assertNoReservedContext(args.ctx);
-			const clawsStore = store();
-			const runId = args.runId ?? newId("run");
-			// Write-side ingress for the product transcript: the persisted user message is
-			// tokenized like everything else durable (posture-aware per claw row).
-			const userContent = context.redaction
-				? await context.redaction.redact(
-						{ text: args.message },
-						{ scope: "claw", scopeId: args.clawId },
-					)
-				: { text: args.message };
-			const userMessage = await clawsStore.messages.append({
-				clawId: args.clawId,
-				content: userContent,
-				runId,
-				role: "user",
-				threadId: args.threadId,
-				visibility: "user",
-			});
+			const { runId, userMessage, runOptions } = await openConversationalRun(
+				args,
+				caller,
+			);
 			const result = await context.runtime.generate(
 				args.message,
 				args.ctx as never,
-				// A conversational message is a human at the other end → interactive. The chosen model
-				// (if any) rides alongside the server-set recording/runMode options. The authenticated
-				// caller seeds the run's principal (`busyclaw__principal`) — the run IS the caller.
-				{
-					...runtimeRunOptionsWithCaller(
-						runtimeRunOptionsWithRecording(
-							{ runMode: "interactive" },
-							{
-								clawId: args.clawId,
-								runId,
-								threadId: args.threadId,
-								userMessageId: userMessage.id,
-							},
-						),
-						caller?.principal,
-					),
-					model: args.model,
-				},
+				runOptions,
 			);
 			const response = { result, userMessage };
 			if (args.view !== "original" || context.redaction === undefined) {
@@ -1407,6 +1467,23 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				messages: 1,
 			});
 			return revealed;
+		},
+
+		// No `view: "original"` branch, unlike sendMessage. Re-identifying a RESULT is a read of a
+		// finished value; there is no finished value here, and re-identifying deltas as they fly past
+		// would put raw PII on the wire under a flag meant for one audited read. A caller who wants
+		// the original reads the transcript back through `listMessages` once the run has landed.
+		async sendMessageAndStream(args, caller?: ClawApiCaller) {
+			const { userMessage, runOptions } = await openConversationalRun(
+				args,
+				caller,
+			);
+			const stream = context.runtime.stream(
+				args.message,
+				args.ctx as never,
+				runOptions,
+			);
+			return { ...stream, userMessage };
 		},
 
 		async forgetSubject({ subjectId }) {

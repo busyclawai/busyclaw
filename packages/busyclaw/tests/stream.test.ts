@@ -11,7 +11,13 @@
 // actually streams.
 
 import { describe, expect, it } from "vitest";
-import { owned, type V2Model } from "./fixtures";
+import { createClaw } from "../src/index";
+import {
+	durableRedactor,
+	owned,
+	type V2Model,
+	withPrincipal,
+} from "./fixtures";
 
 /** A v4 model that really streams: one chunk per word, then a finish. */
 function streamingModel(text: string): V2Model {
@@ -103,6 +109,106 @@ describe("claw.api.stream", () => {
 					caller: unknown,
 				) => Promise<unknown>
 			)({ prompt: "hi" }, { principal: "" }),
+		).rejects.toThrow();
+	});
+});
+
+// `claw.api.sendMessageAndStream` — the same send, watched as it is written.
+//
+// This exists because `stream` alone could not serve a chat UI. It is ad-hoc: no claw, no thread,
+// nothing persisted, so the reader IS the only copy of the answer — close the tab and it is gone,
+// and the run is aborted because there would be nothing left to serve. A conversation needs the
+// opposite: the reply belongs to the thread whether or not anyone is currently watching it arrive.
+
+const ACTOR = "user:actor-1";
+
+async function conversation(model: V2Model) {
+	const { db, redactor } = durableRedactor();
+	const claw = createClaw({ database: db, model, redaction: { redactor } });
+	const api = withPrincipal(claw, ACTOR).api;
+	const agent = await api.createClaw({
+		id: "claw-1",
+		createdBy: ACTOR,
+		name: "Assistant",
+	});
+	const thread = await api.createThread({
+		id: "thread-1",
+		clawId: agent.id,
+		title: "Chat",
+	});
+	return { claw, api, agent, thread };
+}
+
+describe("claw.api.sendMessageAndStream", () => {
+	it("streams the reply AND leaves it in the transcript", async () => {
+		const { api, agent, thread } = await conversation(
+			streamingModel("one two three four"),
+		);
+
+		const { textStream, result, userMessage } = await api.sendMessageAndStream({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		// The user's turn is already persisted — a chat UI renders it beside the arriving reply.
+		expect(userMessage.role).toBe("user");
+
+		const deltas: string[] = [];
+		for await (const delta of textStream) deltas.push(delta);
+		const final = await result;
+
+		expect(final.status).toBe("completed");
+		expect(deltas.length).toBeGreaterThan(1);
+		expect(deltas.join("")).toBe(final.text);
+
+		const messages = await api.listMessages({ threadId: thread.id });
+		expect(messages.map((m) => m.role)).toContain("assistant");
+	});
+
+	it("keeps the answer when the reader walks away mid-stream", async () => {
+		// The whole reason this method exists. A closed tab must not destroy a nearly-finished
+		// answer: the run detaches, finishes, and the reply is in the thread to be read back.
+		const { api, agent, thread } = await conversation(
+			streamingModel("one two three four"),
+		);
+
+		const { textStream, result } = await api.sendMessageAndStream({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		for await (const _delta of textStream) break; // the tab closes after one delta
+
+		// Not rejected — finished.
+		const final = await result;
+		expect(final.status).toBe("completed");
+		expect(final.text).toBe("one two three four");
+
+		// And it is where the reader will look for it when they come back.
+		const messages = await api.listMessages({ threadId: thread.id });
+		const assistant = messages.filter((m) => m.role === "assistant");
+		expect(assistant).toHaveLength(1);
+		expect(JSON.stringify(assistant[0]?.content)).toContain(
+			"one two three four",
+		);
+	});
+
+	it("DENIES a principal who does not reach the claw", async () => {
+		// It writes to a shared row, so it authorizes against the CLAW — like sendMessage, and unlike
+		// the ad-hoc `stream`, which is caller-only. Anchoring it on the caller would have put it in
+		// the group the sealed baseline permits for anyone authenticated, and this test would pass
+		// while the method was in fact open to every account. Only a cross-principal call can tell.
+		const { claw, agent, thread } = await conversation(
+			streamingModel("secret"),
+		);
+		const stranger = withPrincipal(claw, "user:actor-2").api;
+
+		await expect(
+			stranger.sendMessageAndStream({
+				clawId: agent.id,
+				threadId: thread.id,
+				message: "let me in",
+			}),
 		).rejects.toThrow();
 	});
 });
