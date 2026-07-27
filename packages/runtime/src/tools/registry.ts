@@ -137,12 +137,20 @@ function toolContentVersion(input: {
 /** Back the registration flow with the registry stores it writes through. `authzChanges` is optional
  *  so callers with only the two tool stores still work; when present, each registration appends a
  *  `spec_registered` event that bumps the org router's count-keyed bundle version (slice 6b). */
+/** The stores a registration writes through — and, when the adapter can, a way to write them as one. */
+export type SpecRegistryStores = {
+	specRegistrations: SpecRegistrationStore;
+	registeredTools: RegisteredToolStore;
+	authzChanges?: AuthzChangeStore;
+	/** Rebinds these stores to a transaction. Absent ⇒ the adapter has none, and the work runs
+	 *  unwrapped exactly as it did before. */
+	transaction?: <R>(
+		fn: (stores: SpecRegistryStores) => Promise<R>,
+	) => Promise<R>;
+};
+
 export function createSpecRegistry(
-	stores: {
-		specRegistrations: SpecRegistrationStore;
-		registeredTools: RegisteredToolStore;
-		authzChanges?: AuthzChangeStore;
-	},
+	stores: SpecRegistryStores,
 	options: SpecRegistryOptions = {},
 ): SpecRegistry {
 	const maxDocumentBytes =
@@ -188,142 +196,159 @@ export function createSpecRegistry(
 				seen.add(address);
 			}
 
-			const existing = await stores.registeredTools.listBySource(
-				{ scope: input.scope, scopeId: input.scopeId },
-				input.source,
-			);
-			const priorByAddress = new Map(existing.map((row) => [row.address, row]));
+			// EVERY write below is one unit when the adapter can give us one. A registration inserts,
+			// updates and DELETES tool rows, replaces the spec row, and appends the change that bumps
+			// the org's bundle version — and a crash between the rows and the append leaves the surface
+			// changed while the router keeps serving a bundle that still names a tool the spec removed.
+			// The fail-closed delete stops being fail-closed until something unrelated bumps the version.
+			return stores.transaction
+				? stores.transaction((tx) => writeRegistration(tx))
+				: writeRegistration(stores);
 
-			// WHERE each operation's credential may go — derived from the freshly extracted bindings and
-			// checked against what the source already had, ENTIRELY before the first write. A spec that
-			// moves one operation's origin must leave the whole registration untouched: half-applying it
-			// would delete rows and rotate others while the caller reads a thrown error.
-			const credentialBindings = new Map<string, CredentialBinding>();
-			for (const tool of extraction.tools) {
-				const address = `${input.source}.${tool.name}`;
-				// Throws when the spec names no server: an operation with no approvable destination must
-				// not become a row, because a row with no pinned origin is one whose credential could
-				// later be sent anywhere.
-				const next = credentialBindingOf(tool.binding, {
+			async function writeRegistration(
+				txStores: SpecRegistryStores,
+			): Promise<SpecRegistrationReport> {
+				const existing = await txStores.registeredTools.listBySource(
+					{ scope: input.scope, scopeId: input.scopeId },
+					input.source,
+				);
+				const priorByAddress = new Map(
+					existing.map((row) => [row.address, row]),
+				);
+
+				// WHERE each operation's credential may go — derived from the freshly extracted bindings and
+				// checked against what the source already had, ENTIRELY before the first write. A spec that
+				// moves one operation's origin must leave the whole registration untouched: half-applying it
+				// would delete rows and rotate others while the caller reads a thrown error.
+				const credentialBindings = new Map<string, CredentialBinding>();
+				for (const tool of extraction.tools) {
+					const address = `${input.source}.${tool.name}`;
+					// Throws when the spec names no server: an operation with no approvable destination must
+					// not become a row, because a row with no pinned origin is one whose credential could
+					// later be sent anywhere.
+					const next = credentialBindingOf(tool.binding, {
+						source: input.source,
+						address,
+					});
+					const prior = priorByAddress.get(address);
+					// A re-registration may rotate anything about an operation EXCEPT where its credential
+					// goes and how it is placed.
+					if (prior) {
+						assertCredentialBindingUnchanged(prior, next, {
+							source: input.source,
+							address,
+						});
+					}
+					credentialBindings.set(address, next);
+				}
+				/** Present for every extracted address — the pre-pass above filled the map. */
+				const requireCredentialBinding = (
+					address: string,
+				): CredentialBinding => {
+					const binding = credentialBindings.get(address);
+					if (!binding) {
+						throw configurationError(
+							"registered tool has no credential binding",
+							{ address, source: input.source },
+						);
+					}
+					return binding;
+				};
+
+				const added: string[] = [];
+				const updated: string[] = [];
+				const perRowVersions: string[] = [];
+
+				for (const tool of extraction.tools) {
+					const address = `${input.source}.${tool.name}`;
+					const version = toolContentVersion({
+						name: tool.name,
+						description: tool.description,
+						inputSchema: tool.inputSchema,
+						governance: tool.governance,
+						binding: tool.binding,
+					});
+					perRowVersions.push(version);
+					// governance flows through TYPED — the registry column is schema-first
+					// (`field.json(toolGovernance)`), so the store's input schema validates it; only the
+					// format-opaque binding still needs the explicit JSON-safety gate before storage.
+					const binding = asJsonObject(tool.binding, "registered tool binding");
+					const prior = priorByAddress.get(address);
+					const credentialBinding = requireCredentialBinding(address);
+					// Flat literals — the store's entity schemas drop undefined-valued keys, so an
+					// absent description stays absent without conditional spreads here.
+					if (!prior) {
+						await txStores.registeredTools.create({
+							scope: input.scope,
+							scopeId: input.scopeId,
+							source: input.source,
+							name: tool.name,
+							address,
+							description: tool.description,
+							inputSchema: tool.inputSchema,
+							governance: tool.governance,
+							binding,
+							...credentialBinding,
+							contentVersion: version,
+						});
+						added.push(address);
+					} else if (prior.contentVersion !== version) {
+						await txStores.registeredTools.update(prior.id, {
+							name: tool.name,
+							address,
+							description: tool.description,
+							inputSchema: tool.inputSchema,
+							governance: tool.governance,
+							binding,
+							...credentialBinding,
+							contentVersion: version,
+						});
+						updated.push(address);
+					}
+				}
+
+				// Fail-closed: an operation gone from the spec loses its row (and thus its permission).
+				const removed: string[] = [];
+				for (const row of existing) {
+					if (!seen.has(row.address)) {
+						await txStores.registeredTools.deleteById(row.id);
+						removed.push(row.address);
+					}
+				}
+
+				const contentVersion = hashHex(
+					stableStringify([...perRowVersions].sort()),
+				);
+				const report = {
+					added,
+					updated,
+					removed,
+					skipped: extraction.skipped,
+					warnings: extraction.warnings,
+				};
+				await txStores.specRegistrations.upsert({
+					scope: input.scope,
+					scopeId: input.scopeId,
 					source: input.source,
-					address,
+					specBlob: input.document,
+					contentVersion,
+					// Typed through — the report column is schema-first (`field.json(specRegistrationReport)`),
+					// so the store's input schema validates the shape; no JSON-laundering needed.
+					report,
+					registeredBy: input.registeredBy,
 				});
-				const prior = priorByAddress.get(address);
-				// A re-registration may rotate anything about an operation EXCEPT where its credential
-				// goes and how it is placed.
-				if (prior) {
-					assertCredentialBindingUnchanged(prior, next, {
-						source: input.source,
-						address,
-					});
-				}
-				credentialBindings.set(address, next);
-			}
-			/** Present for every extracted address — the pre-pass above filled the map. */
-			const requireCredentialBinding = (address: string): CredentialBinding => {
-				const binding = credentialBindings.get(address);
-				if (!binding) {
-					throw configurationError(
-						"registered tool has no credential binding",
-						{ address, source: input.source },
-					);
-				}
-				return binding;
-			};
-
-			const added: string[] = [];
-			const updated: string[] = [];
-			const perRowVersions: string[] = [];
-
-			for (const tool of extraction.tools) {
-				const address = `${input.source}.${tool.name}`;
-				const version = toolContentVersion({
-					name: tool.name,
-					description: tool.description,
-					inputSchema: tool.inputSchema,
-					governance: tool.governance,
-					binding: tool.binding,
+				// A registration is an authz-state change — append so the org router's count-keyed bundle
+				// version bumps and the newly registered surface takes effect on the next decision.
+				await txStores.authzChanges?.append({
+					scope: input.scope,
+					scopeId: input.scopeId,
+					kind: "spec_registered",
+					summary: { source: input.source, contentVersion },
+					by: asPrincipal(input.registeredBy),
 				});
-				perRowVersions.push(version);
-				// governance flows through TYPED — the registry column is schema-first
-				// (`field.json(toolGovernance)`), so the store's input schema validates it; only the
-				// format-opaque binding still needs the explicit JSON-safety gate before storage.
-				const binding = asJsonObject(tool.binding, "registered tool binding");
-				const prior = priorByAddress.get(address);
-				const credentialBinding = requireCredentialBinding(address);
-				// Flat literals — the store's entity schemas drop undefined-valued keys, so an
-				// absent description stays absent without conditional spreads here.
-				if (!prior) {
-					await stores.registeredTools.create({
-						scope: input.scope,
-						scopeId: input.scopeId,
-						source: input.source,
-						name: tool.name,
-						address,
-						description: tool.description,
-						inputSchema: tool.inputSchema,
-						governance: tool.governance,
-						binding,
-						...credentialBinding,
-						contentVersion: version,
-					});
-					added.push(address);
-				} else if (prior.contentVersion !== version) {
-					await stores.registeredTools.update(prior.id, {
-						name: tool.name,
-						address,
-						description: tool.description,
-						inputSchema: tool.inputSchema,
-						governance: tool.governance,
-						binding,
-						...credentialBinding,
-						contentVersion: version,
-					});
-					updated.push(address);
-				}
+
+				return { ...report, contentVersion };
 			}
-
-			// Fail-closed: an operation gone from the spec loses its row (and thus its permission).
-			const removed: string[] = [];
-			for (const row of existing) {
-				if (!seen.has(row.address)) {
-					await stores.registeredTools.deleteById(row.id);
-					removed.push(row.address);
-				}
-			}
-
-			const contentVersion = hashHex(
-				stableStringify([...perRowVersions].sort()),
-			);
-			const report = {
-				added,
-				updated,
-				removed,
-				skipped: extraction.skipped,
-				warnings: extraction.warnings,
-			};
-			await stores.specRegistrations.upsert({
-				scope: input.scope,
-				scopeId: input.scopeId,
-				source: input.source,
-				specBlob: input.document,
-				contentVersion,
-				// Typed through — the report column is schema-first (`field.json(specRegistrationReport)`),
-				// so the store's input schema validates the shape; no JSON-laundering needed.
-				report,
-				registeredBy: input.registeredBy,
-			});
-			// A registration is an authz-state change — append so the org router's count-keyed bundle
-			// version bumps and the newly registered surface takes effect on the next decision.
-			await stores.authzChanges?.append({
-				scope: input.scope,
-				scopeId: input.scopeId,
-				kind: "spec_registered",
-				summary: { source: input.source, contentVersion },
-				by: asPrincipal(input.registeredBy),
-			});
-
-			return { ...report, contentVersion };
 		},
 	};
 }

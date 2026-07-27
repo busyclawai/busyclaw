@@ -62,6 +62,19 @@ export type RegistryStores = {
 	factsOverlay: FactsOverlayStore;
 	policySlices: PolicySliceStore;
 	authzChanges: AuthzChangeStore;
+	/**
+	 * Run several of these stores' writes as ONE unit, over stores rebound to the transaction.
+	 *
+	 * A registration is not one write: it inserts, updates and DELETES tool rows, replaces the spec
+	 * row, and appends the change that bumps the org's bundle version. Split across separate commits,
+	 * a crash between the tool writes and the append leaves the rows changed and the version stale —
+	 * so the router keeps serving a bundle that still names a tool the spec removed. The fail-closed
+	 * delete stops being fail-closed until something unrelated bumps the version.
+	 *
+	 * Absent when the adapter has no transaction support; the caller then runs the same work
+	 * unwrapped, which is what it did before this existed.
+	 */
+	transaction?: <R>(fn: (stores: RegistryStores) => Promise<R>) => Promise<R>;
 };
 
 const SPEC_MODEL = "spec_registration";
@@ -451,11 +464,21 @@ export function createRegistryStores(
 		},
 	};
 
+	// Rebuilding the bundle over the transaction's adapter is the whole mechanism: every store here is
+	// one `entityDb` over `adapter`, so the same construction against `tx` yields the same stores
+	// writing inside the transaction.
+	const transaction = adapter.transaction;
 	return {
 		specRegistrations,
 		registeredTools,
 		factsOverlay,
 		policySlices,
 		authzChanges,
+		...(transaction !== undefined
+			? {
+					transaction: <R>(fn: (stores: RegistryStores) => Promise<R>) =>
+						transaction((tx) => fn(createRegistryStores(tx, options))),
+				}
+			: {}),
 	};
 }
