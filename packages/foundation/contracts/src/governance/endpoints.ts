@@ -38,9 +38,7 @@ export type EndpointDefinition = RouteDefinition<never, unknown>;
 /** A record of built routes, optionally grouped: a nested record is a GROUP whose key becomes a path
  *  segment, so a namespace can mirror shapes like `skills.packages.create` → `/packages/create`. */
 export type EndpointDefinitions = {
-	// biome-ignore lint/suspicious/noExplicitAny: a route's In/Out vary per entry; `any` here is the
-	// only way to accept a heterogeneous record without erasing each entry's own types, which
-	// `InferEndpoints` reads back below.
+	// biome-ignore lint/suspicious/noExplicitAny: a route's In/Out vary per entry; `any` here is the only way to accept a heterogeneous record without erasing each entry's own types, which `InferEndpoints` reads back below. (One line on purpose — a wrapped reason puts the directive on a comment line, so it suppresses nothing and reports itself unused.)
 	readonly [name: string]: RouteDefinition<any, any> | EndpointDefinitions;
 };
 
