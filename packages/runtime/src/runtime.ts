@@ -58,6 +58,7 @@ import {
 	composeContext,
 	type IdentityResolver,
 	type MembershipResolver,
+	type SubjectResolver,
 } from "./context";
 import {
 	createRuntimeEvent,
@@ -239,6 +240,10 @@ export type RuntimeConfig = {
 	configScope?: ConfigScopeResolver;
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
+	/** Whose personal data this turn is about — the erasure key every mapping minted during it links
+	 *  to. Without one, ordinary redaction mints mappings linked to NOBODY and `forgetSubject` answers
+	 *  successfully having found nothing. See {@link SubjectResolver}. */
+	subject?: SubjectResolver;
 	audit?: AuditSink;
 	/**
 	 * Whose authority an APPROVED action executes under when the run resumes — the escalation semantic.
@@ -786,6 +791,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		identity: config.identity,
 		membership: config.membership,
 		configScope: config.configScope,
+		subject: config.subject,
 	});
 	// The run's tool set, plus the discovery meta-tools when anything in it is `discoverable`. They
 	// are ordinary descriptors from here on — dispatched, gate-registered and catalogued through the
@@ -974,15 +980,34 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	 *
 	 * Unstamped, the redactor ran container-LESS: a placeholder minted in claw A rehydrated at claw B's
 	 * tool edge, and `forgetSubject` (which erases per container) could not reach run-minted rows at all.
-	 * An ad-hoc run has no claw, so it stays unstamped — there is no container to name.
+	 *
+	 * An ad-hoc run has no claw — but it is not therefore containerless, and treating it that way put
+	 * EVERY such run in one shared namespace. A placeholder minted by one contextless run rehydrated in
+	 * another, so holding a token from someone else's run was enough to have a tool hand you the value
+	 * behind it. The run is the container when nothing larger is: `(run, runId)`, minted per run, so the
+	 * absent case is many namespaces of one rather than one namespace of many.
 	 */
 	const stampRedactionContainer = (
 		ctx: Record<string, unknown>,
 		recording: RuntimeRecordingContext | undefined,
+		runId: string | undefined,
 	): Record<string, unknown> => {
+		// A recorded run is contained by its CLAW: the transcript outlives the run, and a placeholder in
+		// message 3 has to rehydrate in message 40. An ad-hoc run has no such life — nothing survives it
+		// — so its own id is the honest boundary, and erasure reaches it the same way it reaches a claw.
 		if (recording !== undefined) {
 			ctx[SCOPE_CONTEXT_KEY] = "claw";
 			ctx[SCOPE_ID_CONTEXT_KEY] = recording.clawId;
+			return ctx;
+		}
+		// A container has to be the SAME one on the way back in: a placeholder minted before an approval
+		// park must rehydrate after it. So a resume whose checkpoint carries no run id is left
+		// uncontained on purpose — that run was minted before run containers existed, and inventing one
+		// now would put the read in a namespace the mint never used. Nothing throws on a container
+		// mismatch; the value just comes back as a raw placeholder, which is why this stays explicit.
+		if (runId !== undefined) {
+			ctx[SCOPE_CONTEXT_KEY] = "run";
+			ctx[SCOPE_ID_CONTEXT_KEY] = runId;
 		}
 		return ctx;
 	};
@@ -1028,7 +1053,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				resolved[CLAW_ID_CONTEXT_KEY] = state.recording.clawId;
 				resolved[THREAD_ID_CONTEXT_KEY] = state.recording.threadId;
 			}
-			stampRedactionContainer(resolved, state.recording);
+			stampRedactionContainer(resolved, state.recording, state.runId);
 			// The run's own id — the recording's when the run is recorded, else the one this invocation
 			// minted. clawId/threadId stay conditional on a recording (an ad-hoc run genuinely has
 			// neither), but a run id it always has, so an after-gate always has something to correlate
@@ -1422,10 +1447,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	const resolveRunContext = async (
 		ctxInput: Record<string, unknown> | undefined,
 		recording: RuntimeRecordingContext | undefined,
+		runId: string | undefined,
 	): Promise<Record<string, unknown>> => {
 		const ctx = stripReserved(ctxInput ?? {});
 		const resolved = resolveContext ? await resolveContext(ctx) : ctx;
-		return stampRedactionContainer(resolved, recording);
+		return stampRedactionContainer(resolved, recording, runId);
 	};
 
 	const assertYieldable = (options: RuntimeRunOptions | undefined): void => {
@@ -1459,7 +1485,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// approval records, so the two are joinable for a run that has nothing else to join on.
 		state.runId = options?.runId ?? recording?.runId ?? newId("run");
 		const emitCtx = { recording, runId: state.runId };
-		const resolvedCtx = await resolveRunContext(ctx, recording);
+		const resolvedCtx = await resolveRunContext(ctx, recording, state.runId);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 		if (onDelta !== undefined) {
@@ -1615,7 +1641,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 		if (record.status !== "approved" && record.status !== "executing")
 			return null;
-		const resolvedCtx = await resolveRunContext(ctx, effectiveRecording);
+		const resolvedCtx = await resolveRunContext(
+			ctx,
+			effectiveRecording,
+			effectiveRunId,
+		);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		// DRIFT. The tool is resolved fresh, as it must be — but a registered source can be
 		// re-registered while an approval sits pending, and the address survives what it points at.
@@ -1809,7 +1839,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			options?.[RUNTIME_RECORDING_OPTION] ?? checkpoint.recording;
 		const runId = options?.runId ?? checkpoint.runId;
 		const emitCtx = { recording, runId };
-		const resolvedCtx = await resolveRunContext(ctx, recording);
+		const resolvedCtx = await resolveRunContext(ctx, recording, runId);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 

@@ -1437,4 +1437,129 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			toolName: "send_email",
 		});
 	});
+
+	// H-06. An ad-hoc run has no claw, and that was read as "no container" — so EVERY contextless run
+	// shared one namespace. Holding a placeholder minted by someone else's run was then enough to have
+	// a tool hand you the value behind it, because the tool edge rehydrates and the namespace matched.
+	it("does not rehydrate a placeholder minted by a different ad-hoc run", async () => {
+		const db = memoryAdapter();
+		const seen: string[] = [];
+		const make = () =>
+			createRuntime({
+				model: scriptedModel({ prompt: "" }),
+				database: db,
+				redactor: createStoredRedactor({
+					detector: emailDetector,
+					// The SAME mapping store — the isolation has to come from the container, not from
+					// two runtimes that simply cannot see each other's rows.
+					mappings: createPiiMappingStore(db),
+				}),
+				tools: {
+					send_email: govern(
+						tool({
+							description: "Send an email.",
+							inputSchema: jsonSchema<{ to: string }>({
+								type: "object",
+								properties: { to: { type: "string" } },
+								required: ["to"],
+							}),
+							execute: async (args) => {
+								seen.push((args as { to: string }).to);
+								return { sent: true };
+							},
+						}),
+						{},
+					),
+				},
+			});
+
+		// Run one mints a placeholder for a real address, and its own tool edge rehydrates it.
+		const first = { prompt: "" };
+		const runtimeA = createRuntime({
+			model: scriptedModel(first),
+			database: db,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (args) => {
+							seen.push((args as { to: string }).to);
+							return { sent: true };
+						},
+					}),
+					{},
+				),
+			},
+		});
+		await runtimeA.generate("email alice@personal.com the offer");
+		expect(seen[0]).toBe("alice@personal.com");
+		const token = first.prompt.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0];
+		if (!token) throw new Error("expected run one to mint a placeholder");
+
+		// Run two is a DIFFERENT ad-hoc run and presents the stolen token. It must come out the other
+		// side as itself — an opaque string — never as the address behind it.
+		await make().generate(`email ${token} the offer`);
+		expect(seen[1]).toBe(token);
+		expect(seen[1]).not.toBe("alice@personal.com");
+	});
+
+	// H-07. Ordinary message and tool redaction minted mappings linked to NO subject, because nothing
+	// could stamp one: the context key is reserved (so a caller cannot supply it) and no resolver wrote
+	// it. `forgetSubject` then answered successfully having found nothing — the worst possible
+	// compliance reply, because it is indistinguishable from a completed erasure.
+	describe("erasure reaches what ordinary redaction minted", () => {
+		const build = (subject?: (ctx: Record<string, unknown>) => string) => {
+			const db = memoryAdapter();
+			const mappings = createPiiMappingStore(db);
+			const runtime = createRuntime({
+				model: scriptedModel({ prompt: "" }),
+				database: db,
+				redactor: createStoredRedactor({ detector: emailDetector, mappings }),
+				...(subject !== undefined ? { subject } : {}),
+				tools: {
+					send_email: govern(
+						tool({
+							description: "Send an email.",
+							inputSchema: jsonSchema<{ to: string }>({
+								type: "object",
+								properties: { to: { type: "string" } },
+								required: ["to"],
+							}),
+							execute: async () => ({ sent: true }),
+						}),
+						{},
+					),
+				},
+			});
+			return { runtime, mappings };
+		};
+
+		it("erases a mapping the normal flow minted when a subject resolver names one", async () => {
+			const { runtime, mappings } = build(() => "person-7");
+			await runtime.generate("email alice@personal.com the offer");
+
+			// The junction exists because trusted code said whose data this is — busyclaw cannot infer
+			// that from the value, so a deployment that owes anyone erasure has to say.
+			expect(await mappings.deleteForSubject("person-7")).toBeGreaterThan(0);
+			// And it is gone: a second erasure finds nothing left to shred.
+			expect(await mappings.deleteForSubject("person-7")).toBe(0);
+		});
+
+		it("reports ZERO when nothing was ever linked — not a silent success", async () => {
+			const { runtime, mappings } = build();
+			await runtime.generate("email alice@personal.com the offer");
+			// A mapping WAS minted; it simply belongs to no subject, so erasure cannot reach it. The
+			// count is what makes that visible instead of reading as a completed shred.
+			expect(await mappings.deleteForSubject("person-7")).toBe(0);
+		});
+	});
 });

@@ -267,13 +267,17 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 		},
 		deleteForSubject(subjectId) {
 			const keys = subjectToKeys.get(subjectId);
-			if (keys === undefined) return;
-			for (const key of keys) byKey.delete(key);
+			if (keys === undefined) return 0;
+			let erased = 0;
+			for (const key of keys) {
+				if (byKey.delete(key)) erased += 1;
+			}
 			// The value is gone — drop it from every other subject's index too.
 			for (const set of subjectToKeys.values()) {
 				for (const key of keys) set.delete(key);
 			}
 			subjectToKeys.delete(subjectId);
+			return erased;
 		},
 	};
 }

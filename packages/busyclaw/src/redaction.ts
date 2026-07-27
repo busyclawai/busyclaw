@@ -109,8 +109,10 @@ export type ClawRedactionHandle = {
 		ctx: { scope: string; scopeId: string },
 	) => Promise<T>;
 	redact: <T>(value: T, ctx: { scope: string; scopeId: string }) => Promise<T>;
-	/** Crypto-shred every mapping this subject appears on. */
-	forgetSubject: (subjectId: string) => Promise<void>;
+	/** Crypto-shred every mapping this subject appears on, and report how many went. Zero is a real
+	 *  answer and a load-bearing one: a subject is only ever linked when trusted code stamps it, so
+	 *  "nothing was linked to this person" is the likeliest outcome and must not read as "erased". */
+	forgetSubject: (subjectId: string) => Promise<number>;
 };
 
 export type ResolvedRedaction = {
@@ -218,9 +220,7 @@ export function resolveRedaction(input: {
 			...(cfg.recover !== undefined ? { recover: cfg.recover } : {}),
 			warn: input.warn,
 		});
-		forgetSubject = async (subjectId) => {
-			await mappings.deleteForSubject(subjectId);
-		};
+		forgetSubject = async (subjectId) => mappings.deleteForSubject(subjectId);
 	}
 	const armed = cfg.redactor !== undefined || detector !== undefined;
 	// The handle rides the FINAL resolved redactor (routing included), so its `redact`/`original`

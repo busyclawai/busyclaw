@@ -152,7 +152,15 @@ export type PiiMappingStore = {
 		ctx?: RehydrationContext,
 	) => PiiMapping | null | Promise<PiiMapping | null>;
 	/** Right-to-be-forgotten: delete every mapping this subject appears on (multi-subject safe). */
-	deleteForSubject: (subjectId: string) => void | Promise<void>;
+	/**
+	 * Crypto-shred every mapping this subject appears on, and report HOW MANY.
+	 *
+	 * The count is the point. Erasure used to answer `void`, so "shredded every mapping this person
+	 * appears on" and "found nothing, because nothing was ever linked to them" were the same reply —
+	 * and the second is the likely one, since a subject is only linked when trusted code stamps it.
+	 * A compliance answer that cannot distinguish those is worse than no answer: it is a false one.
+	 */
+	deleteForSubject: (subjectId: string) => number | Promise<number>;
 };
 
 export const redactionContext = type({

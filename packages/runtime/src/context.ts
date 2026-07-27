@@ -10,6 +10,7 @@ import {
 	type Principal,
 	ROLE_CONTEXT_KEY,
 	type ScopeRef,
+	SUBJECT_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	userPrincipal,
@@ -73,14 +74,33 @@ export function roleMembership(deps: {
 	};
 }
 
+/**
+ * Resolves WHOSE PERSONAL DATA this turn is about — the erasure key every PII mapping minted during it
+ * is linked to, so a later `forgetSubject` can find them.
+ *
+ * Trusted-code only, by construction: the key it writes carries the reserved prefix, so a caller
+ * cannot supply it and `stripReserved` drops any attempt. That is the point — a subject the caller
+ * names is a subject the caller can misname, and the mapping it links would be erased by the wrong
+ * person's request or by nobody's.
+ *
+ * Without one, ordinary message and tool redaction mints mappings linked to NO subject, and erasure
+ * cannot discover them: `forgetSubject` answers successfully having found nothing. busyclaw cannot
+ * derive this itself — who a value is ABOUT is domain knowledge, not something a tokenizer can infer
+ * from the value — so a deployment that owes anyone erasure has to say.
+ */
+export type SubjectResolver = (
+	ctx: TurnContext,
+) => string | undefined | Promise<string | undefined>;
+
 /** Compose identity + membership into ONE core ContextResolver — identity first (membership needs the actor). */
 export function composeContext(parts: {
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
 	configScope?: ConfigScopeResolver;
+	subject?: SubjectResolver;
 }): ContextResolver | undefined {
-	const { identity, membership, configScope } = parts;
-	if (!identity && !membership && !configScope) return undefined;
+	const { identity, membership, configScope, subject } = parts;
+	if (!identity && !membership && !configScope && !subject) return undefined;
 	return async (ctx) => {
 		if (configScope) {
 			const ref = await configScope(ctx);
@@ -98,6 +118,14 @@ export function composeContext(parts: {
 			if (m) {
 				ctx[TEAM_CONTEXT_KEY] = m.team;
 				ctx[ROLE_CONTEXT_KEY] = m.role;
+			}
+		}
+		// LAST: a deployment usually derives the subject from the actor identity resolved above, so it
+		// runs where that is already on the context.
+		if (subject) {
+			const subjectId = await subject(ctx);
+			if (typeof subjectId === "string" && subjectId !== "") {
+				ctx[SUBJECT_CONTEXT_KEY] = subjectId;
 			}
 		}
 		return ctx;

@@ -220,7 +220,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
 	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
 	 *  no redaction configured): a no-op "success" would be false comfort. */
-	forgetSubject: (input: { subjectId: string }) => Promise<void>;
+	forgetSubject: (input: { subjectId: string }) => Promise<{ erased: number }>;
 
 	createToolCall: (input: CreateToolCallInput) => Promise<ToolCallRecord>;
 	getToolCall: (input: { id: string }) => Promise<ToolCallRecord | null>;
@@ -1397,8 +1397,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		async forgetSubject({ subjectId }) {
-			await requireRedaction().forgetSubject(subjectId);
-			await auditPrivacy("pii.erasure", { subjectId });
+			const erased = await requireRedaction().forgetSubject(subjectId);
+			// The count rides into the audit too. "Erasure requested and nothing was found" is the
+			// answer a regulator asks for, and it is indistinguishable from a completed shred unless
+			// somebody wrote the number down at the moment it was true.
+			await auditPrivacy("pii.erasure", { subjectId, erased });
+			return { erased };
 		},
 
 		createToolCall: (args) => store().toolCalls.create(args),
