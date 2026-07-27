@@ -12,7 +12,7 @@ import type {
 	InboundRequest,
 	PersistEndpointEvent,
 } from "./contracts";
-import type { DeliveryInbox } from "./inbox";
+import type { DeliveryInbox, DeliveryKey, DeliveryOutbox } from "./inbox";
 
 export type ChannelDispatchResult = {
 	status: number;
@@ -30,6 +30,8 @@ export async function handleInbound(input: {
 	channel: Channel;
 	endpoint: EndpointContext;
 	message: InboundMessage;
+	/** Absent ⇒ no database, so the reply is sent without a durable record and a crash loses it. */
+	outbox?: DeliveryOutbox;
 }): Promise<void> {
 	const { claw, channel, endpoint, message } = input;
 	// The dispatch acts for a stranger (no authenticated principal) — the app-authz caller is
@@ -58,16 +60,46 @@ export async function handleInbound(input: {
 		},
 		caller,
 	);
-	if (sent.result.status === "completed" && sent.result.text) {
-		await channel.send({
-			endpoint,
-			message: {
-				externalConversationId: message.externalConversationId,
-				text: sent.result.text,
-				replyContext: message.replyContext,
-			},
-		});
+	if (sent.result.status !== "completed" || !sent.result.text) return;
+	const reply = {
+		externalConversationId: message.externalConversationId,
+		text: sent.result.text,
+		...(message.replyContext !== undefined
+			? { replyContext: message.replyContext }
+			: {}),
+	};
+	const key =
+		input.outbox !== undefined && message.deliveryId !== undefined
+			? {
+					provider: channel.provider,
+					endpointKey: endpoint.endpointKey,
+					deliveryId: message.deliveryId,
+				}
+			: undefined;
+	// No outbox (or no delivery id to key one on) ⇒ send and hope, exactly as before.
+	if (input.outbox === undefined || key === undefined) {
+		await channel.send({ endpoint, message: reply });
+		return;
 	}
+	// DURABLE BEFORE SENT. De-duplicating the inbound half created a new way to lose a reply: the turn
+	// runs, the process dies before `send`, and the delivery is already claimed — so the provider's
+	// retry correctly declines to re-run it and the answer is simply gone. Writing the reply first
+	// means a crash anywhere after this leaves a row `drainOutbox` will finish.
+	await input.outbox.enqueue(key, reply);
+	try {
+		await channel.send({ endpoint, message: reply });
+	} catch (error) {
+		// Left PENDING on purpose — the drain owns the retry, and a send that failed here is exactly
+		// what the outbox exists to carry.
+		await input.outbox.markFailed(
+			key,
+			error instanceof Error ? error.message : String(error),
+		);
+		throw error;
+	}
+	// A crash between the send and this mark re-sends later: a duplicate message is visible and
+	// recoverable, a lost one is neither, so that is the side to fail on.
+	await input.outbox.markSent(key);
 }
 
 /**
@@ -83,6 +115,7 @@ export async function dispatchWebhook(input: {
 	/** Absent ⇒ this claw has no database, so there is nowhere to record a claim and a provider retry
 	 *  replays the turn exactly as it did before. */
 	inbox?: DeliveryInbox;
+	outbox?: DeliveryOutbox;
 }): Promise<ChannelDispatchResult> {
 	const { claw, channel, endpoint, request } = input;
 	// Authentication is NOT optional here. `if (channel.verify)` read as "verify when the channel
@@ -141,11 +174,20 @@ async function relayOnce(input: {
 	endpoint: EndpointContext;
 	message: InboundMessage;
 	inbox?: DeliveryInbox;
+	outbox?: DeliveryOutbox;
 }): Promise<boolean> {
-	const { claw, channel, endpoint, message, inbox } = input;
+	const { claw, channel, endpoint, message, inbox, outbox } = input;
 	const deliveryId = message.deliveryId;
+	const relay = () =>
+		handleInbound({
+			claw,
+			channel,
+			endpoint,
+			message,
+			...(outbox !== undefined ? { outbox } : {}),
+		});
 	if (inbox === undefined || deliveryId === undefined) {
-		await handleInbound({ claw, channel, endpoint, message });
+		await relay();
 		return true;
 	}
 	const key = {
@@ -156,7 +198,7 @@ async function relayOnce(input: {
 	// Claimed BEFORE the turn: a claim taken afterwards would be recording history, and the second
 	// arrival is already halfway through its own run by then.
 	if (!(await inbox.claim(key, DELIVERY_LEASE_MS))) return false;
-	await handleInbound({ claw, channel, endpoint, message });
+	await relay();
 	await inbox.complete(key);
 	return true;
 }
@@ -173,6 +215,7 @@ export async function pollEndpoint(input: {
 	persist: PersistEndpointEvent;
 	limit?: number;
 	inbox?: DeliveryInbox;
+	outbox?: DeliveryOutbox;
 }): Promise<{ processed: number }> {
 	const { claw, channel, endpoint } = input;
 	if (!channel.poll) return { processed: 0 };
@@ -197,4 +240,58 @@ export async function pollEndpoint(input: {
 		});
 		throw error;
 	}
+}
+
+/**
+ * Finish the replies a crash left owed — the recovery half of the outbox.
+ *
+ * A reply is written before it is sent and marked after, so anything still `pending` is a send that
+ * either never happened or never got acknowledged. Both are re-sent: a duplicate message is visible
+ * and recoverable, a lost one is neither.
+ *
+ * Called by whatever the deployment already runs on a schedule. Deliberately not wired to a cron here —
+ * the app-bot mode has one and registrations mode does not, and a drain that only ran where a poll
+ * happened to exist would be a guarantee that quietly depends on configuration.
+ */
+export async function drainOutbox(input: {
+	outbox: DeliveryOutbox;
+	/** The transports to send through, by provider. */
+	channels: ReadonlyMap<string, Channel>;
+	/** Resolve the endpoint a pending reply belongs to; absent ⇒ that row is skipped, not dropped. */
+	endpointFor: (
+		key: DeliveryKey,
+	) => Promise<EndpointContext | undefined> | EndpointContext | undefined;
+	limit?: number;
+}): Promise<{ sent: number; failed: number }> {
+	const owed = await input.outbox.pending(input.limit);
+	let sent = 0;
+	let failed = 0;
+	for (const row of owed) {
+		const channel = input.channels.get(row.provider);
+		const endpoint = await input.endpointFor(row);
+		// A provider that is no longer configured, or an endpoint that has been revoked: leave the row
+		// alone. Dropping it would erase the evidence that somebody is still owed an answer.
+		if (!channel || !endpoint) continue;
+		try {
+			await channel.send({
+				endpoint,
+				message: {
+					externalConversationId: row.externalConversationId,
+					text: row.text,
+					...(row.replyContext !== undefined
+						? { replyContext: row.replyContext }
+						: {}),
+				},
+			});
+			await input.outbox.markSent(row);
+			sent += 1;
+		} catch (error) {
+			await input.outbox.markFailed(
+				row,
+				error instanceof Error ? error.message : String(error),
+			);
+			failed += 1;
+		}
+	}
+	return { sent, failed };
 }

@@ -1,6 +1,6 @@
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { channelDeliveryModels } from "../src/core/inbox";
+import { channelDeliveryModels, channelOutboxModels } from "../src/core/inbox";
 import {
 	channelsModels,
 	createChannelEndpointStateStore,
@@ -12,6 +12,7 @@ const db = () =>
 	entityAdapter(memoryAdapter(), {
 		...channelsModels,
 		...channelDeliveryModels,
+		...channelOutboxModels,
 	});
 
 const now = () => "2026-01-01T00:00:00.000Z";
