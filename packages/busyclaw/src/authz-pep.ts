@@ -20,7 +20,9 @@ import {
 	type PrincipalScope,
 } from "@busyclaw/authz";
 import {
+	type AccessGrantResourceKey,
 	type AccessGrantStore,
+	type AccessGrantsByResource,
 	type Adapter,
 	type ApprovalStore,
 	type AuthzContext,
@@ -423,7 +425,13 @@ function collectRouteAuthz(
 function resourceLoaderFor(input: {
 	registry: Map<string, ResourceLoader>;
 	grantStore: AccessGrantStore | undefined;
-}): (target: AuthzTarget) => Promise<ApiResourceShape> {
+}): {
+	byTarget: (target: AuthzTarget) => Promise<ApiResourceShape>;
+	byTargets: (
+		targets: readonly AuthzTarget[],
+		concurrency: number,
+	) => Promise<ApiResourceShape[]>;
+} {
 	const { registry, grantStore } = input;
 
 	const loadShape = async (
@@ -454,21 +462,39 @@ function resourceLoaderFor(input: {
 		if (base === null) return DENY_SHAPE;
 		// Grants are DATA: the resource's OWN (kind, id) grants ∪ any inherited parents'. Empty when no
 		// grant store is configured (grant enforcement needs a DB; owner/scope still decide without it).
-		const grantKeys = [{ kind, id }, ...(base.grantParents ?? [])];
-		const grants = grantStore
-			? (
-					await Promise.all(
-						grantKeys.map((key) =>
-							grantStore.listForResource(key.kind, key.id),
-						),
-					)
-				).flat()
-			: [];
+		return shapeFrom(kind, id, base, await grantsFor([{ kind, id, base }]));
+	};
+
+	/** Every grant key a set of loaded rows needs — each row's own (kind, id) ∪ its inherited parents' —
+	 *  fetched in ONE query. The plural store call is what makes a page of rows cost one grant read. */
+	const grantsFor = async (
+		loaded: readonly { kind: string; id: string; base: ResolvedResource }[],
+	): Promise<AccessGrantsByResource> => {
+		if (grantStore === undefined) return new Map();
+		const keys: AccessGrantResourceKey[] = [];
+		for (const { kind, id, base } of loaded) {
+			keys.push({ resourceKind: kind, resourceId: id });
+			for (const parent of base.grantParents ?? []) {
+				keys.push({ resourceKind: parent.kind, resourceId: parent.id });
+			}
+		}
+		return grantStore.listForResources(keys);
+	};
+
+	/** Render one loaded row against an already-fetched grant lookup. Pure — no reads. */
+	const shapeFrom = (
+		kind: string,
+		id: string,
+		base: ResolvedResource,
+		grants: AccessGrantsByResource,
+	): ApiResourceShape => {
+		const at = (key: { kind: string; id: string }) =>
+			grants.get(key.kind)?.get(key.id) ?? [];
 		return {
 			createdBy: base.createdBy,
 			scope: base.scope,
 			scopeId: base.scopeId,
-			grants,
+			grants: [...at({ kind, id }), ...(base.grantParents ?? []).flatMap(at)],
 		};
 	};
 
@@ -481,7 +507,51 @@ function resourceLoaderFor(input: {
 			? loadShape(target.kind, target.id)
 			: { scope: target.scope, scopeId: target.scopeId, grants: [] };
 
-	return byTarget;
+	/**
+	 * The same shapes for MANY targets, with the grant read hoisted: every row's base is loaded (that is
+	 * the row's own data and stays per-row), then ONE `listForResources` covers the whole page.
+	 *
+	 * The loads run with bounded concurrency for the reason the decision does — an unbounded map over a
+	 * page opens as many simultaneous reads as the page is long. A load that THROWS yields `DENY_SHAPE`,
+	 * so an undecidable row is a denied row, never an escaping error that fails the whole listing.
+	 */
+	const byTargets = async (
+		targets: readonly AuthzTarget[],
+		concurrency: number,
+	): Promise<ApiResourceShape[]> => {
+		type Loaded = { kind: string; id: string; base: ResolvedResource } | null;
+		const loaded: Loaded[] = [];
+		for (let i = 0; i < targets.length; i += concurrency) {
+			const settled = await Promise.allSettled(
+				targets.slice(i, i + concurrency).map(async (target) => {
+					if (!("kind" in target)) return null;
+					const loader = registry.get(target.kind);
+					if (loader === undefined) return null;
+					const base = await loader(target.id);
+					return base === null
+						? null
+						: { kind: target.kind, id: target.id, base };
+				}),
+			);
+			for (const outcome of settled) {
+				loaded.push(outcome.status === "fulfilled" ? outcome.value : null);
+			}
+		}
+		// ONE query for the whole page — the reason this function exists.
+		const grants = await grantsFor(loaded.filter((row) => row !== null));
+		return targets.map((target, index) => {
+			const row = loaded[index];
+			if (row !== undefined && row !== null) {
+				return shapeFrom(row.kind, row.id, row.base, grants);
+			}
+			// A boundary target carries no row to load and no grants — the same shape `byTarget` renders.
+			return "kind" in target
+				? DENY_SHAPE
+				: { scope: target.scope, scopeId: target.scopeId, grants: [] };
+		});
+	};
+
+	return { byTarget, byTargets };
 }
 
 /**
@@ -584,10 +654,11 @@ export function governApi(input: {
 	// What each ROUTE-built method declared via `.authz(...)`. Present ⇒ the route path below; absent ⇒
 	// a core method still on the legacy binding table.
 	const routeAuthz = collectRouteAuthz(input.api);
-	const loadResource = resourceLoaderFor({
-		registry,
-		grantStore: input.grantStore,
-	});
+	const { byTarget: loadResource, byTargets: loadResources } =
+		resourceLoaderFor({
+			registry,
+			grantStore: input.grantStore,
+		});
 	const hostScopes = input.resolvePrincipalScopes ?? (() => []);
 	// The host's resolver is the one place membership enters the decision, so it is a trust boundary
 	// even though the host is trusted code. Core reserves the `busyclaw:` scope prefix for containers it
@@ -646,12 +717,13 @@ export function governApi(input: {
 	const FILTER_CONCURRENCY = 10;
 
 	/**
-	 * The bulk half of the decision — {@link AuthzContext.filter}. Cedar has no batch authorize, so
-	 * this is still one `isAuthorized` per row; what it removes from the loop is the PER-CALL work.
+	 * The bulk half of the decision — {@link AuthzDecisions.filter}. Cedar has no batch authorize, so
+	 * this is still one `isAuthorized` per row; what it removes from the loop is everything ELSE.
 	 *
-	 * `resolvePrincipalScopes` is the one that matters: it is a HOST callback, so a per-row `check`
-	 * asks the host "what is this principal a member of?" once per row — the same answer, fetched N
-	 * times, plausibly over the network. Resolved once here and reused for the whole set.
+	 * Two reads that a per-row `enforce` repeats are hoisted here. `resolvePrincipalScopes` is a HOST
+	 * callback, so per-row it asks "what is this principal a member of?" once per row — the same answer,
+	 * fetched N times, plausibly over the network. And the grant read is one query per row against a
+	 * table whose rows differ only in the id; `loadResources` collapses the page into ONE.
 	 *
 	 * Denials and errors both DROP the row. A listing that threw on the first unreadable row would
 	 * fail the whole page, and telling a caller "denied" for one row rather than omitting it turns the
@@ -666,36 +738,32 @@ export function governApi(input: {
 	}): Promise<T[]> => {
 		if (spec.rows.length === 0) return [];
 		if (unsafeOpen) return [...spec.rows];
-		// Once for the whole page, not once per row.
-		const scopes = await resolvePrincipalScopes(spec.principal);
+		// Both once for the whole page, not once per row.
+		const [scopes, resources] = await Promise.all([
+			resolvePrincipalScopes(spec.principal),
+			loadResources(spec.rows.map(spec.target), FILTER_CONCURRENCY),
+		]);
 		const kept: T[] = [];
-		for (let i = 0; i < spec.rows.length; i += FILTER_CONCURRENCY) {
-			const batch = spec.rows.slice(i, i + FILTER_CONCURRENCY);
-			const settled = await Promise.allSettled(
-				batch.map(async (row) => {
-					const result = await decideApiCall({
-						engine: input.engine,
-						method: spec.method,
-						level: spec.level,
-						principal: spec.principal,
-						resource: await loadResource(spec.target(row)),
-						scopes,
-					});
-					return result.decision === "permit";
-				}),
-			);
-			for (const [index, outcome] of settled.entries()) {
-				const row = batch[index];
-				if (row === undefined) continue;
-				// `allSettled` never rejects, so a thrown loader lands here as a rejection rather than
-				// escaping the listing — and an undecided row is not a permitted one.
-				const permitted = outcome.status === "fulfilled" && outcome.value;
-				if (permitted || shadow) kept.push(row);
-				if (!permitted && shadow) {
-					input.warn(
-						`busyclaw app-authz shadow: would drop a row from ${spec.method}`,
-					);
-				}
+		for (const [index, row] of spec.rows.entries()) {
+			const resource = resources[index];
+			// An unloadable row is a denied row, never a permitted one.
+			const result =
+				resource === undefined
+					? undefined
+					: await decideApiCall({
+							engine: input.engine,
+							method: spec.method,
+							level: spec.level,
+							principal: spec.principal,
+							resource,
+							scopes,
+						});
+			const permitted = result?.decision === "permit";
+			if (permitted || shadow) kept.push(row);
+			if (!permitted && shadow) {
+				input.warn(
+					`busyclaw app-authz shadow: would drop a row from ${spec.method}`,
+				);
 			}
 		}
 		return kept;
@@ -736,8 +804,10 @@ export function governApi(input: {
 				return fn(domainInput, {
 					caller: caller ?? {},
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
-					check: async () => {},
-					filter: async (_level, rows) => [...rows],
+					authz: {
+						enforce: async () => {},
+						filter: async (_level, rows) => [...rows],
+					},
 				} satisfies AuthzContext);
 			}
 			// A method with no declaration is one the PEP cannot decide. That cannot happen through the
@@ -789,21 +859,23 @@ export function governApi(input: {
 			return fn(domainInput, {
 				caller: caller ?? {},
 				principal,
-				check: async (level, target, asMethod) =>
-					enforce({
-						method: asMethod ?? method,
-						level,
-						principal,
-						resource: await loadResource(target),
-					}),
-				filter: (level, rows, target, asMethod) =>
-					filterRows({
-						method: asMethod ?? method,
-						level,
-						principal,
-						rows,
-						target,
-					}),
+				authz: {
+					enforce: async (level, target, asMethod) =>
+						enforce({
+							method: asMethod ?? method,
+							level,
+							principal,
+							resource: await loadResource(target),
+						}),
+					filter: (level, rows, target, asMethod) =>
+						filterRows({
+							method: asMethod ?? method,
+							level,
+							principal,
+							rows,
+							target,
+						}),
+				},
 			} satisfies AuthzContext);
 		};
 	};

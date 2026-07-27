@@ -178,18 +178,41 @@ export function grantLevelSatisfies(
 	);
 }
 
+/** One resource a grant lookup asks about — both halves opaque, like every id in this table. */
+export type AccessGrantResourceKey = {
+	resourceKind: string;
+	resourceId: string;
+};
+
 /**
- * The generic ACL store — org-blind (every id/ref is opaque). `listForResource` is the hot path the PEP
- * calls per governed call; `create`/`delete` back the share/unshare api. Rows are immutable, so there is
- * no update. `delete` removes by the (resourceKind, resourceId, principalRef) natural key (an unshare
+ * Grants for a SET of resources: `kind → id → grants`. Nested rather than keyed by a composite string
+ * so there is no key format for a caller and the store to agree on (and get subtly wrong). A resource
+ * with no grants is ABSENT — read it with `?.get(id) ?? []`.
+ */
+export type AccessGrantsByResource = ReadonlyMap<
+	string,
+	ReadonlyMap<string, AccessGrant[]>
+>;
+
+/**
+ * The generic ACL store — org-blind (every id/ref is opaque). `listForResources` is the hot path the PEP
+ * reads on every governed call; `create`/`delete` back the share/unshare api. Rows are immutable, so there
+ * is no update. `delete` removes by the (resourceKind, resourceId, principalRef) natural key (an unshare
  * revokes every level a grantee held on the resource) and returns how many rows went.
  */
 export type AccessGrantStore = {
-	/** Every grant on (resourceKind, resourceId), projected to the PEP shape — the hot path. */
-	listForResource: (
-		resourceKind: string,
-		resourceId: string,
-	) => Promise<AccessGrant[]>;
+	/**
+	 * Every grant on each of the given resources, projected to the PEP shape, in ONE query.
+	 *
+	 * Plural rather than singular because the singular version made a LISTING cost one query per row:
+	 * authorizing a page of a hundred rows opened a hundred grant reads that differed only in the id.
+	 * The single-resource path passes a one-key list and costs one extra map lookup, which is the right
+	 * trade for having ONE query in the port — two would have to agree forever, and a listing quietly
+	 * reading the slower one is not a difference any test would notice.
+	 */
+	listForResources: (
+		keys: readonly AccessGrantResourceKey[],
+	) => Promise<AccessGrantsByResource>;
 	create: (input: NewAccessGrant) => Promise<AccessGrantRecord>;
 	delete: (input: {
 		resourceKind: string;

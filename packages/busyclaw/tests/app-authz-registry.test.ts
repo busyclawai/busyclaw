@@ -116,7 +116,20 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 
 	function grantStoreWith(rows: Map<string, AccessGrant[]>): AccessGrantStore {
 		return {
-			listForResource: async (kind, id) => rows.get(`${kind}:${id}`) ?? [],
+			// The port is plural — one query for a whole page. The stub answers only the keys it was
+			// ASKED for, so a loader that forgot to name a resource's parents shows up as a missing grant
+			// rather than being covered by a stub that returns everything it knows.
+			listForResources: async (keys) => {
+				const byKind = new Map<string, Map<string, AccessGrant[]>>();
+				for (const { resourceKind, resourceId } of keys) {
+					const grants = rows.get(`${resourceKind}:${resourceId}`);
+					if (!grants) continue;
+					const byId = byKind.get(resourceKind) ?? new Map();
+					byId.set(resourceId, grants);
+					byKind.set(resourceKind, byId);
+				}
+				return byKind;
+			},
 			create: async () => {
 				throw new Error("unused");
 			},

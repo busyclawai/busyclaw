@@ -28,7 +28,7 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 		});
 	});
 
-	it("listForResource projects permission → level and is scoped to (resourceKind, resourceId)", async () => {
+	it("listForResources projects permission → level and is scoped to (resourceKind, resourceId)", async () => {
 		const store = createAccessGrantStore(memoryAdapter());
 		await store.create({
 			resourceKind: "claw",
@@ -54,9 +54,65 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			grantedBy: "user:alice",
 		});
 
-		const grants = await store.listForResource("claw", "claw-1");
+		const grants = await store.listForResources([
+			{ resourceKind: "claw", resourceId: "claw-1" },
+		]);
 		// The PEP-facing projection: { principalRef, level } only — audit columns stay in the store.
-		expect(grants).toEqual([{ principalRef: "user:bob", level: "manage" }]);
+		expect(grants.get("claw")?.get("claw-1")).toEqual([
+			{ principalRef: "user:bob", level: "manage" },
+		]);
+		// Neither the same-kind sibling nor the same-id other kind came along.
+		expect(grants.get("claw")?.get("claw-2")).toBeUndefined();
+		expect(grants.get("thread")).toBeUndefined();
+	});
+
+	it("answers for many resources across kinds in one call", async () => {
+		const store = createAccessGrantStore(memoryAdapter());
+		for (const row of [
+			{ resourceKind: "claw", resourceId: "claw-1", principalRef: "user:bob" },
+			{
+				resourceKind: "claw",
+				resourceId: "claw-2",
+				principalRef: "user:carol",
+			},
+			{ resourceKind: "thread", resourceId: "t-1", principalRef: "public" },
+			// Not asked for — must not come back even though its kind is.
+			{
+				resourceKind: "claw",
+				resourceId: "claw-9",
+				principalRef: "user:mallory",
+			},
+		]) {
+			await store.create({
+				...row,
+				permission: "read",
+				grantedBy: "user:alice",
+			});
+		}
+
+		const grants = await store.listForResources([
+			{ resourceKind: "claw", resourceId: "claw-1" },
+			{ resourceKind: "claw", resourceId: "claw-2" },
+			{ resourceKind: "thread", resourceId: "t-1" },
+			// A key with no grants at all is ABSENT, not an empty array.
+			{ resourceKind: "claw", resourceId: "claw-nothing" },
+		]);
+		expect(grants.get("claw")?.get("claw-1")).toEqual([
+			{ principalRef: "user:bob", level: "read" },
+		]);
+		expect(grants.get("claw")?.get("claw-2")).toEqual([
+			{ principalRef: "user:carol", level: "read" },
+		]);
+		expect(grants.get("thread")?.get("t-1")).toEqual([
+			{ principalRef: "public", level: "read" },
+		]);
+		expect(grants.get("claw")?.get("claw-9")).toBeUndefined();
+		expect(grants.get("claw")?.get("claw-nothing")).toBeUndefined();
+	});
+
+	it("returns nothing for an empty key set without touching the database", async () => {
+		const store = createAccessGrantStore(memoryAdapter());
+		expect((await store.listForResources([])).size).toBe(0);
 	});
 
 	it("delete revokes EVERY level a grantee held on the resource, by the natural key", async () => {
@@ -90,9 +146,15 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			principalRef: "user:bob",
 		});
 		expect(removed).toBe(2);
-		expect(await store.listForResource("claw", "claw-1")).toEqual([
-			{ principalRef: "public", level: "read" },
-		]);
+		expect(
+			(
+				await store.listForResources([
+					{ resourceKind: "claw", resourceId: "claw-1" },
+				])
+			)
+				.get("claw")
+				?.get("claw-1"),
+		).toEqual([{ principalRef: "public", level: "read" }]);
 	});
 
 	it("rejects a malformed grant at the create boundary", async () => {

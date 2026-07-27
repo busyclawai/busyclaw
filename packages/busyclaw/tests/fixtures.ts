@@ -1,6 +1,6 @@
 import type {
-	Detector,
 	BusyclawPlugin,
+	Detector,
 	PiiSpan,
 	ToolDefinition,
 	ToolGovernance,

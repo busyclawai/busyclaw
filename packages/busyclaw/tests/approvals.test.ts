@@ -4,8 +4,8 @@ import {
 	auditSupervision,
 	type BusyclawPlugin,
 	PRINCIPAL_CONTEXT_KEY,
+	SYSTEM_ANONYMOUS,
 } from "@busyclaw/contracts";
-import { SYSTEM_ANONYMOUS } from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
@@ -26,15 +26,13 @@ describe("createClaw approvals", () => {
 			model: approvalToolModel(),
 			redaction: { redactor },
 			tools: {
-				send_email: emailTool(
-					{
-						onExecute: (to) => {
-							toolRuns++;
-							toolSaw = to;
-							return { sent: true, to };
-						},
+				send_email: emailTool({
+					onExecute: (to) => {
+						toolRuns++;
+						toolSaw = to;
+						return { sent: true, to };
 					},
-				),
+				}),
 			},
 		});
 
@@ -156,7 +154,9 @@ describe("createClaw approvals", () => {
 			claw.api.grantApproval({ approvalId }, { principal: "user:unrelated" }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		// The claw's owner may — the approval resolves through the claw that parked it.
-		await expect(claw.api.grantApproval({ approvalId })).resolves.not.toBeNull();
+		await expect(
+			claw.api.grantApproval({ approvalId }),
+		).resolves.not.toBeNull();
 	});
 
 	it("the resume caller cannot choose the executing identity — the record fixes it (attest)", async () => {

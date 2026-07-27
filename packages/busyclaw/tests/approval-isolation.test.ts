@@ -7,7 +7,12 @@
 // it leaks through a URL, a log, a screenshot, a support ticket.
 
 import { describe, expect, it } from "vitest";
-import { approvalToolModel, durableRedactor, emailTool, owned } from "./fixtures";
+import {
+	approvalToolModel,
+	durableRedactor,
+	emailTool,
+	owned,
+} from "./fixtures";
 
 const OWNER = { principal: "user:actor-1" } as const;
 const STRANGER = { principal: "user:stranger" } as const;
@@ -94,9 +99,7 @@ describe("approval isolation", () => {
 			OWNER,
 		);
 
-		await expect(
-			claw.api.listApprovals({}, REVIEWER),
-		).resolves.toHaveLength(1);
+		await expect(claw.api.listApprovals({}, REVIEWER)).resolves.toHaveLength(1);
 		await expect(
 			claw.api.grantApproval({ approvalId }, REVIEWER),
 		).resolves.not.toBeNull();
@@ -121,6 +124,8 @@ describe("approval isolation", () => {
 		await expect(
 			claw.api.continueRun({ approvalId }, REVIEWER),
 		).rejects.toThrow(DENIED);
-		await expect(claw.api.continueRun({ approvalId }, OWNER)).resolves.toBeTruthy();
+		await expect(
+			claw.api.continueRun({ approvalId }, OWNER),
+		).resolves.toBeTruthy();
 	});
 });

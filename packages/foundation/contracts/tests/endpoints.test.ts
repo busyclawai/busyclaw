@@ -6,8 +6,8 @@
 import { type } from "arktype";
 import { describe, expect, it } from "vitest";
 import {
-	ENDPOINTS_METADATA,
 	BusyclawError,
+	ENDPOINTS_METADATA,
 	endpointHttpMethod,
 	endpointRoutesOf,
 	endpoints,

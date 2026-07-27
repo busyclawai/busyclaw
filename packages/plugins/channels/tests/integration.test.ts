@@ -208,16 +208,24 @@ describe("channels ↔ busyclaw integration", () => {
 		).resolves.toMatchObject({ id: created.id, hasSecret: true });
 	});
 
-	// The reason a listing calls `ctx.filter` once instead of `ctx.check` in a loop. Cedar has no bulk
-	// authorize, so the per-ROW evaluation is unavoidable — but `resolvePrincipalScopes` is a HOST
-	// callback, and asking it "what is this principal a member of?" once per row is the same answer
-	// fetched N times, plausibly over the network. It is lifted out of the loop, and this is the only
-	// place that property is observable.
-	it("resolves the caller's scopes once for a listing, not once per row", async () => {
+	// The reason a listing calls `ctx.authz.filter` once instead of `ctx.authz.enforce` in a loop. Cedar
+	// has no bulk authorize, so the per-ROW evaluation is unavoidable — but the two READS around it are
+	// not. `resolvePrincipalScopes` is a HOST callback (the same answer fetched N times, plausibly over
+	// the network) and the grant lookup is a query against a table whose rows differ only in the id.
+	// Both are hoisted, and this is the only place either property is observable.
+	it("resolves scopes and reads grants once for a listing, not once per row", async () => {
 		const db = memoryAdapter();
 		let resolves = 0;
+		let grantReads = 0;
+		const counting = {
+			...db,
+			findMany: async (input: { model: string }) => {
+				if (input.model === "access_grant") grantReads += 1;
+				return db.findMany(input as Parameters<typeof db.findMany>[0]);
+			},
+		} as typeof db;
 		const claw = createClaw({
-			database: db,
+			database: counting,
 			model: textModel("done"),
 			redaction: {
 				redactor: createStoredRedactor({
@@ -244,11 +252,14 @@ describe("channels ↔ busyclaw integration", () => {
 		}
 
 		resolves = 0;
+		grantReads = 0;
 		const rows = await claw.api.channels.registrations.list({}, owner);
 		expect(rows).toHaveLength(3);
-		// One for the listing's own caller-mode decision, one for the whole batch of rows. Per-row it
-		// would be 1 + 3, and it would grow with the page.
+		// One resolve for the listing's own caller-mode decision, one for the whole batch of rows. Per
+		// row it would be 1 + 3, and it would grow with the page.
 		expect(resolves).toBe(2);
+		// And exactly ONE grant query covers all three rows. Per row it would be 3.
+		expect(grantReads).toBe(1);
 	});
 
 	// An org-scoped BYO bot needs a deployment that can PROVE org membership. Until an org plugin
