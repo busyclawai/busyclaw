@@ -99,6 +99,18 @@ export type ToolDescriptor<
 	 *  posture: "may this agent do this" is policy, decided against these facts. */
 	governance: ToolGovernance;
 	invocation: Invocation;
+	/**
+	 * The content hash of a DATA-BACKED tool — the version of the row this descriptor was built from.
+	 *
+	 * Present only for tools that exist as data (a registered OpenAPI operation), because only those
+	 * can change underneath a pending approval: the address survives a re-registration while the path,
+	 * schema and governance behind it do not. An approval records the version it was granted against
+	 * and a resume refuses a mismatch.
+	 *
+	 * Absent for a code tool. A host closure has no version to take, and inventing one — hashing a
+	 * function, say — would report drift it cannot actually see.
+	 */
+	contentVersion?: string;
 };
 
 /** A descriptor before it has an address — what an authoring helper (`tool()`, `govern()`) returns.

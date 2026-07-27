@@ -550,6 +550,19 @@ export const runtimeApprovalMetadata = ark({
 	 *  as (some providers match by name, not only by call id). Never decided or dispatched on, so a
 	 *  wrong value can only mis-address a result message — never reach a different tool. */
 	"toolWireName?": "string | undefined",
+	/**
+	 * The content version of the tool as it stood WHEN THE HUMAN WAS ASKED — the hash of its name,
+	 * description, input schema, governance and binding.
+	 *
+	 * A registered source can be re-registered while an approval sits pending. The address survives, so
+	 * the resume dispatches happily onto whatever `petstore.addPet` means now: a different path, a
+	 * different schema, different governance. What the human read and what would run are then two
+	 * different operations, and nothing said so. Compared at resume; a mismatch refuses.
+	 *
+	 * Absent for a code tool, which is a host closure with no version to take. Its drift is a redeploy,
+	 * not a data change, and there is nothing here that could detect it honestly.
+	 */
+	"toolVersion?": "string | undefined",
 	toolInput: "unknown",
 	...runtimeResumeStateShape,
 });
@@ -1046,6 +1059,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						"runtime approval messages invalid",
 					),
 				};
+				// The version of the tool the human is being asked about. Only data-backed tools have
+				// one; a code tool is a closure and reports none.
+				const parkedVersion = runTools[state.currentToolPath]?.contentVersion;
+				if (parkedVersion !== undefined) {
+					metadata.toolVersion = parkedVersion;
+				}
 				// Only when the wire name is NOT the path's own projection — a call routed through the
 				// `execute` meta-tool. Carrying it always would put a second id in the checkpoint for
 				// every approval; carrying it never would answer a routed call under a name the
@@ -1555,13 +1574,36 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 		if (record.status !== "approved" && record.status !== "executing")
 			return null;
-		// TAKE the lease. Null means it cannot be taken — not granted, expired, or being run right now
-		// by someone whose lease has not lapsed. Recovery of an abandoned execution is the `executing`
-		// case above plus a lapsed lease, and the store decides that, not the caller.
-		const claimed = await approvalStore.claim(id, APPROVAL_LEASE_MS);
-		if (!claimed) return null;
 		const resolvedCtx = await resolveRunContext(ctx, effectiveRecording);
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
+		// DRIFT. The tool is resolved fresh, as it must be — but a registered source can be
+		// re-registered while an approval sits pending, and the address survives what it points at.
+		// Resuming then runs an operation the human never read: same name, different path, schema or
+		// governance. Refuse rather than dispatch onto it; a fresh approval is the honest recovery.
+		const currentVersion = runTools[checkpoint.toolName]?.contentVersion;
+		if (
+			checkpoint.toolVersion !== undefined &&
+			currentVersion !== checkpoint.toolVersion
+		) {
+			throw stateError(
+				"the approved tool changed since it was approved — re-approve against the current definition",
+				{
+					approvalId: id,
+					toolName: checkpoint.toolName,
+					approvedVersion: checkpoint.toolVersion,
+					currentVersion:
+						currentVersion ?? "(the tool is no longer registered)",
+				},
+			);
+		}
+		// TAKE the lease — AFTER the checks that can refuse. Taking first would leave a drifted or
+		// otherwise unrunnable approval sitting `executing` until the lease lapsed, so nobody could
+		// re-decide it for fifteen minutes and every recovery would re-take it only to refuse again.
+		// Null means it cannot be taken: not granted, expired, or being run right now by someone whose
+		// lease has not lapsed. Recovery of an abandoned execution is the `executing` case above plus a
+		// lapsed lease, and the store decides that, not the caller.
+		const claimed = await approvalStore.claim(id, APPROVAL_LEASE_MS);
+		if (!claimed) return null;
 		const selected = selectModel(options?.model);
 
 		const state = createRunState();
