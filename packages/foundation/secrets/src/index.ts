@@ -31,6 +31,10 @@ export type EnvOptions = {
 	vars?: Record<string, string | undefined>;
 	/** Per-provider remap of busyclaw's canonical name → this backend's key; pass-through if absent. */
 	aliases?: Record<string, string>;
+	/** Canonical names this env may answer for a TENANT-SCOPED resolution — see
+	 *  {@link SecretProvider.shared}. Default none: an env var is the DEPLOYMENT's credential, and
+	 *  lending it to a tenant that asked for its own is the ambient authority this closes. */
+	shared?: readonly string[];
 };
 
 /** The environment-variable secret provider: reads a plain token out of the env map. Get-only
@@ -45,6 +49,7 @@ export function env(options: EnvOptions = {}): SecretProvider {
 	return {
 		name: options.name ?? "env",
 		aliases: options.aliases,
+		shared: options.shared,
 		capability: { manage: false },
 		get: async (ref: string): Promise<SecretMaterial | null> => {
 			const value = vars[ref];
@@ -86,11 +91,31 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 		...providers.filter((provider) => provider.tier !== "data"),
 	];
 
+	/**
+	 * A resolution that names a TENANT — both halves, because one alone names no boundary — must not
+	 * fall through to deployment infrastructure. A config-tier provider holds the deployment's own
+	 * credentials, so answering a tenant's miss with one hands that tenant the deployment's authority
+	 * under a name the tenant chose. Only names the provider explicitly SHARES are still answered.
+	 *
+	 * Unscoped reads are untouched: an app bot's token or a sandbox credential carries no tenant, so
+	 * there is nobody to lend anything to and env resolves exactly as before.
+	 */
+	const answersFor = (
+		provider: SecretProvider,
+		name: string,
+		ctx: ResolveContext,
+	): boolean => {
+		if (provider.tier === "data") return true;
+		if (ctx.scope === undefined || ctx.scopeId === undefined) return true;
+		return provider.shared?.includes(name) === true;
+	};
+
 	const get = async (
 		name: string,
 		ctx: ResolveContext = {},
 	): Promise<SecretMaterial | null> => {
 		for (const provider of ordered) {
+			if (!answersFor(provider, name, ctx)) continue;
 			const key = provider.aliases?.[name] ?? name;
 			const material = await provider.get(key, ctx);
 			if (material !== null) return material;

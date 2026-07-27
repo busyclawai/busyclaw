@@ -46,6 +46,22 @@ export type SecretProvider = {
 	 *  providers BEFORE config-tier regardless of listing order (stable within a tier) — the
 	 *  data-beats-config precedence, declared as a provider property, not special-cased. */
 	tier?: "data" | "config";
+	/**
+	 * Canonical names this CONFIG-tier provider may answer for a TENANT-SCOPED resolution — a request
+	 * whose context names a `(scope, scopeId)`. Absent or empty means none, which is the default.
+	 *
+	 * Config-tier providers are deployment infrastructure: an env var is the DEPLOYMENT's credential,
+	 * not a tenant's. A tenant-scoped lookup that missed every data-tier provider used to fall through
+	 * to env and quietly hand that tenant the deployment's own authority — its quota, its billing, its
+	 * data scope, under a name the tenant chose. Nothing in the chain marked the difference.
+	 *
+	 * So a config-tier provider now sits out scoped resolutions unless the name is listed here, and
+	 * listing it is the deployment stating "this credential is genuinely shared by every tenant" (an
+	 * app-owned API key, a partner integration billed centrally). Unscoped reads — an app bot's token,
+	 * a sandbox credential — never consult this list at all: they carry no tenant, so there is no
+	 * tenant to lend anything to.
+	 */
+	shared?: readonly string[];
 };
 
 /** The ONE door every subsystem resolves credentials through — built once from the provider chain

@@ -139,6 +139,10 @@ const anySecret = (value: string): Secrets =>
 	buildSecrets([
 		{
 			name: "test",
+			// A registered tool's credential belongs to the TENANT, so the double is data-tier. Config
+			// tier (env/vault) is deployment infrastructure and deliberately sits out tenant-scoped
+			// resolutions unless a name is declared shared — see the secrets package's tests.
+			tier: "data",
 			capability: { manage: false },
 			get: async () => ({ kind: "token", value }),
 		},

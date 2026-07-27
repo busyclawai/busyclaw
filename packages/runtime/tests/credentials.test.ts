@@ -58,6 +58,11 @@ function sourceSecrets(table: Record<string, SecretMaterial | "throw">): {
 	const secrets = buildSecrets([
 		{
 			name: "test",
+			// A registered tool's credential belongs to the TENANT, so the double is data-tier — the
+			// realistic shape, and the one that keeps resolving for a scoped call. A config-tier
+			// provider sits out scoped resolutions by design; that fence has its own tests, and
+			// these are about credential PLACEMENT.
+			tier: "data",
 			capability: { manage: false },
 			get: async (ref, ctx) => {
 				seen.push({ ref, ctx });
