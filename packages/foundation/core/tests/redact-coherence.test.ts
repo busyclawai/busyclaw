@@ -336,6 +336,34 @@ describe("deterministic placeholders (indexKey)", () => {
 		);
 	});
 
+	// The tombstone is PROOF, not a gate. The test above pins the behaviour that matters most — a
+	// person who asks to be forgotten can come back, and their new data gets a new token — so what was
+	// missing is only the record: once the mappings are shredded, nothing said the erasure happened.
+	// The audit chain says it was REQUESTED, in a different store, and cannot say whether it completed
+	// or from where.
+	it("marks the containers it erased from, and says so afterwards", async () => {
+		const mappings = createMemoryPiiMappingStore();
+		const redactor = createStoredRedactor({
+			detector: emailDetector,
+			mappings,
+			indexKey: "test-key",
+		});
+		const subjectCtx = { ...ctx, subjectIds: ["s1"] };
+		await redactor.redactValue("email a@b.com", subjectCtx);
+
+		expect(await mappings.isErased("s1", ctx)).toBe(false);
+		await mappings.deleteForSubject("s1");
+		expect(await mappings.isErased("s1", ctx)).toBe(true);
+		// Per CONTAINER: erasing from one claw has said nothing about another, and a mark that reached
+		// across them would disable re-identification for tenants who never asked.
+		expect(
+			await mappings.isErased("s1", { scope: "claw", scopeId: "other" }),
+		).toBe(false);
+		// A subject who was never here leaves no mark — there is nowhere truthful to put one, since
+		// erasure names a subject with no container.
+		expect(await mappings.isErased("never-seen", ctx)).toBe(false);
+	});
+
 	it("without indexKey: fresh tokens per occurrence, and a durable store warns once", async () => {
 		const keyless = createStoredRedactor({
 			detector: emailDetector,

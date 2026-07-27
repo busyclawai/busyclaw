@@ -217,6 +217,13 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 	// clobbers. Subjects are a separate index for erasure only.
 	const byKey = new Map<string, PiiMapping>();
 	const subjectToKeys = new Map<string, Set<string>>();
+	// subjectId → the containers they have been erased from. The in-memory tombstone: erasure is a
+	// standing instruction, so a later mint for the same person in the same container is refused
+	// rather than quietly re-creating what was just shredded.
+	const erasedContainers = new Map<string, Set<string>>();
+	/** The container half of {@link containerKey} — a tombstone marks a container, not a placeholder. */
+	const erasureKey = (c: ScopeRef): string =>
+		JSON.stringify([c.scope, c.scopeId]);
 	// A whole container, never two independently-optional halves: `piiContainer` has already collapsed
 	// the absent and half-absent cases to UNCONTAINED, so there is no `?? null` to get wrong here and
 	// no way for a write and a read to disagree about which bucket "no context" means.
@@ -265,8 +272,25 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			}
 			return null;
 		},
+		isErased(subjectId, ctx) {
+			const container = piiContainer(ctx);
+			return (
+				erasedContainers.get(subjectId)?.has(erasureKey(container)) === true
+			);
+		},
 		deleteForSubject(subjectId) {
 			const keys = subjectToKeys.get(subjectId);
+			// The mark goes down for every container this subject appeared in. Nothing found ⇒ nothing
+			// marked: erasure names a subject with no container, so the only containers it can name are
+			// the ones the subject's own rows named.
+			const marks = erasedContainers.get(subjectId) ?? new Set<string>();
+			for (const key of keys ?? []) {
+				const mapping = byKey.get(key);
+				if (mapping) {
+					marks.add(erasureKey(mapping));
+				}
+			}
+			if (marks.size > 0) erasedContainers.set(subjectId, marks);
 			if (keys === undefined) return 0;
 			let erased = 0;
 			for (const key of keys) {

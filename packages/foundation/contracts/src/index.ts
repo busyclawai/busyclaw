@@ -386,6 +386,7 @@ export type { ReasonCode } from "./governance/reason-codes";
 export { defineReasonCodes } from "./governance/reason-codes";
 export type {
 	Detector,
+	PiiErasure,
 	PiiKind,
 	PiiMapping,
 	PiiMappingStore,
@@ -399,6 +400,10 @@ export type {
 } from "./governance/redact";
 export {
 	piiContainer,
+	piiErasure,
+	piiErasureEntity,
+	piiErasureFields,
+	piiErasureSchema,
 	piiKind,
 	piiKindValues,
 	piiMapping,
