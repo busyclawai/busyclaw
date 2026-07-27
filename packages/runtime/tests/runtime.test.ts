@@ -1331,4 +1331,110 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			expect(runs()).toBe(1);
 		});
 	});
+
+	// H-09. `idempotency: "required"` is the strongest thing a tool can say about itself: this cannot
+	// safely run twice. With no ledger there is nothing that could tell a retry from a first attempt,
+	// and the paths that retry — crash recovery, approval resume, lease recovery — are exactly the ones
+	// that would then double-charge.
+	it("refuses a required-idempotency tool when the claw has no effect store", async () => {
+		let toolRuns = 0;
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			// No database ⇒ no effect store. This used to execute anyway.
+			tools: {
+				// The scripted model calls `send_email`; the effect policy is what this is about.
+				send_email: govern(
+					tool({
+						description: "Charge a card.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => {
+							toolRuns++;
+							return { charged: true };
+						},
+					}),
+					{ effect: { kind: "external", idempotency: "required" } },
+				),
+			},
+		});
+
+		await expect(runtime.generate("email alice@personal.com")).rejects.toThrow(
+			/requires idempotency but this claw has no effect store/,
+		);
+		expect(toolRuns).toBe(0);
+	});
+
+	it("still runs a tool that says a duplicate is survivable", async () => {
+		let toolRuns = 0;
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			tools: {
+				// The scripted model calls `send_email`; the effect policy is what this is about.
+				send_email: govern(
+					tool({
+						description: "Charge a card.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						execute: async () => {
+							toolRuns++;
+							return { charged: true };
+						},
+					}),
+					// `optional` is the tool saying it would PREFER a ledger, not that it needs one.
+					{ effect: { kind: "external", idempotency: "optional" } },
+				),
+			},
+		});
+
+		expect((await runtime.generate("email alice@personal.com")).status).toBe(
+			"completed",
+		);
+		expect(toolRuns).toBe(1);
+	});
+
+	it("hands the ledger's effect id to the tool, matching the row it claimed", async () => {
+		let seenEffectId: unknown;
+		const db = memoryAdapter();
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (_args, options) => {
+							seenEffectId = (options as { effectId?: unknown }).effectId;
+							return { sent: true };
+						},
+					}),
+					{ effect: { kind: "external", idempotency: "required" } },
+				),
+			},
+		});
+
+		expect(
+			(await runtime.generate("email alice@personal.com the offer")).status,
+		).toBe("completed");
+		// The SAME id the ledger claimed — that is what makes it stable across a retry, and therefore
+		// worth anything as a provider's idempotency key. A freshly minted one per attempt would be
+		// indistinguishable from no key at all.
+		expect(typeof seenEffectId).toBe("string");
+		expect(await runtime.effects?.get(seenEffectId as string)).toMatchObject({
+			status: "completed",
+			toolName: "send_email",
+		});
+	});
 });

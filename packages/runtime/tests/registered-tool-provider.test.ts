@@ -459,4 +459,74 @@ describe("createRegisteredToolProvider", () => {
 		// the destination was reachable at all.
 		expect(resolved).toBe(0);
 	});
+
+	// H-09. The ledger mints an id per effect that is stable across every retry of the same attempt —
+	// which is exactly what a provider's idempotency key wants to be. It was generated and never sent,
+	// so a retried attempt looked like a fresh charge to the far end. `Idempotency-Key` is the de-facto
+	// convention (Stripe, Square, PayPal, an IETF draft) and an unknown header costs a provider nothing.
+	it("sends the effect id as an idempotency key when governance says duplicates matter", async () => {
+		const { fn, calls } = fakeFetch(() => new Response("{}", { status: 200 }));
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		await toolExecutor(tools["petstore.getPet"])(
+			{ petId: 1 },
+			{ effectId: "run:r1:tool:c1" },
+		);
+		expect(
+			(calls[0]?.init.headers as Record<string, string>)["idempotency-key"],
+		).toBe("run:r1:tool:c1");
+	});
+
+	it("sends no key when the tool says a duplicate does not matter", async () => {
+		const { fn, calls } = fakeFetch(() => new Response("{}", { status: 200 }));
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					// `none` is the tool saying duplicates are fine. We do not editorialize.
+					governance: {
+						access: "read",
+						effect: { kind: "external", idempotency: "none" },
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+		await toolExecutor(tools["petstore.getPet"])(
+			{ petId: 1 },
+			{ effectId: "run:r1:tool:c1" },
+		);
+		expect(
+			(calls[0]?.init.headers as Record<string, string>)["idempotency-key"],
+		).toBeUndefined();
+	});
+
+	it("sends no key when there is no ledger to make one stable", async () => {
+		const { fn, calls } = fakeFetch(() => new Response("{}", { status: 200 }));
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider([row({})], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		// No effectId in the call options — a key nothing tracks would be decoration.
+		await toolExecutor(tools["petstore.getPet"])({ petId: 1 }, {});
+		expect(
+			(calls[0]?.init.headers as Record<string, string>)["idempotency-key"],
+		).toBeUndefined();
+	});
 });

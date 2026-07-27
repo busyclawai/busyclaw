@@ -74,6 +74,7 @@ import {
 import { abortIfNeeded, createRunState, type RunState } from "./run-state";
 import {
 	NESTED_APPROVAL_UNSUPPORTED,
+	NESTED_EFFECT_UNSUPPORTED,
 	NESTED_INVOKER_TOOL,
 	type SubInvoke,
 } from "./subinvoke";
@@ -1149,12 +1150,37 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						toolCallId: state.currentToolCallId,
 						messages: state.currentMessages,
 						abortSignal,
+						// The ledger's id for THIS effect, handed to the tool so a provider that speaks
+						// idempotency keys can be given one that is stable across every retry of the same
+						// attempt. Read at CALL time, not closure-build time: the id is minted a few lines
+						// below, on the store path only. Absent when there is no ledger, which is honest —
+						// a key whose stability nothing tracks would be decoration.
+						...(state.currentEffectId !== undefined
+							? { effectId: state.currentEffectId }
+							: {}),
 						...(isInvokerTool ? { subInvoke } : {}),
 						...(isDiscoverySearch ? { probeAccess } : {}),
 					});
 				const effectPolicy = stamp.effect;
 				const outputMode = effectOutputMode(effectPolicy);
-				if (!effectStore) return execute(state.abortSignal);
+				if (!effectStore) {
+					// `idempotency: "required"` is the tool saying it CANNOT safely run twice. With no
+					// ledger there is nothing that could tell a retry from a first attempt, so running it
+					// anyway silently converts the strongest declaration a tool can make into no
+					// protection at all — and the paths that retry (crash recovery, approval resume,
+					// lease recovery) are exactly the ones that then double-charge or double-send.
+					if (effectPolicy?.idempotency === "required") {
+						throw configurationError(
+							`tool "${call.name}" requires idempotency but this claw has no effect store`,
+							{
+								toolName: call.name,
+								reason:
+									"pass a database to createClaw so effects can be claimed, or relax the tool's effect policy to 'optional' if a duplicate is genuinely acceptable",
+							},
+						);
+					}
+					return execute(state.abortSignal);
+				}
 				if (outputMode === "redacted" && !redactor) {
 					throw configurationError(
 						"redacted effect output requires a redactor",
@@ -1339,6 +1365,21 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					gateId: "runtime:nested-invoke",
 					reason: `tool "${name}" is a capability tool and cannot be invoked from nested execution`,
 					reasonCode: NESTED_INVOKER_TOOL,
+				};
+			}
+			// A nested call is unledgered by construction: the nested core has no effect store, and a
+			// deterministic child effect id cannot be derived honestly — the guest is model-authored
+			// code, so the same parent replayed may not make the same nested calls in the same order.
+			// A tool declaring it CANNOT run twice is therefore refused at the door rather than run
+			// outside the ledger, where a parent retry would silently repeat it. `optional`/`none` say
+			// a duplicate is survivable, and they pass.
+			if (target?.governance.effect?.idempotency === "required") {
+				return {
+					status: "denied",
+					demands: [],
+					gateId: "runtime:nested-effect",
+					reason: `tool "${name}" requires idempotency and cannot be called from nested execution`,
+					reasonCode: NESTED_EFFECT_UNSUPPORTED,
 				};
 			}
 			// handleToolCall re-validates args at ingress (arktype jsonObject); the cast only
