@@ -893,6 +893,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const api = governApi({
 		api: mergedApi,
 		engine: apiEngine,
+		approvals: runtime.approvals,
 		clawsStore,
 		runs: engine?.runs,
 		grantStore,

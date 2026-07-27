@@ -22,6 +22,7 @@ import {
 import {
 	type AccessGrantStore,
 	type Adapter,
+	type ApprovalStore,
 	type AuthzContext,
 	type AuthzTarget,
 	authorizationError,
@@ -198,11 +199,13 @@ type ResourceLoader = (id: string) => Promise<ResolvedResource | null>;
 export function buildResourceRegistry(input: {
 	clawsStore: ClawsStore | undefined;
 	runs: ClawRunReadModel | undefined;
+	/** Feeds the `approval` loader — see the registration below. */
+	approvals: ApprovalStore | undefined;
 	adapter: Adapter | undefined;
 	plugins: readonly EuroclawPlugin[];
 }): Map<string, ResourceLoader> {
 	const registry = new Map<string, ResourceLoader>();
-	const { clawsStore, runs } = input;
+	const { approvals, clawsStore, runs } = input;
 
 	if (clawsStore !== undefined) {
 		// claw — the base shared agent resource: its own createdBy/scope/scopeId.
@@ -539,6 +542,9 @@ export function governApi(input: {
 	 *  the run's principal). `undefined` when no engine is configured; getRun/listRunEvents then fall to
 	 *  the method's own "requires a run read model" config error (via personalScope), not an authz deny. */
 	runs: ClawRunReadModel | undefined;
+	/** The durable approval store — feeds the `approval` loader. An approval anchors on the CLAW whose
+	 *  run parked it, falling back to the tenant it ran in. */
+	approvals: ApprovalStore | undefined;
 	/** The generic ACL store — feeds real grants into the decision (slice 5). `undefined` → grants are
 	 *  `[]` (owner/scope still decide). */
 	grantStore: AccessGrantStore | undefined;
@@ -563,6 +569,7 @@ export function governApi(input: {
 	warn: (message: string) => void;
 }): Record<string, unknown> {
 	const registry = buildResourceRegistry({
+		approvals: input.approvals,
 		clawsStore: input.clawsStore,
 		runs: input.runs,
 		adapter: input.adapter,

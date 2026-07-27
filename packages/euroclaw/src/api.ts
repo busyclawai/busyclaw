@@ -9,6 +9,7 @@ import type {
 	BindConversationInput,
 	BindConversationResult,
 	CheckpointRecord,
+	AuthzContext,
 	ClawApiCaller,
 	ClawApiMethodName,
 	ClawEngineHandle,
@@ -850,8 +851,6 @@ const callerOnly = (reason: string): ApiRouteAuthz<unknown> => ({
 // Reasons reused across several methods — written once so the gap they describe is stated once.
 const CREATES =
 	"mints a new row; its owner is stamped from the authenticated caller";
-const APPROVAL_GAP =
-	"KNOWN GAP: an approval row carries no claw, run, or scope to resolve, and needs-approval exists for autonomous runs with no user-owner — so there is nothing to anchor on until the record gains immutable organization/resource/requester/approver facts. Any authenticated human can currently reach any approval";
 
 // The per-method route table. Each method's authz is CO-LOCATED at its own `apiRoute(...)` call and
 // type-checked against that method's input, so a resolver reading a field the method does not have is a
@@ -941,12 +940,27 @@ export const clawApiRoutes = {
 	),
 	// approval — the built-in gate is the user-principal floor (a human may decide, a machine may not,
 	// see `userApprover`), which is NOT an ownership check. Closing this needs a schema change.
-	grantApproval: apiRoute("grantApproval", callerOnly(APPROVAL_GAP)),
-	denyApproval: apiRoute("denyApproval", callerOnly(APPROVAL_GAP)),
-	getApproval: apiRoute("getApproval", callerOnly(APPROVAL_GAP)),
-	listApprovals: apiRoute("listApprovals", callerOnly(APPROVAL_GAP)),
+	// approval — anchored on the record, at three levels, because viewing, deciding and executing are
+	// three different permissions and collapsing them is how "can see it" quietly becomes "can run it".
+	//
+	//   read   see that it exists and what it parked
+	//   use    DECIDE it — grant or deny
+	//   manage EXECUTE the approved action, which is strictly more than deciding: the replay bypasses
+	//          one gate by id, so resuming is the step that actually performs the parked call.
+	//
+	// The `userApprover` floor still applies on top of the decide methods (a human decides, a machine
+	// never does) — that is an actor check, not an ownership one, and it was never a substitute.
+	getApproval: apiRoute("getApproval", on("read", "approval", "id")),
+	grantApproval: apiRoute("grantApproval", on("use", "approval", "approvalId")),
+	denyApproval: apiRoute("denyApproval", on("use", "approval", "approvalId")),
+	listApprovals: apiRoute(
+		"listApprovals",
+		callerOnly(
+			"a LISTING, not a row: it has no id to resolve, so the handler filters to the approvals this caller may read rather than the gate refusing the call",
+		),
+	),
 	// Resumes by approvalId, so it inherits exactly the gap above.
-	continueRun: apiRoute("continueRun", callerOnly(APPROVAL_GAP)),
+	continueRun: apiRoute("continueRun", on("manage", "approval", "approvalId")),
 	getEffect: apiRoute(
 		"getEffect",
 		callerOnly(
@@ -970,7 +984,10 @@ export const clawApiRoutes = {
 		"startRun",
 		callerOnly("mints the caller's own run; there is no prior row to resolve"),
 	),
-	continueEngineRun: apiRoute("continueEngineRun", callerOnly(APPROVAL_GAP)),
+	continueEngineRun: apiRoute(
+		"continueEngineRun",
+		on("manage", "approval", "approvalId"),
+	),
 	getRun: apiRoute("getRun", on("read", "run", "id")),
 	listRunEvents: apiRoute("listRunEvents", on("read", "run", "runId")),
 	// The generic share/unshare api — the target kind AND id both come from the INPUT, so any registered
