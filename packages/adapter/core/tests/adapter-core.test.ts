@@ -21,6 +21,7 @@ describe("@busyclaw/adapter-core", () => {
 		const handler = toRequestHandler(claw);
 		const post = await handler(
 			new Request("https://app.test/api/busyclaw/create-claw", {
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					id: "claw-1",
 					createdBy: "user:user-1",
@@ -279,6 +280,7 @@ describe("@busyclaw/adapter-core", () => {
 		const response = await handler(
 			new Request("https://app.test/api/busyclaw/create-claw", {
 				// id must be a string — type-invalid input is rejected before the api is touched
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ id: 42 }),
 				method: "POST",
 			}),
@@ -412,6 +414,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const set = await handler(
 			new Request("https://app.test/api/busyclaw/secrets/set", {
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ name: "NOTION", value: "tok-1" }),
 				method: "POST",
 			}),
@@ -443,6 +446,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const remove = await handler(
 			new Request("https://app.test/api/busyclaw/secrets/delete", {
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ name: "NOTION" }),
 				method: "POST",
 			}),
@@ -466,6 +470,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const response = await handler(
 			new Request("https://app.test/api/busyclaw/secrets/set", {
 				// name must be non-empty — rejected by the declared schema, before the handler runs.
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ name: "", value: "v" }),
 				method: "POST",
 			}),
@@ -578,6 +583,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const set = await handler(
 			new Request("https://app.test/api/busyclaw/secrets/set", {
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ name: "E2E", value: "v" }),
 				method: "POST",
 			}),
@@ -610,6 +616,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const createClawRequest = (handler: ReturnType<typeof toRequestHandler>) =>
 			handler(
 				new Request("https://app.test/api/busyclaw/create-claw", {
+					headers: { "content-type": "application/json" },
 					body: JSON.stringify({ name: "c" }),
 					method: "POST",
 				}),
@@ -666,6 +673,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const setSecret = (handler: ReturnType<typeof toRequestHandler>) =>
 			handler(
 				new Request("https://app.test/api/busyclaw/secrets/set", {
+					headers: { "content-type": "application/json" },
 					body: JSON.stringify({ name: "E2E", value: "v" }),
 					method: "POST",
 				}),
@@ -712,6 +720,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		const bad = await handler(
 			new Request("https://app.test/api/busyclaw/share-resource", {
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					resourceKind: "claw",
 					resourceId: "c1",

@@ -50,6 +50,15 @@ export type ClawRequestHandlerOptions = {
 	 *  identity path — request BODIES never carry a who/where field; those are server-stamped from the
 	 *  caller (docs/plans/stamped-fields.md).
 	 *
+	 *  IF YOU AUTHENTICATE FROM A COOKIE, CHECK THE ORIGIN HERE. A cookie is sent by the browser on
+	 *  cross-site requests whether or not the user meant to make one, so possession of a session is
+	 *  not evidence of intent — this is the one place holding the whole request, and therefore the
+	 *  only place that can tell. Bodied requests must already declare `application/json`, which stops
+	 *  a plain cross-site HTML form (a browser cannot send that content type cross-site without a
+	 *  preflight it will fail), but that is one shape, not the property. Prefer `SameSite=Lax` or
+	 *  `Strict` and reject a foreign `Origin` on anything that writes. A bearer token read from a
+	 *  header is not ambient and needs none of this.
+	 *
 	 *  FAIL-CLOSED: absent, or returning `undefined` (an unauthenticated request), means no principal —
 	 *  so the actor floor DENIES every governed core api call with a 403 (a plugin endpoint falls to its
 	 *  own fail-closed owner check). A misconfigured mount is thus safe: it denies, it never exposes.
@@ -70,11 +79,21 @@ export type ClawRequestHandlerOptions = {
 
 type CronTaskResult = BusyclawCronResult & { id: string };
 
+/**
+ * L-11. Every response here is per-caller: it was authorized for one principal, and much of it is
+ * that principal's transcript. Without an explicit directive a shared cache — a corporate proxy, a
+ * CDN in front of the app, a browser's own back/forward store — is free to apply its heuristics, and
+ * the failure mode is one user being served another's answer.
+ *
+ * `no-store` by DEFAULT, overridable through `init.headers`, because the only response here that is
+ * not per-caller is the OpenAPI document, which says so for itself.
+ */
 function json(data: unknown, init?: ResponseInit): Response {
 	return new Response(JSON.stringify(data), {
 		...init,
 		headers: {
 			"content-type": "application/json; charset=utf-8",
+			"cache-control": "no-store",
 			...(init?.headers ?? {}),
 		},
 	});
@@ -211,6 +230,27 @@ function conflictKey(route: Pick<ResolvedRoute, "method" | "path">): string {
 	return `${route.method} ${shape}`;
 }
 
+/**
+ * Could one request path satisfy BOTH patterns? Same segment count, and at every position either
+ * the literals agree or one side is a parameter that would swallow the other's literal.
+ *
+ * M-17. Comparing normalized SHAPES catches `/x/:a` against `/x/:b`, but not `/c/:provider/hook`
+ * against `/c/app/:key` — different shapes, yet `/c/app/hook` matches both, and which handler ran
+ * came down to which plugin registered first. Two routes reached by one URL is not a preference to
+ * be resolved by ordering: the pair may carry different authorization, so the answer to "who may
+ * call this" would depend on load order.
+ */
+function patternsOverlap(a: readonly string[], b: readonly string[]): boolean {
+	if (a.length !== b.length) return false;
+	return a.every((segment, index) => {
+		const other = b[index];
+		if (other === undefined) return false;
+		return (
+			segment.startsWith(":") || other.startsWith(":") || segment === other
+		);
+	});
+}
+
 function checkRouteConflicts(routes: readonly ResolvedRoute[]): void {
 	const seen = new Map<string, string>();
 	for (const route of routes) {
@@ -224,6 +264,30 @@ function checkRouteConflicts(routes: readonly ResolvedRoute[]): void {
 			});
 		}
 		seen.set(key, route.id);
+	}
+
+	// Patterns only. A STATIC path overlapping a pattern is not ambiguous — the dispatcher tries the
+	// literal map first and only falls through to patterns on a miss, so the literal always wins and
+	// that is a defined rule rather than an accident of ordering.
+	const patterns = routes
+		.filter((route) => isPattern(route.path))
+		.map((route) => ({
+			route,
+			segments: normalizePath(route.path).split("/"),
+		}));
+	for (let i = 0; i < patterns.length; i++) {
+		for (let j = i + 1; j < patterns.length; j++) {
+			const left = patterns[i];
+			const right = patterns[j];
+			if (!left || !right) continue;
+			if (left.route.method !== right.route.method) continue;
+			if (!patternsOverlap(left.segments, right.segments)) continue;
+			throw configurationError("busyclaw ambiguous route patterns", {
+				route: right.route.id,
+				previous: left.route.id,
+				paths: [left.route.path, right.route.path],
+			});
+		}
 	}
 }
 
@@ -241,6 +305,41 @@ function methodFrom(request: Request): ClawHttpMethod | null {
 	return null;
 }
 
+/**
+ * The media types a browser can send cross-site from a plain HTML form, with no preflight and no
+ * cooperation from the target. `application/json` is NOT among them — asking for it is what turns a
+ * silent cross-site POST into a CORS preflight the browser will refuse on its own.
+ */
+const SIMPLE_REQUEST_TYPES = new Set([
+	"application/x-www-form-urlencoded",
+	"multipart/form-data",
+	"text/plain",
+]);
+
+/**
+ * M-10. Bodied requests were parsed media-type-blind: the body was read and `JSON.parse`d whatever
+ * the sender called it. A cross-site HTML form can POST `text/plain` containing valid JSON, and a
+ * host that authenticates from an ambient cookie would then have executed it as the logged-in user —
+ * CSRF, with no script on the attacker's page.
+ *
+ * Requiring a JSON content type removes that shape entirely, because a browser cannot send one
+ * cross-site without first asking permission. It is not a substitute for an Origin check on a
+ * cookie-authenticated deployment; see `resolveCaller`, which is where a host has the request in
+ * hand and can make that call.
+ */
+function assertJsonContentType(request: BusyclawRouteRequest): void {
+	const header = request.headers.get("content-type");
+	if (header === null || header === "") return; // no body declared — nothing was parsed as one
+	const media = header.split(";")[0]?.trim().toLowerCase() ?? "";
+	if (media === "application/json" || media.endsWith("+json")) return;
+	throw validationError(
+		"unsupported content type",
+		SIMPLE_REQUEST_TYPES.has(media)
+			? `${media} cannot be sent cross-site without preflight, so it is refused here — send application/json`
+			: `expected application/json, received ${media}`,
+	);
+}
+
 async function readInput(
 	request: BusyclawRouteRequest,
 	method: ClawHttpMethod,
@@ -248,7 +347,24 @@ async function readInput(
 	if (method === "GET") {
 		const search = new URL(request.url).searchParams;
 		const encoded = search.get("input");
-		if (encoded) {
+		// L-10. Two representations were accepted — an `input=<json>` blob and flat query pairs — and
+		// nothing said what a request carrying both, or a repeated key, meant. Whichever the parser
+		// happened to prefer decided it, so a proxy or client that appended a duplicate could change
+		// the input a validated request carried without changing what a reader of the URL would see.
+		if (encoded !== null) {
+			if (search.getAll("input").length > 1) {
+				throw validationError(
+					"ambiguous request input",
+					"`input` appears more than once",
+				);
+			}
+			const extra = [...search.keys()].filter((key) => key !== "input");
+			if (extra.length > 0) {
+				throw validationError(
+					"ambiguous request input",
+					`\`input\` cannot be combined with query parameters (${extra.join(", ")})`,
+				);
+			}
 			// A GET carries its input in the URL, so the same ceiling applies to a different carrier.
 			if (encoded.length > MAX_REQUEST_BODY_BYTES) {
 				throw limitError(
@@ -260,8 +376,17 @@ async function readInput(
 			}
 			return JSON.parse(encoded) as unknown;
 		}
+		const keys = [...search.keys()];
+		const duplicated = keys.filter((key, index) => keys.indexOf(key) !== index);
+		if (duplicated.length > 0) {
+			throw validationError(
+				"ambiguous request input",
+				`repeated query parameters (${[...new Set(duplicated)].join(", ")})`,
+			);
+		}
 		return Object.fromEntries(search.entries());
 	}
+	assertJsonContentType(request);
 	const text = await readRequestBody(request);
 	return text ? (JSON.parse(text) as unknown) : {};
 }
@@ -575,7 +700,13 @@ function openApiRoutes(
 			id: "openapi",
 			method: "GET",
 			path: "/openapi.json",
-			handler: () => ({ body: document }),
+			// The one response on this surface that is NOT per-caller: it is generated once at
+			// assembly and is identical for everyone, so it opts out of the `no-store` default rather
+			// than making every reference UI re-fetch a document that cannot have changed.
+			handler: () => ({
+				body: document,
+				headers: { "cache-control": "public, max-age=300" },
+			}),
 		},
 	];
 }
