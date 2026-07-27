@@ -79,8 +79,10 @@ export type AiSdkLoopInput = {
 	/** Stream the model instead of generating it whole — each step uses `streamText` and pushes
 	 *  rehydrated text deltas to `onDelta` as they arrive. The transcript still persists placeholders. */
 	streaming?: boolean;
-	/** Called with each rehydrated text delta while `streaming`. */
-	onDelta?: (text: string) => void;
+	/** Called with each rehydrated text delta while `streaming`. AWAITED: a consumer whose buffer is
+	 *  full answers with a promise, and awaiting it here is what stops the read from the provider —
+	 *  backpressure only exists if the producer is willing to wait. */
+	onDelta?: (text: string) => void | Promise<void>;
 	/** placeholder → original, for turning streamed deltas into the reader-facing text. Identity when
 	 *  there is no redactor. Buffered so a `{{pii:…}}` token split across deltas is never mangled. */
 	rehydrateValue?: (text: string) => Promise<string>;
@@ -349,10 +351,10 @@ export async function runAiSdkLoop(
 			const rehydrator = createStreamRehydrator(input.rehydrateValue);
 			for await (const delta of streamed.textStream) {
 				const shown = await rehydrator.push(delta);
-				if (shown !== "") input.onDelta?.(shown);
+				if (shown !== "") await input.onDelta?.(shown);
 			}
 			const tail = await rehydrator.flush();
-			if (tail !== "") input.onDelta?.(tail);
+			if (tail !== "") await input.onDelta?.(tail);
 			return {
 				usage: await streamed.usage,
 				finishReason: await streamed.finishReason,
