@@ -239,3 +239,7 @@ export function memoryAdapter(): Adapter {
 
 	return make(db);
 }
+
+// Uniqueness-violation normalization — one typed conflict, whichever driver raised it. What makes
+// try-create → on-conflict-re-read writable without knowing the backend.
+export { asConflict, isUniqueViolation } from "./conflict";

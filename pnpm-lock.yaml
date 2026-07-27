@@ -143,6 +143,9 @@ importers:
       '@euroclaw/storage-kysely':
         specifier: workspace:*
         version: link:../storage/kysely
+      '@euroclaw/storage-mongodb':
+        specifier: workspace:*
+        version: link:../storage/mongodb
       '@euroclaw/storage-prisma':
         specifier: workspace:*
         version: link:../storage/prisma
@@ -575,6 +578,9 @@ importers:
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../core
       '@types/better-sqlite3':
         specifier: 7.6.13
         version: 7.6.13
@@ -619,6 +625,9 @@ importers:
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../core
       '@types/better-sqlite3':
         specifier: 7.6.13
         version: 7.6.13
@@ -635,6 +644,9 @@ importers:
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../core
       mongodb:
         specifier: 6.21.0
         version: 6.21.0
@@ -648,6 +660,9 @@ importers:
         specifier: workspace:*
         version: link:../../foundation/contracts
     devDependencies:
+      '@euroclaw/storage-core':
+        specifier: workspace:*
+        version: link:../core
       '@prisma/client':
         specifier: 6.19.3
         version: 6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3)

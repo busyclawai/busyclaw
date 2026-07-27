@@ -31,6 +31,7 @@ import {
 	validationError,
 } from "@euroclaw/contracts";
 import { type } from "arktype";
+import { asConflict } from "./conflict";
 import { type SchemaAdapterOptions, schemaAdapter } from "./schema-adapter";
 
 /** What a model contributes: its entity DSL fields (an `entity()` object satisfies this shape),
@@ -195,6 +196,23 @@ function ensureModel(validators: ModelValidators, model: string): void {
 
 // The validating wrapper over an already-schema-aware adapter. Split from entityAdapter so the
 // transaction path can re-wrap a tx adapter without re-deriving schemas.
+/** Run a write, re-throwing a uniqueness violation as the typed conflict and everything else as it
+ *  came. Nothing is swallowed: an unrecognised error keeps its identity and its stack. */
+async function withConflict<T>(
+	context: { model: string; operation: string },
+	run: () => Promise<T>,
+): Promise<T> {
+	try {
+		return await run();
+	} catch (error) {
+		const conflict = asConflict(error, context);
+		if (conflict === undefined) throw error;
+		// Keep the driver error reachable — the normalized one is for branching, not for forensics.
+		(conflict as { cause?: unknown }).cause = error;
+		throw conflict;
+	}
+}
+
 function withValidation(
 	inner: Adapter,
 	validators: ModelValidators,
@@ -211,7 +229,12 @@ function withValidation(
 				string,
 				unknown
 			>;
-			const row = await inner.create({ model, data: valid, select });
+			// Losing a race to a uniqueness constraint arrives here as whatever the driver raised.
+			// Normalized at the ONE place every write already passes through, so a caller can write
+			// try-create → on-conflict-re-read without knowing which database is underneath.
+			const row = await withConflict({ model, operation: "create" }, () =>
+				inner.create({ model, data: valid, select }),
+			);
 			return parseWith(validators, "read", model, row);
 		},
 
@@ -233,7 +256,11 @@ function withValidation(
 		},
 
 		async update(input) {
-			const row = await inner.update(input);
+			// An update can violate uniqueness too — moving a row onto another's key.
+			const row = await withConflict(
+				{ model: input.model, operation: "update" },
+				() => inner.update(input),
+			);
 			return row == null
 				? null
 				: parseWith(validators, "read", input.model, row);
@@ -241,7 +268,9 @@ function withValidation(
 
 		async updateMany(input) {
 			ensureModel(validators, input.model);
-			return inner.updateMany(input);
+			return withConflict({ model: input.model, operation: "updateMany" }, () =>
+				inner.updateMany(input),
+			);
 		},
 
 		async delete(input) {

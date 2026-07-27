@@ -1,6 +1,7 @@
 export type EuroclawErrorCode =
 	| "EUROCLAW_AUTHORIZATION_DENIED"
 	| "EUROCLAW_CONFIGURATION_ERROR"
+	| "EUROCLAW_CONFLICT"
 	| "EUROCLAW_STATE_ERROR"
 	| "EUROCLAW_UNSUPPORTED_OPERATION"
 	| "EUROCLAW_VALIDATION_FAILED";
@@ -91,6 +92,30 @@ export function authorizationError(
 ): EuroclawError {
 	return new EuroclawError({
 		code: "EUROCLAW_AUTHORIZATION_DENIED",
+		message,
+		details,
+	});
+}
+
+/**
+ * A write lost a race against a uniqueness constraint the database enforces.
+ *
+ * Its own code because it is the one storage failure a caller can RECOVER from rather than merely
+ * report: the row it wanted exists, written by whoever got there first, so the answer is to re-read
+ * and adopt the winner. Left as a raw driver error that recovery is unwritable — every backend
+ * spells the violation differently (Postgres 23505, SQLite SQLITE_CONSTRAINT_UNIQUE, Prisma P2002,
+ * Mongo 11000), and Drizzle hands through whichever driver is underneath it. So the normalization
+ * has to happen once, below the callers, or each one invents its own partial version of it.
+ *
+ * `details.constraint` carries the database's own name for the constraint when it gave one — enough
+ * to tell WHICH uniqueness was violated when a table has more than one.
+ */
+export function conflictError(
+	message: string,
+	details?: Record<string, unknown>,
+): EuroclawError {
+	return new EuroclawError({
+		code: "EUROCLAW_CONFLICT",
 		message,
 		details,
 	});
