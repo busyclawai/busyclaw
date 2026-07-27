@@ -63,6 +63,30 @@ export type AuthzContext = {
 		target: AuthzTarget,
 		asMethod?: string,
 	) => Promise<void>;
+	/**
+	 * Authorize MANY resources and return the ones that survive — the listing primitive, and what a
+	 * listing should use instead of `check` in a loop.
+	 *
+	 * Same decision as {@link check} per row, with three differences that only make sense in bulk:
+	 * the caller's scope memberships are resolved ONCE for the whole set rather than re-asking the
+	 * host's resolver per row; the rows are decided with BOUNDED concurrency, so a thousand-row page
+	 * cannot open a thousand simultaneous reads; and a row that DENIES is dropped rather than thrown,
+	 * because one unreadable row must not fail the page. A row whose decision ERRORS is also dropped —
+	 * fail-closed, the same answer `check` would reach by throwing.
+	 *
+	 * `asMethod` matters here for the same reason it matters on `check`, and more sharply: a listing is
+	 * declared caller-only, so it sits in the `creates` group the sealed baseline permits for any
+	 * authenticated principal. Decided as the listing, every row would pass. Name the SINGLE-ROW read.
+	 *
+	 * Cedar has no bulk authorize (`isAuthorized` takes one request), so this is not a batched
+	 * evaluation — it is the per-row evaluation with the per-CALL work lifted out of the loop.
+	 */
+	readonly filter: <T>(
+		level: RouteLevel,
+		rows: readonly T[],
+		target: (row: T) => AuthzTarget,
+		asMethod?: string,
+	) => Promise<T[]>;
 };
 
 /** The boundary validator a route declares — an arktype type in practice. */

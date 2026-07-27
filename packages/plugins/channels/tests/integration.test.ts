@@ -208,6 +208,49 @@ describe("channels ↔ busyclaw integration", () => {
 		).resolves.toMatchObject({ id: created.id, hasSecret: true });
 	});
 
+	// The reason a listing calls `ctx.filter` once instead of `ctx.check` in a loop. Cedar has no bulk
+	// authorize, so the per-ROW evaluation is unavoidable — but `resolvePrincipalScopes` is a HOST
+	// callback, and asking it "what is this principal a member of?" once per row is the same answer
+	// fetched N times, plausibly over the network. It is lifted out of the loop, and this is the only
+	// place that property is observable.
+	it("resolves the caller's scopes once for a listing, not once per row", async () => {
+		const db = memoryAdapter();
+		let resolves = 0;
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: noopDetector,
+					mappings: createPiiMappingStore(db),
+				}),
+			},
+			resolvePrincipalScopes: () => {
+				resolves += 1;
+				return [];
+			},
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+		const owner = { principal: userPrincipal("owner") };
+		for (const endpointKey of ["bot-a", "bot-b", "bot-c"]) {
+			await claw.api.channels.registrations.register(
+				{
+					provider: "telegram",
+					endpointKey,
+					webhookSecret: `hook-${endpointKey}`,
+				},
+				owner,
+			);
+		}
+
+		resolves = 0;
+		const rows = await claw.api.channels.registrations.list({}, owner);
+		expect(rows).toHaveLength(3);
+		// One for the listing's own caller-mode decision, one for the whole batch of rows. Per-row it
+		// would be 1 + 3, and it would grow with the page.
+		expect(resolves).toBe(2);
+	});
+
 	// An org-scoped BYO bot needs a deployment that can PROVE org membership. Until an org plugin
 	// resolves it, an explicit boundary is denied rather than taken on the caller's word — which is the
 	// fail-closed direction: the alternative is registering a bot into a tenant you do not belong to.

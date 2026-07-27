@@ -638,6 +638,70 @@ export function governApi(input: {
 	};
 
 	/**
+	 * How many rows a listing decides at once. Every row costs at least a resource load and a grant
+	 * read, so an unbounded `Promise.all` over a page turns one listing into as many simultaneous
+	 * database reads as the page is long — a self-inflicted load spike that scales with page size.
+	 * Ten is quickhr's number, and the point is only that a bound exists.
+	 */
+	const FILTER_CONCURRENCY = 10;
+
+	/**
+	 * The bulk half of the decision — {@link AuthzContext.filter}. Cedar has no batch authorize, so
+	 * this is still one `isAuthorized` per row; what it removes from the loop is the PER-CALL work.
+	 *
+	 * `resolvePrincipalScopes` is the one that matters: it is a HOST callback, so a per-row `check`
+	 * asks the host "what is this principal a member of?" once per row — the same answer, fetched N
+	 * times, plausibly over the network. Resolved once here and reused for the whole set.
+	 *
+	 * Denials and errors both DROP the row. A listing that threw on the first unreadable row would
+	 * fail the whole page, and telling a caller "denied" for one row rather than omitting it turns the
+	 * listing into a probe for rows they cannot see.
+	 */
+	const filterRows = async <T>(spec: {
+		method: string;
+		level: ApiPermissionLevel;
+		principal: Principal;
+		rows: readonly T[];
+		target: (row: T) => AuthzTarget;
+	}): Promise<T[]> => {
+		if (spec.rows.length === 0) return [];
+		if (unsafeOpen) return [...spec.rows];
+		// Once for the whole page, not once per row.
+		const scopes = await resolvePrincipalScopes(spec.principal);
+		const kept: T[] = [];
+		for (let i = 0; i < spec.rows.length; i += FILTER_CONCURRENCY) {
+			const batch = spec.rows.slice(i, i + FILTER_CONCURRENCY);
+			const settled = await Promise.allSettled(
+				batch.map(async (row) => {
+					const result = await decideApiCall({
+						engine: input.engine,
+						method: spec.method,
+						level: spec.level,
+						principal: spec.principal,
+						resource: await loadResource(spec.target(row)),
+						scopes,
+					});
+					return result.decision === "permit";
+				}),
+			);
+			for (const [index, outcome] of settled.entries()) {
+				const row = batch[index];
+				if (row === undefined) continue;
+				// `allSettled` never rejects, so a thrown loader lands here as a rejection rather than
+				// escaping the listing — and an undecided row is not a permitted one.
+				const permitted = outcome.status === "fulfilled" && outcome.value;
+				if (permitted || shadow) kept.push(row);
+				if (!permitted && shadow) {
+					input.warn(
+						`busyclaw app-authz shadow: would drop a row from ${spec.method}`,
+					);
+				}
+			}
+		}
+		return kept;
+	};
+
+	/**
 	 * The ACTOR FLOOR, run before any handler is entered. Every route path guarantees its handler a
 	 * present, non-blank principal, which is why {@link AuthzContext.principal} is non-optional and no
 	 * handler re-derives it. `decideApiCall` enforces the same floor for the legacy path.
@@ -673,6 +737,7 @@ export function governApi(input: {
 					caller: caller ?? {},
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
 					check: async () => {},
+					filter: async (_level, rows) => [...rows],
 				} satisfies AuthzContext);
 			}
 			// A method with no declaration is one the PEP cannot decide. That cannot happen through the
@@ -730,6 +795,14 @@ export function governApi(input: {
 						level,
 						principal,
 						resource: await loadResource(target),
+					}),
+				filter: (level, rows, target, asMethod) =>
+					filterRows({
+						method: asMethod ?? method,
+						level,
+						principal,
+						rows,
+						target,
 					}),
 			} satisfies AuthzContext);
 		};

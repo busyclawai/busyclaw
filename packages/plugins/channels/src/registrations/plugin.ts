@@ -413,30 +413,20 @@ export function buildRegistrationsPlugin(
 									filter: ChannelRegistrationListFilter,
 									ctx: AuthzContext,
 								) => {
-									const rows = await requireStore().list(filter);
-									const visible = await Promise.all(
-										rows.map(async (row) => {
-											try {
-												await ctx.check(
-													"read",
-													{ kind: CHANNEL_REGISTRATION_KIND, id: row.id },
-													REGISTRATION_READ,
-												);
-												return row;
-											} catch {
-												// A row the caller may not read is ABSENT from the listing, not an
-												// error: one unreadable row must not fail the whole page, and
-												// distinguishing "denied" from "not there" would make the list a
-												// probe for other tenants' registrations.
-												return null;
-											}
+									// The filter NARROWS; `ctx.filter` DECIDES. A row the caller may not read is
+									// absent rather than an error — one unreadable row must not fail the page, and
+									// answering "denied" per row would make the listing a probe for other tenants'
+									// registrations. Decided as the single-row read, never as the listing.
+									const visible = await ctx.filter(
+										"read",
+										await requireStore().list(filter),
+										(row) => ({
+											kind: CHANNEL_REGISTRATION_KIND,
+											id: row.id,
 										}),
+										REGISTRATION_READ,
 									);
-									return visible
-										.filter(
-											(row): row is ChannelRegistrationRecord => row !== null,
-										)
-										.map((row) => toChannelRegistrationView(row));
+									return visible.map((row) => toChannelRegistrationView(row));
 								},
 							),
 						revoke: route
