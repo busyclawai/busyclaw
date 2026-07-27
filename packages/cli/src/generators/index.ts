@@ -21,12 +21,19 @@ import {
 	generateKyselyTypes,
 	type KyselyTypeDialect,
 } from "@euroclaw/storage-kysely";
+import { generateMongoIndexes } from "@euroclaw/storage-mongodb";
 import { generatePrismaSchema } from "@euroclaw/storage-prisma";
 
 export type { DrizzleProvider } from "@euroclaw/storage-drizzle";
 
 /** What `db generate` can emit. */
-export const GENERATE_TARGETS = ["sql", "drizzle", "prisma", "kysely"] as const;
+export const GENERATE_TARGETS = [
+	"sql",
+	"drizzle",
+	"prisma",
+	"kysely",
+	"mongodb",
+] as const;
 export type GenerateTarget = (typeof GENERATE_TARGETS)[number];
 
 /**
@@ -39,6 +46,7 @@ export type GenerateTarget = (typeof GENERATE_TARGETS)[number];
 export const TARGET_FOR_ADAPTER: Readonly<Record<string, GenerateTarget>> = {
 	drizzle: "drizzle",
 	kysely: "sql",
+	mongodb: "mongodb",
 	prisma: "prisma",
 };
 
@@ -48,6 +56,7 @@ export const DEFAULT_OUTPUT: Readonly<Record<GenerateTarget, string>> = {
 	drizzle: "euroclaw-schema.ts",
 	prisma: "euroclaw.prisma",
 	kysely: "euroclaw-db.ts",
+	mongodb: "euroclaw-indexes.mongo.js",
 };
 
 /** Targets that print the whole schema without connecting to anything. A type predicate, so a
@@ -65,6 +74,9 @@ export function generateOffline(input: {
 	dialect?: KyselyTypeDialect;
 	warn?: (message: string) => void;
 }): string {
+	if (input.target === "mongodb") {
+		return generateMongoIndexes({ schema: input.schema });
+	}
 	if (input.target === "prisma") {
 		return generatePrismaSchema({
 			schema: input.schema,
