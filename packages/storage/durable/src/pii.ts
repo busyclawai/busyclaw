@@ -3,6 +3,7 @@ import {
 	type PiiMapping,
 	type PiiMappingStore,
 	piiContainer,
+	piiErasureFields,
 	piiMappingFields,
 	piiSubjectFields,
 } from "@busyclaw/contracts";
@@ -13,6 +14,8 @@ export type PiiMappingStoreOptions = {
 	model?: string;
 	/** The subject junction table. Default "pii_subject". */
 	subjectModel?: string;
+	/** Time source — for deterministic tombstone timestamps in tests. */
+	now?: () => string;
 };
 
 type MappingWhere = EntityWhere<typeof piiMappingFields>;
@@ -74,6 +77,7 @@ export function createPiiMappingStore(
 	adapter: Adapter,
 	options: PiiMappingStoreOptions = {},
 ): PiiMappingStore {
+	const now = options.now ?? (() => new Date().toISOString());
 	// Both tables ride one entity-validating adapter (options overrides ride modelName — the
 	// engine-sql precedent). The store owns the mapping + its subject junction (the erasure axis);
 	// every row crossing the adapter boundary is parsed against its record schema.
@@ -88,6 +92,7 @@ export function createPiiMappingStore(
 				? { modelName: options.subjectModel }
 				: {}),
 		},
+		pii_erasure: { fields: piiErasureFields },
 	});
 	return {
 		durable: true,
@@ -148,6 +153,19 @@ export function createPiiMappingStore(
 			return rows.find((mapping) => sameContainer(mapping, ctx)) ?? null;
 		},
 
+		async isErased(subjectId, ctx) {
+			const container = piiContainer(ctx);
+			const row = await db.findOne({
+				model: "pii_erasure",
+				where: [
+					{ field: "subjectId", value: subjectId },
+					{ field: "scope", value: container.scope, connector: "AND" },
+					{ field: "scopeId", value: container.scopeId, connector: "AND" },
+				],
+			});
+			return row !== null;
+		},
+
 		async deleteForSubject(subjectId: string) {
 			// Find every (placeholder, container) this subject appears on (multi-subject safe), then
 			// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
@@ -170,6 +188,30 @@ export function createPiiMappingStore(
 					model: "pii_subject",
 					where: subjectContainerWhere(row),
 				});
+			}
+			// The TOMBSTONE, one per container this subject was erased from. Without it erasure is a
+			// point-in-time delete: the mappings go, and the very next turn naming the same person mints
+			// them again — forgotten until somebody says your name. The mark makes the request standing.
+			const containers = new Set<string>();
+			for (const row of subjectRows) {
+				containers.add(JSON.stringify([row.scope, row.scopeId]));
+			}
+			// Nothing found ⇒ nothing marked, and that is the honest limit rather than an oversight:
+			// erasure is addressed by subject alone, with no container in the request, so the only
+			// containers this can name are the ones the subject's own rows named. A subject erased
+			// before they ever appeared leaves no mark — there is nowhere truthful to put one.
+			const at = now();
+			for (const key of containers) {
+				const [scope, scopeId] = JSON.parse(key) as [string, string];
+				// Re-erasing is not an error and must not fail on the composite key.
+				try {
+					await db.create({
+						model: "pii_erasure",
+						data: { subjectId, scope, scopeId, erasedAt: at },
+					});
+				} catch {
+					// Already tombstoned — the instruction stands, and its first date is the true one.
+				}
 			}
 			// Mappings shredded, not subject rows: it is the mapping that made a placeholder
 			// rehydratable, so it is the mapping whose removal is the erasure.

@@ -21,6 +21,7 @@ import {
 	entity,
 	factsOverlayFields,
 	messageFields,
+	piiErasureFields,
 	piiMappingFields,
 	piiSubjectFields,
 	policySliceFields,
@@ -53,6 +54,8 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	effect: effectStorageFields,
 	pii_mapping: piiMappingFields,
 	pii_subject: piiSubjectFields,
+	// The erasure tombstone — durable proof of what was shredded, and from where.
+	pii_erasure: piiErasureFields,
 	run_checkpoint: runCheckpointFields,
 	team_member: teamMemberEntity.fields,
 	team_invite: teamInviteEntity.fields,

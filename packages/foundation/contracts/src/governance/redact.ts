@@ -131,6 +131,31 @@ export type PiiSubject = EntityRecord<typeof piiSubjectFields>;
 /** The storage schema backing the durable subject junction. */
 export const piiSubjectSchema = piiSubjectEntity.storage;
 
+// The erasure TOMBSTONE — one row per (subject, container) that has been shredded.
+//
+// Erasure without it is a point-in-time delete, not a standing instruction: the mappings go, and the
+// very next turn that mentions the same person mints them again. The person asked to be forgotten and
+// was, for as long as nobody said their name.
+//
+// Per CONTAINER, like everything else on this axis: a subject erased from one claw has said nothing
+// about another, and a tombstone that reached across containers would silently disable re-identification
+// for tenants who never asked for it.
+export const piiErasureFields = {
+	subjectId: field.string({ required: true, index: true, primaryKey: true }),
+	scope: field.string({ required: true, index: true, primaryKey: true }),
+	scopeId: field.string({ required: true, index: true, primaryKey: true }),
+	/** When the shred happened — the durable half of the `pii.erasure` audit line, which lives in a
+	 *  different store and answers a different question ("was it requested" vs "is it still in force"). */
+	erasedAt: field.string({ required: true }),
+} as const;
+
+export const piiErasureEntity = entity("pii_erasure", piiErasureFields);
+export const piiErasure = piiErasureEntity.record;
+export type PiiErasure = EntityRecord<typeof piiErasureFields>;
+
+/** The storage schema backing the erasure tombstone. */
+export const piiErasureSchema = piiErasureEntity.storage;
+
 /** The re-identification store: placeholder → original PII, contained by (scope, scopeId), with a
  *  subject junction for erasure. */
 export type PiiMappingStore = {
@@ -161,6 +186,20 @@ export type PiiMappingStore = {
 	 * A compliance answer that cannot distinguish those is worse than no answer: it is a false one.
 	 */
 	deleteForSubject: (subjectId: string) => number | Promise<number>;
+	/**
+	 * Has this subject been erased from this container? Reads the tombstone.
+	 *
+	 * A RECORD, deliberately not a gate. Blocking future mints would make erasure a permanent ban, and
+	 * a person who asks to be forgotten must still be able to come back — the existing behaviour is
+	 * already right: the erased token stays inert forever and a reappearing value mints a FRESH one.
+	 * What was missing is proof. Once the mappings are gone nothing else says the erasure happened;
+	 * the audit chain records that it was REQUESTED, in a different store, and cannot say whether it
+	 * completed or where.
+	 */
+	isErased: (
+		subjectId: string,
+		ctx?: RehydrationContext,
+	) => boolean | Promise<boolean>;
 };
 
 export const redactionContext = type({
