@@ -37,7 +37,6 @@ import {
 	endpointRoutesOf,
 	errorMessage,
 	isReservedScope,
-	type LooseResourceBinding,
 	type PolicySourceSlice,
 	type Principal,
 	RESERVED_SCOPE_PREFIX,
@@ -150,12 +149,6 @@ export function callerOnlyMethodIds(api: Record<string, unknown>): string[] {
 	return [...collectRouteAuthz(api)]
 		.filter(([, authz]) => authz.mode === "caller")
 		.map(([method]) => method);
-}
-
-function stringField(input: unknown, key: string): string | undefined {
-	if (input === null || typeof input !== "object") return undefined;
-	const value = (input as Record<string, unknown>)[key];
-	return typeof value === "string" ? value : undefined;
 }
 
 /** A resource shape nothing satisfies — no owner, no scope, no grants — so owner ∪ scope ∪ grant all
