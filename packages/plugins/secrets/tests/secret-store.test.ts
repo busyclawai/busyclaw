@@ -19,6 +19,8 @@ import {
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
 	type SecretStoreOptions,
+	secretKeyId,
+	secretKeyring,
 	secrets,
 	storedSecretFields,
 } from "../src/index";
@@ -31,8 +33,8 @@ const storedSecretModels = {
 	stored_secret: { fields: storedSecretFields },
 };
 
-const cipherFor = (key: string) =>
-	createSecretCipher(async () => parseSecretStoreKey(key));
+const cipherFor = (...keys: string[]) =>
+	createSecretCipher(async () => secretKeyring(keys.map(parseSecretStoreKey)));
 
 /** A plugin configured against a fresh in-memory table (config key by default; tests override),
  *  plus a same-key store over the same adapter as the seeding surface. */
@@ -329,7 +331,7 @@ describe("encryption at rest", () => {
 		});
 	});
 
-	it("never rests plaintext — the raw row holds hex(nonce ‖ ciphertext+tag)", async () => {
+	it("never rests plaintext — the raw row holds k1.<keyId>.hex(nonce ‖ ciphertext+tag)", async () => {
 		const { db, store } = connectedStore();
 		await store.set({
 			name: "AT_REST",
@@ -348,9 +350,10 @@ describe("encryption at rest", () => {
 		if (sealed === undefined) throw new Error("expected a sealed value");
 		expect(sealed).not.toBe("plain-secret");
 		expect(sealed).not.toContain("plain-secret");
-		// the documented encoding: hex, 12-byte nonce + ciphertext + 16-byte GCM tag ⇒ ≥ 56 hex chars
-		expect(sealed).toMatch(/^[0-9a-f]+$/);
-		expect(sealed.length).toBeGreaterThanOrEqual(56);
+		// The documented encoding: version, the id of the key that sealed it, then hex of a 12-byte
+		// nonce + ciphertext + 16-byte GCM tag ⇒ ≥ 56 hex chars of payload.
+		expect(sealed).toMatch(/^k1\.[0-9a-f]{16}\.[0-9a-f]+$/);
+		expect(sealed.split(".")[2]?.length).toBeGreaterThanOrEqual(56);
 		// and it is EXACTLY the sealed form — the same-key cipher, given the row's own binding, opens
 		// it back to the plaintext
 		expect(
@@ -512,12 +515,75 @@ describe("encryption at rest", () => {
 		const plugin = secrets([], { store: { key: OTHER_KEY } });
 		plugin.configure?.({ adapter: db });
 		const [provider] = plugin.secrets.providers;
+		// M-13 made this failure NAMEABLE. It used to be "cannot decrypt" — one message covering a
+		// rotated key, a tampered row, and a relocated value alike, because the envelope carried
+		// nothing to tell them apart. The key id says which key is missing, so an operator who dropped
+		// one still in use has a fixable mistake rather than a row that has silently become garbage.
 		await expect(
 			provider.get("ROTATED", { principal: "user:alice" }),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
-			message: expect.stringMatching(/cannot decrypt stored secret/),
+			message: expect.stringMatching(/no longer holds/),
 		});
+	});
+
+	// ── rotation, which was previously not a procedure ───────────────────────────────────────────
+	//
+	// One key forever: swapping it made every row fail to open, indistinguishably from tampering. So
+	// a leaked key could not be retired without an outage and re-entering every secret by hand.
+
+	it("opens rows sealed under a retired key when it stays in the keyring", async () => {
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
+		const before = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+		});
+		await before.set({
+			name: "CARRIED",
+			value: "still-readable",
+			createdBy: "user:alice",
+		});
+
+		// Rotation: the NEW key first (it seals), the old one behind it (it still opens).
+		const after = createStoredSecretsStore(db, {
+			cipher: cipherFor(OTHER_KEY, TEST_KEY),
+		});
+		const row = await after.get("personal", "user:alice", "CARRIED");
+		if (!row) throw new Error("expected the row");
+		expect(
+			await cipherFor(OTHER_KEY, TEST_KEY).open(row.value, {
+				scope: "personal",
+				scopeId: "user:alice",
+				name: "CARRIED",
+			}),
+		).toBe("still-readable");
+	});
+
+	it("seals NEW writes under the active key, so re-setting a row retires it", async () => {
+		const db = entityAdapter(memoryAdapter(), storedSecretModels);
+		const before = createStoredSecretsStore(db, {
+			cipher: cipherFor(TEST_KEY),
+		});
+		await before.set({
+			name: "MOVED",
+			value: "v1",
+			createdBy: "user:alice",
+		});
+		const sealedBefore = (await before.get("personal", "user:alice", "MOVED"))
+			?.value;
+
+		const after = createStoredSecretsStore(db, {
+			cipher: cipherFor(OTHER_KEY, TEST_KEY),
+		});
+		await after.set({ name: "MOVED", value: "v2", createdBy: "user:alice" });
+		const sealedAfter = (await after.get("personal", "user:alice", "MOVED"))
+			?.value;
+
+		const oldId = secretKeyId(parseSecretStoreKey(TEST_KEY));
+		const newId = secretKeyId(parseSecretStoreKey(OTHER_KEY));
+		expect(sealedBefore?.split(".")[1]).toBe(oldId);
+		// The row moved onto the new key by being re-set — which is what makes "is anything still on
+		// the old key?" a question the data answers.
+		expect(sealedAfter?.split(".")[1]).toBe(newId);
 	});
 
 	it("short-circuits its own master-key name — env serves it, the store row is never consulted", async () => {
@@ -724,5 +790,77 @@ describe("the personal management api — claw.api.secrets.*", () => {
 			["/list", "GET"],
 		]);
 		expect(Object.keys(api).sort()).toEqual(["delete", "list", "set"]);
+	});
+});
+
+// M-13: the name is a resolution KEY, and the value is stored in the honeypot.
+//
+// The schema said "a string" and stopped. Both are written through an authenticated api anyone with
+// an account can reach, so "however much the caller cared to send" was the only bound on either —
+// and a name that differs only by surrounding space is a lookup resolving to a row nobody meant.
+
+describe("stored-secrets store — input bounds", () => {
+	const store = () =>
+		createStoredSecretsStore(
+			entityAdapter(memoryAdapter(), storedSecretModels),
+			{ cipher: cipherFor(TEST_KEY) },
+		);
+
+	it("refuses a name with surrounding whitespace rather than trimming it", async () => {
+		// Trimming silently would make `" AWS_KEY"` and `"AWS_KEY"` the same row, which hides that one
+		// caller is deriving names from something untrusted.
+		await expect(
+			store().set({ name: " AWS_KEY", value: "v", createdBy: "user:alice" }),
+		).rejects.toThrow(/whitespace/);
+	});
+
+	it.each([
+		"has space",
+		"curly{brace}",
+		"slash/es",
+		"",
+		"üñî",
+	])("refuses a non-canonical name (%j)", async (name) => {
+		await expect(
+			store().set({ name, value: "v", createdBy: "user:alice" }),
+		).rejects.toThrow(/stored secret name/);
+	});
+
+	it("accepts the ordinary shapes a real secret name takes", async () => {
+		for (const name of ["AWS_KEY", "stripe.live", "gh-token", "v2_KEY.9"]) {
+			await expect(
+				store().set({ name, value: "v", createdBy: "user:alice" }),
+			).resolves.toBeDefined();
+		}
+	});
+
+	it("refuses an oversized name and an oversized value", async () => {
+		await expect(
+			store().set({
+				name: "A".repeat(200),
+				value: "v",
+				createdBy: "user:alice",
+			}),
+		).rejects.toThrow(/out of range/);
+
+		await expect(
+			store().set({
+				name: "BIG",
+				value: "x".repeat(100_000),
+				createdBy: "user:alice",
+			}),
+		).rejects.toThrow(/too large/);
+	});
+
+	it("reports the SIZE of an oversized value, never the value", async () => {
+		// This message reaches logs and the caller. Echoing a rejected secret back would make the
+		// bound itself the disclosure.
+		await expect(
+			store().set({
+				name: "BIG",
+				value: `sk-live-${"x".repeat(100_000)}`,
+				createdBy: "user:alice",
+			}),
+		).rejects.not.toThrow(/sk-live/);
 	});
 });

@@ -104,10 +104,57 @@ async function guarded<T>(fn: () => Promise<T>): Promise<T> {
 	}
 }
 
+// M-13. The schema said "a string" and stopped there, so a name and a value were each bounded only
+// by what the caller cared to send — and this table is the honeypot, reached through an authenticated
+// api that anyone with an account can write to.
+//
+// The name additionally has a GRAMMAR, because it is a resolution key, not a label. Names come from
+// callers and are compared against provider-supplied ones (env vars, the deployment's own), so
+// leading/trailing space, or two names differing only by case, are the makings of a lookup that
+// resolves to a row nobody meant. Canonical means: trimmed, and drawn from an alphabet where two
+// distinct-looking names are distinct.
+const MAX_SECRET_NAME_LENGTH = 128;
+const MAX_SECRET_VALUE_BYTES = 64 * 1024;
+const SECRET_NAME_GRAMMAR = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 function assertSetInput(input: unknown): SetStoredSecretInput {
 	const valid = setStoredSecretInput(input);
 	if (valid instanceof type.errors) {
 		throw validationError("stored secret input invalid", valid.summary);
+	}
+	const name = valid.name.trim();
+	if (name !== valid.name) {
+		// Refused rather than silently trimmed: a caller who wrote `" AWS_KEY"` and a caller who wrote
+		// `"AWS_KEY"` mean the same row, and quietly making that true would hide the fact that one of
+		// them is generating names from something untrusted.
+		throw validationError(
+			"stored secret name has leading or trailing whitespace",
+			JSON.stringify(valid.name),
+		);
+	}
+	if (name.length === 0 || name.length > MAX_SECRET_NAME_LENGTH) {
+		throw validationError(
+			"stored secret name is out of range",
+			`1..${MAX_SECRET_NAME_LENGTH} characters, received ${name.length}`,
+		);
+	}
+	if (!SECRET_NAME_GRAMMAR.test(name)) {
+		throw validationError(
+			"stored secret name is not canonical",
+			"letters, digits, dot, dash and underscore only, starting with a letter or digit",
+		);
+	}
+	// Presence is a separate rule enforced downstream ("value is required"); this only bounds a value
+	// that IS there, so the two messages stay distinct.
+	if (
+		valid.value !== undefined &&
+		valid.value.length > MAX_SECRET_VALUE_BYTES
+	) {
+		// Length, not the value: this message travels to logs and to the caller.
+		throw validationError(
+			"stored secret value is too large",
+			`limit ${MAX_SECRET_VALUE_BYTES} bytes, received ${valid.value.length}`,
+		);
 	}
 	return valid;
 }
