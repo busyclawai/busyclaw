@@ -902,3 +902,103 @@ describe("toolsFromOpenApi — hostile documents", () => {
 		expect(result.skipped[0]?.reason).toContain("cannot wrap");
 	});
 });
+
+// $ref chains — M-14.
+//
+// A chain (`A → B → C → …`) is not nesting: every link resolves to the SAME place in the output, so
+// following one deliberately left the depth counter alone. But each hop was a RECURSIVE call, so the
+// walk went as deep as the chain was long with only the node budget watching — and a long enough
+// acyclic chain produced `RangeError: Maximum call stack size exceeded`, which escaped the
+// per-operation skip and killed the entire extraction. A hostile spec is an upload; this is reached
+// from `registerOpenApiSpec`.
+
+/** One long ACYCLIC chain: L0 → L1 → … → Ln → { type: "string" }. */
+function chainDoc(length: number): JsonObject {
+	const schemas: JsonObject = {};
+	for (let i = 0; i < length; i += 1) {
+		schemas[`L${i}`] = { $ref: `#/components/schemas/L${i + 1}` };
+	}
+	schemas[`L${length}`] = { type: "string" };
+	return doc(
+		{
+			"/x": {
+				post: {
+					operationId: "x",
+					requestBody: {
+						content: {
+							"application/json": {
+								schema: { $ref: "#/components/schemas/L0" },
+							},
+						},
+					},
+				},
+			},
+		},
+		{ components: { schemas } },
+	);
+}
+
+function bodyProperties(extraction: {
+	tools: readonly { inputSchema: unknown }[];
+}): Record<string, unknown> | undefined {
+	return (
+		extraction.tools[0]?.inputSchema as {
+			properties?: Record<string, unknown>;
+		}
+	)?.properties;
+}
+
+describe("toolsFromOpenApi — $ref chains", () => {
+	it("skips a chain past the hop cap instead of overflowing the stack", () => {
+		const extraction = toolsFromOpenApi(chainDoc(9000));
+
+		// Refused as ONE operation, loudly — the document still extracts.
+		expect(extraction.tools).toHaveLength(0);
+		expect(extraction.skipped).toHaveLength(1);
+		expect(extraction.skipped[0]?.reason).toMatch(/chain longer than/);
+	});
+
+	it("still inlines a chain of ordinary length", () => {
+		// The cap must refuse the pathological case without refusing aliasing, which is a normal way
+		// to write a spec — `Pet` → `Animal` → the real schema.
+		const extraction = toolsFromOpenApi(chainDoc(3));
+
+		expect(extraction.skipped).toHaveLength(0);
+		expect(bodyProperties(extraction)?.body).toEqual({ type: "string" });
+	});
+
+	it("treats one ref reached down two branches as fan-out, not a cycle", () => {
+		// The cycle check is now a Set mutated as the walk descends and unwound on the way out. Get
+		// the unwind wrong and a schema referenced twice in DIFFERENT places reads as circular the
+		// second time — which the old copy-per-hop array could not get wrong by construction.
+		const extraction = toolsFromOpenApi(
+			doc(
+				{
+					"/x": {
+						post: {
+							operationId: "x",
+							requestBody: {
+								content: {
+									"application/json": {
+										schema: {
+											type: "object",
+											properties: {
+												a: { $ref: "#/components/schemas/Shared" },
+												b: { $ref: "#/components/schemas/Shared" },
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{ components: { schemas: { Shared: { type: "string" } } } },
+			),
+		);
+
+		expect(extraction.skipped).toHaveLength(0);
+		expect(bodyProperties(extraction)?.a).toEqual({ type: "string" });
+		expect(bodyProperties(extraction)?.b).toEqual({ type: "string" });
+	});
+});
