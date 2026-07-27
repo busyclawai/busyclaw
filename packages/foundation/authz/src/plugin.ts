@@ -44,6 +44,13 @@ export type PolicyPluginConfig<Ctx extends Record<string, unknown>> = {
 	id?: string;
 	/** Seal the gate so it can't be removed or redefined — the unremovable org floor. */
 	sealed?: boolean;
+	/**
+	 * Extra entities for THIS decision, derived from the request context — how a per-run action (a
+	 * boundary's registered tool) becomes something policy can name, without recompiling the engine.
+	 * Merged UNDER the engine's own directory, so a run can ADD actions and never redefine one.
+	 * Ignored by an engine that takes no per-decision entities.
+	 */
+	entitiesFor?: (ctx: Ctx) => unknown;
 };
 
 /**
@@ -86,7 +93,21 @@ export function createPolicyPlugin<Ctx extends Record<string, unknown>>(
 					baseMatcher(call, ctx as Ctx),
 				handler: async (call: ToolCall, ctx: TurnContext) => {
 					const req = validateRequest(config.mapCall(call, ctx as Ctx));
-					return decide(validateResult(await config.engine.authorize(req)));
+					// Per-decision entities, when the config derives any from this request's context —
+						// how a per-run action becomes nameable without recompiling the engine. Passed
+						// positionally to engines that accept them (cedar merges them UNDER its directory);
+						// an engine whose `authorize` takes one argument simply ignores the extra.
+						const extra = config.entitiesFor?.(ctx as Ctx);
+						const result =
+							extra === undefined
+								? await config.engine.authorize(req)
+								: await (
+										config.engine.authorize as (
+											request: PolicyRequest,
+											entities?: unknown,
+										) => Promise<PolicyResult>
+									)(req, extra);
+						return decide(validateResult(result));
 				},
 			},
 		],

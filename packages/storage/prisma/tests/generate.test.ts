@@ -2,6 +2,8 @@
 // emitted code, and on the two things easiest to get quietly wrong: declaration ORDER and COMPOSITE
 // primary keys, which euroclaw has and Better Auth's generators never see.
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
 	piiMappingSchema,
 	piiSubjectSchema,
@@ -9,6 +11,22 @@ import {
 } from "@euroclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { generatePrismaSchema } from "../src/generate";
+
+/** Resolve a locally-installed CLI binary by walking up to the nearest `node_modules/.bin`.
+ *  Deliberately NOT `npx`: npx resolves through the npm cache and can shell out to a lookup that
+ *  fails under load — this test passed in isolation and failed with "command not found" only when
+ *  the whole workspace gate ran at once. A path that exists on disk cannot do that. */
+function binPath(name: string): string {
+	let dir = process.cwd();
+	for (;;) {
+		const candidate = join(dir, "node_modules", ".bin", name);
+		if (existsSync(candidate)) return candidate;
+		const parent = dirname(dir);
+		if (parent === dir)
+			throw new Error(`could not resolve the "${name}" binary`);
+		dir = parent;
+	}
+}
 
 /** A claw <- thread pair (declared child-first, so ordering has to be earned) plus a composite key. */
 const SCHEMA: SchemaDeclaration = {
@@ -190,8 +208,8 @@ describe("the emitted schema is accepted by Prisma itself", () => {
 			);
 
 			const { stdout, stderr } = await promisify(execFile)(
-				"npx",
-				["prisma", "validate", "--schema", join(dir, "schema.prisma")],
+				binPath("prisma"),
+				["validate", "--schema", join(dir, "schema.prisma")],
 				{ cwd: process.cwd() },
 			);
 			expect(`${stdout}${stderr}`).toContain("is valid");
