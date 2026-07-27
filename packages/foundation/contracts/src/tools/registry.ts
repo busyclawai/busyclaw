@@ -54,9 +54,22 @@ export const specRegistrationFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
+/**
+ * One row per (scope, scopeId, source) — enforced, not merely intended.
+ *
+ * The section header above already says it, and the upsert already reads by that tuple. What was
+ * missing is the database agreeing: `id` is GENERATED, so two concurrent registrations produce two
+ * different primary keys and the key arbitrates nothing. That left two rows for one logical
+ * registration, later reads returning an arbitrary one, and an update landing on only one — a
+ * re-registration that silently did not take.
+ *
+ * Safe to enforce because `createRegistryStores` retries its upsert body when this rejects a write:
+ * the loser re-reads, finds the row, and updates it.
+ */
 export const specRegistrationEntity = entity(
 	"spec_registration",
 	specRegistrationFields,
+	{ uniques: [["scope", "scopeId", "source"]] },
 );
 export const specRegistrationRecord = specRegistrationEntity.record;
 export type SpecRegistrationRecord = EntityRecord<
@@ -155,7 +168,16 @@ export const factsOverlayFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
-export const factsOverlayEntity = entity("facts_overlay", factsOverlayFields);
+/**
+ * One row per (scope, scopeId, actionId) — same reasoning as `spec_registration`, with a sharper edge.
+ *
+ * This one replaces by delete-then-create, so there is a window with NO row where another writer can
+ * create one; then it is our create the constraint rejects. `createRegistryStores` retries the delete
+ * and the create together, so the last writer's override lands whole — which is what replace means.
+ */
+export const factsOverlayEntity = entity("facts_overlay", factsOverlayFields, {
+	uniques: [["scope", "scopeId", "actionId"]],
+});
 export const factsOverlayRecord = factsOverlayEntity.record;
 export type FactsOverlayRecord = EntityRecord<typeof factsOverlayFields>;
 

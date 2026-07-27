@@ -1,3 +1,4 @@
+import { conflictError } from "@euroclaw/contracts";
 import { type Adapter, memoryAdapter } from "@euroclaw/storage-core";
 import { kyselyAdapter } from "@euroclaw/storage-kysely";
 import Database from "better-sqlite3";
@@ -304,5 +305,86 @@ describe("createRegistryStores over kysely (sqlite) — JSON columns round-trip"
 		expect(listed[0]?.governance).toEqual(toolInput("org-a").governance);
 		expect(listed[0]?.inputSchema).toEqual(toolInput("org-a").inputSchema);
 		expect(tool.address).toBe("petstore.addPet");
+	});
+});
+
+// ── the upsert race, against a real constraint ──────────────────────────────────────────────────
+//
+// These upserts are lookup-then-create with a GENERATED id, so two concurrent writers produce two
+// different primary keys and the key arbitrates nothing — the same reason a generated placeholder
+// slipped past pii_mapping's key. The composite unique rejects the second write; the retry in
+// createRegistryStores is what turns that rejection into the caller's content landing.
+//
+// Reproduced deterministically rather than by timing: the adapter plants a competing row in the exact
+// window the race lives in — after our findOne saw nothing, before our create runs.
+describe("createRegistryStores — losing the upsert race", () => {
+	let sqlite: Database.Database | undefined;
+	afterEach(() => sqlite?.close());
+
+	/** spec_registration WITH the constraint the emitter now generates for it. */
+	function withConstraint(): { adapter: Adapter; db: Database.Database } {
+		const raw = new Database(":memory:");
+		sqlite = raw;
+		raw.exec(
+			`CREATE TABLE spec_registration (
+				id TEXT PRIMARY KEY, scope TEXT, scopeId TEXT, source TEXT, specBlob TEXT,
+				contentVersion TEXT, report TEXT, registeredBy TEXT, createdAt TEXT, updatedAt TEXT,
+				CONSTRAINT spec_registration_scope_scopeId_source_uq UNIQUE (scope, scopeId, source)
+			)`,
+		);
+		const kysely = new Kysely<Record<string, Record<string, unknown>>>({
+			dialect: new SqliteDialect({ database: raw }),
+		});
+		return { adapter: kyselyAdapter(kysely), db: raw };
+	}
+
+	it("the loser's content lands, on the winner's row, with ONE row left", async () => {
+		const { adapter, db } = withConstraint();
+		let planted = false;
+		const racing: Adapter = {
+			...adapter,
+			async create(args) {
+				// The window: our findOne has already returned nothing.
+				if (!planted) {
+					planted = true;
+					db.prepare(
+						`INSERT INTO spec_registration
+						 (id, scope, scopeId, source, specBlob, contentVersion, report, registeredBy,
+						  createdAt, updatedAt)
+						 VALUES ('other-writer', 'organization', 'org-a', 'petstore', '{}', 'theirs',
+						         '{"added":[],"updated":[],"removed":[],"skipped":[],"warnings":[]}',
+						         'user:bob', 'then', 'then')`,
+					).run();
+				}
+				return adapter.create(args);
+			},
+		};
+
+		const { specRegistrations } = createRegistryStores(racing);
+		const result = await specRegistrations.upsert(specInput("org-a"));
+
+		// Ours won on content — that is what upsert promises — and it landed on THEIR row rather than
+		// adding a second one, which is what the constraint made unavoidable.
+		expect(result.contentVersion).toBe("spec-v1");
+		expect(result.id).toBe("other-writer");
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM spec_registration").get(),
+		).toEqual({ n: 1 });
+	});
+
+	it("a conflict that never clears is rethrown, not retried forever", async () => {
+		// The bound: a caller whose write cannot land has to hear about it rather than spin.
+		const { adapter } = withConstraint();
+		const alwaysLoses: Adapter = {
+			...adapter,
+			create: () => {
+				throw conflictError("unique constraint violated");
+			},
+		};
+
+		const { specRegistrations } = createRegistryStores(alwaysLoses);
+		await expect(specRegistrations.upsert(specInput("org-a"))).rejects.toThrow(
+			/unique constraint violated/,
+		);
 	});
 });

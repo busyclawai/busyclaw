@@ -26,6 +26,7 @@ import {
 	type FactsOverlayUpsert,
 	factsOverlayFields,
 	factsOverlayUpsert as factsOverlayUpsertSchema,
+	isConflict,
 	type PolicySliceStore,
 	type PolicySliceUpsert,
 	policySliceFields,
@@ -86,6 +87,48 @@ const andEq = <const F extends string>(field: F, value: string) => ({
  *  would collide across labels, so `(team, acme)` could read `(organization, acme)`'s rows. */
 const inScope = (ref: ScopeRef) =>
 	[whereEq("scope", ref.scope), andEq("scopeId", ref.scopeId)] as const;
+
+/** Attempts an upsert gets before a conflict is the caller's problem. */
+const UPSERT_ATTEMPTS = 3;
+
+/**
+ * Run an upsert body again when the database refuses its insert.
+ *
+ * Every upsert below is lookup-then-create (or, for the overlay, delete-then-create) with a GENERATED
+ * id, so two concurrent writers produce two different primary keys and the key cannot arbitrate
+ * between them — the same reason a generated placeholder slipped past `pii_mapping`'s key. The
+ * composite unique on each table's logical tuple is what rejects the second write; this is what turns
+ * that rejection into a retry rather than a crash on a path that had a correct recovery.
+ *
+ * It retries the WHOLE body instead of adopting the winner's row, because that is what upsert means:
+ * the caller's content is meant to land. On the second pass the row exists, so lookup-then-create
+ * takes its update branch and delete-then-create replaces it. (Redaction resolves the same race the
+ * opposite way — it ADOPTS, because there a placeholder already handed to a model is authoritative and
+ * ours is the one to discard. Same detection, different resolution; which is why there is no shared
+ * helper spanning both.)
+ *
+ * Every append to the authz change log happens after its write succeeds, so a retried body appends
+ * exactly once — the router's version never bumps for an attempt that lost.
+ *
+ * Bounded, and the bound earns its keep on the overlay: two writers trading delete-then-create could
+ * otherwise hand the race back and forth indefinitely. Exhausting it rethrows, because a caller whose
+ * write never landed has to hear about it.
+ */
+async function upsertWithRetry<T>(
+	what: string,
+	run: () => Promise<T>,
+): Promise<T> {
+	for (let attempt = 1; attempt <= UPSERT_ATTEMPTS; attempt++) {
+		try {
+			return await run();
+		} catch (error) {
+			// Anything that is not the database saying "that row already exists" keeps its identity.
+			if (!isConflict(error) || attempt === UPSERT_ATTEMPTS) throw error;
+		}
+	}
+	// Unreachable: the final attempt either returns or rethrows above.
+	throw stateError(`${what} exhausted its upsert attempts`);
+}
 
 /** Back the three registry ports with a storage Adapter. */
 export function createRegistryStores(
@@ -148,33 +191,38 @@ export function createRegistryStores(
 	const specRegistrations: SpecRegistrationStore = {
 		async upsert(input) {
 			const valid = validateSpecInput(input);
-			const existing = await db.findOne({
-				model: SPEC_MODEL,
-				where: [...inScope(valid), andEq("source", valid.source)],
-			});
-			const stamp = now();
-			if (existing) {
-				const updated = await db.update({
+			return upsertWithRetry("spec registration", async () => {
+				const existing = await db.findOne({
 					model: SPEC_MODEL,
-					where: [whereEq("id", existing.id)],
-					update: {
-						specBlob: valid.specBlob,
-						contentVersion: valid.contentVersion,
-						report: valid.report,
-						registeredBy: valid.registeredBy,
-						updatedAt: stamp,
-					},
+					where: [...inScope(valid), andEq("source", valid.source)],
 				});
-				if (!updated) {
-					throw stateError("spec registration vanished mid-upsert", {
-						id: existing.id,
+				const stamp = now();
+				if (existing) {
+					const updated = await db.update({
+						model: SPEC_MODEL,
+						where: [whereEq("id", existing.id)],
+						update: {
+							specBlob: valid.specBlob,
+							contentVersion: valid.contentVersion,
+							report: valid.report,
+							registeredBy: valid.registeredBy,
+							updatedAt: stamp,
+						},
 					});
+					if (!updated) {
+						// Genuinely gone now: a concurrent delete between the read and the update. Before
+						// the unique constraint, duplicate rows were another way to land here, which made
+						// this message misreport its own cause.
+						throw stateError("spec registration vanished mid-upsert", {
+							id: existing.id,
+						});
+					}
+					return updated;
 				}
-				return updated;
-			}
-			return db.create({
-				model: SPEC_MODEL,
-				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
+				return db.create({
+					model: SPEC_MODEL,
+					data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
+				});
 			});
 		},
 
@@ -245,14 +293,18 @@ export function createRegistryStores(
 		async upsert(input) {
 			const valid = validateOverlayInput(input);
 			// Replace: drop any prior override for this (org, actionId), then write the new one whole.
-			await db.delete({
-				model: OVERLAY_MODEL,
-				where: [...inScope(valid), andEq("actionId", valid.actionId)],
-			});
-			const stamp = now();
-			const record = await db.create({
-				model: OVERLAY_MODEL,
-				data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
+			// The retry is what makes the gap between the delete and the create survivable — another
+			// writer can create in it, and then OUR create is the one the unique rejects.
+			const record = await upsertWithRetry("facts overlay", async () => {
+				await db.delete({
+					model: OVERLAY_MODEL,
+					where: [...inScope(valid), andEq("actionId", valid.actionId)],
+				});
+				const stamp = now();
+				return db.create({
+					model: OVERLAY_MODEL,
+					data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
+				});
 			});
 			await authzChanges.append({
 				scope: valid.scope,
@@ -331,36 +383,38 @@ export function createRegistryStores(
 
 		async upsert(input) {
 			const valid = validatePolicyInput(input);
-			const existing = await db.findOne({
-				model: POLICY_MODEL,
-				where: [...inScope(valid), andEq("name", valid.name)],
-			});
-			const stamp = now();
-			let record: Awaited<ReturnType<PolicySliceStore["upsert"]>>;
-			if (existing) {
-				const updated = await db.update({
+			const record = await upsertWithRetry("policy slice", async () => {
+				const existing = await db.findOne({
 					model: POLICY_MODEL,
-					where: [whereEq("id", existing.id)],
-					// The store owns updatedAt — spread first so a caller-supplied one is overridden.
-					update: {
-						cedar: valid.cedar,
-						mode: valid.mode,
-						updatedBy: valid.updatedBy,
-						updatedAt: stamp,
-					},
+					where: [...inScope(valid), andEq("name", valid.name)],
 				});
-				if (!updated) {
-					throw stateError("policy slice vanished mid-upsert", {
-						id: existing.id,
+				const stamp = now();
+				if (existing) {
+					const updated = await db.update({
+						model: POLICY_MODEL,
+						where: [whereEq("id", existing.id)],
+						// The store owns updatedAt — spread first so a caller-supplied one is overridden.
+						update: {
+							cedar: valid.cedar,
+							mode: valid.mode,
+							updatedBy: valid.updatedBy,
+							updatedAt: stamp,
+						},
 					});
+					if (!updated) {
+						// A concurrent delete between the read and the update. Duplicate rows used to be
+						// another route here, which made this message misreport its cause.
+						throw stateError("policy slice vanished mid-upsert", {
+							id: existing.id,
+						});
+					}
+					return updated;
 				}
-				record = updated;
-			} else {
-				record = await db.create({
+				return db.create({
 					model: POLICY_MODEL,
 					data: { ...valid, id: newId(), createdAt: stamp, updatedAt: stamp },
 				});
-			}
+			});
 			// Append after the write succeeds — a failed write must never bump the router's version.
 			await authzChanges.append({
 				scope: valid.scope,

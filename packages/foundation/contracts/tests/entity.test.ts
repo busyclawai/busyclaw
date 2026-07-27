@@ -6,9 +6,12 @@ import {
 	effectRecord,
 	effectSchema,
 	entity,
+	factsOverlaySchema,
 	field,
 	type JsonObject,
 	piiMappingSchema,
+	policySliceSchema,
+	specRegistrationSchema,
 	uniqueConstraints,
 } from "../src/index";
 
@@ -33,6 +36,22 @@ describe("euroclaw core — entity-derived schemas", () => {
 			required: true,
 			pii: "contains",
 		});
+	});
+
+	it("every replace-by-tuple config table enforces that tuple", () => {
+		// Each of these already SAID it — in a section header or an upsert docstring — while the
+		// database agreed to none of it. Their ids are generated, so two concurrent writers collide on
+		// nothing and leave two rows for one logical registration: later reads pick an arbitrary one,
+		// and an update lands on only one. For policy_slice that is an authz fact.
+		expect(specRegistrationSchema.spec_registration.uniques).toEqual([
+			["scope", "scopeId", "source"],
+		]);
+		expect(factsOverlaySchema.facts_overlay.uniques).toEqual([
+			["scope", "scopeId", "actionId"],
+		]);
+		expect(policySliceSchema.policy_slice.uniques).toEqual([
+			["scope", "scopeId", "name"],
+		]);
 	});
 
 	it("pii_mapping is unique on the VALUE per container, not on the placeholder", () => {

@@ -39,7 +39,17 @@ export const policySliceFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
-export const policySliceEntity = entity("policy_slice", policySliceFields);
+/**
+ * One slice per (scope, scopeId, name) — enforced, matching what the upsert already reads by.
+ *
+ * Same shape as its siblings: `id` is GENERATED, so two concurrent writers collide on nothing and
+ * leave two rows for one named slice. Here that is an AUTHZ fact — reads would pick an arbitrary one
+ * of two policies, and a mode change to `enforce` could land on the copy nobody reads.
+ * `createRegistryStores` retries its upsert body, so the loser updates the winner's row instead.
+ */
+export const policySliceEntity = entity("policy_slice", policySliceFields, {
+	uniques: [["scope", "scopeId", "name"]],
+});
 export const policySliceRecord = policySliceEntity.record;
 export type PolicySliceRecord = EntityRecord<typeof policySliceFields>;
 
