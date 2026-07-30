@@ -149,6 +149,7 @@ const slice = (scopeId: string, name: string) => ({
 	name,
 	cedar: `forbid(principal, action == Action::"x", resource);`,
 	mode: "enforce" as const,
+	plane: "tool" as const,
 	updatedBy: "user:admin",
 });
 

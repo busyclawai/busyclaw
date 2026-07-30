@@ -34,6 +34,13 @@ export const policySliceFields = {
 	cedar: field.string({ required: true }),
 	// enforce = in the live set; shadow = a real second evaluation (diffed, never applied); off = dropped.
 	mode: field.enum(["enforce", "shadow", "off"], { required: true }),
+	// WHICH policy plane this slice governs — the same rule a plugin-contributed slice follows (see
+	// PolicySourceSlice.plane, R-H04). A slice naming no resource type matches everything in whichever
+	// engine it is compiled into, so "which engine" cannot be left to whatever the caller had in mind.
+	// Stored slices are written by ADMINS at runtime rather than by plugin authors at build time,
+	// which makes stating it more important here, not less: nothing about a row records what the
+	// person writing it was looking at.
+	plane: field.enum(["tool", "api", "both"], { required: true }),
 	updatedBy: field.principal({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),

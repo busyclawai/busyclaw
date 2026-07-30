@@ -359,6 +359,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		name: string;
 		cedar: string;
 		mode: "enforce" | "shadow" | "off";
+		plane: "tool" | "api" | "both";
 	}) => Promise<PolicySliceRecord>;
 	listPolicySlices: (input: {
 		scope: string;
@@ -716,6 +717,11 @@ const putPolicySliceInput = ark({
 	mode: ark("'enforce' | 'shadow' | 'off'").configure({
 		busyclaw: {
 			doc: "`enforce` blocks, `shadow` evaluates without blocking, `off` disables — the slice's effect over the code-owned system posture.",
+		},
+	}),
+	plane: ark("'tool' | 'api' | 'both'").configure({
+		busyclaw: {
+			doc: "Which policy plane this slice governs: `tool` the agent's tool floor, `api` the product api, `both` written out deliberately. A slice naming no resource type matches everything in whichever engine it is compiled into, so the plane is stated rather than inferred.",
 		},
 	}),
 	name: ark("string").configure({

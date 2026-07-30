@@ -164,6 +164,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "no-reads",
 			cedar: FORBID_READ,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-y", "readDoc")).status).toBe("denied");
@@ -177,6 +178,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "watch",
 			cedar: FORBID_READ,
 			mode: "shadow",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		const result = await call("org-s", "readDoc");
@@ -193,6 +195,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "disabled",
 			cedar: FORBID_READ,
 			mode: "off",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-o", "readDoc")).status).toBe("ok");
@@ -207,6 +210,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "guard",
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-e", "readDoc")).status).toBe("ok"); // guard doesn't touch reads
@@ -217,6 +221,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "guard",
 			cedar: FORBID_READ,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-e", "readDoc")).status).toBe("denied");
@@ -233,6 +238,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "a-forbid",
 			cedar: FORBID_READ,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		await stores.policySlices.upsert({
@@ -241,6 +247,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "b-permit",
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-d", "readDoc")).status).toBe("denied");
@@ -275,6 +282,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "broken",
 			cedar: "this is not valid cedar @@@",
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		await expect(
@@ -295,6 +303,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "escalate",
 			cedar: `permit(principal, action == Action::"writeDoc", resource);`,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		// interactive: a human is present → the customer permit relaxes the floor → the write runs.
@@ -322,6 +331,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "typo",
 			cedar: `this is not valid cedar`,
 			mode: "shadow",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		const before = ran.length;
@@ -342,6 +352,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			name: "typo-forbid",
 			cedar: `forbid(principal, action == Action::"reedDoc", resource);`, // typo: reedDoc != readDoc
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect((await call("org-typo", "readDoc")).status).toBe("ok"); // the typo'd forbid never fires
@@ -361,6 +372,7 @@ describe("policy-slice api surface", () => {
 			name: "s1",
 			cedar: `permit(principal, action, resource);`,
 			mode: "enforce",
+			plane: "tool",
 			updatedBy: "user:admin",
 		});
 		expect(created.id).toBeTruthy();

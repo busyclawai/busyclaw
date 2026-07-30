@@ -12,6 +12,9 @@ const sliceInput = (
 	name,
 	cedar: `forbid(principal, action == Action::"petstore.removePet", resource);`,
 	mode,
+	// A stored slice states its plane like a plugin-contributed one does (R-H04). These fixtures are
+	// agent-surface policy.
+	plane: "tool" as const,
 	updatedBy: "user:admin",
 });
 
@@ -33,6 +36,7 @@ describe("createRegistryStores — policy_slice", () => {
 		expect(listed[0]).toMatchObject({
 			name: "reads-only",
 			mode: "enforce",
+			plane: "tool",
 			cedar: sliceInput("org-a").cedar,
 			updatedBy: "user:admin",
 		});
@@ -47,6 +51,7 @@ describe("createRegistryStores — policy_slice", () => {
 			...sliceInput("org-a", "guard"),
 			cedar: `permit(principal, action, resource);`,
 			mode: "shadow",
+			plane: "tool",
 			updatedBy: "user:bob",
 		});
 		expect(second.id).toBe(first.id); // replace-in-place, not a new row
@@ -126,6 +131,7 @@ describe("createRegistryStores — policy_slice", () => {
 				scopeId: "org-bad",
 				name: "x",
 				mode: "enforce",
+				plane: "tool",
 				updatedBy: "user:a",
 				createdAt: "t",
 				updatedAt: "t",
