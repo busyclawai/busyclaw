@@ -622,3 +622,36 @@ describe("@busyclaw/sandboxes — a tool result crosses as DATA (R-H13)", () => 
 		expect(called).toBe(0);
 	}, 30000);
 });
+
+describe("@busyclaw/sandboxes — the execution's lifetime reaches its tools (R-H13)", () => {
+	it("R21: a nested tool call receives the execution signal and sees it abort", async () => {
+		// The guest's promise already rejected on the deadline, but the host work it was waiting on
+		// ran to completion — the guest saw a timeout, the tool did not. A run killed at five
+		// milliseconds still owed a hundred milliseconds of somebody else's API.
+		//
+		// Cooperative, like every abort in Node: this hands the signal to whoever can act on it
+		// rather than pretending the engine can stop work it does not own.
+		let received: AbortSignal | undefined;
+		let finishedAnyway = false;
+
+		await executeInSandbox({
+			sandbox: quickjs({ timeoutMs: 50 }),
+			code: "await tools.slow({}); return 1;",
+			invoker: {
+				invoke: async (_input, options) => {
+					received = options?.signal;
+					await new Promise((resolve) => setTimeout(resolve, 300));
+					finishedAnyway = true;
+					return { status: "ok", output: 1 };
+				},
+			},
+			context: {},
+		});
+
+		expect(received).toBeDefined();
+		// The execution is over, so its signal is down — a tool that watches it can stop.
+		expect(received?.aborted).toBe(true);
+		// And this one did not watch, which is exactly why the signal is offered rather than assumed.
+		expect(finishedAnyway).toBe(false);
+	}, 30000);
+});

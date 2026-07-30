@@ -121,6 +121,7 @@ export function normalizeCode(code: string): string {
 function wrapInvoker(
 	invoker: SandboxToolInvoker,
 	budget: { enter: () => Promise<() => void> },
+	signal: AbortSignal,
 ): SandboxToolInvoker {
 	return {
 		invoke: async (input) => {
@@ -145,7 +146,7 @@ function wrapInvoker(
 				};
 			}
 			try {
-				const outcome = await invoker.invoke(valid);
+				const outcome = await invoker.invoke(valid, { signal });
 				const safe = jsonSafe(outcome);
 				if (!safe.ok) {
 					return {
@@ -196,7 +197,7 @@ export async function executeInSandbox(input: {
 	const { network, budget: limits } = input.context;
 	const outstanding = new AbortController();
 	const budget = createExecutionBudget(limits);
-	const invoker = wrapInvoker(input.invoker, budget);
+	const invoker = wrapInvoker(input.invoker, budget, outstanding.signal);
 
 	// The SAME budget on the fetch door. Two counters would let a guest spend the whole host by
 	// alternating between them, and the host does not care which door the work arrived through. A

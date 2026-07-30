@@ -189,5 +189,21 @@ export type ExecutionContext = {
 };
 
 export interface SandboxToolInvoker {
-	invoke: (input: SandboxInvokeInput) => Promise<unknown>;
+	/**
+	 * `signal` is the EXECUTION's lifetime, aborted the moment the sandbox finishes for any reason —
+	 * timeout, error, or a clean return.
+	 *
+	 * The guest's promise already rejects on a deadline, but the host work it was waiting on carried
+	 * on to completion: the guest saw a timeout, the tool did not. A guest could abandon calls faster
+	 * than the host retired them, and a run killed at five milliseconds still owed a hundred
+	 * milliseconds of somebody else's API.
+	 *
+	 * Cooperative, like every abort in Node — an invoker that ignores it still runs to completion, so
+	 * this hands the signal to whoever can act on it rather than pretending the engine can stop work
+	 * it does not own. The runtime's own tool loop already threads `abortSignal` this way.
+	 */
+	invoke: (
+		input: SandboxInvokeInput,
+		options?: { signal: AbortSignal },
+	) => Promise<unknown>;
 }
