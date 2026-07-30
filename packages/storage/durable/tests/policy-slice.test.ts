@@ -66,6 +66,26 @@ describe("createRegistryStores — policy_slice", () => {
 		expect(listed[0]?.updatedBy).toBe("user:bob");
 	});
 
+	// An upsert used to write a hand-picked few columns, so `plane` was accepted by the input schema
+	// and silently discarded: a caller moving a slice to the api plane got a success and a read-back
+	// still saying "tool", which was honest about a write that never happened. A field the schema
+	// takes and the update drops is worse than one it rejects.
+	it("upsert REPLACES every column it accepted, not a hand-picked few", async () => {
+		const { policySlices } = createRegistryStores(memoryAdapter());
+		await policySlices.upsert({ ...sliceInput("org-a", "guard"), plane: "tool" });
+		await policySlices.upsert({
+			...sliceInput("org-a", "guard"),
+			plane: "api",
+			managedBy: "operator",
+		});
+		const [row] = await policySlices.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		expect(row?.plane).toBe("api");
+		expect(row?.managedBy).toBe("operator");
+	});
+
 	it("distinct names in one scope coexist", async () => {
 		const { policySlices } = createRegistryStores(memoryAdapter());
 		await policySlices.upsert(sliceInput("org-a", "a", "enforce"));

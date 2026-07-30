@@ -407,9 +407,17 @@ export function createRegistryStores(
 						model: POLICY_MODEL,
 						where: [whereEq("id", existing.id)],
 						// The store owns updatedAt — spread first so a caller-supplied one is overridden.
+						//
+						// EVERY caller-settable column, not a hand-picked few. `plane` was missing, so an
+						// upsert that moved a slice from the tool plane to the api plane was accepted and
+						// silently did nothing — the caller's read-back said `tool` and it was telling the
+						// truth about a write that never happened. A field the input schema accepts and
+						// the update ignores is worse than one it rejects.
 						update: {
 							cedar: valid.cedar,
 							mode: valid.mode,
+							plane: valid.plane,
+							managedBy: valid.managedBy,
 							updatedBy: valid.updatedBy,
 							updatedAt: stamp,
 						},

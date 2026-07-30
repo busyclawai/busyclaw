@@ -17,6 +17,7 @@ import {
 	configurationError,
 	type JsonObject,
 	jsonObject,
+	type PolicySliceStore,
 	type RegisteredToolStore,
 	type SourceDiagnostic,
 	type SpecRegistrationStore,
@@ -32,10 +33,36 @@ import {
 	credentialBindingOf,
 } from "./credential-binding";
 import { toolsFromOpenApi } from "./sources/openapi";
+import {
+	egressPolicySliceName,
+	generateEgressPolicy,
+} from "./spec-egress-policy";
 
 /** The slug is the address prefix; dots are reserved as the `<source>.<tool>` separator. */
 const SOURCE_SLUG = /^[a-z][a-z0-9-]{0,63}$/;
 const DEFAULT_MAX_DOCUMENT_BYTES = 5_000_000;
+
+/**
+ * The action GROUP every operation from one registration belongs to — how a policy names "everything
+ * this spec brought in" without enumerating it.
+ *
+ * Namespaced under `source:` for the reason the extractor already namespaces tags under `tag:`: a
+ * document's own vocabulary must not be able to claim a meaning the system assigns. `tag:` stops an
+ * uploaded spec claiming `writes`; `source:` stops it claiming membership of a source it was not
+ * registered as. The two prefixes cannot collide with each other or with a semantic group.
+ *
+ * Stamped at REGISTRATION rather than extraction, because the source is not a property of the
+ * document. The same file registered twice under two names is two sources, and an extractor that
+ * knew the name would be reading a fact it was never given. `SOURCE_SLUG` keeps the result
+ * Cedar-safe with no sanitizing.
+ *
+ * ONE function because the group name has two readers that must agree: the row's governance (here)
+ * and the generated egress ceiling that names the group in policy text. A drift between them is a
+ * policy that silently matches nothing.
+ */
+export function sourceActionGroup(source: string): string {
+	return `source:${source}`;
+}
 
 export type SpecRegistrationInput = {
 	scope: string;
@@ -142,6 +169,9 @@ export type SpecRegistryStores = {
 	specRegistrations: SpecRegistrationStore;
 	registeredTools: RegisteredToolStore;
 	authzChanges?: AuthzChangeStore;
+	/** Where the generated egress CEILING is written. Optional like `authzChanges`: a caller with only
+	 *  the two tool stores registers exactly as it did before, and gets no ceiling. */
+	policySlices?: PolicySliceStore;
 	/** Rebinds these stores to a transaction. Absent ⇒ the adapter has none, and the work runs
 	 *  unwrapped exactly as it did before. */
 	transaction?: <R>(
@@ -293,11 +323,25 @@ export function createSpecRegistry(
 
 				for (const tool of extraction.tools) {
 					const address = `${input.source}.${tool.name}`;
+					// The source group joins the extractor's own groups here, BEFORE the content version
+					// is taken. Stamping it after would leave the version blind to it: rows registered
+					// before this existed would hash identically, the update branch would skip them, and
+					// they would sit ungrouped until something unrelated changed the operation. A
+					// governance fact the version cannot see is one a re-registration cannot repair.
+					const governance = {
+						...tool.governance,
+						groups: [
+							...new Set([
+								...(tool.governance.groups ?? []),
+								sourceActionGroup(input.source),
+							]),
+						].sort(),
+					};
 					const version = toolContentVersion({
 						name: tool.name,
 						description: tool.description,
 						inputSchema: tool.inputSchema,
-						governance: tool.governance,
+						governance,
 						binding: tool.binding,
 					});
 					perRowVersions.push(version);
@@ -318,7 +362,7 @@ export function createSpecRegistry(
 							address,
 							description: tool.description,
 							inputSchema: tool.inputSchema,
-							governance: tool.governance,
+							governance: governance,
 							binding,
 							...credentialBinding,
 							contentVersion: version,
@@ -330,7 +374,7 @@ export function createSpecRegistry(
 							address,
 							description: tool.description,
 							inputSchema: tool.inputSchema,
-							governance: tool.governance,
+							governance: governance,
 							binding,
 							...credentialBinding,
 							contentVersion: version,
@@ -351,12 +395,75 @@ export function createSpecRegistry(
 				const contentVersion = hashHex(
 					stableStringify([...perRowVersions].sort()),
 				);
+
+				// The generated egress CEILING, written inside the same unit as the rows it describes.
+				// Outside it, a crash between the two leaves rows governed by a ceiling for a spec that
+				// no longer exists — the fail-closed delete above stops being fail-closed.
+				//
+				// Origins come from the credential bindings computed in the pre-pass, which is the SAME
+				// `normalizeOrigin(binding.server)` the floor stamps `context.server` from. The ceiling
+				// and the fact it tests cannot disagree about where an operation reaches.
+				const ceilingWarnings: SourceDiagnostic[] = [];
+				if (txStores.policySlices) {
+					const sliceName = egressPolicySliceName(input.source);
+					const cedar = generateEgressPolicy({
+						source: input.source,
+						operations: [...credentialBindings].map(([address, binding]) => ({
+							address,
+							origin: binding.credentialOrigin,
+						})),
+					});
+					const managedBy = `spec:${input.source}`;
+					const priorSlice = (
+						await txStores.policySlices.listForScope({
+							scope: input.scope,
+							scopeId: input.scopeId,
+						})
+					).find((slice) => slice.name === sliceName);
+
+					if (priorSlice && priorSlice.managedBy !== managedBy) {
+						// DETACHED (or a name a person claimed first). The row is theirs now, so the
+						// generator does not touch it — but silence here would be the same overwrite with
+						// extra steps: what the operator needs to know is that the ceiling they own no
+						// longer follows the spec it was generated from. Say it where they are standing,
+						// in the report of the registration that caused the divergence.
+						ceilingWarnings.push({
+							subject: sliceName,
+							reason:
+								`the egress ceiling "${sliceName}" is detached (managedBy ${priorSlice.managedBy ?? "unset"}), so this registration did not regenerate it — ` +
+								"it may now permit or refuse origins this spec no longer declares",
+						});
+					} else if (cedar !== undefined) {
+						await txStores.policySlices.upsert({
+							scope: input.scope,
+							scopeId: input.scopeId,
+							name: sliceName,
+							cedar,
+							// `enforce`, not `shadow`: the ceiling restates the origin invariant this very
+							// flow already enforces on the rows, so it cannot refuse a call the invoker
+							// would have allowed. Shadow-first is for generated PERMITS, and there are none.
+							mode: "enforce",
+							plane: "tool",
+							managedBy,
+							updatedBy: asPrincipal(input.registeredBy),
+						});
+					} else if (priorSlice) {
+						// The spec extracted nothing this time. Its ceiling described operations that are
+						// gone, so it goes with them — a ceiling outliving the thing it bounded is a rule
+						// nobody can trace back to a source.
+						await txStores.policySlices.delete(
+							{ scope: input.scope, scopeId: input.scopeId },
+							priorSlice.id,
+						);
+					}
+				}
+
 				const report = {
 					added,
 					updated,
 					removed,
 					skipped: extraction.skipped,
-					warnings: extraction.warnings,
+					warnings: [...extraction.warnings, ...ceilingWarnings],
 				};
 				await txStores.specRegistrations.upsert({
 					scope: input.scope,

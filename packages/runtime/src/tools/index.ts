@@ -39,6 +39,19 @@ export {
 	normalizeOrigin,
 } from "./invoke/request-plan";
 export type { SpecRegistrationReport, SpecRegistry } from "./registry";
-export { createSpecRegistry, REGISTER_OPENAPI_SPEC_ACTION } from "./registry";
+export {
+	createSpecRegistry,
+	REGISTER_OPENAPI_SPEC_ACTION,
+	sourceActionGroup,
+} from "./registry";
 export type { OpenApiExtraction, OpenApiTool } from "./sources/openapi";
 export { toolsFromOpenApi } from "./sources/openapi";
+export type {
+	EgressPolicyOperation,
+	GenerateEgressPolicyInput,
+} from "./spec-egress-policy";
+export {
+	egressOperationsOf,
+	egressPolicySliceName,
+	generateEgressPolicy,
+} from "./spec-egress-policy";

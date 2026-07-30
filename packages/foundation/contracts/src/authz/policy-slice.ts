@@ -41,6 +41,25 @@ export const policySliceFields = {
 	// which makes stating it more important here, not less: nothing about a row records what the
 	// person writing it was looking at.
 	plane: field.enum(["tool", "api", "both"], { required: true }),
+	// WHO owns this row's content — `operator` for a slice a person wrote, `spec:<source>` for one a
+	// spec registration GENERATED. Upsert replaces by name, so without this a regeneration and a human
+	// edit are the same write and the store cannot tell them apart: re-registering a spec would
+	// silently overwrite whatever an admin had put under the generated name, with no signal anywhere
+	// that it happened. The generator rewrites only rows carrying its own tag; a row tagged `operator`
+	// is DETACHED and left alone, and the registration that would have regenerated it reports the
+	// divergence instead. A generated artifact you cannot take ownership of is one people work around;
+	// one that silently eats edits is worse.
+	//
+	// An explicit value each way, never "absent means human". Optional columns drop undefined on
+	// update, so absence is not writable — an edit meaning to hand the row back would silently leave
+	// the generator's tag in place and the next registration would eat it, which is precisely the bug
+	// this field exists to prevent. Absence therefore means only "written before this field existed".
+	//
+	// STAMPED BY THE DOOR, never caller input: `putPolicySlice` writes `operator` because a person
+	// came through it, and the generator writes its own tag. A caller that could set this could
+	// declare its hand-written slice generator-owned and have the next registration silently replace
+	// it — or claim a source's tag and never be regenerated again.
+	managedBy: field.string(),
 	updatedBy: field.principal({ required: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),

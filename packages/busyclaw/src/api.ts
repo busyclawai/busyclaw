@@ -1702,6 +1702,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		putPolicySlice: (args, caller?: ClawApiCaller) =>
 			registry().policySlices.upsert({
 				...args,
+				// A person came through this door, so the row is theirs — stamped here, exactly like
+				// `updatedBy`, and for the same reason: a caller that could set it could tag its own
+				// slice `spec:<source>` and have the next registration of that spec silently replace it,
+				// or claim a source's tag and never be regenerated again. Writing to a name a generator
+				// owns is what DETACHES it: the edit takes, and the registration that would have
+				// overwritten it reports the divergence instead of eating it.
+				managedBy: "operator",
 				updatedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
 		listPolicySlices: ({ scope, scopeId }) =>

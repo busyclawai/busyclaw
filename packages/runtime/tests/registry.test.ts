@@ -565,13 +565,28 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				"petstore",
 			),
 		).toHaveLength(4);
-		// …including the append that bumps the bundle version, inside the same unit.
+		// …including the appends that bump the bundle version, inside the same unit. TWO, because a
+		// registration now changes two things: the tool surface (`spec_registered`) and the generated
+		// egress ceiling (`policy_changed`, appended by the slice store). The count only has to be
+		// monotonic for the router to key on it, and recording both is the honest log of what happened.
 		expect(
 			await real.authzChanges.count({
 				scope: "organization",
 				scopeId: "org-a",
 			}),
-		).toBe(1);
+		).toBe(2);
+		// The ceiling landed, in the same unit, under the reserved name and owned by the generator.
+		const slices = await real.policySlices.listForScope({
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		expect(slices).toHaveLength(1);
+		expect(slices[0]).toMatchObject({
+			name: "petstore.egress",
+			managedBy: "spec:petstore",
+			mode: "enforce",
+			plane: "tool",
+		});
 	});
 });
 
@@ -649,5 +664,93 @@ describe("registerOpenApiSpec — a source's origins cannot be extended", () => 
 				document: withExtraOperation("https://cdn.petstore.example"),
 			}),
 		).resolves.toBeDefined();
+	});
+});
+
+// The generated egress ceiling, and the one thing that makes it survivable: a person can take it
+// over. Upsert replaces by (scope, scopeId, name), so without an ownership marker a regeneration and
+// a hand edit are the same write — re-registering a spec would eat the edit with nothing to show for
+// it. `managedBy` is what tells them apart, and the divergence warning is what stops the alternative
+// (leave it alone, say nothing) from being the same silence in the other direction.
+describe("registerOpenApiSpec — the generated egress ceiling", () => {
+	const scope = { scope: "organization", scopeId: "org-a" };
+	const register = (stores: RegistryStores) =>
+		createSpecRegistry(stores).registerOpenApiSpec({
+			...scope,
+			source: "petstore",
+			document: petstore(),
+			registeredBy: "user:alice",
+		});
+
+	it("bounds the source to the origin its operations declare, and forbids only", async () => {
+		const stores = createRegistryStores(memoryAdapter());
+		await register(stores);
+		const [slice] = await stores.policySlices.listForScope(scope);
+		expect(slice?.cedar).toContain('action in Action::"source:petstore"');
+		expect(slice?.cedar).toContain("context has server");
+		// Import grants nothing — the whole reason generation can run unattended.
+		expect(slice?.cedar).not.toContain("permit");
+	});
+
+	it("regenerating replaces the slice it owns", async () => {
+		const stores = createRegistryStores(memoryAdapter());
+		await register(stores);
+		const [first] = await stores.policySlices.listForScope(scope);
+		await stores.policySlices.upsert({
+			...scope,
+			name: "petstore.egress",
+			cedar: "forbid(principal, action, resource);",
+			mode: "enforce",
+			plane: "tool",
+			managedBy: "spec:petstore",
+			updatedBy: "user:bob",
+		});
+		const report = await register(stores);
+		const [after] = await stores.policySlices.listForScope(scope);
+		expect(after?.id).toBe(first?.id); // replaced in place, not duplicated
+		expect(after?.cedar).toBe(first?.cedar); // back to the generated text
+		expect(report.warnings).toHaveLength(0);
+	});
+
+	it("a DETACHED slice is left alone, and the registration says the source diverged", async () => {
+		const stores = createRegistryStores(memoryAdapter());
+		await register(stores);
+		// Detach: the same row, no longer claimed by the generator. This is the operator taking it.
+		const mine = "forbid(principal, action, resource) unless { 1 == 1 };";
+		await stores.policySlices.upsert({
+			...scope,
+			name: "petstore.egress",
+			cedar: mine,
+			mode: "enforce",
+			plane: "tool",
+			// What the human door stamps. Writing to a generated name is what detaches it.
+			managedBy: "operator",
+			updatedBy: "user:bob",
+		});
+
+		const report = await register(stores);
+		const [after] = await stores.policySlices.listForScope(scope);
+		expect(after?.cedar).toBe(mine); // untouched — theirs now
+		expect(report.warnings.map((w) => w.subject)).toContain("petstore.egress");
+		expect(report.warnings[0]?.reason).toContain("detached");
+	});
+
+	it("a source that extracts nothing loses its ceiling with its rows", async () => {
+		const stores = createRegistryStores(memoryAdapter());
+		await register(stores);
+		expect(await stores.policySlices.listForScope(scope)).toHaveLength(1);
+		await createSpecRegistry(stores).registerOpenApiSpec({
+			...scope,
+			source: "petstore",
+			document: {
+				openapi: "3.1.0",
+				info: { title: "petstore", version: "1.0.0" },
+				servers: [{ url: "https://api.petstore.example/v1" }],
+				paths: {},
+			},
+			registeredBy: "user:alice",
+		});
+		// A ceiling outliving the operations it bounded is a rule nobody can trace to a source.
+		expect(await stores.policySlices.listForScope(scope)).toEqual([]);
 	});
 });
