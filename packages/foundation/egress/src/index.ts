@@ -258,3 +258,12 @@ function embeddedIPv4(
 	const g7 = groups[7] ?? 0;
 	return [(g6 >> 8) & 0xff, g6 & 0xff, (g7 >> 8) & 0xff, g7 & 0xff];
 }
+
+// Credential PLACEMENT — shared by the OpenAPI invoker (which reads it from a spec's securityScheme)
+// and the governed fetch tool (which reads it from a destination binding). Two ways to decide, one
+// way to perform; see credential-placement.ts.
+export type {
+	CredentialPlacement,
+	CredentialTarget,
+} from "./credential-placement";
+export { managedHeader, placeCredential } from "./credential-placement";

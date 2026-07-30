@@ -17,6 +17,7 @@ import type {
 	Secrets,
 } from "@busyclaw/contracts";
 import { asPrincipal, configurationError } from "@busyclaw/contracts";
+import { type CredentialPlacement, placeCredential } from "@busyclaw/egress";
 import type {
 	OpenApiAuthScheme,
 	OpenApiBinding,
@@ -119,57 +120,21 @@ function applyScheme(
 	def: OpenApiAuthScheme,
 	material: SecretMaterial,
 ): void {
+	// The spec dialect decides WHICH placement; the shared primitive performs it. Doing the placement
+	// here as well would be a second implementation of "where a bearer token goes", and the fetch
+	// tool would be the one that drifted — silently, because a credential in the wrong header and no
+	// credential at all both come back as a 401.
+	placeCredential(plan, placementOf(def), material, `scheme "${scheme}"`);
+}
+
+/** An OpenAPI security scheme, as a placement. oauth2/openIdConnect place a bearer token — the
+ *  material arrives from a token-minting resolver like any other. */
+function placementOf(def: OpenApiAuthScheme): CredentialPlacement {
 	if (def.type === "apiKey") {
-		const value = tokenValue(scheme, def.type, material);
-		if (def.in === "header") {
-			plan.headers[def.name] = value;
-		} else {
-			appendQueryParam(plan, def.name, value);
-		}
-		return;
+		return def.in === "header"
+			? { kind: "header", name: def.name }
+			: { kind: "query", name: def.name };
 	}
-	if (def.type === "http" && def.scheme === "basic") {
-		if (material.kind !== "basic") {
-			throw configurationError(
-				`scheme "${scheme}" is http/basic but the resolver returned ${material.kind} material`,
-				{ scheme },
-			);
-		}
-		plan.headers.authorization = `Basic ${base64Utf8(`${material.username}:${material.password}`)}`;
-		return;
-	}
-	// http/bearer and oauth2/openIdConnect all place a bearer token.
-	plan.headers.authorization = `Bearer ${tokenValue(scheme, def.type, material)}`;
-}
-
-function tokenValue(
-	scheme: string,
-	type: string,
-	material: SecretMaterial,
-): string {
-	if (material.kind !== "token") {
-		throw configurationError(
-			`scheme "${scheme}" (${type}) needs token material but the resolver returned ${material.kind}`,
-			{ scheme },
-		);
-	}
-	return material.value;
-}
-
-function appendQueryParam(
-	plan: HttpRequestPlan,
-	name: string,
-	value: string,
-): void {
-	const separator = plan.url.includes("?") ? "&" : "?";
-	plan.url = `${plan.url}${separator}${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
-}
-
-/** Base64 of a UTF-8 string using web-standard primitives (busyclaw packages avoid node `Buffer`
- *  types): TextEncoder → bytes → btoa. Correct for non-ASCII basic-auth credentials. */
-function base64Utf8(text: string): string {
-	const bytes = new TextEncoder().encode(text);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary);
+	if (def.type === "http" && def.scheme === "basic") return { kind: "basic" };
+	return { kind: "bearer" };
 }

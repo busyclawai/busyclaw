@@ -13,14 +13,57 @@
 // the model may fetch. Permitting one and refusing the other would be a distinction policy cannot
 // actually hold, and the floor denies both by default until something permits them.
 
-import { govern, type ToolDefinition } from "@busyclaw/contracts";
+import { govern, type Secrets, type ToolDefinition } from "@busyclaw/contracts";
 import { jsonSchema } from "ai";
+import {
+	type CredentialPlacement,
+	managedHeader,
+	placeCredential,
+} from "./credential-placement";
 import { type GovernedFetchOptions, governedFetch } from "./governed-fetch";
-import { FETCH_TOOL_PATH } from "./index";
+import { FETCH_TOOL_PATH, originOf } from "./index";
+
+/**
+ * A destination → credential routing row: WHERE it applies, WHICH secret, and HOW it is placed.
+ *
+ * The match key is the destination ORIGIN, not an integration slug, because this tool sees a URL
+ * rather than a named operation. Exact origins only, matching `allow` — a pattern spanning a
+ * multi-tenant host family reads as one destination and is many, and injecting a credential hands
+ * the secret to whatever answers.
+ */
+export type EgressCredentialBinding = {
+	/** The origin this credential is for — `https://api.example`, compared after normalization. */
+	origin: string;
+	/** The secret NAME, resolved through the one door. Never a value: what a deployment writes down
+	 *  is which credential to use, and the resolver decides where it actually lives. */
+	secret: string;
+	/** Where it goes on the request. */
+	placement: CredentialPlacement;
+};
 
 /** Config the DEPLOYMENT owns. `signal` is absent because a lifetime is per call, not per tool: it
  *  arrives with the call, from whoever is waiting on it. */
-export type FetchToolInput = Omit<GovernedFetchOptions, "signal">;
+export type FetchToolInput = Omit<GovernedFetchOptions, "signal"> & {
+	/**
+	 * Claim-check credentials, matched on destination and applied PER CALL at egress.
+	 *
+	 * The point is what the caller never holds. The model writes the URL and the guest runs the code,
+	 * and neither is ever handed the secret — it is resolved here, placed on the outbound request,
+	 * and gone. So an over-privileged token stops being the problem it usually is: over-privileged is
+	 * survivable when the holder is the host and every use passes the gate, and prompt-injected code
+	 * cannot exfiltrate a credential it was never given.
+	 *
+	 * A destination with no binding is UNAUTHENTICATED, not refused — still floored, still
+	 * policy-governed, just carrying no credential. A binding that exists and resolves to nothing
+	 * FAILS LOUD, because that is a configuration error wearing the costume of a public endpoint.
+	 */
+	credentials?: {
+		bindings: readonly EgressCredentialBinding[];
+		/** The one door. Bind context with `.with({ scope, scopeId, principal })` before handing it
+		 *  over — per-actor credentials ride that, not a knob here. */
+		secrets: Secrets;
+	};
+};
 
 const DESCRIPTION =
 	"Perform an HTTP request to an allowed destination. Returns { status, statusText, headers, body }.";
@@ -85,9 +128,46 @@ export function fetchTool(input: FetchToolInput): ToolDefinition {
 					...input,
 					...(options?.abortSignal ? { signal: options.abortSignal } : {}),
 				});
-				return await perform(args.url, {
+
+				// CLAIM-CHECK. The credential is resolved and placed here, per call, at the last moment
+				// before the request leaves — never pre-baked into the caller and never handed across.
+				const target = {
+					url: args.url,
+					headers: { ...(args.headers ?? {}) },
+				};
+				const binding = input.credentials?.bindings.find(
+					(candidate) => originOf(candidate.origin) === originOf(args.url),
+				);
+				if (binding && input.credentials) {
+					// STRIP first, then place. A guest that put its own token in the slot this binding
+					// manages must not have it survive — at the destination, a smuggled credential in the
+					// managed header is indistinguishable from one the deployment authorized. Header names
+					// are case-insensitive on the wire, so the strip has to be too, or `Authorization`
+					// walks past a check looking for `authorization`.
+					const managed = managedHeader(binding.placement);
+					if (managed) {
+						const lower = managed.toLowerCase();
+						for (const name of Object.keys(target.headers)) {
+							if (name.toLowerCase() === lower) delete target.headers[name];
+						}
+					}
+					// `require`, not `get`: a binding that exists and resolves to nothing is a
+					// configuration error, and sending the request unauthenticated would dress it up as a
+					// public endpoint and hand the failure to whoever reads the 401 later.
+					const material = await input.credentials.secrets.require(
+						binding.secret,
+					);
+					placeCredential(
+						target,
+						binding.placement,
+						material,
+						`credential "${binding.secret}"`,
+					);
+				}
+
+				return await perform(target.url, {
 					method: args.method ?? "GET",
-					...(args.headers ? { headers: args.headers } : {}),
+					headers: target.headers,
 					...(args.body !== undefined ? { body: args.body } : {}),
 				});
 			},
