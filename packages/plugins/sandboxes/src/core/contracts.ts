@@ -144,10 +144,6 @@ export type IsolationPosture = {
 export type ExecutionContext = {
 	timeoutMs?: number;
 	memoryLimitBytes?: number;
-	/** Egress policy for THIS execution — reserved for the domain-allowlist step; absent/null = the
-	 *  provider injects no fetch. The v1 quickjs provider consumes egress only as "fetch or not"
-	 *  through `fetchAdapter` below; it does not read `domains`. */
-	egress?: { domains?: readonly string[] } | null;
 	modules?: Record<string, string>;
 	/** Whether this execution may use the network — see {@link SandboxNetwork}. Absent = airgapped. */
 	network?: SandboxNetwork;

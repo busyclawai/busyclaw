@@ -250,9 +250,6 @@ export async function executeInSandbox(input: {
 		...(input.context.memoryLimitBytes !== undefined
 			? { memoryLimitBytes: input.context.memoryLimitBytes }
 			: {}),
-		...(input.context.egress !== undefined
-			? { egress: input.context.egress }
-			: {}),
 		...(input.context.modules !== undefined
 			? { modules: input.context.modules }
 			: {}),
