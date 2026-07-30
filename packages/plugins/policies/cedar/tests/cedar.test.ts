@@ -357,8 +357,8 @@ describe("@busyclaw/policy-cedar — context.server (spoof-proof egress fact)", 
 		const core = coreWith({
 			model,
 			policies: serverPolicy,
-			serverForAction: (id) =>
-				id === "petstore.getPet" ? "https://api.x.com" : undefined,
+			serverForAction: ({ call }) =>
+				call.name === "petstore.getPet" ? "https://api.x.com" : undefined,
 		});
 		const r = await core.handleToolCall(
 			{ name: "petstore.getPet", args: {} },

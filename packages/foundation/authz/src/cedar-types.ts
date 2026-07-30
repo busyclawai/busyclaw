@@ -78,12 +78,22 @@ export type CedarMapCallConfig = {
 	/** The egress origin for an action, from its registered binding's server — stamped as the
 	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived.
 	 *
-	 *  Takes the request's context as a second argument because not every action is known when this
-	 *  mapper is built: a boundary's registered tools arrive PER RUN, and their origins arrive with
-	 *  them. A resolver over a fixed set ignores the argument and stays correct; one that must also
-	 *  answer for this run's tools reads them off the context it is handed. Trusted, post-strip
-	 *  context — the origin is still taken from what the TOOL declares, never from a caller field. */
-	serverForAction?: (actionId: string, ctx: CedarContext) => string | undefined;
+	 *  Handed the whole CALL and the request context, because where a call is going is not always a
+	 *  property of which action it is. A registered tool's origin comes from its binding, and a
+	 *  resolver over a fixed set reads only `call.name`. But an action whose whole purpose is to reach
+	 *  a destination the CALLER names — a governed fetch, where the URL is an argument — has a
+	 *  different origin per call, and an action-keyed lookup structurally cannot answer for it: it
+	 *  would return one origin for every call, or none.
+	 *
+	 *  Still model-DERIVED, and that distinction survives the widening: for a bound tool the origin
+	 *  comes from the binding; for an argument-addressed one it is computed from the argument by
+	 *  trusted code that also decides what the argument means. What is never allowed is reading a
+	 *  destination out of caller-supplied CONTEXT, which is what would let a caller forge where it
+	 *  claims to be going. Args are the request; context facts are the claim about who is asking. */
+	serverForAction?: (input: {
+		call: ToolCall;
+		ctx: CedarContext;
+	}) => string | undefined;
 };
 
 export type CedarPluginConfig = CedarEngineConfig & {
@@ -97,9 +107,11 @@ export type CedarPluginConfig = CedarEngineConfig & {
 	 *  spoof-proof `context.server` fact so egress becomes policy-visible. Model-DERIVED (like
 	 *  `entities`), never caller-derived: it comes from the registered model, not `req.context`, so a
 	 *  caller/model cannot forge it and a tool cannot target a server other than the one it declares.
-	 *  Receives the request context too, for the per-run tools that are not known when this is built —
-	 *  see the note on `CedarMapCallConfig.serverForAction`. */
-	serverForAction?: (actionId: string, ctx: CedarContext) => string | undefined;
+	 *  Receives the whole call + context — see the note on `CedarMapCallConfig.serverForAction`. */
+	serverForAction?: (input: {
+		call: ToolCall;
+		ctx: CedarContext;
+	}) => string | undefined;
 	/** Which calls Cedar governs. Default: every call (the allowlist). */
 	matcher?: (call: ToolCall, ctx: CedarContext) => boolean;
 	/** Entity type for the default-mapped principal (from the stamped `busyclaw__principal`). Default "User". */

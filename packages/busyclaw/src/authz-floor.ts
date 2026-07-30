@@ -235,7 +235,12 @@ export function buildFloorPolicyPlugin(input: {
 	//    a static-only one leaves every registered tool without the fact the egress rules are written
 	//    about. The per-run half is cached on the descriptor array's identity, like the entities below.
 	const runOrigins = new WeakMap<object, Map<string, string>>();
-	const originFor = (actionId: string, ctx: unknown): string | undefined => {
+	const originFor = (input: {
+		call: { name: string };
+		ctx: unknown;
+	}): string | undefined => {
+		const { call, ctx } = input;
+		const actionId = call.name;
 		const fromStatic = staticOrigins.get(actionId);
 		if (fromStatic !== undefined) return fromStatic;
 		const descriptors = runActionsOf(ctx);

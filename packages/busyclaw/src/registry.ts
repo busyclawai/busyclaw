@@ -104,7 +104,7 @@ export function assembleOrgActions(input: {
  */
 export function serverForActionFromRegisteredTools(
 	rows: readonly RegisteredToolRecord[],
-): (actionId: string) => string | undefined {
+): (input: { call: { name: string } }) => string | undefined {
 	const origins = new Map<string, string>();
 	for (const row of rows) {
 		const server = row.binding.server;
@@ -115,7 +115,7 @@ export function serverForActionFromRegisteredTools(
 			// Uninvokable binding — no egress fact to stamp.
 		}
 	}
-	return (actionId) => origins.get(actionId);
+	return ({ call }) => origins.get(call.name);
 }
 
 /**
