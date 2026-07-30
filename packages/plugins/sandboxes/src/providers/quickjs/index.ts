@@ -217,12 +217,24 @@ function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 	}
 	// A name with no contents still costs. `open` is here because it is what CREATES the entry the
 	// fd forms above then write into — charging only at write would let an open-loop make entries
-	// for free.
+	// for free. `mkdtemp` mints a name too, from a prefix the guest chooses.
 	for (const name of [
 		"mkdirSync",
 		"mkdir",
 		"openSync",
 		"open",
+		"mkdtempSync",
+		"mkdtemp",
+	]) {
+		cap(name, -1, 0);
+	}
+
+	// TWO-PATH operations, and the reason charging them was wrong: arg 0 is the SOURCE — a path that
+	// already exists and was already charged when it was made — while arg 1 is the DESTINATION, which
+	// is the new entry. Charging arg 0 charged nothing new, so a copy/link/symlink loop minted entries
+	// for free however small the entry budget was. For `symlink` arg 0 is not even a path in this
+	// volume; it is the target text, so charging it was doubly meaningless.
+	for (const name of [
 		"copyFileSync",
 		"copyFile",
 		"renameSync",
@@ -232,7 +244,54 @@ function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 		"linkSync",
 		"link",
 	]) {
-		cap(name, -1, 0);
+		cap(name, -1, 1);
+	}
+
+	// `copyFile` also duplicates the source's BYTES, and the duplicate is host memory exactly as the
+	// original was. Charged from the source's own size, read through the UNWRAPPED stat so this
+	// cannot recurse into the cap.
+	const sizeOf = (path: unknown): number => {
+		try {
+			const stat = (
+				fs as unknown as { statSync: (p: unknown) => { size: number } }
+			).statSync(path);
+			return typeof stat?.size === "number" ? stat.size : 0;
+		} catch {
+			// An unreadable source is the real call's problem to report, not the budget's.
+			return 0;
+		}
+	};
+	for (const name of ["copyFileSync", "copyFile"]) {
+		const original = surface[name];
+		if (typeof original !== "function") continue;
+		const bound = original.bind(fs);
+		surface[name] = (...args: unknown[]) => {
+			charge(sizeOf(args[0]));
+			return bound(...args);
+		};
+	}
+
+	// `truncate` takes a LENGTH, and memfs grows the buffer to it — a guest-chosen allocation in host
+	// heap that the QuickJS memory limit never sees. One call could ask for a gigabyte and be charged
+	// nothing, because no payload and no new path is involved. The fd form is the same allocation
+	// reached through a descriptor.
+	const capLength = (name: string, lengthIndex: number): void => {
+		const original = surface[name];
+		if (typeof original !== "function") return;
+		const bound = original.bind(fs);
+		surface[name] = (...args: unknown[]) => {
+			const length = args[lengthIndex];
+			if (typeof length === "number" && length > 0) charge(length);
+			return bound(...args);
+		};
+	};
+	for (const name of [
+		"truncateSync",
+		"truncate",
+		"ftruncateSync",
+		"ftruncate",
+	]) {
+		capLength(name, 1);
 	}
 }
 

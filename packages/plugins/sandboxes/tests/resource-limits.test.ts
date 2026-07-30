@@ -295,3 +295,86 @@ describe("@busyclaw/sandboxes host-side resource limits (M-06)", () => {
 		await hostStillWorks();
 	}, 30000);
 });
+
+// ── R-H13: the operations that mint an entry without writing to it ───────────────────────────────
+//
+// The write cap charged arg 0 of every path-taking call. For a two-path operation that is the
+// SOURCE — a path that already exists and was already charged when it was made — while arg 1 is the
+// destination, which is the new entry. So charging it charged nothing new, and a copy/link/symlink
+// loop minted entries for free however small the budget was. For `symlink` arg 0 is not even a path
+// in the volume; it is the target text.
+//
+// `truncate` is the sharper one: it takes a LENGTH and memfs grows the buffer to it. No payload, no
+// new path, so nothing was charged — one call could ask for a gigabyte of host heap that the
+// QuickJS memory limit never sees.
+
+describe("@busyclaw/sandboxes host-side resource limits — multi-path and length (R-H13)", () => {
+	it("R10: copy charges the DESTINATION, so a copy loop cannot mint entries for free", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024, maxFsEntries: 3 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'for (let i = 0; i < 500; i++) fs.copyFileSync("/a", "/copy" + i);',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: { a: "xxxx" } },
+		});
+
+		expect(res.error).toMatch(/quota exceeded/);
+		await hostStillWorks();
+	}, 30000);
+
+	it("R11: link and symlink charge their destination too", async () => {
+		const linked = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024, maxFsEntries: 3 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'for (let i = 0; i < 500; i++) fs.symlinkSync("/target", "/s" + i);',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(linked.output.error).toMatch(/quota exceeded/);
+		await hostStillWorks();
+	}, 30000);
+
+	it("R12: copy charges the bytes it duplicates, not just the name", async () => {
+		// A copy is a second resident copy of the content. Charging only the name would let a handful
+		// of copies of one large file multiply host memory while the entry count barely moved.
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 32 * 1024, maxFsEntries: 4096 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'for (let i = 0; i < 20; i++) fs.copyFileSync("/big", "/c" + i);',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: { big: "y".repeat(8 * 1024) } },
+		});
+
+		expect(res.error).toMatch(/quota exceeded/);
+		await hostStillWorks();
+	}, 30000);
+
+	it("R13: truncate charges the length it grows the buffer to", async () => {
+		// memfs expands a host-side buffer to a guest-chosen length, outside the wasm heap limit —
+		// the same premise R1b pins for writes, reached through an operation that writes nothing.
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'fs.writeFileSync("/t", "x");',
+				'fs.truncateSync("/t", 512 * 1024 * 1024);',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toMatch(/quota exceeded/);
+		await hostStillWorks();
+	}, 30000);
+});
