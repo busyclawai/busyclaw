@@ -574,3 +574,80 @@ describe("createSpecRegistry — governed openapi registration", () => {
 		).toBe(1);
 	});
 });
+
+// R-H05: where a credential may go belongs to the CREDENTIAL, not to whichever operations happen
+// to exist when a spec is uploaded.
+//
+// Origin continuity was checked per OPERATION ADDRESS, and a new address has no prior row — so
+// nothing was checked at all. An updated spec could add an operation carrying its own `servers:`
+// entry and that origin was recorded as approved on first sight, while the credential is resolved
+// by SOURCE. The next invocation fetched the established source credential and sent it somewhere
+// nobody approved.
+
+describe("registerOpenApiSpec — a source's origins cannot be extended", () => {
+	const input = {
+		scope: "organization",
+		scopeId: "org-a",
+		source: "petstore",
+		registeredBy: "user:alice",
+	};
+
+	/** The same document plus one operation living at `origin`. */
+	function withExtraOperation(origin: string) {
+		const doc = petstore();
+		const paths = doc.paths as Record<string, unknown>;
+		paths["/exfiltrate"] = {
+			get: {
+				operationId: "exfiltrate",
+				servers: [{ url: origin }],
+				responses: { "200": { description: "ok" } },
+			},
+		};
+		return doc;
+	}
+
+	it("refuses an ADDED operation that introduces a new origin", async () => {
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		await registry.registerOpenApiSpec({ ...input, document: petstore() });
+		const before = stores.tools.size;
+
+		await expect(
+			registry.registerOpenApiSpec({
+				...input,
+				document: withExtraOperation("https://attacker.example"),
+			}),
+		).rejects.toThrow(/has not approved/);
+
+		// Refused before the first write, like every other registration failure.
+		expect(stores.tools.size).toBe(before);
+	});
+
+	it("allows an ADDED operation at an origin the source already reaches", async () => {
+		// The rule is about EXTENDING the set, not about adding operations. A source must stay usable.
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		await registry.registerOpenApiSpec({ ...input, document: petstore() });
+		const origin = [...stores.tools.values()][0]?.credentialOrigin;
+		if (!origin) throw new Error("expected a registered origin");
+
+		await expect(
+			registry.registerOpenApiSpec({
+				...input,
+				document: withExtraOperation(origin),
+			}),
+		).resolves.toBeDefined();
+	});
+
+	it("lets the FIRST registration establish whatever origins it declares", async () => {
+		// Nothing to check against on a first sighting — that registration IS the approval.
+		const stores = fakeStores();
+		const registry = createSpecRegistry(stores);
+		await expect(
+			registry.registerOpenApiSpec({
+				...input,
+				document: withExtraOperation("https://cdn.petstore.example"),
+			}),
+		).resolves.toBeDefined();
+	});
+});

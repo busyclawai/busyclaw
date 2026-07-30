@@ -221,6 +221,22 @@ export function createSpecRegistry(
 				// moves one operation's origin must leave the whole registration untouched: half-applying it
 				// would delete rows and rotate others while the caller reads a thrown error.
 				const credentialBindings = new Map<string, CredentialBinding>();
+				// R-H05. The origins this SOURCE has already had approved — the union across its rows.
+				//
+				// Origin continuity was checked per OPERATION ADDRESS, and a new address has no prior
+				// row, so nothing was checked at all: an updated spec could add an operation (or rename
+				// one, which is the same thing) carrying its own `servers:` entry, and that origin was
+				// recorded as approved on first sight. The credential, meanwhile, is resolved by SOURCE
+				// — so the next invocation fetched the existing source credential and sent it to an
+				// origin nobody approved. Renaming was the quiet version: the old row is deleted and the
+				// new one is a first sighting.
+				//
+				// Where a credential may go is a property of the CREDENTIAL, not of whichever operations
+				// happen to exist when a spec is uploaded. The first registration establishes the set;
+				// later ones may rearrange operations within it and may not extend it.
+				const approvedOrigins = new Set(
+					existing.map((row) => row.credentialOrigin),
+				);
 				for (const tool of extraction.tools) {
 					const address = `${input.source}.${tool.name}`;
 					// Throws when the spec names no server: an operation with no approvable destination must
@@ -238,6 +254,22 @@ export function createSpecRegistry(
 							source: input.source,
 							address,
 						});
+					} else if (
+						existing.length > 0 &&
+						!approvedOrigins.has(next.credentialOrigin)
+					) {
+						// A NEW operation on an ESTABLISHED source. It may live at any origin the source
+						// already reaches; it may not introduce one. `existing.length > 0` is what makes
+						// the first registration the approval rather than a check against nothing.
+						throw configurationError(
+							"registered spec adds an operation at an origin this source has not approved",
+							{
+								source: input.source,
+								address,
+								origin: next.credentialOrigin,
+								approvedOrigins: [...approvedOrigins],
+							},
+						);
 					}
 					credentialBindings.set(address, next);
 				}
