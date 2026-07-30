@@ -11,7 +11,7 @@
 // `PinnedConnection`, so the dependency stops here instead of spreading across package boundaries.
 
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import {
 	assertEgressAllowed as assertEgressAllowedFloor,
 	type EgressDecision,
@@ -101,3 +101,22 @@ export function pinnedConnection(decision: EgressDecision): PinnedConnection {
 		close: () => agent.close(),
 	};
 }
+
+/**
+ * The `fetch` that can actually drive {@link pinnedConnection}'s dispatcher — undici's own, from the
+ * same package as the Agent, exported here so the two cannot be separated.
+ *
+ * They were separated, and it broke egress outright. `dispatcher` is a non-standard `RequestInit`
+ * field that only an undici-backed fetch reads, and the global `fetch` is backed by whatever undici
+ * NODE bundles — 7 on Node 24 — while this package pins undici 8. Handing an 8 Agent to a 7 fetch
+ * fails with `invalid onRequestStart method` before a byte leaves, so every pinned call — every
+ * registered tool, every sandbox fetch — failed closed on a current Node. Silent, because the floor
+ * is *supposed* to refuse things, and "the request did not go out" is what refusal looks like.
+ *
+ * Exporting them together is the fix rather than a version bump: a bump is true until the next Node
+ * ships a different undici, and this cannot drift because a caller taking the dispatcher takes the
+ * fetch from the same import. A host that supplies its OWN fetch still owns this half of the floor —
+ * the pin is offered and a custom implementation is free to ignore it, which is why the destination
+ * is validated before the socket rather than trusted from it.
+ */
+export const pinnedFetch: typeof globalThis.fetch = undiciFetch;

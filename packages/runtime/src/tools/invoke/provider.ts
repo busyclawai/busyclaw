@@ -44,6 +44,7 @@ import {
 	type EgressDecision,
 	type EgressLookup,
 	pinnedConnection,
+	pinnedFetch,
 } from "./egress";
 import { planHttpRequest } from "./request-plan";
 
@@ -90,7 +91,10 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 export function createRegisteredToolProvider(
 	options: RegisteredToolProviderOptions,
 ): RegisteredToolProvider {
-	const fetchImpl = options.fetch ?? fetch;
+	// The DEFAULT must be the fetch that matches `pinnedConnection`'s dispatcher — the global one is
+	// backed by whatever undici Node bundles, and handing it this package's Agent fails before the
+	// request leaves. A host-supplied fetch owns this half of the floor and may ignore the pin.
+	const fetchImpl = options.fetch ?? pinnedFetch;
 	const maxResponseBytes =
 		options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;

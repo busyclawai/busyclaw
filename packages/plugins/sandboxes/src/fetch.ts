@@ -21,6 +21,7 @@ import type { EgressLookup } from "@busyclaw/egress";
 import {
 	assertEgressAllowedOnNode,
 	pinnedConnection,
+	pinnedFetch,
 } from "@busyclaw/egress/node";
 import type { SandboxFetch } from "./core/contracts";
 
@@ -34,7 +35,8 @@ export type GovernedFetchOptions = {
 	maxResponseBytes?: number;
 	/** Per-request deadline. Default 30 s. */
 	timeoutMs?: number;
-	/** Injected for tests; defaults to the platform global `fetch`. */
+	/** Injected for tests; defaults to the fetch that matches the egress pin (NOT the global one —
+	 *  see `pinnedFetch`). */
 	fetch?: typeof fetch;
 };
 
@@ -83,7 +85,7 @@ async function readCapped(
 export function governedFetch(
 	options: GovernedFetchOptions = {},
 ): SandboxFetch {
-	const fetchImpl = options.fetch ?? fetch;
+	const fetchImpl = options.fetch ?? pinnedFetch;
 	const maxResponseBytes =
 		options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;

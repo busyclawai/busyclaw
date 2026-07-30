@@ -1,5 +1,9 @@
 import type { JsonObject, Outcome } from "@busyclaw/contracts";
-import { errorMessage, redactionContextFrom, stateError } from "@busyclaw/contracts";
+import {
+	errorMessage,
+	redactionContextFrom,
+	stateError,
+} from "@busyclaw/contracts";
 import type { Governance } from "@busyclaw/core";
 import type { LanguageModelMiddleware } from "ai";
 import type { RunState } from "./run-state";
@@ -160,9 +164,7 @@ export function modelMiddleware(
 					| undefined
 					? P
 					: never;
-				const source = (
-					streamed.stream as ReadableStream<Part>
-				).getReader();
+				const source = (streamed.stream as ReadableStream<Part>).getReader();
 				let finishReason: unknown;
 				let usage: unknown;
 				// Read explicitly rather than `pipeThrough` a TransformStream: a transformer sees a

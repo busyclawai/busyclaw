@@ -17,5 +17,6 @@ export {
 	type PinnedConnection,
 	type PinnedLookup,
 	pinnedConnection,
+	pinnedFetch,
 	pinnedLookup,
 } from "@busyclaw/egress/node";

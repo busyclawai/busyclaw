@@ -25,4 +25,7 @@ declare module "undici" {
 	export class Agent extends Dispatcher {
 		constructor(options?: { connect?: { lookup?: UndiciLookup } });
 	}
+
+	/** undici's own `fetch` — the one that can drive the Agent above. See `pinnedFetch`. */
+	export const fetch: typeof globalThis.fetch;
 }
