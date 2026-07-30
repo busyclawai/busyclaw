@@ -983,4 +983,8 @@ export type {
 	ValidateSecretsAtBootInput,
 } from "./secrets";
 export { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
-export { getBusyclawModels, getBusyclawTables } from "./tables";
+export {
+	assertUniquesRepresentable,
+	getBusyclawModels,
+	getBusyclawTables,
+} from "./tables";

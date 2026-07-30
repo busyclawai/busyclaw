@@ -73,6 +73,7 @@ export type {
 	PolicySliceUpsert,
 } from "./authz/policy-slice";
 export {
+	policySliceEntity,
 	policySliceFields,
 	policySliceRecord,
 	policySliceSchema,
@@ -512,6 +513,7 @@ export type {
 	SpecRegistrationUpsert,
 } from "./tools/registry";
 export {
+	factsOverlayEntity,
 	factsOverlayFields,
 	factsOverlayRecord,
 	factsOverlaySchema,
@@ -521,6 +523,7 @@ export {
 	registeredToolPatch,
 	registeredToolRecord,
 	registeredToolSchema,
+	specRegistrationEntity,
 	specRegistrationFields,
 	specRegistrationRecord,
 	specRegistrationReport,

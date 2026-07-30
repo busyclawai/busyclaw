@@ -36,10 +36,21 @@ import { asConflict } from "./conflict";
 import { type SchemaAdapterOptions, schemaAdapter } from "./schema-adapter";
 
 /** What a model contributes: its entity DSL fields (an `entity()` object satisfies this shape),
- *  plus an optional physical table-name override (the SchemaDeclaration `modelName` passthrough). */
+ *  plus an optional physical table-name override (the SchemaDeclaration `modelName` passthrough) and
+ *  the table-level constraints no single field can carry.
+ *
+ *  `uniques` rides HERE, and not only on the entity that declared it, because the assembly is what
+ *  the generators actually see. An entity can declare `(scope, scopeId, name)` all it likes; if the
+ *  merged model map drops it, no migration ever emits the constraint — and code that expects the
+ *  database to reject a duplicate insert (every lookup-then-create upsert) silently gets two rows
+ *  instead of a retry. */
 export type EntityModelMap = Record<
 	string,
-	{ fields: Record<string, EntityField>; modelName?: string }
+	{
+		fields: Record<string, EntityField>;
+		modelName?: string;
+		uniques?: readonly (readonly string[])[];
+	}
 >;
 
 /** The read view of a field map: `returned: false` columns never come back from the adapter
