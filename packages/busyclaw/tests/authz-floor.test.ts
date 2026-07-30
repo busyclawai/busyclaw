@@ -15,6 +15,7 @@ import { createClaw, govern } from "../src/index";
 import {
 	durableRedactor,
 	owned,
+	textModel,
 	type V2Model,
 	withPrincipal,
 } from "./fixtures";
@@ -326,6 +327,8 @@ describe("policy annotations — declared by plugins, carried on the decision", 
 			{
 				name: "escalate:accessibility-team",
 				mode: "enforce",
+				// The TOOL floor: `Action::"writes"` is an agent-surface action group.
+				plane: "tool",
 				cedar: `@escalate("team:accessibility")
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
 			},
@@ -430,6 +433,7 @@ describe("policy annotations — the audience wall, end to end", () => {
 				{
 					name: "salary:forbid",
 					mode: "enforce",
+					plane: "tool",
 					cedar: `@escalate("betterauth:team_eng")
 @guidance("${input.guidance ?? GUIDANCE}")
 forbid(principal, action == Action::"read_salary", resource);`,
@@ -545,4 +549,66 @@ describe("the floor's action inventory has no holes (H-04)", () => {
 	//     that they were denied as unmodeled, and the outbound call never happened.
 	//
 	//   - `run_code` — packages/plugins/sandboxes. Its stamp is asserted beside the tool it belongs to.
+});
+
+// R-H04: a slice governs the plane it names, and only that one.
+//
+// Every plugin slice used to be compiled into BOTH engines, on the reasoning that a `Tool::` slice
+// is inert against `ClawApi::` requests and vice versa. That holds for a slice that NAMES a resource
+// type. It does not hold for one that names none: `permit(principal, action, resource);` matches
+// everything in whichever engine it lands in — so a plugin author writing a broad permit for their
+// own tools also permitted product-api actions, over the owner/scope/grant rules, wherever no forbid
+// happened to apply.
+
+describe("policy planes are isolated", () => {
+	const wideOpen = (plane: "tool" | "api" | "both"): BusyclawPlugin => ({
+		id: `wide:${plane}`,
+		policies: [
+			{
+				name: `wide:${plane}`,
+				mode: "enforce",
+				// Names no resource type, so nothing about it says which plane it is for.
+				cedar: "permit(principal, action, resource);",
+				plane,
+			},
+		],
+	});
+
+	it("a TOOL-plane permit does not reach the product api", async () => {
+		// The defect, stated as the thing that must not happen: a stranger must still be denied a
+		// claw they do not reach, however broadly the agent's floor was opened.
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: textModel("ok"),
+			plugins: [wideOpen("tool")],
+		});
+		const agent = await claw.api.createClaw({
+			id: "claw-1",
+			createdBy: "user:actor-1",
+			name: "private",
+		});
+
+		const stranger = withPrincipal(claw, "user:actor-2").api;
+		await expect(stranger.getClaw({ id: agent.id })).rejects.toThrow();
+	});
+
+	it("an API-plane permit does reach it — the mechanism works, the targeting is the point", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			redaction: { redactor },
+			model: textModel("ok"),
+			plugins: [wideOpen("api")],
+		});
+		const agent = await claw.api.createClaw({
+			id: "claw-1",
+			createdBy: "user:actor-1",
+			name: "private",
+		});
+
+		const stranger = withPrincipal(claw, "user:actor-2").api;
+		await expect(stranger.getClaw({ id: agent.id })).resolves.toBeDefined();
+	});
 });

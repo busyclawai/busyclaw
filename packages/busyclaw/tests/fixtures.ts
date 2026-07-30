@@ -310,6 +310,9 @@ export const floorPermitsWrites: BusyclawPlugin = {
 			name: "test:permit-writes",
 			cedar: `permit(principal, action in Action::"writes", resource);`,
 			mode: "enforce",
+			// The TOOL floor — this exempts a suite from the agent-side floor and says nothing about
+			// who may call the product api. Before planes existed it silently did both (R-H04).
+			plane: "tool",
 		},
 	],
 };

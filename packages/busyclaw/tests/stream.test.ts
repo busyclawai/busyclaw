@@ -224,9 +224,7 @@ describe("claw.api.sendMessageAndStream", () => {
 
 describe("M-09 — streamed model egress reaches the audit", () => {
 	function entries(audit: ReturnType<typeof createMemoryAudit>) {
-		return audit
-			.entries()
-			.filter((entry) => entry.boundary === "model");
+		return audit.entries().filter((entry) => entry.boundary === "model");
 	}
 
 	it("records a streamed model call, as a generated one already was", async () => {

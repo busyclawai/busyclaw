@@ -136,6 +136,21 @@ export type PolicySourceSlice = {
 	name: string;
 	cedar: string;
 	mode: "enforce" | "shadow" | "off";
+	/**
+	 * WHICH policy plane this slice governs — the agent's tool floor, the product api, or both.
+	 *
+	 * R-H04. Every plugin slice used to be compiled into BOTH engines, on the reasoning that a
+	 * `Tool::` slice is inert against `ClawApi::` requests and vice versa. That holds for a slice
+	 * that NAMES a resource type. It does not hold for one that names none: `permit(principal,
+	 * action, resource);` matches everything in whichever engine it lands in, so a plugin author
+	 * writing a broad permit for their own tools also permitted product-api actions — over the
+	 * owner/scope/grant rules, wherever no forbid happened to apply.
+	 *
+	 * REQUIRED, and `"both"` must be written out. A default would be a guess about authorization,
+	 * and the guess that reads as harmless is the one that silently reaches the plane the author was
+	 * not thinking about.
+	 */
+	plane: "tool" | "api" | "both";
 };
 
 /**

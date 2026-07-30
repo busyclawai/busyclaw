@@ -100,8 +100,12 @@ export function buildFloorPolicyPlugin(input: {
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({
 	//    policies })` is the canonical contributor; any plugin may add slices. `PolicySourceSlice` is
 	//    structurally the bundle-loader's input.
-	const slices: PolicySourceSlice[] = input.plugins.flatMap(
-		(plugin) => plugin.policies ?? [],
+	// Only slices that say they govern THIS plane — see PolicySourceSlice.plane. A slice aimed at the
+	// product api is not merely inert here, it is not compiled here.
+	const slices: PolicySourceSlice[] = input.plugins.flatMap((plugin) =>
+		(plugin.policies ?? []).filter(
+			(slice) => slice.plane === "tool" || slice.plane === "both",
+		),
 	);
 	const bundle = loadPolicyBundle({ system: SYSTEM_POSTURE, slices });
 	// Policy-ANNOTATION keys plugins declare (`@escalate("team:x")` → `{ key: "escalate" }`). Collected

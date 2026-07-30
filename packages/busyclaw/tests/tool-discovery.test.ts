@@ -231,6 +231,7 @@ const escalationPlugin: BusyclawPlugin = {
 		{
 			name: "escalate:eng",
 			mode: "enforce",
+			plane: "tool",
 			cedar: `@escalate("betterauth:team_eng")
 @guidance("${GUIDANCE}")
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,

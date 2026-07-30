@@ -563,8 +563,13 @@ export function buildApiPolicyEngine(input: {
 	createMethodIds: readonly string[];
 	plugins: readonly BusyclawPlugin[];
 }): CedarEngine {
-	const slices: PolicySourceSlice[] = input.plugins.flatMap(
-		(plugin) => plugin.policies ?? [],
+	// Only slices that say they govern THIS plane — see PolicySourceSlice.plane. Namespace routing
+	// was doing this job for slices that name a resource type, and doing nothing for the ones that
+	// do not; an unqualified permit matched here as readily as in the floor.
+	const slices: PolicySourceSlice[] = input.plugins.flatMap((plugin) =>
+		(plugin.policies ?? []).filter(
+			(slice) => slice.plane === "api" || slice.plane === "both",
+		),
 	);
 	const bundle = loadPolicyBundle({
 		system: API_ACCESS_BASELINE,

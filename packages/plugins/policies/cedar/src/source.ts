@@ -15,6 +15,17 @@ export type CedarSourceConfig = {
 	id?: string;
 	/** Merge mode. `enforce` (default) joins the live set; `shadow` is evaluated but never applied. */
 	mode?: "enforce" | "shadow" | "off";
+	/**
+	 * WHICH plane these policies govern. Default `"tool"` — `cedar()` exists to shape what the AGENT
+	 * may do, and that is what nearly every caller writes it for.
+	 *
+	 * The default is deliberately the NARROW one. Reaching the product api is a separate decision
+	 * about who may call the application's own methods, and an author who wants it says so; an author
+	 * who does not think about it gets the plane they were thinking about. Before this existed every
+	 * slice reached both, so an unqualified `permit(principal, action, resource);` written for tools
+	 * also permitted api actions over the owner/scope/grant rules (R-H04).
+	 */
+	plane?: "tool" | "api" | "both";
 };
 
 /**
@@ -41,6 +52,7 @@ export function cedar(config: CedarSourceConfig): PolicyPlugin<CedarContext> {
 				name: config.name ?? id,
 				cedar: config.policies,
 				mode: config.mode ?? "enforce",
+				plane: config.plane ?? "tool",
 			},
 		],
 	};
