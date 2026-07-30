@@ -117,13 +117,50 @@ describe("planHttpRequest — routing", () => {
 		expect(plan.url).toBe("https://api.example/x");
 	});
 
-	it("flattens non-parameter args into a JSON body with a default Content-Type", () => {
+	it("flattens DECLARED body args into a JSON body with a default Content-Type", () => {
 		const plan = planHttpRequest(
-			binding({ method: "post", path: "/pets", parameters: [] }),
+			binding({
+				method: "post",
+				path: "/pets",
+				parameters: [],
+				bodyProperties: ["name", "age"],
+			}),
 			{ name: "Rex", age: 3 },
 		);
 		expect(plan.body).toBe(JSON.stringify({ name: "Rex", age: 3 }));
 		expect(plan.headers["content-type"]).toBe("application/json");
+	});
+
+	// M-05. This test used to pass NO declared body properties and assert the args landed in the body
+	// anyway — which was the defect written down as the contract: whatever the model sent became the
+	// request. The spec decides the shape now.
+	it("refuses an argument the operation never declared", () => {
+		expect(() =>
+			planHttpRequest(
+				binding({
+					method: "post",
+					path: "/pets",
+					parameters: [],
+					bodyProperties: ["name"],
+				}),
+				{ name: "Rex", role: "admin" },
+			),
+		).toThrow(/does not declare/);
+	});
+
+	it("leaves a WRAPPED body's interior alone — it is the spec's business, not ours", () => {
+		const plan = planHttpRequest(
+			binding({
+				method: "post",
+				path: "/bulk",
+				parameters: [],
+				bodyWrapped: true,
+			}),
+			{ body: { anything: true, nested: { deep: 1 } } },
+		);
+		expect(plan.body).toBe(
+			JSON.stringify({ anything: true, nested: { deep: 1 } }),
+		);
 	});
 
 	it("bodyWrapped: the single `body` arg IS the body", () => {

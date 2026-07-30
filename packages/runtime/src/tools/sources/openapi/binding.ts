@@ -98,6 +98,10 @@ export const openApiBinding = type({
 	"bodyRequired?": "boolean",
 	// The body did not flatten (non-object schema) — it lives under the single `body` input key.
 	"bodyWrapped?": "boolean",
+	// The body property names the spec DECLARED. Recorded because the invoker treats any argument
+	// that is not a declared parameter as a body field, and without this there is nothing to check
+	// that against — an undeclared name would ride into the request unexamined (M-05).
+	"bodyProperties?": "string[]",
 	// The spec's security requirements (operation ?? document), shape-checked but unresolved —
 	// resolving schemes to secrets is the invoker's concern. `[]` means explicitly public.
 	"security?": openApiSecurityRequirement.array(),

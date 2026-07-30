@@ -216,6 +216,9 @@ describe("createRegisteredToolProvider", () => {
 						path: "/pets",
 						server: "https://api.example/v1",
 						parameters: [],
+						// The body fields the operation declares — an argument outside this set is
+						// refused rather than swept into the request (M-05).
+						bodyProperties: ["name"],
 						security: [{ bearerAuth: [] }],
 						authSchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
 					},
@@ -528,5 +531,63 @@ describe("createRegisteredToolProvider", () => {
 		expect(
 			(calls[0]?.init.headers as Record<string, string>)["idempotency-key"],
 		).toBeUndefined();
+	});
+});
+
+// L-06 + M-05: what a tool result may carry back, and what a tool call may carry out.
+describe("registered tool — the result is an allowlist", () => {
+	it("does not hand the model cookies, redirect targets, or auth challenges", async () => {
+		// Every Fetch-exposed header used to be copied into the model's view. `set-cookie` carries the
+		// upstream's session; a `location` on a 3xx — never followed, so it always reaches here — can
+		// be a pre-signed URL bearing its own credential; `www-authenticate` describes how to get one.
+		// None of it is anything the model was authorized to see; it arrived because nobody chose.
+		const { fn } = fakeFetch(
+			() =>
+				new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: {
+						"content-type": "application/json",
+						"set-cookie": "session=SECRET; HttpOnly",
+						location: "https://cdn.test/signed?token=SECRET",
+						"www-authenticate": 'Bearer realm="internal"',
+						"x-internal-node": "prod-db-7",
+						"retry-after": "30",
+					},
+				}),
+		);
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					address: "petstore.listPets",
+					governance: { access: "read" },
+					inputSchema: { type: "object", properties: {} },
+					binding: {
+						method: "get",
+						path: "/pets",
+						server: "https://api.example/v1",
+						parameters: [],
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+
+		const result = (await exec(tools, "petstore.listPets", {})) as {
+			headers: Record<string, string>;
+		};
+		const seen = Object.keys(result.headers);
+		expect(seen).not.toContain("set-cookie");
+		expect(seen).not.toContain("location");
+		expect(seen).not.toContain("www-authenticate");
+		expect(seen).not.toContain("x-internal-node");
+		// What a result is actually read for still comes through.
+		expect(result.headers["content-type"]).toContain("application/json");
+		expect(result.headers["retry-after"]).toBe("30");
+		expect(JSON.stringify(result)).not.toContain("SECRET");
 	});
 });

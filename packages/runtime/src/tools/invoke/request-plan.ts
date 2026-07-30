@@ -75,10 +75,25 @@ export function planHttpRequest(
 	// like "__proto__" stays a body property, never a prototype write.
 	const bodyEntries: [string, JsonValue][] = [];
 
+	// M-05. Every argument that was not a declared parameter used to become a body field, so the
+	// model decided the request's shape rather than the spec. A tool authorized to send
+	// `{ title, body }` could send `{ title, body, role: "admin" }` — undeclared, unexamined,
+	// straight into a request carrying the operation's credential. The generated schema said
+	// otherwise, but a schema is what a model is TOLD; this is what happens.
+	//
+	// A wrapped body is the one case where the single `body` argument IS the payload and its interior
+	// is the spec's business, not ours.
+	const declaredBody = new Set(binding.bodyProperties ?? []);
 	for (const [name, value] of Object.entries(args)) {
 		if (value === undefined) continue;
 		const parameter = byName.get(name);
 		if (!parameter) {
+			if (!binding.bodyWrapped && !declaredBody.has(name)) {
+				throw configurationError(
+					"registered tool received an argument the operation does not declare",
+					{ argument: name },
+				);
+			}
 			bodyEntries.push([name, value]);
 			continue;
 		}

@@ -139,6 +139,9 @@ function extractOperation(
 	// prototype) and build the object with Object.fromEntries, which always creates own props.
 	const propertyEntries: [string, JsonValue][] = [];
 	const propertyNames = new Set<string>();
+	// The body fields this operation declares — recorded onto the binding so the invoker can refuse
+	// an argument the spec never described.
+	const bodyPropertyNames: string[] = [];
 	const required: string[] = [];
 	const parameters: OpenApiParameterBinding[] = [];
 
@@ -192,6 +195,11 @@ function extractOperation(
 	const inputSchema: JsonObject = {
 		type: "object",
 		properties: Object.fromEntries(propertyEntries),
+		// CLOSED. An open schema told the model that anything else was acceptable, and the invoker
+		// agreed with it — every undeclared argument became a body field. Saying so in the schema is
+		// the half a model reads; the invoker refuses it regardless, because a schema is a
+		// description and this is the enforcement.
+		additionalProperties: false,
 		...(required.length > 0 ? { required } : {}),
 	};
 
@@ -218,6 +226,9 @@ function extractOperation(
 				? { bodyContentType: body.contentType, bodyRequired: body.required }
 				: {}),
 			...(bodyWrapped ? { bodyWrapped } : {}),
+			...(bodyPropertyNames.length > 0
+				? { bodyProperties: bodyPropertyNames }
+				: {}),
 			...(security !== undefined ? { security } : {}),
 			...(authSchemes !== undefined ? { authSchemes } : {}),
 			...(operation.deprecated === true ? { deprecated: true } : {}),

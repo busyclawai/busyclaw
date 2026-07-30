@@ -271,6 +271,29 @@ async function performFetch(
 
 /** Read a response body under a byte cap and parse it as DATA (JSON when the content-type says so,
  *  else text). The body is untrusted — it is validated as JSON-safe, never executed. */
+/**
+ * L-06. Every Fetch-exposed response header was copied into the model's view of the result. That is
+ * a disclosure channel pointing the wrong way: `set-cookie` carries the upstream's session, a
+ * `location` on a 3xx (which is never followed, so it always reaches here) can be a pre-signed URL
+ * bearing its own credential, and `www-authenticate` describes how to get one. None of it is
+ * anything the model was authorized to see; it arrived because nobody chose.
+ *
+ * An allowlist rather than a denylist, for the usual reason: the set of headers an upstream might
+ * invent is open, and the set a model can act on is small. What is here is what a tool result is
+ * actually read for — the shape of the payload, whether it was truncated, and how to pace retries.
+ */
+const MODEL_VISIBLE_HEADERS = [
+	"content-type",
+	"content-length",
+	"content-language",
+	"etag",
+	"last-modified",
+	"retry-after",
+	"x-ratelimit-limit",
+	"x-ratelimit-remaining",
+	"x-ratelimit-reset",
+] as const;
+
 async function readResponse(
 	response: Response,
 	maxResponseBytes: number,
@@ -289,7 +312,10 @@ async function readResponse(
 	const body = safe instanceof type.errors ? text : safe;
 
 	const headers: Record<string, string> = {};
-	for (const [key, value] of response.headers) headers[key] = value;
+	for (const key of MODEL_VISIBLE_HEADERS) {
+		const value = response.headers.get(key);
+		if (value !== null) headers[key] = value;
+	}
 	return { status: response.status, headers, body };
 }
 
