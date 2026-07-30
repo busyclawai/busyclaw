@@ -454,3 +454,119 @@ describe("@busyclaw/sandboxes — recursive mkdir charges every component (R-H13
 		expect(res.result).toBe(2);
 	}, 30000);
 });
+
+// ── R-H13: one allowance across both doors ───────────────────────────────────────────────────────
+//
+// Every nested tool call and every fetch was individually bounded — each governed, each capped —
+// and nothing bounded the SET. A guest could issue them without limit inside one execution: every
+// call legal, the total unconstrained. The wall clock was the only ceiling, which bounds time
+// rather than work, so a faster host simply allowed more.
+
+describe("@busyclaw/sandboxes — the execution's shared host budget (R-H13)", () => {
+	const counting = (): SandboxToolInvoker & { calls: () => number } => {
+		let calls = 0;
+		return {
+			calls: () => calls,
+			invoke: async () => {
+				calls += 1;
+				return { status: "ok", output: 1 };
+			},
+		};
+	};
+
+	it("R15: caps total nested tool calls for one execution", async () => {
+		const invoker = counting();
+		const { output } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"let denied = 0;",
+				"for (let i = 0; i < 200; i++) {",
+				"  const r = await tools.some.thing({});",
+				'  if (r && r.status === "denied") denied++;',
+				"}",
+				"return denied;",
+			].join("\n"),
+			invoker,
+			context: { budget: { maxHostCalls: 20 } },
+		});
+
+		// The host did 20 and no more; the rest came back as a value the model can read.
+		expect(invoker.calls()).toBe(20);
+		expect(Number(output.result)).toBe(180);
+	}, 30000);
+
+	it("R16: exhaustion is a DENIED value, not a thrown execution", async () => {
+		// A refusal the guest can read lets model code adapt — the same shape a governed denial takes.
+		// Killing the run instead would turn a quota into a crash.
+		const { output } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"await tools.a({});",
+				"const r = await tools.a({});",
+				"return r.reasonCode;",
+			].join("\n"),
+			invoker: counting(),
+			context: { budget: { maxHostCalls: 1 } },
+		});
+
+		expect(output.error).toBeUndefined();
+		expect(output.result).toBe("SANDBOX_BUDGET_EXHAUSTED");
+	}, 30000);
+
+	it("R17: the budget is SHARED — fetch spends the same allowance as tool calls", async () => {
+		// Two counters would let a guest spend the whole host by alternating between the doors. The
+		// host does not care which one the work arrived through.
+		const invoker = counting();
+		const { output } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"await tools.a({});",
+				"await tools.a({});",
+				"try {",
+				'  await fetch("https://example.com/");',
+				'  return "fetch-allowed";',
+				'} catch (e) { return "fetch-refused"; }',
+			].join("\n"),
+			invoker,
+			context: {
+				budget: { maxHostCalls: 2 },
+				network: {
+					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+					transport: async () => new Response("hi", { status: 200 }),
+				},
+			},
+		});
+
+		expect(invoker.calls()).toBe(2);
+		expect(output.result).toBe("fetch-refused");
+	}, 30000);
+
+	it("R18: bounds how many run at ONCE, not just how many run", async () => {
+		let inFlight = 0;
+		let peak = 0;
+		const invoker: SandboxToolInvoker = {
+			invoke: async () => {
+				inFlight += 1;
+				peak = Math.max(peak, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				inFlight -= 1;
+				return { status: "ok", output: 1 };
+			},
+		};
+
+		await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"const jobs = [];",
+				"for (let i = 0; i < 40; i++) jobs.push(tools.a({}));",
+				"await Promise.all(jobs);",
+				"return 1;",
+			].join("\n"),
+			invoker,
+			context: { budget: { maxHostCalls: 100, maxConcurrentHostCalls: 4 } },
+		});
+
+		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeGreaterThan(1); // still concurrent, just bounded
+	}, 30000);
+});

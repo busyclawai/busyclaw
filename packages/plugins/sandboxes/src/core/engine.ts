@@ -1,7 +1,7 @@
 // The shared, provider-agnostic execution engine: code normalization, invoker wrapping (input
 // validation + defect opacity), and result validation. Providers implement isolate mechanics only.
 
-import { validationError } from "@busyclaw/contracts";
+import { limitError, validationError } from "@busyclaw/contracts";
 import { type } from "arktype";
 import { governedFetch } from "../fetch";
 import {
@@ -9,6 +9,7 @@ import {
 	executionResult,
 	type ProviderExecutionContext,
 	type Sandbox,
+	type SandboxBudget,
 	type SandboxExecution,
 	type SandboxToolInvoker,
 	sandboxInvokeInput,
@@ -17,6 +18,54 @@ import {
 
 /** Reason code for a malformed invoke shape coming out of sandboxed code. */
 const SANDBOX_INVOKE_INVALID = "SANDBOX_INVOKE_INVALID";
+/** Reason code for an execution that has spent its whole host allowance. */
+const SANDBOX_BUDGET_EXHAUSTED = "SANDBOX_BUDGET_EXHAUSTED";
+
+const DEFAULT_MAX_HOST_CALLS = 200;
+const DEFAULT_MAX_CONCURRENT_HOST_CALLS = 8;
+
+/**
+ * The execution's shared allowance, held by the engine because the engine is the only place BOTH
+ * doors pass through — nested tool calls and fetch. A budget either door owned would bound half the
+ * work and let a guest spend the rest through the other one.
+ *
+ * `enter` refuses when the total is gone and otherwise waits for a concurrency slot, so the guest's
+ * own speed cannot turn a legal total into a thousand simultaneous sockets. It returns the release,
+ * which the caller runs in a `finally` — an operation that never releases would wedge the execution,
+ * so the release is a value rather than a rule to remember.
+ */
+function createExecutionBudget(limits: SandboxBudget | undefined): {
+	enter: () => Promise<() => void>;
+} {
+	const maxCalls = limits?.maxHostCalls ?? DEFAULT_MAX_HOST_CALLS;
+	const maxConcurrent =
+		limits?.maxConcurrentHostCalls ?? DEFAULT_MAX_CONCURRENT_HOST_CALLS;
+	let spent = 0;
+	let inFlight = 0;
+	const waiting: (() => void)[] = [];
+
+	return {
+		enter: async () => {
+			if (spent >= maxCalls) {
+				throw limitError(`sandbox execution exceeded ${maxCalls} host calls`, {
+					limit: maxCalls,
+				});
+			}
+			spent += 1;
+			if (inFlight >= maxConcurrent) {
+				await new Promise<void>((resolve) => waiting.push(resolve));
+			}
+			inFlight += 1;
+			let released = false;
+			return () => {
+				if (released) return;
+				released = true;
+				inFlight -= 1;
+				waiting.shift()?.();
+			};
+		},
+	};
+}
 
 // Globals via a typed cast — this repo builds without a DOM/node lib, so `crypto`/`console` are not
 // ambiently typed (channels' globalThis-cast convention).
@@ -44,7 +93,10 @@ export function normalizeCode(code: string): string {
  *  - an infra defect from the invoker is caught and replaced with an opaque correlation id, the
  *    original logged host-side. Host error text (paths, connection strings) never reaches the model.
  */
-function wrapInvoker(invoker: SandboxToolInvoker): SandboxToolInvoker {
+function wrapInvoker(
+	invoker: SandboxToolInvoker,
+	budget: { enter: () => Promise<() => void> },
+): SandboxToolInvoker {
 	return {
 		invoke: async (input) => {
 			const valid = sandboxInvokeInput(input);
@@ -53,6 +105,18 @@ function wrapInvoker(invoker: SandboxToolInvoker): SandboxToolInvoker {
 					status: "denied",
 					reason: `invalid sandbox invoke input: ${valid.summary}`,
 					reasonCode: SANDBOX_INVOKE_INVALID,
+				};
+			}
+			// Exhaustion is a denied VALUE, not a throw — the same shape a governed refusal takes, so
+			// model code reads "you have run out" and can adapt instead of dying on it.
+			let release: () => void;
+			try {
+				release = await budget.enter();
+			} catch (error) {
+				return {
+					status: "denied",
+					reason: error instanceof Error ? error.message : String(error),
+					reasonCode: SANDBOX_BUDGET_EXHAUSTED,
 				};
 			}
 			try {
@@ -64,6 +128,8 @@ function wrapInvoker(invoker: SandboxToolInvoker): SandboxToolInvoker {
 					error,
 				);
 				return { status: "error", error: `internal sandbox error [${id}]` };
+			} finally {
+				release();
 			}
 		},
 	};
@@ -84,7 +150,6 @@ export async function executeInSandbox(input: {
 	context: ExecutionContext;
 }): Promise<SandboxExecution> {
 	const code = normalizeCode(input.code);
-	const invoker = wrapInvoker(input.invoker);
 
 	// The floor goes on the path HERE, once, for every execution — a host declares network policy and
 	// cannot hand over an unfenced door (see ExecutionContext.network).
@@ -94,12 +159,29 @@ export async function executeInSandbox(input: {
 	// not. A guest could therefore retire promises faster than the host retired connections, and
 	// abandoned requests still spent their full 30 seconds against whatever they were aimed at.
 	// Aborting in `finally` binds them — when the execution is over, so is its network.
-	const { network, ...rest } = input.context;
+	const { network, budget: limits, ...rest } = input.context;
 	const outstanding = new AbortController();
-	const context: ProviderExecutionContext = network
+	const budget = createExecutionBudget(limits);
+	const invoker = wrapInvoker(input.invoker, budget);
+
+	// The SAME budget on the fetch door. Two counters would let a guest spend the whole host by
+	// alternating between them, and the host does not care which door the work arrived through. A
+	// refusal throws here rather than returning a value, because that is what the egress floor
+	// already does when it says no; the guest catches it as an ordinary error either way.
+	const governed = network
+		? governedFetch({ ...network, signal: outstanding.signal })
+		: undefined;
+	const context: ProviderExecutionContext = governed
 		? {
 				...rest,
-				fetchAdapter: governedFetch({ ...network, signal: outstanding.signal }),
+				fetchAdapter: async (target, init) => {
+					const release = await budget.enter();
+					try {
+						return await governed(target, init);
+					} finally {
+						release();
+					}
+				},
 			}
 		: rest;
 

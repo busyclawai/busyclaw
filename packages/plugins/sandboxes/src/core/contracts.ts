@@ -66,6 +66,25 @@ export type SandboxNetwork = {
 };
 
 /**
+ * One execution's allowance for everything it makes the HOST do.
+ *
+ * Every nested tool call and every fetch was individually bounded — each one governed, each one
+ * capped — and nothing bounded the SET. A guest could issue them without limit inside a single
+ * execution: every call legal, the total unconstrained. The wall clock was the only ceiling, which
+ * is a bound on time rather than on work, and a faster host simply allowed more.
+ *
+ * ONE budget across both doors, deliberately. Separate counters would let a guest spend the whole
+ * host by alternating between them, and the host does not care which door the work came through.
+ */
+export type SandboxBudget = {
+	/** Total nested tool calls + fetches for this execution. Default 200. */
+	maxHostCalls?: number;
+	/** How many may be in flight at once. Default 8 — a guest firing a thousand at once costs the
+	 *  host a thousand sockets and tool executions no matter what the total allows. */
+	maxConcurrentHostCalls?: number;
+};
+
+/**
  * What a PROVIDER receives: the host's context with the network already resolved into one governed
  * adapter. Providers never see host network options and cannot be handed a raw fetch — by the time
  * a context reaches here the floor is on the path, or there is no network at all.
@@ -160,6 +179,9 @@ export type ExecutionContext = {
 	 * inside it, and — via `transport` — the socket underneath it.
 	 */
 	network?: SandboxNetwork;
+	/** What this execution may make the host do, across nested tool calls and fetch together.
+	 *  Absent = defaults. See {@link SandboxBudget}. */
+	budget?: SandboxBudget;
 	/** In-memory virtual filesystem tree to seed for this execution. memfs lives in the HOST heap and
 	 *  is NOT bounded by `memoryLimitBytes`, so the provider enforces a byte budget at BOTH the seed
 	 *  (load) and cumulative writes — see the quickjs provider's `maxFsBytes`. Absent = no fs. */
