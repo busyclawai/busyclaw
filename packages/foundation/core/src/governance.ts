@@ -7,6 +7,7 @@
 // See docs/architecture/02a + 04 and docs/research/better-auth/.
 
 import {
+	type AbortLifetime,
 	type AfterGate,
 	type ApprovalMetadataResolver,
 	type ApprovalRecord,
@@ -83,6 +84,14 @@ export type GovernanceConfig = {
 	now?: () => string;
 };
 
+/** Per-CALL options for `handleToolCall` — about this invocation, not about the tool or the run.
+ *  Distinct from the turn context, which is data the gates read; this is the caller's control over
+ *  its own call. */
+export type ToolCallOptions = {
+	/** The caller's lifetime for this call — see {@link ToolBoundary.signal}. */
+	signal?: AbortLifetime;
+};
+
 /** The turn context for a given config: the base bag + every plugin's contributed fields. */
 export type Context<Config extends GovernanceConfig> = TurnContext &
 	InferContext<Config>;
@@ -100,6 +109,7 @@ export type Governance<Config extends GovernanceConfig = GovernanceConfig> = {
 	handleToolCall: (
 		call: ToolCall,
 		ctx?: Context<Config>,
+		options?: ToolCallOptions,
 	) => Promise<HandleResult>;
 	/** Run one governed model (LLM) call: redact the prompt → invoke → audit. */
 	handleModelCall: (
@@ -477,6 +487,10 @@ export function createGovernance<const Config extends GovernanceConfig>(
 		call: ToolCall,
 		ctx: Record<string, unknown>,
 		satisfied?: readonly GateDemand[],
+		// The CALLER's lifetime for this call, when narrower than the run's. Absent on the resume path
+		// (`continueRun`): the caller that started it is long gone, so there is no lifetime to inherit
+		// and the run's own is the only honest bound.
+		signal?: AbortLifetime,
 	): Promise<HandleResult> {
 		let outcome: Outcome | null = null;
 		const boundaryCall = toolBoundaryCall(call);
@@ -497,6 +511,9 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			// Permitted → run the tool. PII rehydrated *inside* the boundary only.
 			const output = await runTool(call, ctx, {
 				rehydrate: (v) => redactor.rehydrateValue(v, redactionContextFrom(ctx)),
+				// The caller's own lifetime, when it has one narrower than the run's — a nested call
+				// from a sandbox execution. The runner combines it with the run's signal.
+				...(signal ? { signal } : {}),
 			});
 			outcome = { status: "ok", output };
 			return outcome;
@@ -691,7 +708,7 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			return outcomes;
 		},
 
-		async handleToolCall(rawCall, ctxInput) {
+		async handleToolCall(rawCall, ctxInput, options) {
 			// 0. Validate the inbound call at runtime — the LLM is untrusted input.
 			const valid = toolCall(rawCall);
 			if (valid instanceof type.errors) {
@@ -704,7 +721,12 @@ export function createGovernance<const Config extends GovernanceConfig>(
 			const args = redactionOn
 				? await redactor.redactValue(valid.args, redactionContextFrom(ctx))
 				: valid.args;
-			return runGoverned({ name: valid.name, args }, ctx);
+			return runGoverned(
+				{ name: valid.name, args },
+				ctx,
+				undefined,
+				options?.signal,
+			);
 		},
 
 		async continueRun(record, ctxInput) {

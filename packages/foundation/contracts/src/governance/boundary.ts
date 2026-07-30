@@ -341,6 +341,34 @@ export type AfterGate<Ctx extends TurnContext = TurnContext> = {
 /** Handed to the tool runner so it can rehydrate PII *inside* its own boundary. */
 export type ToolBoundary = {
 	rehydrate: <T>(value: T) => Promise<T>;
+	/**
+	 * The CALLER's lifetime for this one call, when the caller has one narrower than the run's.
+	 *
+	 * A nested call is the case that needs it. A sandbox execution ends — deadline, error, clean
+	 * return — and the host work it started should end with it, but the run it belongs to is still
+	 * going, so the run's own signal says nothing. Without a channel for the caller's signal the
+	 * guest's promise rejects while the socket it was waiting on runs to completion: the guest sees a
+	 * timeout, the host does not, and a guest can retire promises faster than the host retires
+	 * connections.
+	 *
+	 * COMBINED with the run's signal by the runner, never substituted for it — this narrows a
+	 * lifetime and must not be able to widen one. Absent for an ordinary top-level call, where the
+	 * run's signal already is the caller's.
+	 */
+	signal?: AbortLifetime;
+};
+
+/**
+ * A lifetime that ends — `AbortSignal`'s shape, named structurally.
+ *
+ * Contracts builds without the DOM lib, which is where TypeScript keeps `AbortSignal`, and that is a
+ * deliberate line: this package is the protocol every tier shares, including ones with no browser
+ * globals at all. `SandboxFetch` mirrors `fetch` for the same reason. A real `AbortSignal` satisfies
+ * this, so callers pass one and nothing casts.
+ */
+export type AbortLifetime = {
+	readonly aborted: boolean;
+	addEventListener: (type: "abort", listener: () => void) => void;
 };
 
 /** Executes a permitted tool. Receives the REDACTED call; rehydrate only what you need. */

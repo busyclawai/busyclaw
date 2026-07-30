@@ -10,21 +10,47 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { FETCH_TOOL_PATH, fetchTool } from "@busyclaw/egress/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SandboxToolInvoker } from "../src/core/contracts";
 import { executeInSandbox } from "../src/index";
 import { quickjs } from "../src/providers/quickjs/index";
 
-const noInvoke: SandboxToolInvoker = {
-	invoke: async () => {
-		throw new Error("invoker should not be called");
+/**
+ * The invoker a real host provides: the runtime's `subInvoke` resolves `busyclaw.fetch` to the
+ * registered tool and runs it through the chokepoint. Here it dispatches straight to the tool,
+ * because these tests are about the FLOOR and about the execution owning its sockets — the governed
+ * DECISION has its own tests at the assembly level, where a policy engine exists.
+ *
+ * It forwards the signal, which is the point of half of them: nothing reaches the network except
+ * through a tool call now, so a fixture that stubbed the invoker away would be testing a path that
+ * no longer exists.
+ */
+const routeFetch = (
+	options: Parameters<typeof fetchTool>[0] = {
+		allow: ["https://example.com"],
 	},
-};
+): SandboxToolInvoker => ({
+	invoke: async ({ path, args }, invokeOptions) => {
+		if (path !== FETCH_TOOL_PATH) {
+			throw new Error(`unexpected nested call: ${path}`);
+		}
+		const execute = fetchTool(options).invocation.execute as (
+			a: unknown,
+			o: unknown,
+		) => Promise<unknown>;
+		return {
+			status: "ok",
+			output: await execute(args, { abortSignal: invokeOptions?.signal }),
+		};
+	},
+});
 
 const run = (
 	code: string,
 	context: Parameters<typeof executeInSandbox>[0]["context"],
-) => executeInSandbox({ sandbox: quickjs(), code, invoker: noInvoke, context });
+	invoker: SandboxToolInvoker = routeFetch(),
+) => executeInSandbox({ sandbox: quickjs(), code, invoker, context });
 
 // A REAL loopback server, so "blocked" cannot be confused with "nothing was listening". Pointing the
 // guest at a dead port proves nothing: the connection fails either way, and the test passes whether
@@ -65,10 +91,11 @@ describe("sandbox network — the floor is not optional", () => {
 				'  return "reached:" + r.status;',
 				'} catch (e) { return "blocked"; }',
 			].join("\n"),
-			// The origin IS declared, so the destination check passes it through and the FLOOR is what
-			// refuses. Leaving it undeclared would make this pass for the wrong reason — a green test
-			// naming the floor while never reaching it.
-			{ network: { allow: [`http://127.0.0.1:${port}`], allowInsecure: true } },
+			// The tool the invoker routes to DECLARES this origin, so the destination check passes it
+			// through and the FLOOR is what refuses. Left undeclared this would pass for the wrong
+			// reason — a green test naming the floor while never reaching it.
+			{ network: true },
+			routeFetch({ allow: [`http://127.0.0.1:${port}`], allowInsecure: true }),
 		);
 		expect(output.result).toBe("blocked");
 	});
@@ -85,12 +112,8 @@ describe("sandbox network — the floor is not optional", () => {
 				'} catch (e) { return "blocked"; }',
 			].join("\n"),
 			// Declared, for the same reason as above: the floor is the thing under test.
-			{
-				network: {
-					allow: ["http://169.254.169.254"],
-					allowInsecure: true,
-				},
-			},
+			{ network: true },
+			routeFetch({ allow: ["http://169.254.169.254"], allowInsecure: true }),
 		);
 		expect(output.result).toBe("blocked");
 	});
@@ -113,16 +136,16 @@ describe("sandbox network — the execution owns its requests", () => {
 
 		const { output } = await run(
 			'try { await fetch("https://example.com/slow"); return "done"; } catch (e) { return "err"; }',
-			{
-				timeoutMs: 500,
-				// A fake resolver keeps this hermetic: the floor still range-checks the answer, it just
-				// does not need DNS to get one.
-				network: {
-					allow: ["https://example.com"],
-					transport,
-					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-				},
-			},
+			{ timeoutMs: 500, network: true },
+			// The transport and a fake resolver live on the TOOL now — the floor still range-checks
+			// the answer, it just does not need DNS to get one. The signal reaches this transport by
+			// travelling engine → invoker → subInvoke → handleToolCall → the tool's execute, which is
+			// the whole chain this test exists to hold.
+			routeFetch({
+				allow: ["https://example.com"],
+				transport,
+				lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+			}),
 		);
 
 		// The guest is finished either way; what matters is the host side.

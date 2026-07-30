@@ -2,8 +2,8 @@
 // validation + defect opacity), and result validation. Providers implement isolate mechanics only.
 
 import { limitError, validationError } from "@busyclaw/contracts";
+import { FETCH_TOOL_PATH } from "@busyclaw/egress/node";
 import { type } from "arktype";
-import { governedFetch } from "../fetch";
 import {
 	type ExecutionContext,
 	executionResult,
@@ -199,12 +199,43 @@ export async function executeInSandbox(input: {
 	const budget = createExecutionBudget(limits);
 	const invoker = wrapInvoker(input.invoker, budget, outstanding.signal);
 
-	// The SAME budget on the fetch door. Two counters would let a guest spend the whole host by
-	// alternating between them, and the host does not care which door the work arrived through. A
-	// refusal throws here rather than returning a value, because that is what the egress floor
-	// already does when it says no; the guest catches it as an ordinary error either way.
+	// The guest's fetch goes through the INVOKER — the same road `tools.x()` takes, so the same
+	// chokepoint: the run's principal, a floor decision on `busyclaw.fetch` with `context.server`
+	// stamped from the URL, an audit record, and re-redaction of the response before it crosses back
+	// into untrusted guest code. The engine used to call the transport itself and got the SSRF floor,
+	// a destination list, and none of the rest.
+	//
+	// `wrapInvoker` charges the same budget it charges a nested tool call, which is now literally what
+	// this is — so a guest cannot spend the host by alternating between two counters that were never
+	// aware of each other, and nothing bills one request twice.
+	//
+	// A refusal comes back as a denied VALUE, the shape governed refusals already take. This rethrows
+	// it, because a `fetch` that did not happen is an error to the code that called it.
 	const governed = network
-		? governedFetch({ ...network, signal: outstanding.signal })
+		? async (target: string | { readonly href: string }, init?: unknown) => {
+				const request = (init ?? {}) as {
+					method?: string;
+					headers?: Record<string, string>;
+					body?: string;
+				};
+				const result = (await invoker.invoke({
+					path: FETCH_TOOL_PATH,
+					args: {
+						url: typeof target === "string" ? target : target.href,
+						...(request.method !== undefined ? { method: request.method } : {}),
+						...(request.headers !== undefined
+							? { headers: request.headers }
+							: {}),
+						...(request.body !== undefined ? { body: request.body } : {}),
+					},
+				})) as { status?: string; reason?: string; output?: unknown };
+				if (result?.status !== "ok") {
+					throw new Error(
+						result?.reason ?? "sandbox fetch was refused by governance",
+					);
+				}
+				return result.output;
+			}
 		: undefined;
 	// Built from NAMED fields, never a rest-spread of the host's object. A spread carries every extra
 	// key through — including `fetchAdapter`, the ungoverned door removed from `ExecutionContext`
@@ -230,17 +261,10 @@ export async function executeInSandbox(input: {
 			: {}),
 		...(governed
 			? {
-					fetchAdapter: async (target: unknown, init?: unknown) => {
-						const release = await budget.enter();
-						try {
-							return await governed(
-								target as string | { readonly href: string },
-								init,
-							);
-						} finally {
-							release();
-						}
-					},
+					// No budget wrapper here: the call goes through `invoker`, which charges it as the
+					// nested tool call it now is. Charging again would bill one request twice.
+					fetchAdapter: (target: unknown, init?: unknown) =>
+						governed(target as string | { readonly href: string }, init),
 				}
 			: {}),
 	};

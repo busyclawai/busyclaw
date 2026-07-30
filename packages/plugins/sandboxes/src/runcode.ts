@@ -24,6 +24,7 @@ type SubInvoke = (
 	path: string,
 	args: Record<string, unknown>,
 	ctx?: Record<string, unknown>,
+	options?: { signal?: { readonly aborted: boolean } },
 ) => Promise<HandleResult>;
 type InvokerExecuteOptions = { toolCallId: string; subInvoke?: SubInvoke };
 
@@ -97,8 +98,18 @@ export function runCodeTool(input: {
 				// the path separator, so nothing needs translating on this seam. The HandleResult VALUE
 				// (ok/denied) round-trips to the sandbox as JSON so model code can read status/reason.
 				// handleToolCall re-validates args downstream, so the guest object crosses as-is here.
-				invoke: ({ path, args }) =>
-					subInvoke(path, args as Record<string, unknown>),
+				// The EXECUTION's lifetime is forwarded, not dropped. It arrives here from the engine and
+				// has to reach the tool, or a call the guest abandoned outlives the guest — the run's
+				// own signal is still open, so nothing else would end it.
+				invoke: ({ path, args }, invokeOptions) =>
+					subInvoke(
+						path,
+						args as Record<string, unknown>,
+						undefined,
+						invokeOptions?.signal
+							? { signal: invokeOptions.signal }
+							: undefined,
+					),
 			};
 			const baseContext = input.context?.({ toolCallId }) ?? {};
 

@@ -1,3 +1,4 @@
+import { FETCH_TOOL_PATH, fetchTool } from "@busyclaw/egress/node";
 import { describe, expect, it, vi } from "vitest";
 import type {
 	SandboxInvokeInput,
@@ -70,21 +71,33 @@ describe("@busyclaw/sandboxes quickjs provider", () => {
 		});
 		expect(blocked.error).toMatch(/disabled|not supported/i);
 
-		// The host declares POLICY; the engine builds the door. `transport` replaces the socket
-		// beneath the floor, which is the only injection point left — a raw adapter is neither
-		// spellable nor, since the provider context is built from named fields, smuggleable.
+		// The context is a SWITCH; the destination policy and the socket beneath it belong to the
+		// governed fetch TOOL, which the invoker routes to. A raw adapter is neither spellable nor,
+		// since the provider context is built from named fields, smuggleable — and now the request
+		// does not even leave without a tool call the chokepoint saw.
 		const { output: allowed } = await executeInSandbox({
 			sandbox: quickjs(),
 			code: 'const r = await fetch("https://example.test/data"); return r.body;',
-			invoker: noInvoke,
-			context: {
-				network: {
-					allow: ["https://example.test"],
-					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-					transport: async (input) =>
-						new Response(`body:${String(input)}`, { status: 200 }),
+			invoker: {
+				invoke: async ({ path, args }, invokeOptions) => {
+					if (path !== FETCH_TOOL_PATH) {
+						throw new Error(`unexpected nested call: ${path}`);
+					}
+					const execute = fetchTool({
+						allow: ["https://example.test"],
+						lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+						transport: async (input) =>
+							new Response(`body:${String(input)}`, { status: 200 }),
+					}).invocation.execute as (a: unknown, o: unknown) => Promise<unknown>;
+					return {
+						status: "ok",
+						output: await execute(args, {
+							abortSignal: invokeOptions?.signal,
+						}),
+					};
 				},
 			},
+			context: { network: true },
 		});
 		expect(allowed.result).toBe("body:https://example.test/data");
 	});

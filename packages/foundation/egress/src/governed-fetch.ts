@@ -1,5 +1,10 @@
-// The GOVERNED guest fetch: the in-tree `fetchAdapter` a host wires when sandboxed code needs the
-// network, so reaching for the network does not mean hand-rolling the floor.
+// The GOVERNED fetch: the floor, the pin, and the bounds, as one call — so reaching for the network
+// does not mean hand-rolling any of them.
+//
+// It lives HERE, beside the floor it enforces, rather than in the sandbox plugin where it was first
+// written. Nothing about it is sandbox-shaped: a host wanting a governed HTTP call had to depend on
+// a package carrying a QuickJS wasm interpreter and an in-memory filesystem to get one, which is a
+// dependency edge that only made sense as an accident of where the code grew.
 //
 // Why this exists as shipped code rather than documentation. The guest has no network stack of its
 // own — QuickJS is a wasm interpreter with no sockets and no DNS — so every byte it sends leaves
@@ -24,13 +29,12 @@
 // meant to be, and it is required, because a default nobody typed is a decision nobody made.
 
 import { configurationError } from "@busyclaw/contracts";
-import { type EgressLookup, originOf } from "@busyclaw/egress";
+import { type EgressLookup, originOf } from "./index";
 import {
 	assertEgressAllowedOnNode,
 	pinnedConnection,
 	pinnedFetch,
-} from "@busyclaw/egress/node";
-import type { SandboxFetch } from "./core/contracts";
+} from "./node";
 
 export type GovernedFetchOptions = {
 	/** The origins this execution may reach — see {@link SandboxNetwork.allow}. Required, and empty
@@ -57,6 +61,16 @@ export type GovernedFetchOptions = {
 	 *  passes through unchanged. */
 	transport?: typeof fetch;
 };
+
+/**
+ * A governed outbound call, structurally. Mirrors `fetch` loosely — a URL in, plain data out — because
+ * what comes back is flattened and capped rather than a live `Response`: nothing streamable or
+ * closeable should cross into a guest, and a caller that never gets a socket cannot aim one.
+ */
+export type GovernedFetch = (
+	input: string | { readonly href: string },
+	init?: unknown,
+) => Promise<unknown>;
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -100,7 +114,7 @@ async function readCapped(
  * response is returned as-is and the guest may choose to request the new location explicitly, which
  * re-runs the floor on it.
  */
-export function governedFetch(options: GovernedFetchOptions): SandboxFetch {
+export function governedFetch(options: GovernedFetchOptions): GovernedFetch {
 	const fetchImpl = options.transport ?? options.fetch ?? pinnedFetch;
 	const maxResponseBytes =
 		options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;

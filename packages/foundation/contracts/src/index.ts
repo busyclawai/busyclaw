@@ -278,6 +278,7 @@ export {
 } from "./governance/audit";
 // ── governance: the boundary, plugin contract, reason codes, and gate ports ──
 export type {
+	AbortLifetime,
 	AfterGate,
 	BoundaryCall,
 	BoundaryGate,

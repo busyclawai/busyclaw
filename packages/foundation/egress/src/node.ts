@@ -120,3 +120,14 @@ export function pinnedConnection(decision: EgressDecision): PinnedConnection {
  * is validated before the socket rather than trusted from it.
  */
 export const pinnedFetch: typeof globalThis.fetch = undiciFetch;
+
+export type { FetchToolInput } from "./fetch-tool";
+export { FETCH_TOOL_PATH, fetchTool } from "./fetch-tool";
+// The governed call + the tool that exposes it. Both live on the NODE subpath because both bind what
+// the root deliberately does not: node:dns for the floor's resolution, and undici's dispatcher for
+// the pin that makes the vetted address the one actually dialled.
+export type {
+	GovernedFetch,
+	GovernedFetchOptions,
+} from "./governed-fetch";
+export { governedFetch } from "./governed-fetch";

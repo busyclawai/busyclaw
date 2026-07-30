@@ -21,5 +21,4 @@ export type {
 } from "./core/contracts";
 export { executionResult, sandboxInvokeInput } from "./core/contracts";
 export { executeInSandbox, normalizeCode } from "./core/engine";
-export { type GovernedFetchOptions, governedFetch } from "./fetch";
 export { runCodeTool } from "./runcode";

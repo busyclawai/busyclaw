@@ -6,7 +6,6 @@
 // crosses a boundary — the execution result and the invoker input. Ports (Sandbox,
 // SandboxToolInvoker) and host-assembled views (ExecutionContext, IsolationPosture) stay plain TS.
 
-import type { EgressLookup } from "@busyclaw/egress";
 import { type } from "arktype";
 
 // UNTRUSTED (sandbox → host): validated by the ENGINE at the boundary. `result` is the value the
@@ -37,55 +36,17 @@ export type SandboxFetch = (
 ) => Promise<unknown>;
 
 /**
- * What a host may choose about the guest's network. Every field narrows the floor; none removes it.
+ * Whether this execution may use the network at all — a SWITCH, not a policy.
+ *
+ * Where it may reach, on what transport, under what caps: all of that lives on the governed fetch
+ * TOOL, because that is what performs the request and what the chokepoint decides on. It briefly
+ * lived in both places, and two of them declaring the same destination list is the drift nobody
+ * notices until one is the only one being read.
+ *
+ * The engine decides whether the door exists; the tool decides what goes through it; the floor
+ * decides who may. Absent = airgapped, and that stays the default.
  */
-export type SandboxNetwork = {
-	/**
-	 * The origins this execution may reach — `https://api.example` form, matched exactly against the
-	 * guest URL's own origin. REQUIRED, and an empty list means no egress at all.
-	 *
-	 * Declaring `network` used to mean "the whole public internet": the floor rejected private ranges
-	 * and loopback, and everything else was reachable. That is containment against SSRF, not a
-	 * destination policy — a guest running model-authored code could POST anything it had read to any
-	 * host that would take it, and the floor's job is to stop it reaching the metadata service, not to
-	 * have an opinion about pastebins.
-	 *
-	 * Required rather than defaulted-to-empty for the same reason `fetchAdapter` was deleted: a
-	 * default is a thing people do not notice they accepted. `allow: []` is a sentence a reader
-	 * understands; a missing field is one they never see. The cost is that turning networking on now
-	 * means saying where to — which is the point.
-	 *
-	 * Exact origins only, no wildcards. A pattern spanning a multi-tenant host family (`*.s3.
-	 * amazonaws.com`, where each subdomain is somebody else's bucket) reads as one destination and is
-	 * many, and there is no way to write the check that tells a safe wildcard from an unsafe one
-	 * without knowing the service. When wildcards arrive they should arrive with that judgment
-	 * attached, not as a convenience.
-	 */
-	allow: readonly string[];
-	/** Allow http targets (localhost dev / tests). Default false — https only. */
-	allowInsecure?: boolean;
-	/** Response body byte cap — the body crosses into the guest. Default 1 MB. */
-	maxResponseBytes?: number;
-	/** Per-request deadline. Default 30 s. Independent of the EXECUTION deadline, which now also
-	 *  aborts anything still in flight. */
-	timeoutMs?: number;
-	/** DNS for the floor — a host may pin or cache; tests inject a fake. Default node:dns. Narrows
-	 *  what the floor resolves; it cannot skip the range checks applied to the answer. */
-	lookup?: EgressLookup;
-	/**
-	 * A TRUSTED transport beneath the floor — a corporate proxy, a custom TLS stack, a test fake.
-	 *
-	 * It replaces the socket, never the checks: the egress floor has already resolved and vetted the
-	 * address before this is called. Understand what you are taking on, though — the pin rides on a
-	 * non-standard `dispatcher` field, so a transport that ignores it resolves the hostname AGAIN at
-	 * connect time and reopens DNS rebinding, which is the one thing the floor cannot do for you.
-	 *
-	 * A HOST fetch returning a real `Response` — deliberately not {@link SandboxFetch}, which is the
-	 * guest-facing shape the floor produces after capping and flattening the response. This sits on
-	 * the other side of that translation.
-	 */
-	transport?: typeof fetch;
-};
+export type SandboxNetwork = true;
 
 /**
  * One execution's allowance for everything it makes the HOST do.
@@ -188,18 +149,7 @@ export type ExecutionContext = {
 	 *  through `fetchAdapter` below; it does not read `domains`. */
 	egress?: { domains?: readonly string[] } | null;
 	modules?: Record<string, string>;
-	/**
-	 * Network for THIS execution. Absent = airgapped, and that stays the default.
-	 *
-	 * A POLICY, not a function. This slot used to be `fetchAdapter: SandboxFetch` — the host handed
-	 * over the whole door — and a host that wrote `fetchAdapter: fetch` gave the guest 127.0.0.1,
-	 * 169.254.169.254 and the private network with no error and no audit trail. The floor existed and
-	 * was simply not on the path unless someone knew to call it. Making the safe thing short is worth
-	 * something; making the unsafe thing UNSPELLABLE is worth more, so the shape is gone.
-	 *
-	 * The engine now applies {@link governedFetch} itself. What a host can still choose is the policy
-	 * inside it, and — via `transport` — the socket underneath it.
-	 */
+	/** Whether this execution may use the network — see {@link SandboxNetwork}. Absent = airgapped. */
 	network?: SandboxNetwork;
 	/** What this execution may make the host do, across nested tool calls and fetch together.
 	 *  Absent = defaults. See {@link SandboxBudget}. */

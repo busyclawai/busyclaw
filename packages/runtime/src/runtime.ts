@@ -1425,7 +1425,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				audit: config.audit,
 				plugins: config.plugins,
 				resolveContext: resolveGovernanceContext,
-				runTool: async (call, nestedCtx, { rehydrate }) => {
+				runTool: async (call, nestedCtx, { rehydrate, signal }) => {
 					abortIfNeeded(state.abortSignal);
 					const tool = runTools[call.name];
 					const executeTool = tool && toolExecutor(tool);
@@ -1438,7 +1438,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					const output = await executeTool(args, {
 						toolCallId: newId("nested"),
 						messages: [],
-						abortSignal: state.abortSignal,
+						// The run's lifetime AND the caller's, whichever ends first. Combined, never
+						// replaced: a nested caller may narrow how long its own call lives and must not
+						// be able to outlive the run. Without the caller's half, a sandbox execution
+						// ending left the host request it started running to completion — the guest saw
+						// a timeout and the socket did not, so a guest could retire promises faster than
+						// the host retired connections.
+						abortSignal: combinedAbortSignal(state.abortSignal, signal),
 						// v7 requires the toolsContext channel field; busyclaw injects capabilities
 						// through its own seam, so nested leaf calls run context-less.
 						context: undefined,
@@ -1461,7 +1467,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			return nested;
 		};
 
-		const subInvoke: SubInvoke = async (name, args, ctx) => {
+		const subInvoke: SubInvoke = async (name, args, ctx, options) => {
 			// Recursion guard: an invoker-stamped tool cannot be reached from a nested call.
 			// Nested tools never receive a `subInvoke`, so letting one through would only fail
 			// deeper with a worse error — fail closed at the door. runTools (not the static `tools`)
@@ -1496,6 +1502,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			const result = await getNestedCore().handleToolCall(
 				{ name, args: args as JsonObject },
 				ctx,
+				options?.signal ? { signal: options.signal } : undefined,
 			);
 			// A nested needs-approval fails closed AS A VALUE — there is no durable way to park a
 			// live nested execution. Convert to a denied result with a stable reason code, keeping the
