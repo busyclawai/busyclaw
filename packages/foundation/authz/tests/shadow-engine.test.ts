@@ -66,6 +66,50 @@ describe("createShadowPolicyEngine", () => {
 		expect(seen[0]).toMatchObject({ live: "deny", candidate: "permit" });
 	});
 
+	// Per-decision entities reach BOTH sides. Live, because a wrapper that narrows what the request may
+	// name is not observing the decision — it is changing it, and installing a shadow slice would have
+	// denied every run-registered action. Candidate, because comparing against a narrower world reports
+	// divergences the candidate policy never caused, which is exactly the signal shadow mode exists to
+	// produce honestly.
+	it("forwards per-decision entities to BOTH live and candidate", async () => {
+		const live: unknown[] = [];
+		const candidate: unknown[] = [];
+		const record = (into: unknown[]): PolicyEngine => ({
+			authorize: (_r, entities) => {
+				into.push(entities);
+				return { decision: "permit" };
+			},
+		});
+		const engine = createShadowPolicyEngine({
+			live: record(live),
+			candidate: () => record(candidate),
+			observe: () => {},
+		});
+		await engine.authorize(req(), [{ uid: { type: "Action", id: "x" } }]);
+		expect(live).toEqual([[{ uid: { type: "Action", id: "x" } }]]);
+		expect(candidate).toEqual([[{ uid: { type: "Action", id: "x" } }]]);
+	});
+
+	it("forwards per-decision entities when the candidate failed to build", async () => {
+		const live: unknown[] = [];
+		const engine = createShadowPolicyEngine({
+			live: {
+				authorize: (_r, entities) => {
+					live.push(entities);
+					return { decision: "permit" };
+				},
+			},
+			candidate: () => {
+				throw new Error("malformed shadow slice");
+			},
+			observe: () => {},
+		});
+		// The passthrough branch is a SECOND call site for the same argument, and the one a broken
+		// customer slice actually lands on.
+		await engine.authorize(req(), [{ uid: { type: "Action", id: "x" } }]);
+		expect(live).toEqual([[{ uid: { type: "Action", id: "x" } }]]);
+	});
+
 	it("passes through the live engine's capabilities", () => {
 		const seen: ShadowDivergence[] = [];
 		const engine = createShadowPolicyEngine({

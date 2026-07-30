@@ -47,16 +47,20 @@ export function createShadowPolicyEngine(config: {
 	return {
 		// The shadow wrapper decides nothing of its own — it speaks with the live engine's capabilities.
 		capabilities: config.live.capabilities,
-		async authorize(req) {
+		// `entities` reaches BOTH sides. Live, because a wrapper that narrows what the request may name
+		// is not observing the decision, it is changing it — dropping this denied every run-registered
+		// action the moment any source contributed a shadow slice. Candidate, because a shadow run
+		// compared against a narrower world reports divergences the candidate policy never caused.
+		async authorize(req, entities) {
 			// No candidate (build failed) → pure passthrough.
-			if (!candidate) return config.live.authorize(req);
+			if (!candidate) return config.live.authorize(req, entities);
 			// Both run in parallel, but the candidate's rejection is CAUGHT to undefined — the live
 			// result must survive a broken shadow policy.
 			const [live, candidateResult] = await Promise.all([
-				config.live.authorize(req),
+				config.live.authorize(req, entities),
 				// Promise.resolve: the port allows a sync OR async authorize; either way a rejection is
 				// caught to undefined so a broken candidate can never take down the live result.
-				Promise.resolve(candidate.authorize(req)).then(
+				Promise.resolve(candidate.authorize(req, entities)).then(
 					(result) => result,
 					() => undefined,
 				),

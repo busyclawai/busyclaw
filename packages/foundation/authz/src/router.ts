@@ -43,7 +43,11 @@ export function createOrgPolicyRouter(
 
 	return {
 		capabilities: config.capabilities,
-		async authorize(req) {
+		// `entities` is forwarded, not consumed: routing chooses WHICH bundle answers, never what the
+		// request may name. Dropping it made every run-registered action unnameable in the bundle the
+		// router picked, so the floor denied each one with "no policy permits this action" — the exact
+		// tools per-org routing exists to govern.
+		async authorize(req, entities) {
 			// Typed by the PARC contract (validated at the gate) — no duck-probing. BOTH halves or no
 			// boundary: half a key names no boundary, and routing on it would hand this decision another
 			// boundary's compiled policy bundle.
@@ -77,7 +81,7 @@ export function createOrgPolicyRouter(
 			}
 
 			const engine = await pending;
-			return engine.authorize(req);
+			return engine.authorize(req, entities);
 		},
 	};
 }

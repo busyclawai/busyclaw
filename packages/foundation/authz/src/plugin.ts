@@ -94,19 +94,15 @@ export function createPolicyPlugin<Ctx extends Record<string, unknown>>(
 				handler: async (call: ToolCall, ctx: TurnContext) => {
 					const req = validateRequest(config.mapCall(call, ctx as Ctx));
 					// Per-decision entities, when the config derives any from this request's context —
-					// how a per-run action becomes nameable without recompiling the engine. Passed
-					// positionally to engines that accept them (cedar merges them UNDER its directory);
-					// an engine whose `authorize` takes one argument simply ignores the extra.
-					const extra = config.entitiesFor?.(ctx as Ctx);
-					const result =
-						extra === undefined
-							? await config.engine.authorize(req)
-							: await (
-									config.engine.authorize as (
-										request: PolicyRequest,
-										entities?: unknown,
-									) => Promise<PolicyResult>
-								)(req, extra);
+					// how a per-run action becomes nameable without recompiling the engine. Declared on
+					// the port (cedar merges them UNDER its directory); an engine with no such notion
+					// ignores the argument. This used to cast its way past a one-parameter port, which
+					// hid two wrapper engines dropping the supplement and denying every run-registered
+					// action; the cast is gone, so a wrapper that drops it is at least readable as such.
+					const result = await config.engine.authorize(
+						req,
+						config.entitiesFor?.(ctx as Ctx),
+					);
 					return decide(validateResult(result));
 				},
 			},

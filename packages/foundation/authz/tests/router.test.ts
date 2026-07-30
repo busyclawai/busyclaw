@@ -143,6 +143,28 @@ describe("createOrgPolicyRouter", () => {
 		expect(await router.authorize(req("org-a"))).toEqual(decision);
 	});
 
+	// The router is a WRAPPER, and the gate hands per-decision entities positionally — the supplement
+	// that makes a run-registered action nameable at all. Routing chooses which bundle answers; it must
+	// not narrow what that bundle may name. Dropping the argument denied every registered tool with "no
+	// policy permits this action", which reads as a policy decision and is really a lost parameter.
+	// A wrapper of one parameter stays assignable to the port, so only a test can hold this.
+	it("forwards per-decision entities to the resolved bundle", async () => {
+		const seen: unknown[] = [];
+		const router = createOrgPolicyRouter({
+			keyFor: () => "system",
+			engineFor: (): PolicyEngine => ({
+				authorize: (_r, entities) => {
+					seen.push(entities);
+					return { decision: "permit" };
+				},
+			}),
+		});
+		await router.authorize(req("org-a"), [
+			{ uid: { type: "Action", id: "x" } },
+		]);
+		expect(seen).toEqual([[{ uid: { type: "Action", id: "x" } }]]);
+	});
+
 	it("exposes the configured capabilities as its own", () => {
 		const router = createOrgPolicyRouter({
 			keyFor: () => "system",
