@@ -93,8 +93,7 @@ export function planHttpRequest(
 		}
 	}
 
-	// Substitute {name} tokens in the path template; only declared path params are substituted, and
-	// their values are already percent-encoded, so nothing escapes the segment it occupies.
+	// Substitute {name} tokens in the path template; only declared path params are substituted.
 	const operationPath = binding.path.replace(
 		/\{([^}]+)\}/g,
 		(whole, token: string) => pathValues.get(token) ?? whole,
@@ -102,6 +101,26 @@ export function planHttpRequest(
 	const path = joinPath(basePath, operationPath);
 	const queryString = queryPairs.map(([k, v]) => `${k}=${v}`).join("&");
 	const url = `${origin}${path}${queryString ? `?${queryString}` : ""}`;
+
+	// R-H06. Percent-encoding stops a value BREAKING OUT of its segment — `/`, `?`, `#`, `:` all
+	// encode — and that was taken to mean nothing could escape. But `encodeURIComponent` leaves `.`
+	// untouched, so a value of `..` survives intact and is a RELATIVE segment: the URL canonicalizes
+	// `/v1/files/..` to `/v1/`, and the model reaches a sibling route on the same origin while
+	// keeping everything decided for the original operation — the policy verdict, the method, and
+	// the credential attached to it. The egress floor sees nothing wrong because the origin never
+	// changed. The floor authorized one operation; a different one is what runs.
+	//
+	// The check is the canonicalization itself. If normalizing the URL CHANGES the path we built,
+	// something in it was not the literal path we meant to request — which covers `.` and `..` and
+	// whatever else a future encoding rule leaves through, rather than a list of characters to keep
+	// in step with the standard.
+	const canonicalPath = new URL(url).pathname;
+	if (canonicalPath !== path) {
+		throw configurationError(
+			"registered tool path arguments do not resolve to the registered route",
+			{ registered: path, resolved: canonicalPath },
+		);
+	}
 
 	const plan: HttpRequestPlan = {
 		method: binding.method.toUpperCase(),
@@ -126,14 +145,28 @@ export function planHttpRequest(
 }
 
 /** Percent-encode a path value so `/`, `?`, `#`, `:` cannot break out of the path segment. Arrays
- *  serialize as OpenAPI "simple" style (comma-joined), each element encoded. */
+ *  serialize as OpenAPI "simple" style (comma-joined), each element encoded.
+ *
+ *  Encoding is not enough on its own: `.` and `..` pass through unchanged and are RELATIVE segments
+ *  that canonicalization resolves away, taking the parent with them. Refused by name here so the
+ *  caller gets a message about the argument they sent, rather than only the structural check after
+ *  the URL is assembled — that check is the backstop, this is the explanation. */
 function encodePathValue(value: JsonValue): string {
 	if (Array.isArray(value)) {
-		return value
-			.map((item) => encodeURIComponent(scalarString(item)))
-			.join(",");
+		return value.map((item) => encodeOneSegment(item)).join(",");
 	}
-	return encodeURIComponent(scalarString(value));
+	return encodeOneSegment(value);
+}
+
+function encodeOneSegment(value: JsonValue): string {
+	const encoded = encodeURIComponent(scalarString(value));
+	if (encoded === "." || encoded === "..") {
+		throw configurationError(
+			"registered tool path argument is a relative path segment",
+			{ value: encoded },
+		);
+	}
+	return encoded;
 }
 
 /** Serialize a query parameter per its captured style/explode. Returns already-encoded k=v pairs.

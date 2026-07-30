@@ -197,3 +197,64 @@ describe("normalizeOrigin", () => {
 		expect(() => normalizeOrigin("not a url")).toThrow(/server/);
 	});
 });
+
+// R-H06: a path argument must not resolve to a route other than the registered one.
+//
+// Percent-encoding stops a value BREAKING OUT of its segment — `/`, `?`, `#`, `:` all encode — and
+// that was taken to mean nothing could escape. `encodeURIComponent` leaves `.` untouched, so `..`
+// survives intact and is a RELATIVE segment: `/v1/files/..` canonicalizes to `/v1/`. The model
+// reaches a sibling route on the same origin while keeping everything decided for the original
+// operation — the policy verdict, the method, and the credential attached to it. The egress floor
+// sees nothing wrong, because the origin never changed.
+
+describe("planHttpRequest — dot segments", () => {
+	const files = () =>
+		binding({
+			method: "get",
+			path: "/v1/files/{name}",
+			server: "https://api.test",
+			parameters: [{ name: "name", in: "path", required: true }],
+		});
+
+	it("plans an ordinary path argument unchanged", () => {
+		expect(planHttpRequest(files(), { name: "report.txt" }).url).toBe(
+			"https://api.test/v1/files/report.txt",
+		);
+	});
+
+	it("refuses `..`, which would reach the parent route", () => {
+		expect(() => planHttpRequest(files(), { name: ".." })).toThrow(
+			/relative path segment/,
+		);
+	});
+
+	it("refuses `.`, which resolves the segment away", () => {
+		expect(() => planHttpRequest(files(), { name: "." })).toThrow(
+			/relative path segment/,
+		);
+	});
+
+	it("still encodes a separator rather than refusing it", () => {
+		// `a/b` is not an escape — it encodes to `a%2Fb` and stays in its segment. Refusing it would
+		// break legitimate arguments; the rule is about segments that CANONICALIZE away, not about
+		// characters that look dangerous.
+		expect(planHttpRequest(files(), { name: "a/b" }).url).toBe(
+			"https://api.test/v1/files/a%2Fb",
+		);
+	});
+
+	it("refuses any request whose URL does not canonicalize to the registered path", () => {
+		// The structural backstop, independent of the character check: if normalizing the URL changes
+		// the path we built, something in it was not the literal path we meant to request. This is
+		// what covers whatever a future encoding rule lets through.
+		const dotted = binding({
+			method: "get",
+			path: "/v1/../admin/{name}",
+			server: "https://api.test",
+			parameters: [{ name: "name", in: "path", required: true }],
+		});
+		expect(() => planHttpRequest(dotted, { name: "x" })).toThrow(
+			/do not resolve to the registered route/,
+		);
+	});
+});
