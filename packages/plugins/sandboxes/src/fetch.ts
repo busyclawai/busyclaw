@@ -38,6 +38,13 @@ export type GovernedFetchOptions = {
 	/** Injected for tests; defaults to the fetch that matches the egress pin (NOT the global one —
 	 *  see `pinnedFetch`). */
 	fetch?: typeof fetch;
+	/** The EXECUTION's lifetime. Aborted when the sandbox finishes for any reason, so a request the
+	 *  guest abandoned does not outlive the guest — `timeoutMs` bounds one request, this bounds the
+	 *  set of them. */
+	signal?: AbortSignal;
+	/** Same as `fetch`, under the name `SandboxNetwork` uses — so a host's network policy object
+	 *  passes through unchanged. */
+	transport?: typeof fetch;
 };
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
@@ -85,7 +92,7 @@ async function readCapped(
 export function governedFetch(
 	options: GovernedFetchOptions = {},
 ): SandboxFetch {
-	const fetchImpl = options.fetch ?? pinnedFetch;
+	const fetchImpl = options.transport ?? options.fetch ?? pinnedFetch;
 	const maxResponseBytes =
 		options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -107,7 +114,10 @@ export function governedFetch(
 				...request,
 				// A 3xx is DATA here, never a hop — see above.
 				redirect: "manual",
-				signal: AbortSignal.timeout(timeoutMs),
+				// Two deadlines, whichever comes first: this request's own, and the execution's.
+				signal: options.signal
+					? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
+					: AbortSignal.timeout(timeoutMs),
 				// Non-standard RequestInit field the built-in (undici-backed) fetch reads: carries the pin.
 				dispatcher: pin.dispatcher,
 			} as RequestInit);

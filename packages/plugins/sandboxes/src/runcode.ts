@@ -38,15 +38,15 @@ const DEFAULT_DESCRIPTION =
 
 export function runCodeTool(input: {
 	sandbox: Sandbox;
-	/** Per-execution context assembly. Host-supplied; may close over integration/actor to build a
-	 *  governed fetchAdapter. Default: {} (no fetch, no fs, defaults-only bounds).
+	/** Per-execution context assembly. Host-supplied; may close over integration/actor. Default: {}
+	 *  (no network, no fs, defaults-only bounds).
 	 *
-	 *  The guest has no network stack of its own, so `fetchAdapter` is the ONLY way out — and the
-	 *  provider turns fetch on from its mere presence, without inspecting what it does. Pass
-	 *  `governedFetch()` rather than `fetch`: a bare passthrough reaches loopback, the private
-	 *  network, and the cloud metadata endpoint.
+	 *  The guest has no network stack of its own — QuickJS has no sockets and no DNS — so nothing
+	 *  leaves except through this. Declaring `network` turns it on and the ENGINE applies the egress
+	 *  floor; there is no way to hand the guest an ungoverned door, which there used to be:
 	 *
-	 *      context: () => ({ fetchAdapter: governedFetch() })
+	 *      context: () => ({ network: {} })              // floor defaults: https only, 1MB, 30s
+	 *      context: () => ({ network: { allowInsecure: true } })   // local dev
 	 */
 	context?: (options: { toolCallId: string }) => ExecutionContext;
 	description?: string;

@@ -12,9 +12,9 @@ import {
 } from "@sebastianwessel/quickjs";
 import type { IFs, NestedDirectoryJSON, Volume } from "memfs";
 import type {
-	ExecutionContext,
 	ExecutionResult,
 	IsolationPosture,
+	ProviderExecutionContext,
 	Sandbox,
 	SandboxExecution,
 	SandboxToolInvoker,
@@ -335,7 +335,7 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 		async execute(input: {
 			code: string;
 			invoker: SandboxToolInvoker;
-			context: ExecutionContext;
+			context: ProviderExecutionContext;
 		}): Promise<SandboxExecution> {
 			const { runSandboxed } = await load();
 			// Bounded on three axes, because a log line is host memory the guest's own limit never

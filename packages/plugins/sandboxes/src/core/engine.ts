@@ -3,13 +3,16 @@
 
 import { validationError } from "@busyclaw/contracts";
 import { type } from "arktype";
+import { governedFetch } from "../fetch";
 import {
 	type ExecutionContext,
 	executionResult,
+	type ProviderExecutionContext,
 	type Sandbox,
 	type SandboxExecution,
 	type SandboxToolInvoker,
 	sandboxInvokeInput,
+	type VolumeTree,
 } from "./contracts";
 
 /** Reason code for a malformed invoke shape coming out of sandboxed code. */
@@ -82,11 +85,35 @@ export async function executeInSandbox(input: {
 }): Promise<SandboxExecution> {
 	const code = normalizeCode(input.code);
 	const invoker = wrapInvoker(input.invoker);
-	const { output, fsTree } = await input.sandbox.execute({
-		code,
-		invoker,
-		context: input.context,
-	});
+
+	// The floor goes on the path HERE, once, for every execution — a host declares network policy and
+	// cannot hand over an unfenced door (see ExecutionContext.network).
+	//
+	// The controller is the other half. A sandbox deadline rejects the GUEST's promise, but the host
+	// request it was waiting on carried on to completion: the guest saw a timeout, the socket did
+	// not. A guest could therefore retire promises faster than the host retired connections, and
+	// abandoned requests still spent their full 30 seconds against whatever they were aimed at.
+	// Aborting in `finally` binds them — when the execution is over, so is its network.
+	const { network, ...rest } = input.context;
+	const outstanding = new AbortController();
+	const context: ProviderExecutionContext = network
+		? {
+				...rest,
+				fetchAdapter: governedFetch({ ...network, signal: outstanding.signal }),
+			}
+		: rest;
+
+	let output: unknown;
+	let fsTree: VolumeTree | undefined;
+	try {
+		({ output, fsTree } = await input.sandbox.execute({
+			code,
+			invoker,
+			context,
+		}));
+	} finally {
+		outstanding.abort();
+	}
 	const valid = executionResult(output);
 	if (valid instanceof type.errors) {
 		throw validationError("sandbox execution result invalid", valid.summary, {

@@ -6,6 +6,7 @@
 // crosses a boundary — the execution result and the invoker input. Ports (Sandbox,
 // SandboxToolInvoker) and host-assembled views (ExecutionContext, IsolationPosture) stay plain TS.
 
+import type { EgressLookup } from "@busyclaw/egress";
 import { type } from "arktype";
 
 // UNTRUSTED (sandbox → host): validated by the ENGINE at the boundary. `result` is the value the
@@ -34,6 +35,44 @@ export type SandboxFetch = (
 	input: string | { readonly href: string },
 	init?: unknown,
 ) => Promise<unknown>;
+
+/**
+ * What a host may choose about the guest's network. Every field narrows the floor; none removes it.
+ */
+export type SandboxNetwork = {
+	/** Allow http targets (localhost dev / tests). Default false — https only. */
+	allowInsecure?: boolean;
+	/** Response body byte cap — the body crosses into the guest. Default 1 MB. */
+	maxResponseBytes?: number;
+	/** Per-request deadline. Default 30 s. Independent of the EXECUTION deadline, which now also
+	 *  aborts anything still in flight. */
+	timeoutMs?: number;
+	/** DNS for the floor — a host may pin or cache; tests inject a fake. Default node:dns. Narrows
+	 *  what the floor resolves; it cannot skip the range checks applied to the answer. */
+	lookup?: EgressLookup;
+	/**
+	 * A TRUSTED transport beneath the floor — a corporate proxy, a custom TLS stack, a test fake.
+	 *
+	 * It replaces the socket, never the checks: the egress floor has already resolved and vetted the
+	 * address before this is called. Understand what you are taking on, though — the pin rides on a
+	 * non-standard `dispatcher` field, so a transport that ignores it resolves the hostname AGAIN at
+	 * connect time and reopens DNS rebinding, which is the one thing the floor cannot do for you.
+	 *
+	 * A HOST fetch returning a real `Response` — deliberately not {@link SandboxFetch}, which is the
+	 * guest-facing shape the floor produces after capping and flattening the response. This sits on
+	 * the other side of that translation.
+	 */
+	transport?: typeof fetch;
+};
+
+/**
+ * What a PROVIDER receives: the host's context with the network already resolved into one governed
+ * adapter. Providers never see host network options and cannot be handed a raw fetch — by the time
+ * a context reaches here the floor is on the path, or there is no network at all.
+ */
+export type ProviderExecutionContext = Omit<ExecutionContext, "network"> & {
+	fetchAdapter?: SandboxFetch;
+};
 
 // PORTS + HOST-ASSEMBLED VIEWS: plain types — no runtime boundary to validate.
 
@@ -87,7 +126,7 @@ export interface Sandbox {
 	execute: (input: {
 		code: string; // already normalized by the ENGINE
 		invoker: SandboxToolInvoker; // engine-wrapped; routes into handleToolCall
-		context: ExecutionContext; // normalized: limits, egress, injected capabilities
+		context: ProviderExecutionContext; // network already resolved into a governed adapter
 	}) => Promise<SandboxExecution>;
 	dispose?: () => Promise<void>;
 }
@@ -108,8 +147,19 @@ export type ExecutionContext = {
 	 *  through `fetchAdapter` below; it does not read `domains`. */
 	egress?: { domains?: readonly string[] } | null;
 	modules?: Record<string, string>;
-	/** The governed fetch the host supplies for this execution (see SandboxFetch). */
-	fetchAdapter?: SandboxFetch;
+	/**
+	 * Network for THIS execution. Absent = airgapped, and that stays the default.
+	 *
+	 * A POLICY, not a function. This slot used to be `fetchAdapter: SandboxFetch` — the host handed
+	 * over the whole door — and a host that wrote `fetchAdapter: fetch` gave the guest 127.0.0.1,
+	 * 169.254.169.254 and the private network with no error and no audit trail. The floor existed and
+	 * was simply not on the path unless someone knew to call it. Making the safe thing short is worth
+	 * something; making the unsafe thing UNSPELLABLE is worth more, so the shape is gone.
+	 *
+	 * The engine now applies {@link governedFetch} itself. What a host can still choose is the policy
+	 * inside it, and — via `transport` — the socket underneath it.
+	 */
+	network?: SandboxNetwork;
 	/** In-memory virtual filesystem tree to seed for this execution. memfs lives in the HOST heap and
 	 *  is NOT bounded by `memoryLimitBytes`, so the provider enforces a byte budget at BOTH the seed
 	 *  (load) and cumulative writes — see the quickjs provider's `maxFsBytes`. Absent = no fs. */
