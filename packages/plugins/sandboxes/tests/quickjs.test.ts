@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-	SandboxFetch,
 	SandboxInvokeInput,
 	SandboxToolInvoker,
 } from "../src/core/contracts";
@@ -80,6 +79,7 @@ describe("@busyclaw/sandboxes quickjs provider", () => {
 			invoker: noInvoke,
 			context: {
 				network: {
+					allow: ["https://example.test"],
 					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 					transport: async (input) =>
 						new Response(`body:${String(input)}`, { status: 200 }),

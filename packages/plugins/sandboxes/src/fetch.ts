@@ -15,9 +15,16 @@
 // default — a sandbox that silently gains the network because a helper shipped would be a weaker
 // posture, not a stronger one. What changes is that opting IN no longer means opting out of the
 // floor: the safe path is now the short one.
+//
+// And opting in no longer means opting into the whole internet. The floor is SSRF containment — it
+// keeps a guest off 169.254.169.254 and the private network — but it has, correctly, no opinion
+// about which public hosts a workload has business with, so "network on" used to mean every host
+// that would answer. For model-authored code that is the exfiltration channel with the fewest moving
+// parts: read something, POST it somewhere. `allow` is the destination policy the floor was never
+// meant to be, and it is required, because a default nobody typed is a decision nobody made.
 
 import { configurationError } from "@busyclaw/contracts";
-import type { EgressLookup } from "@busyclaw/egress";
+import { type EgressLookup, originOf } from "@busyclaw/egress";
 import {
 	assertEgressAllowedOnNode,
 	pinnedConnection,
@@ -26,6 +33,10 @@ import {
 import type { SandboxFetch } from "./core/contracts";
 
 export type GovernedFetchOptions = {
+	/** The origins this execution may reach — see {@link SandboxNetwork.allow}. Required, and empty
+	 *  means no egress. Checked BEFORE the floor, so a destination nobody declared is never even
+	 *  resolved: DNS for an attacker-chosen name is itself a signal leaving the host. */
+	allow: readonly string[];
 	/** Allow http targets (localhost dev / tests). Default false — https only. */
 	allowInsecure?: boolean;
 	/** DNS override for the floor (tests inject a fake; hosts can pin). Default node:dns. */
@@ -89,16 +100,33 @@ async function readCapped(
  * response is returned as-is and the guest may choose to request the new location explicitly, which
  * re-runs the floor on it.
  */
-export function governedFetch(
-	options: GovernedFetchOptions = {},
-): SandboxFetch {
+export function governedFetch(options: GovernedFetchOptions): SandboxFetch {
 	const fetchImpl = options.transport ?? options.fetch ?? pinnedFetch;
 	const maxResponseBytes =
 		options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+	const allow = new Set(options.allow);
+
 	return async (input, init) => {
 		const url = typeof input === "string" ? input : input.href;
+
+		// Declared destinations first, before the floor resolves anything. Two reasons in this order:
+		// a host nobody declared must not be looked up, because a DNS query for an attacker-chosen
+		// name is already a signal leaving this machine; and the answer here needs no network, so the
+		// common refusal is also the cheap one.
+		//
+		// `originOf` on both sides, so the comparison is between two values computed the same way —
+		// `https://API.example:443` and `https://api.example` are the same destination, and a check
+		// that disagreed would refuse traffic the host meant to permit.
+		const target = originOf(url);
+		if (!allow.has(target)) {
+			throw configurationError(
+				"sandbox fetch target is not a declared destination",
+				{ origin: target, declared: [...allow] },
+			);
+		}
+
 		const decision = await assertEgressAllowedOnNode(url, {
 			...(options.allowInsecure !== undefined
 				? { allowInsecure: options.allowInsecure }

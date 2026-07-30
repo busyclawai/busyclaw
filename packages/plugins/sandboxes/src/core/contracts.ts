@@ -40,6 +40,28 @@ export type SandboxFetch = (
  * What a host may choose about the guest's network. Every field narrows the floor; none removes it.
  */
 export type SandboxNetwork = {
+	/**
+	 * The origins this execution may reach — `https://api.example` form, matched exactly against the
+	 * guest URL's own origin. REQUIRED, and an empty list means no egress at all.
+	 *
+	 * Declaring `network` used to mean "the whole public internet": the floor rejected private ranges
+	 * and loopback, and everything else was reachable. That is containment against SSRF, not a
+	 * destination policy — a guest running model-authored code could POST anything it had read to any
+	 * host that would take it, and the floor's job is to stop it reaching the metadata service, not to
+	 * have an opinion about pastebins.
+	 *
+	 * Required rather than defaulted-to-empty for the same reason `fetchAdapter` was deleted: a
+	 * default is a thing people do not notice they accepted. `allow: []` is a sentence a reader
+	 * understands; a missing field is one they never see. The cost is that turning networking on now
+	 * means saying where to — which is the point.
+	 *
+	 * Exact origins only, no wildcards. A pattern spanning a multi-tenant host family (`*.s3.
+	 * amazonaws.com`, where each subdomain is somebody else's bucket) reads as one destination and is
+	 * many, and there is no way to write the check that tells a safe wildcard from an unsafe one
+	 * without knowing the service. When wildcards arrive they should arrive with that judgment
+	 * attached, not as a convenience.
+	 */
+	allow: readonly string[];
 	/** Allow http targets (localhost dev / tests). Default false — https only. */
 	allowInsecure?: boolean;
 	/** Response body byte cap — the body crosses into the guest. Default 1 MB. */

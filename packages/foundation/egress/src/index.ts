@@ -43,6 +43,31 @@ export type EgressDecision = {
 	family: number;
 };
 
+/**
+ * The canonical origin of a URL — scheme + host, host lowercased, a default port dropped.
+ *
+ * ONE implementation, in foundation, because the answer is compared across tiers: the runtime derives
+ * a registered tool's origin from its binding, the floor stamps `context.server` from the same value,
+ * and a sandbox matches a guest's target against a host's declared list. Two of those computing
+ * "the origin" slightly differently is a comparison that silently fails — `https://API.x:443` and
+ * `https://api.x` are the same destination, and any layer that thinks otherwise refuses traffic it
+ * meant to allow or, worse, allows traffic it meant to refuse.
+ *
+ * Throws on an unparseable URL rather than returning a sentinel: every caller is deciding whether to
+ * let something out, and a caller that cannot name the destination must not proceed.
+ */
+export function originOf(url: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw configurationError("egress target is not a valid URL", { url });
+	}
+	// `URL.host` carries the port only when it is non-default, and lowercases the hostname — the
+	// normalization is the platform's, not ours, so it cannot drift from what actually gets dialled.
+	return `${parsed.protocol}//${parsed.host}`;
+}
+
 /** Assert an egress target is allowed, returning the pinned address. Throws a clear, auditable
  *  error for a blocked target — never a silent deny. */
 export async function assertEgressAllowed(

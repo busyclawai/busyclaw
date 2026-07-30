@@ -65,7 +65,10 @@ describe("sandbox network — the floor is not optional", () => {
 				'  return "reached:" + r.status;',
 				'} catch (e) { return "blocked"; }',
 			].join("\n"),
-			{ network: { allowInsecure: true } },
+			// The origin IS declared, so the destination check passes it through and the FLOOR is what
+			// refuses. Leaving it undeclared would make this pass for the wrong reason — a green test
+			// naming the floor while never reaching it.
+			{ network: { allow: [`http://127.0.0.1:${port}`], allowInsecure: true } },
 		);
 		expect(output.result).toBe("blocked");
 	});
@@ -81,7 +84,13 @@ describe("sandbox network — the floor is not optional", () => {
 				'  return "reached";',
 				'} catch (e) { return "blocked"; }',
 			].join("\n"),
-			{ network: { allowInsecure: true } },
+			// Declared, for the same reason as above: the floor is the thing under test.
+			{
+				network: {
+					allow: ["http://169.254.169.254"],
+					allowInsecure: true,
+				},
+			},
 		);
 		expect(output.result).toBe("blocked");
 	});
@@ -109,6 +118,7 @@ describe("sandbox network — the execution owns its requests", () => {
 				// A fake resolver keeps this hermetic: the floor still range-checks the answer, it just
 				// does not need DNS to get one.
 				network: {
+					allow: ["https://example.com"],
 					transport,
 					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 				},

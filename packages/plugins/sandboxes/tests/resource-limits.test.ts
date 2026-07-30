@@ -531,6 +531,7 @@ describe("@busyclaw/sandboxes — the execution's shared host budget (R-H13)", (
 			context: {
 				budget: { maxHostCalls: 2 },
 				network: {
+					allow: ["https://example.com"],
 					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 					transport: async () => new Response("hi", { status: 200 }),
 				},

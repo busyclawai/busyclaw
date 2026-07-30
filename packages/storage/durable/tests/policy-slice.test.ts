@@ -72,7 +72,10 @@ describe("createRegistryStores — policy_slice", () => {
 	// takes and the update drops is worse than one it rejects.
 	it("upsert REPLACES every column it accepted, not a hand-picked few", async () => {
 		const { policySlices } = createRegistryStores(memoryAdapter());
-		await policySlices.upsert({ ...sliceInput("org-a", "guard"), plane: "tool" });
+		await policySlices.upsert({
+			...sliceInput("org-a", "guard"),
+			plane: "tool",
+		});
 		await policySlices.upsert({
 			...sliceInput("org-a", "guard"),
 			plane: "api",

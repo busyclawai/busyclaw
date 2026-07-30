@@ -13,6 +13,7 @@ import type {
 	ToolDescriptor,
 } from "@busyclaw/contracts";
 import { configurationError } from "@busyclaw/contracts";
+import { originOf } from "@busyclaw/egress";
 import type {
 	OpenApiBinding,
 	OpenApiParameterBinding,
@@ -53,7 +54,10 @@ function parseServer(server: string | undefined): {
 	// The server URL may carry a base path (https://api.x/v1); the operation path appends to it.
 	const basePath =
 		parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
-	return { origin: `${parsed.protocol}//${parsed.host}`, basePath };
+	// The origin comes from the foundation helper, not a second copy of the same two-line join: the
+	// floor, the sandbox and this all compare origins with each other, and a private version here
+	// would be a difference nobody notices until a comparison silently stops matching.
+	return { origin: originOf(server), basePath };
 }
 
 /** The canonical origin of a server URL (default ports dropped, host lowercased). */
