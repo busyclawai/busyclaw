@@ -30,6 +30,7 @@ import type {
 } from "@busyclaw/contracts";
 import {
 	configurationError,
+	errorMessage,
 	jsonObject,
 	jsonValue,
 	validationError,
@@ -259,7 +260,19 @@ async function performFetch(
 				timeoutMs: deps.timeoutMs,
 			});
 		}
-		throw error;
+		// L-03. By this point the URL may CARRY A CREDENTIAL: an `apiKey`/`in: query` scheme appends
+		// it as a query parameter, so `plan.url` is secret-bearing from `applyCredentials` onward. A
+		// transport error frequently quotes the URL it failed on, and rethrowing it verbatim put that
+		// key into whatever read the error — a log line, an operator notice, a tool result.
+		//
+		// The origin and method are what a caller needs to act; the query string is the part that is
+		// never theirs. Reported rather than swallowed, with the cause's own text left behind because
+		// it is the thing that quotes the URL.
+		throw configurationError("registered tool request failed", {
+			origin: plan.origin,
+			method: plan.method,
+			cause: sanitizeTransportMessage(errorMessage(error)),
+		});
 	}
 	try {
 		return await readResponse(response, deps.maxResponseBytes);
@@ -293,6 +306,15 @@ const MODEL_VISIBLE_HEADERS = [
 	"x-ratelimit-remaining",
 	"x-ratelimit-reset",
 ] as const;
+
+/**
+ * Strip anything that looks like a URL query from a transport error's text. A driver quotes the URL
+ * it failed on, and by then the URL can carry an `in: query` credential — so the message is kept for
+ * its diagnosis and cut at the `?`.
+ */
+function sanitizeTransportMessage(message: string): string {
+	return message.replace(/(https?:\/\/[^\s"']+)\?[^\s"']*/gi, "$1?<redacted>");
+}
 
 async function readResponse(
 	response: Response,

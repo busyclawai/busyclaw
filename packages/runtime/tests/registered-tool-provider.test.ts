@@ -591,3 +591,55 @@ describe("registered tool — the result is an allowlist", () => {
 		expect(JSON.stringify(result)).not.toContain("SECRET");
 	});
 });
+
+// L-03: a URL that carries a credential must not travel in an error.
+//
+// An `apiKey` / `in: query` scheme appends its secret as a query parameter, so `plan.url` is
+// secret-bearing from `applyCredentials` onward. A transport error frequently quotes the URL it
+// failed on, and rethrowing it verbatim put that key into whatever read the error — a log line, an
+// operator notice, a tool result.
+describe("registered tool — a failed request does not carry the key", () => {
+	it("reports the origin and method, and cuts the query out of the cause", async () => {
+		const { fn } = fakeFetch(() => {
+			throw new Error(
+				"connect ECONNREFUSED for https://api.example/v1/pets?api_key=SUPERSECRET&x=1",
+			);
+		});
+		const provider = createRegisteredToolProvider({
+			secrets: noSecrets,
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					address: "petstore.listPets",
+					governance: { access: "read" },
+					inputSchema: { type: "object", properties: {} },
+					binding: {
+						method: "get",
+						path: "/pets",
+						server: "https://api.example/v1",
+						parameters: [],
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+
+		let thrown: unknown;
+		try {
+			await exec(tools, "petstore.listPets", {});
+		} catch (error) {
+			thrown = error;
+		}
+
+		const serialized = JSON.stringify({
+			message: (thrown as Error)?.message,
+			details: (thrown as { details?: unknown })?.details,
+		});
+		expect(serialized).not.toContain("SUPERSECRET");
+		expect(serialized).toContain("api.example");
+		expect(serialized).toContain("redacted");
+	});
+});
