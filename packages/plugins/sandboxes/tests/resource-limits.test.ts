@@ -8,7 +8,7 @@
 // that rejection and converts it to an error VALUE — the abort is isolated to the single execution,
 // so the same provider instance and the host stay usable. R2 below asserts all three.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SandboxToolInvoker } from "../src/core/contracts";
 import { executeInSandbox } from "../src/index";
 import { quickjs } from "../src/providers/quickjs/index";
@@ -376,5 +376,81 @@ describe("@busyclaw/sandboxes host-side resource limits — multi-path and lengt
 
 		expect(res.error).toMatch(/quota exceeded/);
 		await hostStillWorks();
+	}, 30000);
+});
+
+// ── R-H13: guest output must not reach the operator's own stdout ─────────────────────────────────
+//
+// The provider overrode six console levels under a comment saying nothing reached host stdout. The
+// wrapper builds a FULL Node console whose every method calls the HOST's `console.*` directly and
+// merges ours over it, so the other fourteen were inherited: `count`, `table`, `group`, `dir`,
+// `time`, `assert` all wrote to the operator's terminal — past the line cap, past the byte cap,
+// captured by nothing and announced by nothing.
+
+describe("@busyclaw/sandboxes — no console method escapes to the host (R-H13)", () => {
+	it.each([
+		"count",
+		"table",
+		"group",
+		"dir",
+		"assert",
+		"timeLog",
+	] as const)("routes console.%s to the run's log sink, not the host console", async (method) => {
+		const spy = vi
+			.spyOn(console, method as "count")
+			.mockImplementation(() => undefined);
+		try {
+			const { output } = await executeInSandbox({
+				sandbox: quickjs(),
+				code: `console.${method}("ESCAPE_MARKER"); return 1;`,
+				invoker: noInvoke,
+				context: {},
+			});
+
+			expect(output.result).toBe(1);
+			expect(spy).not.toHaveBeenCalled();
+			// It was not dropped either — it landed where the caps can see it.
+			expect((output.logs ?? []).join("\n")).toContain("ESCAPE_MARKER");
+		} finally {
+			spy.mockRestore();
+		}
+	});
+});
+
+describe("@busyclaw/sandboxes — recursive mkdir charges every component (R-H13)", () => {
+	it("R14: nesting cannot mint entries a loop would be refused", async () => {
+		// `{ recursive: true }` creates every missing component in ONE call, and a single path charge
+		// counted one — so a guest could nest instead of looping and mint arbitrarily many entries
+		// under any entry budget.
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024, maxFsEntries: 3 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'fs.mkdirSync("/a/b/c/d/e/f/g/h", { recursive: true });',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toMatch(/entry budget/);
+		await hostStillWorks();
+	}, 30000);
+
+	it("R14b: an ordinary mkdir still costs exactly one entry", async () => {
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024, maxFsEntries: 3 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'fs.mkdirSync("/one");',
+				'fs.mkdirSync("/two");',
+				"return 2;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toBeUndefined();
+		expect(res.result).toBe(2);
 	}, 30000);
 });

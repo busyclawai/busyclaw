@@ -68,6 +68,38 @@ const MAX_LOG_LINES = 1000;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 8 * 1024;
 const DEFAULT_MAX_FS_ENTRIES = 4096;
+// Every method the wrapper's console provides, so none is INHERITED.
+//
+// This was six — log/warn/error/info/debug/trace — under a comment claiming nothing reached host
+// stdout. That was false. The wrapper builds a full Node console whose every method calls the HOST's
+// `console.*` directly and merges ours over it, so the other fourteen passed straight through: a
+// guest calling `count`, `table`, `group`, `dir`, `time` or `assert` wrote to the operator's own
+// stdout, past the line and byte caps, with nothing capturing it and nothing announcing it.
+//
+// Enumerated rather than patched, and matched to the wrapper's own list: a method missing from here
+// is a method the guest silently gets back. `clear` is included because the wrapper throws on it —
+// routing it to the sink turns a thrown host error into an ordinary captured line.
+const CONSOLE_METHODS = [
+	"log",
+	"error",
+	"warn",
+	"info",
+	"debug",
+	"trace",
+	"assert",
+	"count",
+	"countReset",
+	"dir",
+	"dirxml",
+	"group",
+	"groupCollapsed",
+	"groupEnd",
+	"table",
+	"time",
+	"timeEnd",
+	"timeLog",
+	"clear",
+] as const;
 
 // Host globals not ambiently typed here (this package builds without a node lib) — cast like
 // engine.ts's globalThis cast. Buffer gives an exact utf8 byte length for a write payload.
@@ -218,15 +250,34 @@ function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 	// A name with no contents still costs. `open` is here because it is what CREATES the entry the
 	// fd forms above then write into — charging only at write would let an open-loop make entries
 	// for free. `mkdtemp` mints a name too, from a prefix the guest chooses.
-	for (const name of [
-		"mkdirSync",
-		"mkdir",
-		"openSync",
-		"open",
-		"mkdtempSync",
-		"mkdtemp",
-	]) {
+	for (const name of ["openSync", "open", "mkdtempSync", "mkdtemp"]) {
 		cap(name, -1, 0);
+	}
+
+	// `mkdir(path, { recursive: true })` creates EVERY missing component in ONE call — `/a/b/c/d/e`
+	// is five directories from one argument — while a single path charge counted one. A guest could
+	// therefore mint arbitrarily many entries under any entry budget by nesting rather than looping.
+	// Charge each component, which is what the volume actually gains.
+	for (const name of ["mkdirSync", "mkdir"]) {
+		const original = surface[name];
+		if (typeof original !== "function") continue;
+		const bound = original.bind(fs);
+		surface[name] = (...args: unknown[]) => {
+			const recursive =
+				(args[1] as { recursive?: boolean } | undefined)?.recursive === true;
+			const path = typeof args[0] === "string" ? args[0] : String(args[0]);
+			if (!recursive) {
+				chargePath(path);
+				return bound(...args);
+			}
+			let prefix = "";
+			for (const segment of path.split("/")) {
+				if (segment === "") continue;
+				prefix += `/${segment}`;
+				chargePath(prefix);
+			}
+			return bound(...args);
+		};
 	}
 
 	// TWO-PATH operations, and the reason charging them was wrong: arg 0 is the SOURCE — a path that
@@ -465,16 +516,11 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 					__invoke: (path: string, args: unknown) =>
 						input.invoker.invoke({ path, args }),
 				},
-				// Console is the only overridable ambient injection — route the six levels to the
-				// per-execution sink; nothing reaches host stdout.
-				console: {
-					log: capture("log"),
-					warn: capture("warn"),
-					error: capture("error"),
-					info: capture("info"),
-					debug: capture("debug"),
-					trace: capture("trace"),
-				},
+				// Console is the only overridable ambient injection — EVERY method routes to the
+				// per-execution sink. See CONSOLE_METHODS for why the list is exhaustive.
+				console: Object.fromEntries(
+					CONSOLE_METHODS.map((name) => [name, capture(name)]),
+				) as SandboxOptions["console"],
 				// Fetch, default-absent. Both flags are required together — the wrapper silently ignores
 				// the adapter without allowFetch. Classified seam: the wrapper types the slot as
 				// `typeof fetch`; our structural SandboxFetch is the host's governed fetch.
