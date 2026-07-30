@@ -199,17 +199,6 @@ export {
 	effectStorageFields,
 } from "./effects";
 // ── sandbox egress: the enforcement port (compiler in @busyclaw/runtime, adapters in plugins) ──
-export type {
-	EgressCapability,
-	EgressPlan,
-	EgressTransport,
-	GovernedOutbound,
-	GovernedSocket,
-	OutboundRequest,
-	OutboundResponse,
-	SandboxEgressAdapter,
-	UnenforcedNote,
-} from "./egress/port";
 // ── the engine protocol: engine-neutral durable execution (impls in @busyclaw/engine-*) ──────
 export type {
 	ClawEngineFactory,

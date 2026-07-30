@@ -24,8 +24,6 @@ export {
 	toolExecutor,
 } from "./dispatch";
 export type { EgressLookup, ResolvedAddress } from "./invoke/egress";
-export type { PlanEgressInput, PlanEgressResult } from "./invoke/plan-egress";
-export { planEgress } from "./invoke/plan-egress";
 export type {
 	InvokerResponse,
 	RegisteredToolContext,
