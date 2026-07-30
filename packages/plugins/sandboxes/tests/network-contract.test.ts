@@ -121,3 +121,25 @@ describe("sandbox network — the execution owns its requests", () => {
 		expect(observed?.aborted).toBe(true);
 	});
 });
+
+describe("sandbox network — the door cannot be smuggled back in", () => {
+	it("ignores a `fetchAdapter` that arrives at runtime anyway", async () => {
+		// Removing a field from a TYPE removes it from the type and nothing else. The value still
+		// arrives — from plain JS, from a widened cast, from an object built dynamically — and the
+		// first version of this fix spread the host's context into the provider's, which carried it
+		// straight through. A raw adapter reached the guest and answered 200 from loopback.
+		let reached = false;
+		const { output } = await run(
+			'try { const r = await fetch("http://127.0.0.1:1/"); return "reached:" + r.status; } catch (e) { return "blocked"; }',
+			{
+				fetchAdapter: async () => {
+					reached = true;
+					return { status: 200 };
+				},
+			} as never,
+		);
+
+		expect(reached).toBe(false);
+		expect(output.result).toBe("blocked");
+	});
+});

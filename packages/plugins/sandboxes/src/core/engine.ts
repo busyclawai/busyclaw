@@ -159,7 +159,7 @@ export async function executeInSandbox(input: {
 	// not. A guest could therefore retire promises faster than the host retired connections, and
 	// abandoned requests still spent their full 30 seconds against whatever they were aimed at.
 	// Aborting in `finally` binds them — when the execution is over, so is its network.
-	const { network, budget: limits, ...rest } = input.context;
+	const { network, budget: limits } = input.context;
 	const outstanding = new AbortController();
 	const budget = createExecutionBudget(limits);
 	const invoker = wrapInvoker(input.invoker, budget);
@@ -171,19 +171,44 @@ export async function executeInSandbox(input: {
 	const governed = network
 		? governedFetch({ ...network, signal: outstanding.signal })
 		: undefined;
-	const context: ProviderExecutionContext = governed
-		? {
-				...rest,
-				fetchAdapter: async (target, init) => {
-					const release = await budget.enter();
-					try {
-						return await governed(target, init);
-					} finally {
-						release();
-					}
-				},
-			}
-		: rest;
+	// Built from NAMED fields, never a rest-spread of the host's object. A spread carries every extra
+	// key through — including `fetchAdapter`, the ungoverned door removed from `ExecutionContext`
+	// above — because removing a field from a TYPE removes it from the type and nothing else: the
+	// value still arrives at runtime, and any JS caller (or a widened TS one) still sends it. Verified
+	// the hard way: with the spread in place, a raw adapter reached the guest and returned 200 from
+	// loopback. An allowlist cannot leak what it does not name.
+	const context: ProviderExecutionContext = {
+		...(input.context.timeoutMs !== undefined
+			? { timeoutMs: input.context.timeoutMs }
+			: {}),
+		...(input.context.memoryLimitBytes !== undefined
+			? { memoryLimitBytes: input.context.memoryLimitBytes }
+			: {}),
+		...(input.context.egress !== undefined
+			? { egress: input.context.egress }
+			: {}),
+		...(input.context.modules !== undefined
+			? { modules: input.context.modules }
+			: {}),
+		...(input.context.mountFs !== undefined
+			? { mountFs: input.context.mountFs }
+			: {}),
+		...(governed
+			? {
+					fetchAdapter: async (target: unknown, init?: unknown) => {
+						const release = await budget.enter();
+						try {
+							return await governed(
+								target as string | { readonly href: string },
+								init,
+							);
+						} finally {
+							release();
+						}
+					},
+				}
+			: {}),
+	};
 
 	let output: unknown;
 	let fsTree: VolumeTree | undefined;

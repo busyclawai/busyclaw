@@ -62,7 +62,7 @@ describe("@busyclaw/sandboxes quickjs provider", () => {
 		expect(res.error).toBeUndefined();
 	});
 
-	it("blocks fetch by default and injects the governed fetchAdapter when supplied", async () => {
+	it("blocks fetch by default and gives a governed one when network is declared", async () => {
 		const { output: blocked } = await executeInSandbox({
 			sandbox: quickjs(),
 			code: 'return await fetch("https://example.test/")',
@@ -71,16 +71,20 @@ describe("@busyclaw/sandboxes quickjs provider", () => {
 		});
 		expect(blocked.error).toMatch(/disabled|not supported/i);
 
-		const fetchAdapter: SandboxFetch = async (input) => ({
-			ok: true,
-			status: 200,
-			text: async () => `body:${String(input)}`,
-		});
+		// The host declares POLICY; the engine builds the door. `transport` replaces the socket
+		// beneath the floor, which is the only injection point left — a raw adapter is neither
+		// spellable nor, since the provider context is built from named fields, smuggleable.
 		const { output: allowed } = await executeInSandbox({
 			sandbox: quickjs(),
-			code: 'const r = await fetch("https://example.test/data"); return await r.text();',
+			code: 'const r = await fetch("https://example.test/data"); return r.body;',
 			invoker: noInvoke,
-			context: { fetchAdapter },
+			context: {
+				network: {
+					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+					transport: async (input) =>
+						new Response(`body:${String(input)}`, { status: 200 }),
+				},
+			},
 		});
 		expect(allowed.result).toBe("body:https://example.test/data");
 	});
