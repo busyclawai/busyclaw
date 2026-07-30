@@ -20,9 +20,34 @@ import {
 const SANDBOX_INVOKE_INVALID = "SANDBOX_INVOKE_INVALID";
 /** Reason code for an execution that has spent its whole host allowance. */
 const SANDBOX_BUDGET_EXHAUSTED = "SANDBOX_BUDGET_EXHAUSTED";
+/** Reason code for a tool result that cannot cross as data (a cycle, a BigInt). */
+const SANDBOX_RESULT_UNREPRESENTABLE = "SANDBOX_RESULT_UNREPRESENTABLE";
 
 const DEFAULT_MAX_HOST_CALLS = 200;
 const DEFAULT_MAX_CONCURRENT_HOST_CALLS = 8;
+
+/**
+ * Reduce a tool result to data before it crosses into the guest.
+ *
+ * A HandleResult is host-authored, so nobody treated the host→guest direction as a boundary — only
+ * guest→host. But a tool that returns a function, or an object holding one, hands the guest a live
+ * HOST CALLABLE: the wrapper marshals it, and `result.output.call("arg")` runs host code from inside
+ * the sandbox. That is the one thing the wasm isolate exists to prevent, reached without touching
+ * the isolate at all — through a tool doing something merely unusual, not hostile.
+ *
+ * A JSON round-trip is the whole fix: functions, symbols and undefined do not survive it, and what
+ * arrives is data. A value that cannot survive it (a cycle, a BigInt) is refused rather than
+ * partially marshalled, because "most of it crossed" is not a boundary.
+ */
+function jsonSafe(
+	value: unknown,
+): { ok: true; value: unknown } | { ok: false } {
+	try {
+		return { ok: true, value: JSON.parse(JSON.stringify(value ?? null)) };
+	} catch {
+		return { ok: false };
+	}
+}
 
 /**
  * The execution's shared allowance, held by the engine because the engine is the only place BOTH
@@ -120,7 +145,16 @@ function wrapInvoker(
 				};
 			}
 			try {
-				return await invoker.invoke(valid);
+				const outcome = await invoker.invoke(valid);
+				const safe = jsonSafe(outcome);
+				if (!safe.ok) {
+					return {
+						status: "denied",
+						reason: "tool result is not representable as data",
+						reasonCode: SANDBOX_RESULT_UNREPRESENTABLE,
+					};
+				}
+				return safe.value;
 			} catch (error) {
 				const id = host.crypto.randomUUID();
 				host.console.error(

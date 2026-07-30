@@ -570,3 +570,55 @@ describe("@busyclaw/sandboxes — the execution's shared host budget (R-H13)", (
 		expect(peak).toBeGreaterThan(1); // still concurrent, just bounded
 	}, 30000);
 });
+
+describe("@busyclaw/sandboxes — created names, not argument names (R-H13)", () => {
+	it("R19: mkdtemp charges each directory it creates, not the prefix it was given", async () => {
+		// The prefix is the same string on every call, so charging arg 0 let the entry set see one
+		// no matter how many directories appeared — the same mistake as charging a copy's SOURCE.
+		const { output: res } = await executeInSandbox({
+			sandbox: quickjs({ maxFsBytes: 64 * 1024, maxFsEntries: 3 }),
+			code: [
+				'const fs = await import("node:fs");',
+				'for (let i = 0; i < 50; i++) fs.mkdtempSync("/t");',
+				"return 1;",
+			].join("\n"),
+			invoker: noInvoke,
+			context: { mountFs: {} },
+		});
+
+		expect(res.error).toMatch(/entry budget/);
+		await hostStillWorks();
+	}, 30000);
+});
+
+describe("@busyclaw/sandboxes — a tool result crosses as DATA (R-H13)", () => {
+	it("R20: a function on a tool result never becomes a guest-callable host function", async () => {
+		// The host→guest direction was not treated as a boundary, because a HandleResult is
+		// host-authored. But a tool returning a function hands the guest a live host callable: the
+		// wrapper marshals it and the guest runs host code — the one thing the isolate exists to
+		// prevent, reached without touching the isolate.
+		let called = 0;
+		const { output } = await executeInSandbox({
+			sandbox: quickjs(),
+			code: [
+				"const r = await tools.x({});",
+				"return typeof (r && r.output && r.output.call);",
+			].join("\n"),
+			invoker: {
+				invoke: async () => ({
+					status: "ok",
+					output: {
+						call: (value: string) => {
+							called += 1;
+							return `host:${value}`;
+						},
+					},
+				}),
+			},
+			context: {},
+		});
+
+		expect(output.result).toBe("undefined");
+		expect(called).toBe(0);
+	}, 30000);
+});

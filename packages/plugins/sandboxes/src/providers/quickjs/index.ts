@@ -250,8 +250,26 @@ function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 	// A name with no contents still costs. `open` is here because it is what CREATES the entry the
 	// fd forms above then write into — charging only at write would let an open-loop make entries
 	// for free. `mkdtemp` mints a name too, from a prefix the guest chooses.
-	for (const name of ["openSync", "open", "mkdtempSync", "mkdtemp"]) {
+	for (const name of ["openSync", "open"]) {
 		cap(name, -1, 0);
+	}
+
+	// `mkdtemp` takes a PREFIX and creates a randomly-named directory from it. Charging arg 0 charged
+	// the prefix — the same string on every call — so the entry set saw one no matter how many
+	// directories appeared. The same mistake as charging a copy's source: the argument is the input,
+	// not the thing created. Every call makes exactly one new entry, so count exactly one, and keep
+	// charging the prefix bytes because the name is at least that long.
+	let temporaries = 0;
+	for (const name of ["mkdtempSync", "mkdtemp"]) {
+		const original = surface[name];
+		if (typeof original !== "function") continue;
+		const bound = original.bind(fs);
+		surface[name] = (...args: unknown[]) => {
+			const prefix = typeof args[0] === "string" ? args[0] : String(args[0]);
+			temporaries += 1;
+			chargePath(`${prefix}\u0000${temporaries}`);
+			return bound(...args);
+		};
 	}
 
 	// `mkdir(path, { recursive: true })` creates EVERY missing component in ONE call — `/a/b/c/d/e`
