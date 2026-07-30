@@ -40,6 +40,71 @@ import type {
 	CreateTableBuilder,
 	Kysely,
 } from "kysely";
+import { sql } from "kysely";
+
+type MigrationDb = Kysely<Record<string, Record<string, unknown>>>;
+
+/**
+ * The COLUMN SETS already covered by a unique index or constraint, as `table\u0000col,col` keys.
+ *
+ * Matched on columns, not on names, and that is the whole reason this is not a one-line lookup. A
+ * table created fresh gets its composite unique as a table CONSTRAINT; SQLite backs that with an
+ * auto-index called `sqlite_autoindex_<table>_N`, so a name lookup finds nothing and would re-plan a
+ * constraint the table already has — redundant DDL, and `isEmpty` permanently false on a database
+ * that is in fact up to date. Postgres happens to name the constraint's index after the constraint,
+ * so a name check would have worked there and silently not in SQLite: the worst kind of half-working.
+ *
+ * A catalog that cannot be read yields an empty set, which degrades to planning the idempotent
+ * `IF NOT EXISTS` statement — correct, just noisier.
+ */
+async function coveredUniqueColumns(
+	db: MigrationDb,
+	dialect: MigrationDialect,
+	tables: readonly string[],
+): Promise<Set<string>> {
+	const covered = new Set<string>();
+	const key = (table: string, columns: readonly string[]) =>
+		`${table}\u0000${[...columns].sort().join(",")}`;
+	try {
+		if (dialect === "postgres") {
+			const rows = await sql<{ tbl: string; cols: string[] }>`
+				select t.relname as tbl, array_agg(a.attname) as cols
+				from pg_index i
+				join pg_class t on t.oid = i.indrelid
+				join pg_attribute a on a.attrelid = t.oid and a.attnum = any(i.indkey)
+				where i.indisunique
+				group by t.relname, i.indexrelid
+			`.execute(db);
+			for (const row of rows.rows) covered.add(key(row.tbl, row.cols));
+			return covered;
+		}
+		for (const table of tables) {
+			const indexes = await sql<{ name: string; unique: number }>`
+				select name, "unique" from pragma_index_list(${table})
+			`.execute(db);
+			for (const index of indexes.rows) {
+				if (index.unique !== 1) continue;
+				const columns = await sql<{ name: string }>`
+					select name from pragma_index_info(${index.name})
+				`.execute(db);
+				covered.add(
+					key(
+						table,
+						columns.rows.map((c) => c.name),
+					),
+				);
+			}
+		}
+		return covered;
+	} catch {
+		return new Set();
+	}
+}
+
+/** The key form {@link coveredUniqueColumns} reports, so the planner asks the same question. */
+function coverageKey(table: string, columns: readonly string[]): string {
+	return `${table}\u0000${[...columns].sort().join(",")}`;
+}
 
 /** The dialects this emitter writes DDL for. */
 export type MigrationDialect = "postgres" | "sqlite";
@@ -147,6 +212,16 @@ export type MigrationPlan = {
 	toBeCreated: PlannedTable[];
 	/** Columns missing from tables that DO exist. */
 	toBeAdded: PlannedColumns[];
+	/** Composite uniques ensured on tables that ALREADY exist — emitted as `CREATE UNIQUE INDEX IF
+	 *  NOT EXISTS`, so a database migrated before a constraint was declared acquires it on the next
+	 *  run instead of staying silently unconstrained. Idempotent: a table that already has it plans
+	 *  the statement and the database no-ops. */
+	backfilledUniques: {
+		model: string;
+		table: string;
+		constraint: string;
+		columns: string[];
+	}[];
 	/** Columns whose live type does not match the declaration — reported, never changed. */
 	drift: {
 		model: string;
@@ -164,7 +239,6 @@ export type MigrationPlan = {
 };
 
 /** The same open row type the adapter uses — DDL is written against names, not a typed schema. */
-type MigrationDb = Kysely<Record<string, Record<string, unknown>>>;
 
 export type MigrationPlanOptions = {
 	db: MigrationDb;
@@ -190,8 +264,22 @@ export async function planMigrations(
 
 	const live = await db.introspection.getTables();
 	const liveByName = new Map(live.map((table) => [table.name, table]));
+	// Which unique indexes already exist, by NAME.
+	//
+	// Kysely's introspection reports columns and nothing else, so a declared constraint cannot be
+	// diffed against the database through it. `CREATE UNIQUE INDEX IF NOT EXISTS` would be idempotent
+	// without this — but then a fully-migrated database would plan a statement on every run, and
+	// `isEmpty` (which the CLI prints as "nothing to do" and uses to SKIP) would permanently say there
+	// is work. A conservative lie in that direction is not free: it trains an operator to ignore the
+	// one signal that tells them a migration is outstanding.
+	const liveUniques = await coveredUniqueColumns(
+		db,
+		dialect,
+		live.map((table) => table.name),
+	);
 
 	const toBeCreated: PlannedTable[] = [];
+	const backfilledUniques: MigrationPlan["backfilledUniques"] = [];
 	const toBeAdded: PlannedColumns[] = [];
 	const drift: MigrationPlan["drift"] = [];
 
@@ -299,7 +387,44 @@ export async function planMigrations(
 			continue;
 		}
 
-		// The table exists: add only the columns it is missing, and report drift on the rest.
+		// The table exists. Its composite uniques were emitted only in the CREATE branch above, so a
+		// database migrated before a constraint was declared never acquired it — and re-running
+		// `migrate` did not repair that, because this branch only ever looked at columns. Every
+		// lookup-then-create upsert in storage-durable depends on the database rejecting the second
+		// insert, so a table silently missing its key does not error, it accumulates duplicates.
+		//
+		// Emitted as a unique INDEX rather than a table constraint, deliberately:
+		//   - SQLite cannot ALTER TABLE ADD CONSTRAINT at all; adding one means rebuilding the table
+		//     (create/copy/drop/rename), which is not something a migrator should do unasked.
+		//   - `CREATE UNIQUE INDEX IF NOT EXISTS` is supported by BOTH dialects, so this is idempotent
+		//     without needing to introspect existing constraints — which Kysely's `getTables()` does
+		//     not expose anyway (columns only).
+		//   - It enforces the same thing and raises the SAME driver codes (`23505`,
+		//     `SQLITE_CONSTRAINT_UNIQUE`), which is what `isConflict` keys on — not the constraint
+		//     kind. So the retry path behaves identically.
+		//
+		// A table that already holds duplicates fails HERE, loudly, with the driver naming them. That
+		// is the correct outcome: the alternative is a migration that reports success while leaving the
+		// invariant unenforced, and the rows have to be resolved by someone who knows which is real.
+		for (const constraint of uniqueConstraints(model, declared)) {
+			if (liveUniques.has(coverageKey(table, constraint.columns))) continue;
+			deferredIndexes.push(
+				db.schema
+					.createIndex(constraint.name)
+					.ifNotExists()
+					.on(table)
+					.columns([...constraint.columns])
+					.unique(),
+			);
+			backfilledUniques.push({
+				model,
+				table,
+				constraint: constraint.name,
+				columns: [...constraint.columns],
+			});
+		}
+
+		// Add only the columns it is missing, and report drift on the rest.
 		const liveColumns = new Map(
 			existing.columns.map((column) => [column.name, column]),
 		);
@@ -359,6 +484,7 @@ export async function planMigrations(
 
 	return {
 		toBeCreated,
+		backfilledUniques,
 		toBeAdded,
 		drift,
 		isEmpty: statements.length === 0,

@@ -386,3 +386,73 @@ describe("planMigrations", () => {
 		]);
 	});
 });
+
+// R-H12. Composite uniques were emitted only in the CREATE-TABLE branch, so a database migrated
+// before a constraint was declared never acquired it — and re-running `migrate` did not repair that,
+// because the existing-table branch only ever compared columns.
+//
+// That is the half of R-H11 that decides whether the fix reaches anyone. Declaring the constraint
+// fixes fresh databases; this is what fixes the ones that already exist. And it matters because every
+// lookup-then-create upsert in storage-durable depends on the database rejecting the second insert:
+// a table silently missing its key does not error, it accumulates duplicates.
+describe("planMigrations — an EXISTING table acquires a newly declared unique", () => {
+	const withUnique = {
+		note: {
+			uniques: [["scope", "name"]],
+			fields: {
+				id: { type: "string", required: true, primaryKey: true },
+				scope: { type: "string", required: true },
+				name: { type: "string", required: true },
+			},
+		},
+	} satisfies Parameters<typeof planMigrations>[0]["schema"];
+
+	const withoutUnique = {
+		note: { fields: withUnique.note.fields },
+	} satisfies Parameters<typeof planMigrations>[0]["schema"];
+
+	it("adds it to a table created before it was declared", async () => {
+		// The table exists WITHOUT the constraint — the state every database migrated before R-H11 is
+		// in right now.
+		await (await plan(withoutUnique)).runMigrations();
+
+		const second = await plan(withUnique);
+		expect(second.isEmpty).toBe(false);
+		expect(second.backfilledUniques).toEqual([
+			{
+				model: "note",
+				table: "note",
+				constraint: "note_scope_name_uq",
+				columns: ["scope", "name"],
+			},
+		]);
+		// A unique INDEX, not a table constraint: SQLite cannot ALTER TABLE ADD CONSTRAINT at all, and
+		// an index enforces the same thing while raising the same driver codes `isConflict` keys on.
+		expect(second.compileMigrations()).toContain("create unique index");
+
+		await second.runMigrations();
+
+		// The database now REJECTS the duplicate — which is the whole point, since upsertWithRetry
+		// treats that rejection as its retry signal.
+		await db
+			.insertInto("note" as never)
+			.values({ id: "a", scope: "s", name: "n" } as never)
+			.execute();
+		await expect(
+			db
+				.insertInto("note" as never)
+				.values({ id: "b", scope: "s", name: "n" } as never)
+				.execute(),
+		).rejects.toThrow(/UNIQUE|constraint/i);
+	});
+
+	it("is not re-planned once it exists — `isEmpty` stays honest", async () => {
+		await (await plan(withUnique)).runMigrations();
+		const again = await plan(withUnique);
+		// Without introspecting index names this would plan an idempotent CREATE ... IF NOT EXISTS on
+		// every run, so a fully-migrated database would permanently report work — training an operator
+		// to ignore the one signal that says a migration is outstanding.
+		expect(again.backfilledUniques).toEqual([]);
+		expect(again.isEmpty).toBe(true);
+	});
+});
