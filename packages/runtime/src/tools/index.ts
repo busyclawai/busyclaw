@@ -33,7 +33,11 @@ export type {
 	RegisteredToolProviderOptions,
 } from "./invoke/provider";
 export { createRegisteredToolProvider } from "./invoke/provider";
-export { normalizeOrigin } from "./invoke/request-plan";
+export {
+	declaredOrigin,
+	declaredOrigins,
+	normalizeOrigin,
+} from "./invoke/request-plan";
 export type { SpecRegistrationReport, SpecRegistry } from "./registry";
 export { createSpecRegistry, REGISTER_OPENAPI_SPEC_ACTION } from "./registry";
 export type { OpenApiExtraction, OpenApiTool } from "./sources/openapi";

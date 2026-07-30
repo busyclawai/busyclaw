@@ -7,7 +7,11 @@
 // from `binding.server` alone, and path values are percent-encoded so a value like "../../x" or
 // "a://b" stays inside its path segment and cannot escape into the authority or inject a query.
 
-import type { JsonObject, JsonValue } from "@busyclaw/contracts";
+import type {
+	JsonObject,
+	JsonValue,
+	ToolDescriptor,
+} from "@busyclaw/contracts";
 import { configurationError } from "@busyclaw/contracts";
 import type {
 	OpenApiBinding,
@@ -55,6 +59,51 @@ function parseServer(server: string | undefined): {
 /** The canonical origin of a server URL (default ports dropped, host lowercased). */
 export function normalizeOrigin(server: string | undefined): string {
 	return parseServer(server).origin;
+}
+
+/**
+ * The egress origin a descriptor DECLARES, or undefined when it declares none.
+ *
+ * The `context.server` policy fact comes from here — from the tool's own binding, never from caller
+ * context, so neither the model nor a caller can forge a destination and a tool cannot target a
+ * server it did not declare. A `local` closure has no declared reach at all: its outbound calls are
+ * undescribed, so it carries no origin fact rather than a guessed one.
+ *
+ * Descriptors are the shape BOTH sides of the floor already speak — the static set built at assembly
+ * and the per-run set a boundary registers through `resolveTools` — which is the point of extracting
+ * it here. Reading the origin off rows in one place and descriptors in another is how the two drift,
+ * and this fact decides whether egress policy fires.
+ *
+ * `binding` is `unknown` on the descriptor because contracts cannot name a provider's binding shape,
+ * so this reads the one field it needs and ignores anything that does not carry it. An unparseable
+ * server yields no fact rather than throwing: the tool is uninvokable anyway, and the floor asking
+ * what a tool declares must not be the thing that fails the run.
+ */
+export function declaredOrigin(descriptor: ToolDescriptor): string | undefined {
+	const invocation = descriptor.invocation;
+	if (invocation.kind !== "binding") return undefined;
+	const binding = invocation.binding;
+	if (binding === null || typeof binding !== "object") return undefined;
+	const server = (binding as { server?: unknown }).server;
+	if (typeof server !== "string") return undefined;
+	try {
+		return normalizeOrigin(server);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Index a descriptor set by path → declared origin. Paths with no declared reach are absent, so a
+ *  lookup miss and "declares nothing" are the same answer. */
+export function declaredOrigins(
+	descriptors: readonly ToolDescriptor[],
+): Map<string, string> {
+	const origins = new Map<string, string>();
+	for (const descriptor of descriptors) {
+		const origin = declaredOrigin(descriptor);
+		if (origin !== undefined) origins.set(descriptor.path, origin);
+	}
+	return origins;
 }
 
 /** Turn a validated binding + flat args into a concrete HTTP request description. Pure. */

@@ -35,7 +35,11 @@ import {
 	type ToolDescriptor,
 	toolDescriptors,
 } from "@busyclaw/contracts";
-import { discoveryTools, EXECUTE_TOOL_PATH } from "@busyclaw/runtime";
+import {
+	declaredOrigins,
+	discoveryTools,
+	EXECUTE_TOOL_PATH,
+} from "@busyclaw/runtime";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
 export const FLOOR_POLICY_ID = "policy:floor";
@@ -105,11 +109,18 @@ export function buildFloorPolicyPlugin(input: {
 	//
 	//    `busyclaw.execute` is the ONE deliberate exclusion — see {@link modelableActions}.
 	const tools = input.tools ?? {};
-	const model = buildAuthzModel(
-		actionInputsFromTools(
-			modelableActions(toolDescriptors({ ...tools, ...discoveryTools(tools) })),
-		),
+	const staticDescriptors = modelableActions(
+		toolDescriptors({ ...tools, ...discoveryTools(tools) }),
 	);
+	const model = buildAuthzModel(actionInputsFromTools(staticDescriptors));
+
+	// 1b. The egress origin each of those tools DECLARES — the `context.server` fact, so a policy can
+	//     say where a tool may reach and have that fire. It used to be stamped by nothing: the mapper
+	//     has always accepted a `serverForAction` provider, the assembly never passed one, and the
+	//     only thing in the repo that built one was a test. So `context.server` was a fact the schema
+	//     declared, the docs designed around, and no running claw ever produced — a policy naming it
+	//     was inert, which is the worst state for a governance fact to be in. It reads as enforcement.
+	const staticOrigins = declaredOrigins(staticDescriptors);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({
 	//    policies })` is the canonical contributor; any plugin may add slices. `PolicySourceSlice` is
@@ -218,7 +229,25 @@ export function buildFloorPolicyPlugin(input: {
 	//    canonical path at the run loop's ingress, so the floor — like dispatch, the audit and every
 	//    gate — only ever sees paths. It used to need an index to reconcile the two, which put a
 	//    second id inside the governance layer; moving the translation to the edge deleted it.
-	const mapCall = cedarMapCall({ model });
+	//    The origin resolver reaches the same two places the ACTIONS come from — the static set, and
+	//    this run's registered descriptors. Both, because either alone is wrong in a way that reads as
+	//    policy: a run-only resolver leaves a host's own bound tools with no declared destination, and
+	//    a static-only one leaves every registered tool without the fact the egress rules are written
+	//    about. The per-run half is cached on the descriptor array's identity, like the entities below.
+	const runOrigins = new WeakMap<object, Map<string, string>>();
+	const originFor = (actionId: string, ctx: unknown): string | undefined => {
+		const fromStatic = staticOrigins.get(actionId);
+		if (fromStatic !== undefined) return fromStatic;
+		const descriptors = runActionsOf(ctx);
+		if (descriptors.length === 0) return undefined;
+		let indexed = runOrigins.get(descriptors);
+		if (indexed === undefined) {
+			indexed = declaredOrigins(descriptors);
+			runOrigins.set(descriptors, indexed);
+		}
+		return indexed.get(actionId);
+	};
+	const mapCall = cedarMapCall({ model, serverForAction: originFor });
 	// 5. Per-RUN actions. The model above is compiled once, from the static tools — but a boundary's
 	//    registered tools arrive per run through `resolveTools`, after that compilation. An action the
 	//    model has never heard of is refused, so without this a registered tool could never run: the

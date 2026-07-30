@@ -76,8 +76,14 @@ export type CedarMapCallConfig = {
 	/** Namespace the resource id as `<prefix>:<tool>` (default none — the bare tool name). */
 	prefix?: string;
 	/** The egress origin for an action, from its registered binding's server — stamped as the
-	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived. */
-	serverForAction?: (actionId: string) => string | undefined;
+	 *  spoof-proof `context.server` fact. Model-DERIVED, never caller-derived.
+	 *
+	 *  Takes the request's context as a second argument because not every action is known when this
+	 *  mapper is built: a boundary's registered tools arrive PER RUN, and their origins arrive with
+	 *  them. A resolver over a fixed set ignores the argument and stays correct; one that must also
+	 *  answer for this run's tools reads them off the context it is handed. Trusted, post-strip
+	 *  context — the origin is still taken from what the TOOL declares, never from a caller field. */
+	serverForAction?: (actionId: string, ctx: CedarContext) => string | undefined;
 };
 
 export type CedarPluginConfig = CedarEngineConfig & {
@@ -90,8 +96,10 @@ export type CedarPluginConfig = CedarEngineConfig & {
 	/** The egress origin for an action, from its registered binding's server — stamped as the
 	 *  spoof-proof `context.server` fact so egress becomes policy-visible. Model-DERIVED (like
 	 *  `entities`), never caller-derived: it comes from the registered model, not `req.context`, so a
-	 *  caller/model cannot forge it and a tool cannot target a server other than the one it declares. */
-	serverForAction?: (actionId: string) => string | undefined;
+	 *  caller/model cannot forge it and a tool cannot target a server other than the one it declares.
+	 *  Receives the request context too, for the per-run tools that are not known when this is built —
+	 *  see the note on `CedarMapCallConfig.serverForAction`. */
+	serverForAction?: (actionId: string, ctx: CedarContext) => string | undefined;
 	/** Which calls Cedar governs. Default: every call (the allowlist). */
 	matcher?: (call: ToolCall, ctx: CedarContext) => boolean;
 	/** Entity type for the default-mapped principal (from the stamped `busyclaw__principal`). Default "User". */

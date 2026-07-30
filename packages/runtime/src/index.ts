@@ -89,6 +89,8 @@ export {
 	// chokepoint, and an action the model does not contain is denied — so a model built from host tools
 	// alone would refuse discovery itself. `EXECUTE_TOOL_PATH` rides along because excluding it is part
 	// of that contract, not an assembly-side opinion (see discovery.ts's header).
+	declaredOrigin,
+	declaredOrigins,
 	discoveryTools,
 	EXECUTE_TOOL_PATH,
 	normalizeOrigin,
