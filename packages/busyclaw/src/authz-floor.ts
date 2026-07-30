@@ -15,9 +15,11 @@
 import {
 	actionEntitiesFromModel,
 	actionInputsFromTools,
+	authzBundleKey,
 	buildAuthzModel,
 	cedarFloorEngine,
 	cedarMapCall,
+	createOrgPolicyRouter,
 	createPolicyPlugin,
 	createShadowPolicyEngine,
 	loadPolicyBundle,
@@ -28,6 +30,7 @@ import {
 	type PolicyEngine,
 	type PolicySourceSlice,
 	runActionsOf,
+	type ScopeRef,
 	type ToolDefinitionSet,
 	type ToolDescriptor,
 	toolDescriptors,
@@ -77,6 +80,17 @@ export function buildFloorPolicyPlugin(input: {
 	tools?: ToolDefinitionSet;
 	plugins: readonly BusyclawPlugin[];
 	warn?: (message: string) => void;
+	/** The durable registry, when the claw has a database. Present ⇒ customer policy slices written
+	 *  through `putPolicySlice` REACH this floor; absent ⇒ code-owned policy only, exactly as before.
+	 *  Stored slices used to be written, kept, and never consulted — the floor a running claw enforced
+	 *  was whatever compiled at createClaw, so an admin editing policy changed nothing and was told
+	 *  nothing. */
+	registry?: {
+		policySlices: {
+			listForScope: (ref: ScopeRef) => Promise<readonly PolicySourceSlice[]>;
+		};
+		authzChanges: { count: (ref: ScopeRef) => Promise<number> };
+	};
 }): BusyclawPlugin {
 	// 1. The floor's action model — every tool the run can reach, classified. Descriptors carry
 	//    governance as a typed field, so this is a projection, not a re-validation.
@@ -107,7 +121,6 @@ export function buildFloorPolicyPlugin(input: {
 			(slice) => slice.plane === "tool" || slice.plane === "both",
 		),
 	);
-	const bundle = loadPolicyBundle({ system: SYSTEM_POSTURE, slices });
 	// Policy-ANNOTATION keys plugins declare (`@escalate("team:x")` → `{ key: "escalate" }`). Collected
 	// the same way as `policies`/`shareable`: statically off the raw plugin, before any configure runs.
 	// The keys stay OPAQUE here — a declared key's value rides the decision out for the plugin to act on.
@@ -115,22 +128,80 @@ export function buildFloorPolicyPlugin(input: {
 		(plugin) => plugin.policyAnnotations ?? [],
 	);
 
-	// 3. The ONE internal engine over the merged live set (+ a shadow candidate ONLY when a source
-	//    contributed a shadow slice — a real second evaluation that never changes the live decision).
-	const live = cedarFloorEngine({ policies: bundle.live, model, annotations });
 	const warn = input.warn ?? ((message: string) => console.warn(message));
-	const shadowPolicies = bundle.shadow;
-	const engine: PolicyEngine = shadowPolicies
-		? createShadowPolicyEngine({
-				live,
-				candidate: () =>
-					cedarFloorEngine({ policies: shadowPolicies, model, annotations }),
-				observe: (divergence) =>
-					warn(
-						`busyclaw authz shadow divergence on ${divergence.request.action.id}: live=${divergence.live} candidate=${divergence.candidate}`,
-					),
+
+	// 3. The engine over a merged live set (+ a shadow candidate ONLY when a source contributed a
+	//    shadow slice — a real second evaluation that never changes the live decision).
+	const engineOver = (merged: PolicySourceSlice[]): PolicyEngine => {
+		const compiled = loadPolicyBundle({
+			system: SYSTEM_POSTURE,
+			slices: merged,
+		});
+		const live = cedarFloorEngine({
+			policies: compiled.live,
+			model,
+			annotations,
+		});
+		const shadowPolicies = compiled.shadow;
+		if (!shadowPolicies) return live;
+		return createShadowPolicyEngine({
+			live,
+			candidate: () =>
+				cedarFloorEngine({ policies: shadowPolicies, model, annotations }),
+			observe: (divergence) =>
+				warn(
+					`busyclaw authz shadow divergence on ${divergence.request.action.id}: live=${divergence.live} candidate=${divergence.candidate}`,
+				),
+		});
+	};
+
+	// 3b. With a database, each decision resolves to its boundary's bundle: code-owned slices PLUS
+	//     whatever that scope stored. Content-addressed — `keyFor` folds in the append-only change
+	//     log's count, so a write bumps the count, the next decision misses the cache, and the bundle
+	//     rebuilds. That is why there is no invalidate call to forget: the key IS the content.
+	//
+	//     Only tool-plane stored slices land here, for the same reason plugin slices are filtered
+	//     (R-H04) — a slice naming no resource type matches everything in whichever engine it reaches.
+	const registry = input.registry;
+	// Built EAGERLY, always — even when a router will serve the decisions. The code-owned set is known
+	// at assembly, so a malformed policy or an over-long annotation must fail HERE, when the claw is
+	// built, rather than on whichever request happens to be first. Routing made every build lazy and
+	// silently moved that failure into traffic; this is also the `undefined`-scope bundle, so nothing
+	// is compiled twice to keep the property.
+	const codeOwned = engineOver(slices);
+	const engine: PolicyEngine = registry
+		? createOrgPolicyRouter({
+				// The router picks a bundle; it does not decide, so it must not describe itself as a
+				// weaker evaluator than the bundles it serves. Every one of them comes from `engineOver`,
+				// so they all declare the same capabilities — and the coverage audit reads these to warn
+				// when a policy's intent needs something no installed engine has. Left unset, routing
+				// silently downgraded the floor to "no declared capabilities" and those warnings would
+				// have fired against the one engine that does support arg-conditions and approvals.
+				...(codeOwned.capabilities
+					? { capabilities: codeOwned.capabilities }
+					: {}),
+				keyFor: async (ref) =>
+					ref
+						? authzBundleKey({
+								configScope: ref,
+								changeCount: await registry.authzChanges.count(ref),
+							})
+						: "system",
+				engineFor: async (ref) => {
+					// No boundary ⇒ nothing stored applies, so this IS the code-owned bundle already
+					// compiled above rather than an identical second one.
+					if (!ref) return codeOwned;
+					const stored = await registry.policySlices.listForScope(ref);
+					const tool = stored.filter(
+						(slice) => slice.plane === "tool" || slice.plane === "both",
+					);
+					// A scope with no slices of its own is the same bundle too — the router keys them
+					// together, and rebuilding per scope would be work with no different answer.
+					if (tool.length === 0) return codeOwned;
+					return engineOver([...slices, ...tool]);
+				},
 			})
-		: live;
+		: codeOwned;
 
 	// 4. The always-on gate — SEALED (the floor can't be removed or redefined) and matching EVERY tool
 	//    call. It used to match only the modeled actions, which made "absent from the model" mean

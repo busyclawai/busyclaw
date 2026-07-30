@@ -828,6 +828,12 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 		...(tools ? { tools } : {}),
 		plugins: pluginList,
 		...(config.warn ? { warn: config.warn } : {}),
+		// With a database, customer policy slices REACH the floor. They were written through
+		// `putPolicySlice`, stored, and then never consulted — the floor a running claw enforced was
+		// whatever compiled at createClaw, so an admin editing policy changed nothing and was told
+		// nothing about it. This is the wire that was missing, not a new mechanism: the router, the
+		// bundle key and the change log all existed as a blueprint the host was expected to assemble.
+		...(registryStores ? { registry: registryStores } : {}),
 	});
 	const runtime = createRuntime({
 		...config,
