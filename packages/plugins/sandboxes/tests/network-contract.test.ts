@@ -10,7 +10,8 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { FETCH_TOOL_PATH, fetchTool } from "@busyclaw/egress/node";
+import { FETCH_TOOL_PATH } from "@busyclaw/egress";
+import { fetchTool } from "@busyclaw/egress/tool";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SandboxToolInvoker } from "../src/core/contracts";
 import { executeInSandbox } from "../src/index";

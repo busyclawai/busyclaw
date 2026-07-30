@@ -1,4 +1,5 @@
-import { FETCH_TOOL_PATH, fetchTool } from "@busyclaw/egress/node";
+import { FETCH_TOOL_PATH } from "@busyclaw/egress";
+import { fetchTool } from "@busyclaw/egress/tool";
 import { describe, expect, it, vi } from "vitest";
 import type {
 	SandboxInvokeInput,

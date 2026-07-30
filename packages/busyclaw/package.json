@@ -39,6 +39,7 @@
 		"kysely": "0.29.2"
 	},
 	"devDependencies": {
+		"@busyclaw/egress": "workspace:*",
 		"@ai-sdk/azure": "4.0.18",
 		"@busyclaw/core": "workspace:*",
 		"@busyclaw/policy-cedar": "workspace:*",

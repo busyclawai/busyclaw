@@ -199,6 +199,49 @@ describe("@busyclaw/runtime subInvoke", () => {
 		expect(auditJson).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 	});
 
+	// The OUTPUT direction, which had no coverage at all until this was written: a mutation disabling
+	// nested re-redaction broke nothing anywhere in the repo.
+	//
+	// The caller here is untrusted BRAIN — model-authored code inside an invoker tool — so what a leaf
+	// tool returns must be redacted again before it crosses back, exactly as the args were on the way
+	// in. Without it, a nested tool is a laundering path: the parent asks for something the model may
+	// not see, and receives it in the clear because the redaction only ever ran at the outer boundary.
+	// This matters more since a governed fetch became a nested call, because then the value crossing
+	// back is a THIRD PARTY'S response.
+	it("re-redacts what a nested tool RETURNS, before the caller sees it", async () => {
+		let nestedSaw: unknown;
+		const runtime = createRuntime({
+			model: callToolOnceModel("run_code", {}),
+			audit: createMemoryAudit(),
+			redactor: createMemoryRedactor(emailDetector),
+			tools: {
+				run_code: invokerTool(async (subInvoke) => {
+					nestedSaw = await subInvoke("lookup", {});
+					return { done: true };
+				}),
+				lookup: govern(
+					tool({
+						description: "Return a record.",
+						inputSchema: jsonSchema<Record<string, never>>({
+							type: "object",
+							properties: {},
+						}),
+						// A third party's payload, from the caller's point of view.
+						execute: async () => ({ email: "bob@personal.com" }),
+					}),
+					{},
+				),
+			},
+		});
+
+		const result = await runtime.generate("do it");
+		expect(result.status).toBe("completed");
+		// The nested caller got a placeholder, not the address.
+		const seen = JSON.stringify(nestedSaw);
+		expect(seen).not.toContain("bob@personal.com");
+		expect(seen).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
+	});
+
 	it("makes two nested calls without an effect collision — only the parent claims an effect", async () => {
 		const claimedIds: string[] = [];
 		const base = createEffectStore(memoryAdapter());

@@ -14,12 +14,9 @@
 // actually hold, and the floor denies both by default until something permits them.
 
 import { govern, type ToolDefinition } from "@busyclaw/contracts";
+import { jsonSchema } from "ai";
 import { type GovernedFetchOptions, governedFetch } from "./governed-fetch";
-
-/** The canonical path of the governed fetch tool. The sandbox engine addresses it by this and a
- *  policy names the same string — one id, so a rule about egress and the call it governs cannot
- *  drift apart. */
-export const FETCH_TOOL_PATH = "busyclaw.fetch";
+import { FETCH_TOOL_PATH } from "./index";
 
 /** Config the DEPLOYMENT owns. `signal` is absent because a lifetime is per call, not per tool: it
  *  arrives with the call, from whoever is waiting on it. */
@@ -42,14 +39,23 @@ const DESCRIPTION =
  * not be making; a policy that cares should condition on the method rather than trust a class this
  * tool is not in a position to state truthfully.
  */
+export { FETCH_TOOL_PATH };
+
 export function fetchTool(input: FetchToolInput): ToolDefinition {
 	return govern(
 		{
 			description: DESCRIPTION,
-			// A PLAIN JSON Schema. The provider edge runs it through `asSchema`, which takes either
-			// that or an AI-SDK `Schema` — so this package needs no AI-SDK dependency to ship a tool,
-			// and the egress floor stays a package about networks.
-			inputSchema: {
+			// An AI-SDK `Schema`, not a bare JSON Schema object: `asSchema` in provider-utils v5
+			// rejects the latter, so "the provider edge will wrap it" is not true and a plain object
+			// fails at `prepareTools` — after the claw builds, on the first call. That is why this
+			// module is its own entry point (`@busyclaw/egress/tool`): the floor stays importable
+			// without an AI SDK, and only a consumer that wants the TOOL pays for one.
+			inputSchema: jsonSchema<{
+				url: string;
+				method?: string;
+				headers?: Record<string, string>;
+				body?: string;
+			}>({
 				type: "object",
 				properties: {
 					url: { type: "string", description: "Absolute https URL." },
@@ -58,7 +64,7 @@ export function fetchTool(input: FetchToolInput): ToolDefinition {
 					body: { type: "string" },
 				},
 				required: ["url"],
-			},
+			}),
 			execute: async (
 				args: {
 					url: string;

@@ -2,7 +2,7 @@
 // validation + defect opacity), and result validation. Providers implement isolate mechanics only.
 
 import { limitError, validationError } from "@busyclaw/contracts";
-import { FETCH_TOOL_PATH } from "@busyclaw/egress/node";
+import { FETCH_TOOL_PATH } from "@busyclaw/egress";
 import { type } from "arktype";
 import {
 	type ExecutionContext,

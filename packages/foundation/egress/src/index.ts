@@ -19,6 +19,16 @@
 
 import { configurationError } from "@busyclaw/contracts";
 
+/**
+ * The canonical path of the governed fetch tool (`@busyclaw/egress/tool`).
+ *
+ * A bare string, and it lives at the ROOT rather than beside the tool, because the people who need
+ * to NAME this action mostly cannot afford to import it: the sandbox engine addresses it, a policy
+ * forbids or permits it, an audit reader looks for it — none of which should pull an AI SDK in to
+ * learn what it is called. One id, so a rule about egress and the call it governs cannot drift.
+ */
+export const FETCH_TOOL_PATH = "busyclaw.fetch";
+
 export type ResolvedAddress = { address: string; family: number };
 
 /** Resolve a hostname to its addresses. Injected by the caller — this package ships no default

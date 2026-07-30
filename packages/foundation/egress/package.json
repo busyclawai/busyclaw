@@ -25,6 +25,10 @@
 		"./node": {
 			"types": "./dist/node.d.ts",
 			"import": "./dist/node.js"
+		},
+		"./tool": {
+			"types": "./dist/fetch-tool.d.ts",
+			"import": "./dist/fetch-tool.js"
 		}
 	},
 	"main": "./dist/index.js",
@@ -41,5 +45,16 @@
 	"dependencies": {
 		"@busyclaw/contracts": "workspace:*",
 		"undici": "8.9.0"
+	},
+	"peerDependencies": {
+		"ai": "^7.0.22"
+	},
+	"peerDependenciesMeta": {
+		"ai": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"ai": "7.0.22"
 	}
 }

@@ -121,11 +121,14 @@ export function pinnedConnection(decision: EgressDecision): PinnedConnection {
  */
 export const pinnedFetch: typeof globalThis.fetch = undiciFetch;
 
-export type { FetchToolInput } from "./fetch-tool";
-export { FETCH_TOOL_PATH, fetchTool } from "./fetch-tool";
-// The governed call + the tool that exposes it. Both live on the NODE subpath because both bind what
-// the root deliberately does not: node:dns for the floor's resolution, and undici's dispatcher for
-// the pin that makes the vetted address the one actually dialled.
+// The governed call lives on the NODE subpath because it binds what the root deliberately does not:
+// node:dns for the floor's resolution, and undici's dispatcher for the pin that makes the vetted
+// address the one actually dialled.
+//
+// The TOOL that exposes it is a third entry, `@busyclaw/egress/tool`, and the split is the point:
+// constructing a ToolDefinition needs the AI SDK's `Schema` (a bare JSON Schema does not survive
+// `asSchema`), and a package about network safety should not make every consumer of its floor carry
+// an AI SDK. Import the floor without it; import the tool and you opt in.
 export type {
 	GovernedFetch,
 	GovernedFetchOptions,
