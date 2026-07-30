@@ -31,14 +31,15 @@ import {
 	type PolicySourceSlice,
 	runActionsOf,
 	type ScopeRef,
+	type ToolCall,
 	type ToolDefinitionSet,
 	type ToolDescriptor,
 	toolDescriptors,
 } from "@busyclaw/contracts";
 import {
-	declaredOrigins,
 	discoveryTools,
 	EXECUTE_TOOL_PATH,
+	originOfCall,
 } from "@busyclaw/runtime";
 
 /** The sealed floor gate id — the un-removable governance baseline. */
@@ -120,7 +121,9 @@ export function buildFloorPolicyPlugin(input: {
 	//     only thing in the repo that built one was a test. So `context.server` was a fact the schema
 	//     declared, the docs designed around, and no running claw ever produced — a policy naming it
 	//     was inert, which is the worst state for a governance fact to be in. It reads as enforcement.
-	const staticOrigins = declaredOrigins(staticDescriptors);
+	const staticByPath = new Map(
+		staticDescriptors.map((descriptor) => [descriptor.path, descriptor]),
+	);
 
 	// 2. Policy SOURCES: every plugin's `policies` slices, merged UNDER the sealed floor. `cedar({
 	//    policies })` is the canonical contributor; any plugin may add slices. `PolicySourceSlice` is
@@ -234,23 +237,23 @@ export function buildFloorPolicyPlugin(input: {
 	//    policy: a run-only resolver leaves a host's own bound tools with no declared destination, and
 	//    a static-only one leaves every registered tool without the fact the egress rules are written
 	//    about. The per-run half is cached on the descriptor array's identity, like the entities below.
-	const runOrigins = new WeakMap<object, Map<string, string>>();
+	const runByPath = new WeakMap<object, Map<string, ToolDescriptor>>();
 	const originFor = (input: {
-		call: { name: string };
+		call: ToolCall;
 		ctx: unknown;
 	}): string | undefined => {
 		const { call, ctx } = input;
-		const actionId = call.name;
-		const fromStatic = staticOrigins.get(actionId);
-		if (fromStatic !== undefined) return fromStatic;
+		const fromStatic = staticByPath.get(call.name);
+		if (fromStatic !== undefined) return originOfCall(fromStatic, call.args);
 		const descriptors = runActionsOf(ctx);
 		if (descriptors.length === 0) return undefined;
-		let indexed = runOrigins.get(descriptors);
+		let indexed = runByPath.get(descriptors);
 		if (indexed === undefined) {
-			indexed = declaredOrigins(descriptors);
-			runOrigins.set(descriptors, indexed);
+			indexed = new Map(descriptors.map((d) => [d.path, d]));
+			runByPath.set(descriptors, indexed);
 		}
-		return indexed.get(actionId);
+		const descriptor = indexed.get(call.name);
+		return descriptor && originOfCall(descriptor, call.args);
 	};
 	const mapCall = cedarMapCall({ model, serverForAction: originFor });
 	// 5. Per-RUN actions. The model above is compiled once, from the static tools — but a boundary's

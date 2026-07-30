@@ -97,6 +97,41 @@ export function declaredOrigin(descriptor: ToolDescriptor): string | undefined {
 	}
 }
 
+/**
+ * The origin THIS CALL reaches — a binding's fixed server, or the argument the descriptor declares
+ * its destination lives in.
+ *
+ * One function for both, because they produce the SAME fact. `context.server` is the thing egress
+ * policy is written about, and a policy that governed bound tools but silently skipped
+ * argument-addressed ones would be the most misleading possible half — a rule that reads as
+ * "wherever this claw reaches" and covers only the destinations that happen to be static.
+ *
+ * The argument's VALUE is caller-supplied, which is fine and is the point: the caller says where it
+ * wants to go, and the floor decides whether it may. What is not caller-supplied is WHICH argument
+ * carries a destination — that is declared by the tool's author, so a caller cannot nominate some
+ * other field and have its contents believed.
+ *
+ * An unparseable or missing value yields no fact, and the guarded ceiling then REFUSES: an action
+ * inside a governed source with no readable destination is exactly the case that must not slip
+ * through. Failing to name where you are going is not permission to go.
+ */
+export function originOfCall(
+	descriptor: ToolDescriptor,
+	args: Record<string, unknown>,
+): string | undefined {
+	const arg = descriptor.governance.destination?.arg;
+	if (arg !== undefined) {
+		const value = args[arg];
+		if (typeof value !== "string") return undefined;
+		try {
+			return originOf(value);
+		} catch {
+			return undefined;
+		}
+	}
+	return declaredOrigin(descriptor);
+}
+
 /** Index a descriptor set by path → declared origin. Paths with no declared reach are absent, so a
  *  lookup miss and "declares nothing" are the same answer. */
 export function declaredOrigins(

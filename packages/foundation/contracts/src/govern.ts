@@ -62,6 +62,19 @@ export const toolGovernance = type({
 	"groups?": "string[]",
 	// The resource entity type this tool acts on (Cedar `resource` type). Default "Tool".
 	"resource?": "string",
+	// WHERE this tool reaches, when the destination is an ARGUMENT rather than a fixed binding.
+	//
+	// A registered OpenAPI operation declares one server, so `context.server` is a property of which
+	// action it is. A tool whose whole purpose is to reach somewhere the caller names — a governed
+	// fetch, an HTTP tool, an MCP proxy — has a different destination per call, and an action-keyed
+	// lookup cannot answer for it: it returns one origin for every call, or none. This names the
+	// argument the origin is read out of, so the floor can stamp the SAME `context.server` fact for
+	// both kinds and one egress policy governs them together.
+	//
+	// A FACT, like everything else here: it says where the tool goes, never who may send it there.
+	// And it is a fact about the TOOL, declared by whoever wrote it — the value still arrives as a
+	// call argument, but which argument carries a destination is not the caller's to decide.
+	"destination?": { arg: "string" },
 	// Force an audit record even when the action's verb isn't otherwise audited.
 	"audit?": "boolean",
 });

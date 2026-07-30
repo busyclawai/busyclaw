@@ -37,6 +37,7 @@ export {
 	declaredOrigin,
 	declaredOrigins,
 	normalizeOrigin,
+	originOfCall,
 } from "./invoke/request-plan";
 export type { SpecRegistrationReport, SpecRegistry } from "./registry";
 export {

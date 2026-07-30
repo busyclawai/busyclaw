@@ -57,6 +57,52 @@ const petstore = (): JsonObject => ({
 	},
 });
 
+/** Calls `path` once with `args`, then answers "done". */
+function callToolModel(path: string, args: Record<string, unknown>): V2Model {
+	let step = 0;
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock",
+		supportedUrls: {},
+		doGenerate: async () => {
+			const usage = {
+				inputTokens: {
+					total: 1,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: 1, text: undefined, reasoning: undefined },
+			};
+			if (step++ === 0) {
+				return {
+					content: [
+						{
+							type: "tool-call",
+							toolCallId: "c1",
+							toolName: path.replace(/\./g, "__"),
+							input: JSON.stringify(args),
+						},
+					],
+					finishReason: { unified: "tool-calls", raw: undefined },
+					usage,
+					warnings: [],
+				};
+			}
+			return {
+				content: [{ type: "text", text: "done" }],
+				finishReason: { unified: "stop", raw: undefined },
+				usage,
+				warnings: [],
+			};
+		},
+		doStream: async () => {
+			throw new Error("stream not used");
+		},
+	} as unknown as V2Model;
+}
+
 /** Calls the registered petstore tool once, then answers "done". */
 function getPetModel(): V2Model {
 	let step = 0;
@@ -197,5 +243,78 @@ describe("context.server reaches the floor", () => {
 		).resolves.toMatchObject({ status: "completed" });
 		// Refused at the floor — a read the floor would otherwise permit, stopped by where it reaches.
 		expect(ran).toBe(false);
+	});
+});
+
+// An ARGUMENT-addressed destination. A bound tool declares one server, so `context.server` is a
+// property of which action it is; a tool whose purpose is to reach wherever the caller names has a
+// different origin per call, and an action-keyed lookup returns one origin for every call or none.
+// Both kinds produce the SAME fact, so ONE egress policy governs them together — a rule that covered
+// bound tools and silently skipped these would read as "wherever this claw reaches" while covering
+// only the destinations that happen to be static.
+describe("context.server for an argument-addressed tool", () => {
+	const fetchTool = (calls: string[]) => ({
+		inputSchema: jsonSchema({
+			type: "object",
+			properties: { url: { type: "string" } },
+		}),
+		governance: {
+			access: "read" as const,
+			// The tool's AUTHOR names the argument. The value is the caller's; which field carries a
+			// destination is not, or a caller could nominate another and have its contents believed.
+			destination: { arg: "url" },
+		},
+		invocation: {
+			kind: "local" as const,
+			execute: async (args: { url: string }) => {
+				calls.push(args.url);
+				return { ok: true };
+			},
+		},
+	});
+
+	const clawFetching = (url: string, calls: string[]) =>
+		createClaw({
+			model: callToolModel("http.get", { url }),
+			tools: { "http.get": fetchTool(calls) },
+			plugins: [
+				cedar({
+					policies: `forbid(principal, action, resource) unless { context has server && context.server == "${DECLARED_ORIGIN}" };`,
+				}),
+			],
+		});
+
+	const go = (claw: ReturnType<typeof clawFetching>) =>
+		claw.$context.runtime.generate(
+			"fetch it",
+			{},
+			runtimeRunOptionsWithCaller(undefined, "alice"),
+		);
+
+	it("the permitted origin goes through", async () => {
+		const calls: string[] = [];
+		await expect(
+			go(clawFetching(`${DECLARED_ORIGIN}/pets/7`, calls)),
+		).resolves.toMatchObject({ status: "completed" });
+		expect(calls).toEqual([`${DECLARED_ORIGIN}/pets/7`]);
+	});
+
+	it("a DIFFERENT origin in the same argument is refused — per call, not per action", async () => {
+		const calls: string[] = [];
+		await expect(
+			go(clawFetching("https://evil.example/collect", calls)),
+		).resolves.toMatchObject({ status: "completed" });
+		// Same tool, same action, one argument different: the tool never ran.
+		expect(calls).toEqual([]);
+	});
+
+	it("an unreadable destination is refused, not waved through", async () => {
+		const calls: string[] = [];
+		// No origin can be derived, so no fact is stamped — and the guarded ceiling then REFUSES.
+		// Failing to say where you are going is not permission to go.
+		await expect(go(clawFetching("not-a-url", calls))).resolves.toMatchObject({
+			status: "completed",
+		});
+		expect(calls).toEqual([]);
 	});
 });

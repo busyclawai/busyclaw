@@ -23,6 +23,7 @@ import {
 	type FactsOverlayRecord,
 	jsonObject,
 	type RegisteredToolRecord,
+	type ToolCall,
 	validationError,
 } from "@busyclaw/contracts";
 import { normalizeOrigin, type SpecRegistry } from "@busyclaw/runtime";
@@ -104,7 +105,7 @@ export function assembleOrgActions(input: {
  */
 export function serverForActionFromRegisteredTools(
 	rows: readonly RegisteredToolRecord[],
-): (input: { call: { name: string } }) => string | undefined {
+): (input: { call: ToolCall }) => string | undefined {
 	const origins = new Map<string, string>();
 	for (const row of rows) {
 		const server = row.binding.server;

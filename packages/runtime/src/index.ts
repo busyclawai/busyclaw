@@ -97,6 +97,7 @@ export {
 	egressPolicySliceName,
 	generateEgressPolicy,
 	normalizeOrigin,
+	originOfCall,
 	planEgress,
 	REGISTER_OPENAPI_SPEC_ACTION,
 	SEARCH_TOOL_PATH,
