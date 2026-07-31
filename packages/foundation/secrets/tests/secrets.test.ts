@@ -1,7 +1,9 @@
 import {
 	BusyclawError,
+	RESERVED_SCOPE_PREFIX,
 	type ResolveContext,
 	type SecretProvider,
+	UNSCOPED,
 } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSecrets, env } from "../src/index";
@@ -366,6 +368,31 @@ describe("secrets.with — a pre-bound reader", () => {
 					scopeId: "org-b",
 				}),
 			).toBeNull();
+		});
+
+		it("treats the UNSCOPED sentinel as unscoped — it is present, but it is not a tenant", async () => {
+			// Once the absent config scope became a VALUE, `scope === undefined` stopped being the way to
+			// ask "does this name a tenant?" — every run now carries a pair. If this check keyed on
+			// presence, the deployment's credential would stop resolving for the runs it exists for
+			// (an app bot's token, a sandbox credential); if it keyed on the label being a tenant's, it
+			// would lend that credential to whoever named the sentinel. `namesTenant` is the question.
+			const secrets = buildSecrets([deployment()]);
+			expect(await secrets.get("PETSTORE", UNSCOPED)).toEqual({
+				kind: "token",
+				value: "deployment-key",
+			});
+		});
+
+		it("a RESERVED label is never a tenant, whichever one it is", async () => {
+			// The predicate is about the reserved PREFIX, not about one sentinel. A future core-minted
+			// stand-in for "no boundary" must not become the one that quietly does name a tenant.
+			const secrets = buildSecrets([deployment()]);
+			expect(
+				await secrets.get("PETSTORE", {
+					scope: `${RESERVED_SCOPE_PREFIX}something-later`,
+					scopeId: "-",
+				}),
+			).toEqual({ kind: "token", value: "deployment-key" });
 		});
 
 		it("treats half a boundary as unscoped — a scope with no id names no tenant", async () => {

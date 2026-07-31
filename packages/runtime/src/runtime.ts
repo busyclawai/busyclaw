@@ -29,6 +29,7 @@ import {
 	THREAD_ID_CONTEXT_KEY,
 	toolDescriptors,
 	toolModelName,
+	UNSCOPED,
 	validationError,
 } from "@busyclaw/contracts";
 import { createGovernance, type Governance } from "@busyclaw/core";
@@ -610,10 +611,7 @@ export const runtimeYieldMetadata = ark({
 	 * This is the yield's copy of that anchor. Absent for a run that resolved no config scope at all
 	 * (single-tenant), where there is nothing to disagree about. R-H03.
 	 */
-	"authority?": ark({
-		"scope?": "string | undefined",
-		"scopeId?": "string | undefined",
-	}).or("undefined"),
+	authority: ark({ scope: "string", scopeId: "string" }),
 	...runtimeResumeStateShape,
 });
 export type RuntimeYieldMetadata = typeof runtimeYieldMetadata.infer;
@@ -1042,13 +1040,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						),
 						...(state.runId !== undefined ? { runId: state.runId } : {}),
 					};
-					// The tenancy anchor a resume compares against. Written only when the run HAS a config
-					// scope — a single-tenant deployment resolves none, and writing an empty anchor would
-					// make every such resume compare something against nothing.
-					const scope = state.authority?.configScope;
-					if (scope !== undefined) {
-						metadata.authority = { scope: scope.scope, scopeId: scope.scopeId };
-					}
+					// The tenancy anchor a resume compares against. Always written: a run that resolved no
+					// tenant carries UNSCOPED, so "which boundary did this yield from" has an answer even
+					// for a single-tenant deployment — and a resume that answers differently is still a
+					// mismatch worth refusing.
+					const anchor = state.authority?.configScope ?? UNSCOPED;
+					metadata.authority = { scope: anchor.scope, scopeId: anchor.scopeId };
 					if (state.recording !== undefined) {
 						metadata.recording = toJsonValue(
 							state.recording,
@@ -1150,7 +1147,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			// principal and wins over the `identity` resolver, which is the caller-LESS fallback
 			// (cron/engine resume → a system principal). Absent caller AND absent resolver → no stamp →
 			// the tool floor fails closed on a modeled action (cedarMapCall denies).
-			const resolved = stampAuthority(ctx, state.authority ?? {});
+			// The fallback is not a hypothetical: it is what a run whose authority was never resolved HAS —
+			// no boundary. UNSCOPED is the value for exactly that, and it finds nothing, so a gate reached
+			// before the entry point settled the authority fails closed rather than inheriting a tenant.
+			const resolved = stampAuthority(
+				ctx,
+				state.authority ?? { configScope: UNSCOPED },
+			);
 			stampRunActions(resolved, runActions);
 			// The approver of a resumed `needs-approval` (forge-proof: from the persisted, PEP-gated
 			// ApprovalRecord's `decidedBy`, set on the resume path — never caller/model). Seeded HERE (the
@@ -1847,13 +1850,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// compared the two: continuing under a different one selects another tenant's registered tools
 		// and resolves another tenant's credentials for a call a human approved somewhere else. Not a
 		// recoverable difference, so refuse rather than pick a side. R-H03.
-		if (!sameConfigScope(authority, record)) {
+		if (!sameConfigScope(authority.configScope, record)) {
 			throw stateError(
 				"the approved action belongs to a different boundary than this resume resolved",
 				{
 					approvalId: id,
-					// The PAIR, not a rendering of it — an absent half is the diagnosis in half these
-					// cases, and `undefined` says that without a sentinel to decode.
+					// The PAIR, not a rendering of it — the reader wants the two boundaries side by side,
+					// and both are always values.
 					approvedIn: { scope: record.scope, scopeId: record.scopeId },
 					resumedIn: authority.configScope,
 				},
@@ -2044,10 +2047,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// recorded on its checkpoint. A yield is a run continuing after a deadline, not a new run —
 		// resuming it into a different tenant would finish it against another tenant's tools and
 		// secrets. R-H03.
-		if (
-			checkpoint.authority !== undefined &&
-			!sameConfigScope(authority, checkpoint.authority)
-		) {
+		if (!sameConfigScope(authority.configScope, checkpoint.authority)) {
 			throw stateError(
 				"the yielded run belongs to a different boundary than this resume resolved",
 				{

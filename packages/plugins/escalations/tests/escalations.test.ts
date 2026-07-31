@@ -278,9 +278,13 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 		const result = await claw.api.generate({ prompt: "write" }, caller);
 		expect(result.status).toBe("waiting_approval");
 		expect(ran).toBe(false);
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain("betterauth:team_eng");
-		expect(warnings[0]).toContain("pager is down");
+		// The ESCALATION warning specifically, not "how many things warned" — the door is shared, so a
+		// total count makes this test fail whenever anything unrelated writes to it.
+		const escalation = warnings.filter((message) =>
+			message.includes("pager is down"),
+		);
+		expect(escalation).toHaveLength(1);
+		expect(escalation[0]).toContain("betterauth:team_eng");
 	});
 
 	// The ordering worth pinning down: an escalation carries NO approval id, and the reason is not that

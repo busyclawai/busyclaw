@@ -1,4 +1,4 @@
-import { conflictError } from "@busyclaw/contracts";
+import { conflictError, UNSCOPED } from "@busyclaw/contracts";
 import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
 import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
@@ -391,5 +391,52 @@ describe("createRegistryStores — losing the upsert race", () => {
 		await expect(specRegistrations.upsert(specInput("org-a"))).rejects.toThrow(
 			/unique constraint violated/,
 		);
+	});
+});
+
+// The reserved boundary is where core puts the ABSENCE of a boundary — `UNSCOPED` is what a run
+// carries when it resolves no tenant. A row stored there would be reachable by every context that
+// failed to resolve a real one, which inverts what the sentinel is for: it narrows, never widens.
+// Guarded on every scope-keyed table, because a read cannot tell a deliberate row from an accident.
+describe("nothing may be stored in a reserved boundary", () => {
+	const stores = () => createRegistryStores(memoryAdapter());
+
+	it("refuses a spec registration", async () => {
+		await expect(
+			stores().specRegistrations.upsert({
+				...specInput("-"),
+				scope: UNSCOPED.scope,
+			}),
+		).rejects.toThrow(/reserved/);
+	});
+
+	it("refuses a registered tool", async () => {
+		await expect(
+			stores().registeredTools.create({
+				...toolInput(UNSCOPED.scopeId),
+				scope: UNSCOPED.scope,
+			}),
+		).rejects.toThrow(/reserved/);
+	});
+
+	it("refuses a policy slice — the sharpest one, since a slice is authorization itself", async () => {
+		await expect(
+			stores().policySlices.upsert({
+				scope: UNSCOPED.scope,
+				scopeId: UNSCOPED.scopeId,
+				name: "reads-only",
+				cedar: "permit(principal, action, resource);",
+				mode: "enforce" as const,
+				plane: "tool" as const,
+				updatedBy: "user:admin",
+			}),
+		).rejects.toThrow(/reserved/);
+	});
+
+	it("a REAL boundary is untouched — the guard is about the prefix, not about writing", async () => {
+		// The case that keeps the three above from passing for the wrong reason.
+		await expect(
+			stores().specRegistrations.upsert(specInput("org-a")),
+		).resolves.toBeDefined();
 	});
 });

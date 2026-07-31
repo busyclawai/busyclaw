@@ -37,6 +37,7 @@ import {
 	endpointRoutesOf,
 	errorMessage,
 	isReservedScope,
+	namesTenant,
 	type PolicySourceSlice,
 	type Principal,
 	RESERVED_SCOPE_PREFIX,
@@ -282,7 +283,13 @@ export function buildResourceRegistry(input: {
 				// to decide its work — this is what a cron-triggered one-off has instead of an owner.
 				// Deliberately NOT "any authenticated human": in a multi-tenant deployment that is
 				// every other tenant's humans too, which is a tenancy breach wearing a convenience.
-				if (record.scope !== undefined && record.scopeId !== undefined) {
+				//
+				// `namesTenant`, not "is a scope present". The column is required now — a run that
+				// resolves no tenant stamps UNSCOPED — so a presence check would fire here for EVERY
+				// approval and make the branch below dead. That branch is the one an ad-hoc `generate`
+				// by a real person depends on: UNSCOPED is a boundary nobody can be a member of, so
+				// routing them through it would deny them their own approval.
+				if (namesTenant(record)) {
 					return { scope: record.scope, scopeId: record.scopeId };
 				}
 				// An ad-hoc call by a real person, in a deployment that resolves no tenant: they own it.

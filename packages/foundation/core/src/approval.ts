@@ -11,6 +11,7 @@ import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
+	UNSCOPED,
 } from "@busyclaw/contracts";
 
 /**
@@ -47,15 +48,19 @@ export function approvalGate(
 				...(typeof ctx[CLAW_ID_CONTEXT_KEY] === "string"
 					? { clawId: ctx[CLAW_ID_CONTEXT_KEY] }
 					: {}),
-				// The TENANT — the second anchor, and the only one a cron-triggered one-off has. Also a
-				// trusted post-strip stamp (the host's configScope resolver writes it).
-				...(typeof ctx[CONFIG_SCOPE_CONTEXT_KEY] === "string" &&
-				typeof ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] === "string"
-					? {
-							scope: ctx[CONFIG_SCOPE_CONTEXT_KEY],
-							scopeId: ctx[CONFIG_SCOPE_ID_CONTEXT_KEY],
-						}
-					: {}),
+				// The TENANT — the second anchor, and the only one a cron-triggered one-off has. A trusted
+				// post-strip stamp, from the run's resolved authority. Never absent: a run that resolves
+				// no tenant carries UNSCOPED, which is a boundary nobody can be a member of, so the
+				// approval is still parentless and still denied — it just says so in the column instead
+				// of leaving it null for a resume to read as agreement.
+				scope:
+					typeof ctx[CONFIG_SCOPE_CONTEXT_KEY] === "string"
+						? ctx[CONFIG_SCOPE_CONTEXT_KEY]
+						: UNSCOPED.scope,
+				scopeId:
+					typeof ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] === "string"
+						? ctx[CONFIG_SCOPE_ID_CONTEXT_KEY]
+						: UNSCOPED.scopeId,
 				metadata: metadata?.(call.toolCall, ctx, outcome),
 				createdAt: now(),
 			});

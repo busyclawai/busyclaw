@@ -15,6 +15,11 @@ const base = {
 	demands: [{ gateId: "oversight", reason: "a human must confirm" }],
 	toolName: "send_email",
 	args: { to: "{{pii:abc}}" },
+	// The TENANT this approval belongs to — required, because a nullable one let a resume read "I don't
+	// know" as agreement with whatever boundary it happened to resolve. A run that names no tenant
+	// carries UNSCOPED here rather than nothing.
+	scope: "organization",
+	scopeId: "org-a",
 	createdAt: "2026-01-01T00:00:00Z",
 };
 
@@ -429,12 +434,16 @@ suite(
 		const db = new Kysely<Record<string, Record<string, unknown>>>({
 			dialect: new SqliteDialect({ database: sqlite }),
 		});
-		// The `approval` table `busyclaw generate` will emit from approvalSchema (`args` holds JSON).
+		// The `approval` table `busyclaw generate` emits from approvalSchema (`args` holds JSON).
+		// HAND-MAINTAINED, and therefore able to drift: a column added to the schema and not to this
+		// list fails here as "table approval has no column named …" the first time a test writes it.
+		// The access anchors (clawId, scope, scopeId) were exactly that — absent here while the schema
+		// had carried them, unnoticed because nothing in this suite set them until scope became required.
 		sqlite.exec(
 			`CREATE TABLE approval (
 						id TEXT PRIMARY KEY, status TEXT, gateId TEXT, toolName TEXT, args TEXT, reasonCode TEXT, metadata TEXT,
-						principal TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT, expiresAt TEXT,
-						demands TEXT, leaseId TEXT, leaseExpiresAt TEXT, result TEXT
+						principal TEXT, clawId TEXT, scope TEXT, scopeId TEXT, reason TEXT, decidedBy TEXT, createdAt TEXT,
+						expiresAt TEXT, demands TEXT, leaseId TEXT, leaseExpiresAt TEXT, result TEXT
 					)`,
 		);
 		return kyselyAdapter(db);

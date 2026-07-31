@@ -13,6 +13,7 @@
 // are not in resolves no membership and denies — which is exactly why it is safe for the request to
 // name it.
 
+import { configurationError } from "@busyclaw/errors";
 import { field } from "./entity";
 
 /** A reference to one opaque access boundary — the parameter shape every scope-keyed store verb takes.
@@ -44,11 +45,64 @@ export const UNCONTAINED = Object.freeze({
 	scopeId: "-",
 }) satisfies ScopeRef;
 
+/**
+ * The config-scope boundary of a run that resolves no tenant — a single-tenant deployment, a cron
+ * one-off, a host that configures no `configScope` resolver at all.
+ *
+ * Same move as {@link UNCONTAINED}, for the other pair: the absent case gets a VALUE so that
+ * everything downstream asks one question instead of inventing its own answer. Six consumers used to
+ * each decide what an undefined config scope meant — five narrowed, one widened — and no signature
+ * carrying `ScopeRef | undefined` could say which was intended.
+ *
+ * NOTHING LIVES HERE. Config writes refuse a reserved scope ({@link assertUnreservedScope}), so a
+ * lookup in this boundary finds nothing by construction. That is deliberate and load-bearing: if rows
+ * could live here, a multi-tenant deployment whose resolver silently returned undefined would stop
+ * getting nothing and start getting the shared bucket's tools and policies. A single-tenant deployment
+ * that wants registered tools names a REAL boundary — `{ scope: "deployment", scopeId: "default" }`
+ * is a fine one — and the assembly warns when a registry is configured with no resolver to reach it.
+ */
+export const UNSCOPED = Object.freeze({
+	scope: `${RESERVED_SCOPE_PREFIX}unscoped`,
+	scopeId: "-",
+}) satisfies ScopeRef;
+
 /** Whether a scope label is core's rather than a plugin's. Membership is never resolvable into one:
  *  a host resolver that returns a reserved scope is claiming a boundary core minted for the absence
  *  of a boundary, which would turn "belongs to nothing" into "shared with everyone". */
 export function isReservedScope(scope: string): boolean {
 	return scope.startsWith(RESERVED_SCOPE_PREFIX);
+}
+
+/**
+ * Whether a pair names a real TENANT — a boundary someone can be a member of.
+ *
+ * The question several call sites were actually asking while spelling it `scope === undefined`. Once
+ * the absent case is a value that spelling stops working, and it was never the right one anyway: a
+ * reserved sentinel is present but is not a tenant, and "both halves or neither" was being re-derived
+ * at each site. Asking it by name means a site cannot accidentally treat core's stand-in for "no
+ * boundary" as somebody's boundary.
+ */
+export function namesTenant(ref: {
+	scope?: string | undefined;
+	scopeId?: string | undefined;
+}): boolean {
+	return (
+		ref.scope !== undefined &&
+		ref.scopeId !== undefined &&
+		!isReservedScope(ref.scope)
+	);
+}
+
+/** Refuse a reserved scope where a caller (or a host) is naming the boundary a row will LIVE in.
+ *  Core mints those labels for the absence of a boundary; a row stored under one would be reachable
+ *  by every context that failed to resolve a real boundary. */
+export function assertUnreservedScope(ref: ScopeRef): void {
+	if (isReservedScope(ref.scope)) {
+		throw configurationError(
+			`"${ref.scope}" is reserved — core mints the "${RESERVED_SCOPE_PREFIX}" prefix to stand for the ABSENCE of a boundary, so nothing may be stored in one`,
+			{ scope: ref.scope, scopeId: ref.scopeId },
+		);
+	}
 }
 
 /** The `(scope, scopeId)` column pair for a scope-keyed CORE CONFIG row. Immutable: unlike a claw —

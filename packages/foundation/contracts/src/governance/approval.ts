@@ -84,11 +84,13 @@ export const approvalFields = {
 	 *  which is also why "any authenticated human" is not an option: in a multi-tenant deployment that
 	 *  is every OTHER tenant's humans too.
 	 *
-	 *  Immutable, and stamped from the host's configScope resolver via the turn context. Absent only
-	 *  where a deployment resolves no tenant at all, and then the approval has no parent and is denied
-	 *  — fail-closed, not "everyone". */
-	scope: field.string({ index: true, immutable: true }),
-	scopeId: field.string({ index: true, immutable: true }),
+	 *  Immutable, and stamped from the run's resolved authority — which always HAS a boundary now: a
+	 *  deployment that resolves no tenant carries `UNSCOPED`, a reserved label nobody can be a member
+	 *  of, so such an approval still has no parent and is still denied. Required, because "the tenant
+	 *  this belongs to" was the one question a resume had to answer and a nullable column let it
+	 *  answer "I don't know" — which read as agreement with whatever the resume resolved. */
+	scope: field.string({ required: true, index: true, immutable: true }),
+	scopeId: field.string({ required: true, index: true, immutable: true }),
 	reason: field.string(),
 	metadata: field.jsonObject(),
 	decidedBy: field.principal(),

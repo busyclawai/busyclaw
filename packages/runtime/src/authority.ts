@@ -28,24 +28,34 @@ import {
 	type ScopeRef,
 	SUBJECT_CONTEXT_KEY,
 	TEAM_CONTEXT_KEY,
+	UNSCOPED,
 } from "@busyclaw/contracts";
 
 /**
  * The facts a run's authority consists of — the answer the host's resolvers gave, ONCE, before
  * anything read it.
  *
- * Frozen, and every field optional, because each is genuinely absent in some real deployment: a cron
- * run has no caller, a single-tenant one has no config scope, a deployment that owes nobody erasure
- * has no subject. Absent means absent — the tool floor fails closed on a modeled action with no
- * principal, which is the correct reading of "we could not establish who this is".
+ * Frozen. Most fields are optional because each is genuinely absent in some real deployment: a cron
+ * run has no caller, a deployment that owes nobody erasure has no subject. Absent means absent — the
+ * tool floor fails closed on a modeled action with no principal, which is the correct reading of "we
+ * could not establish who this is".
+ *
+ * `configScope` is the exception and is always a value. See the field.
  */
 export type RunAuthority = Readonly<{
 	/** The canonical principal. The authenticated caller when there is one; otherwise the `identity`
 	 *  resolver's answer, which is the caller-LESS fallback (cron, engine resume). */
 	principal?: string;
-	/** The `(scope, scopeId)` boundary whose durable configuration governs this run — its registered
-	 *  tools, policy slices and secrets. Both halves or neither; half a key names no boundary. */
-	configScope?: ScopeRef;
+	/**
+	 * The `(scope, scopeId)` boundary whose durable configuration governs this run — its registered
+	 * tools, policy slices and secrets.
+	 *
+	 * ALWAYS a value. A run that resolves no tenant carries {@link UNSCOPED} rather than `undefined`,
+	 * so no consumer downstream has to decide for itself what an absent boundary means — six of them
+	 * used to, and they did not agree on the direction. Half a resolved key still names no boundary and
+	 * collapses here, at the one place that answers the question.
+	 */
+	configScope: ScopeRef;
 	team?: string;
 	role?: string;
 	/** Whose personal data this run is about — the erasure key its PII mappings link to. */
@@ -60,11 +70,13 @@ function captureAuthority(ctx: Record<string, unknown>): RunAuthority {
 	const scopeId = str(CONFIG_SCOPE_ID_CONTEXT_KEY);
 	return Object.freeze({
 		principal: str(PRINCIPAL_CONTEXT_KEY),
-		// Both halves or neither — the same rule `registeredToolResolver` applies when it reads them.
+		// The ONE place the absent (or half-named) boundary becomes a value — the same move
+		// `piiContainer` makes for the other pair, and for the same reason: an open family of
+		// near-misses collapses to exactly one bucket that everything downstream can look up.
 		configScope:
 			scope !== undefined && scopeId !== undefined
 				? Object.freeze({ scope, scopeId })
-				: undefined,
+				: UNSCOPED,
 		team: str(TEAM_CONTEXT_KEY),
 		role: str(ROLE_CONTEXT_KEY),
 		subject: str(SUBJECT_CONTEXT_KEY),
@@ -84,10 +96,8 @@ export function stampAuthority(
 	if (authority.principal !== undefined) {
 		ctx[PRINCIPAL_CONTEXT_KEY] = authority.principal;
 	}
-	if (authority.configScope !== undefined) {
-		ctx[CONFIG_SCOPE_CONTEXT_KEY] = authority.configScope.scope;
-		ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] = authority.configScope.scopeId;
-	}
+	ctx[CONFIG_SCOPE_CONTEXT_KEY] = authority.configScope.scope;
+	ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] = authority.configScope.scopeId;
 	if (authority.team !== undefined) ctx[TEAM_CONTEXT_KEY] = authority.team;
 	if (authority.role !== undefined) ctx[ROLE_CONTEXT_KEY] = authority.role;
 	if (authority.subject !== undefined) {
@@ -121,14 +131,14 @@ export async function resolveRunAuthority(input: {
 	return { authority: captureAuthority(resolved), ctx: resolved };
 }
 
-/** Two authorities name the same tenant. Absent on both sides counts as agreement — a deployment that
- *  resolves no scope at all is single-tenant, and there is nothing to disagree about. */
-export function sameConfigScope(
-	a: RunAuthority,
-	b: { scope?: string; scopeId?: string },
-): boolean {
-	return (
-		a.configScope?.scope === (b.scope ?? undefined) &&
-		a.configScope?.scopeId === (b.scopeId ?? undefined)
-	);
+/**
+ * Two boundaries are the same one.
+ *
+ * Plain equality, because both sides are always values now: the resumed run carries its resolved
+ * boundary and the parked record carries the one it was created in. It used to have to treat "absent
+ * on both sides" as agreement, which is the shape that hides a real disagreement whenever exactly one
+ * side fails to resolve.
+ */
+export function sameConfigScope(a: ScopeRef, b: ScopeRef): boolean {
+	return a.scope === b.scope && a.scopeId === b.scopeId;
 }

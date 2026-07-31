@@ -20,6 +20,7 @@ import type { Adapter, ScopeRef } from "@busyclaw/contracts";
 import {
 	type AuthzChangeAppend,
 	type AuthzChangeStore,
+	assertUnreservedScope,
 	authzChangeAppend as authzChangeAppendSchema,
 	authzChangeFields,
 	type FactsOverlayStore,
@@ -163,6 +164,7 @@ export function createRegistryStores(
 		if (valid instanceof type.errors) {
 			throw validationError("spec registration input invalid", valid.summary);
 		}
+		assertUnreservedScope(valid);
 		return valid;
 	}
 	function validateToolInput(input: unknown): RegisteredToolCreate {
@@ -170,6 +172,7 @@ export function createRegistryStores(
 		if (valid instanceof type.errors) {
 			throw validationError("registered tool input invalid", valid.summary);
 		}
+		assertUnreservedScope(valid);
 		return valid;
 	}
 	function validateToolPatch(patch: unknown): RegisteredToolPatch {
@@ -184,6 +187,7 @@ export function createRegistryStores(
 		if (valid instanceof type.errors) {
 			throw validationError("facts overlay input invalid", valid.summary);
 		}
+		assertUnreservedScope(valid);
 		return valid;
 	}
 	function validatePolicyInput(input: unknown): PolicySliceUpsert {
@@ -191,6 +195,7 @@ export function createRegistryStores(
 		if (valid instanceof type.errors) {
 			throw validationError("policy slice input invalid", valid.summary);
 		}
+		assertUnreservedScope(valid);
 		return valid;
 	}
 	function validateChangeInput(input: unknown): AuthzChangeAppend {
@@ -198,6 +203,7 @@ export function createRegistryStores(
 		if (valid instanceof type.errors) {
 			throw validationError("authz change input invalid", valid.summary);
 		}
+		assertUnreservedScope(valid);
 		return valid;
 	}
 

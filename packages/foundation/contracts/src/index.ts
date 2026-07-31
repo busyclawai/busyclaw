@@ -451,10 +451,13 @@ export {
 // ── the opaque access boundary every scope-keyed core row carries ──
 export type { ScopeRef } from "./scope";
 export {
+	assertUnreservedScope,
 	isReservedScope,
+	namesTenant,
 	RESERVED_SCOPE_PREFIX,
 	scopeFields,
 	UNCONTAINED,
+	UNSCOPED,
 } from "./scope";
 // ── standard-schema interop: accept any standard-schema library without depending on one ──────
 export type {

@@ -569,8 +569,11 @@ function registeredToolResolver(
 ): NonNullable<RuntimeConfig["resolveTools"]> {
 	const provider = createRegisteredToolProvider({ secrets });
 	return async (ctx) => {
-		// Both halves or nothing: a run with a boundary label but no id (or the reverse) names no boundary,
-		// and resolving tools for half a key would read another scope's rows.
+		// No absent-case rule of its own any more. The run's authority resolves the boundary once and
+		// always to a value (`UNSCOPED` when it names no tenant), so this just looks up what is there —
+		// and nothing is ever stored in a reserved boundary, so an unscoped run still gets no rows.
+		// It used to decide for itself that an unresolved boundary meant `{}`, one of six sites each
+		// answering that question its own way.
 		const scope = ctx[CONFIG_SCOPE_CONTEXT_KEY];
 		const scopeId = ctx[CONFIG_SCOPE_ID_CONTEXT_KEY];
 		if (typeof scope !== "string" || typeof scopeId !== "string") return {};
@@ -762,6 +765,20 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const resolveTools = registryStores
 		? registeredToolResolver(registryStores, secrets)
 		: undefined;
+	// A registry with no way to reach it. Registration REQUIRES a `(scope, scopeId)`, and a run only
+	// sees rows in the boundary its `configScope` resolver names — so without one, every registered
+	// tool is invisible and the model is simply offered nothing. That failed silently: the spec
+	// registers fine, the rows are there, and the only symptom is a model that never calls them.
+	//
+	// Stated conditionally because it IS conditional: a storage-backed claw that never registers a
+	// tool is a perfectly ordinary thing, and this cannot know which one it is looking at without a
+	// per-run query it would be paying for on every run to answer a question that changes once. One
+	// line at assembly, aimed at the person who is about to spend an afternoon on the silence.
+	if (registryStores && config.configScope === undefined) {
+		warn(
+			"busyclaw: no `configScope` resolver is configured, so every run resolves no boundary — any registered tool will be unreachable, because a run only sees rows in the boundary it resolves. Single-tenant deployments return a constant one.",
+		);
+	}
 	// The recording/observer split: the claws-store transcript sink is the ONE load-bearing
 	// recording sink (its failures fail the run); every user-configured AND plugin-contributed sink
 	// is an observer — isolated in the fan-out, warned on failure. Plugin sinks are read STATICALLY

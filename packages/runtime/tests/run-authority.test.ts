@@ -10,10 +10,12 @@
 // were handed different starting material.
 
 import {
+	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	ROLE_CONTEXT_KEY,
 	type ToolDefinitionSet,
+	UNSCOPED,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { createStoredRedactor } from "@busyclaw/core";
@@ -394,5 +396,84 @@ describe("a yield cannot be resumed into another tenant", () => {
 		expect(
 			(await runtime.resumeRun(first.checkpointId, { org: "org-a" }))?.status,
 		).toBe("completed");
+	});
+});
+
+// A run's boundary is ALWAYS a value. Six consumers used to each decide what an absent one meant —
+// five narrowed, one widened — and no signature carrying `ScopeRef | undefined` could say which was
+// intended. `UNSCOPED` is the answer for "this run names no tenant", the same move `UNCONTAINED`
+// already made for the redaction container.
+describe("every run carries a boundary", () => {
+	const boundarySeenBy = async (
+		config: Partial<Parameters<typeof createRuntime>[0]>,
+		ctx: Record<string, unknown> = {},
+	): Promise<{ scope: unknown; scopeId: unknown }> => {
+		let seen: { scope: unknown; scopeId: unknown } = {
+			scope: undefined,
+			scopeId: undefined,
+		};
+		const runtime = createRuntime({
+			model: callsInOrder("t"),
+			tools: { t: noopTool() },
+			plugins: [
+				{
+					id: "watch",
+					gates: [
+						{
+							id: "watch",
+							matcher: () => true,
+							handler: (_call, c) => {
+								seen = {
+									scope: c[CONFIG_SCOPE_CONTEXT_KEY],
+									scopeId: c[CONFIG_SCOPE_ID_CONTEXT_KEY],
+								};
+								return { decision: "permit" };
+							},
+						},
+					],
+				},
+			],
+			...config,
+		});
+		await runtime.generate("go", ctx);
+		return seen;
+	};
+
+	it("a deployment with no configScope resolver still names one — the unscoped boundary", async () => {
+		expect(await boundarySeenBy({})).toEqual(UNSCOPED);
+	});
+
+	it("a resolver that returns undefined for THIS run lands there too", async () => {
+		// The multi-tenant deployment whose resolver could not place a particular request. It gets the
+		// boundary that finds nothing, not a missing key each consumer reads its own way.
+		expect(
+			await boundarySeenBy({ configScope: () => undefined }, { org: "org-a" }),
+		).toEqual(UNSCOPED);
+	});
+
+	it("half a resolved key names no boundary and collapses to the same one", async () => {
+		// Collapsed at the ONE place that answers the question. A half-named boundary used to form its
+		// own bucket — distinct from the absent one and from every real tenant — which is an open family
+		// of near-misses rather than a case anything could handle.
+		expect(
+			await boundarySeenBy({
+				configScope: () => ({ scope: "organization" }) as never,
+			}),
+		).toEqual(UNSCOPED);
+	});
+
+	it("a real boundary is passed through untouched", async () => {
+		// The case that keeps the three above from passing because everything collapses.
+		expect(
+			await boundarySeenBy(
+				{
+					configScope: (c) =>
+						typeof c.org === "string"
+							? { scope: "organization", scopeId: c.org }
+							: undefined,
+				},
+				{ org: "org-a" },
+			),
+		).toEqual({ scope: "organization", scopeId: "org-a" });
 	});
 });

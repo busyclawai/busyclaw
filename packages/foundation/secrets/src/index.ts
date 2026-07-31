@@ -15,6 +15,7 @@
 
 import {
 	configurationError,
+	namesTenant,
 	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,
@@ -99,6 +100,12 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 	 *
 	 * Unscoped reads are untouched: an app bot's token or a sandbox credential carries no tenant, so
 	 * there is nobody to lend anything to and env resolves exactly as before.
+	 *
+	 * The question is `namesTenant`, not "is a scope present". Those used to be the same thing, and
+	 * stopped being when the absent config scope became the `UNSCOPED` VALUE: every run carries a pair
+	 * now, so keying on presence would have quietly fenced the deployment's own credentials off from
+	 * the runs they exist for — and keying on the label instead would lend them to whoever named the
+	 * sentinel. A reserved label is present and is not a tenant; both readings have to survive that.
 	 */
 	const answersFor = (
 		provider: SecretProvider,
@@ -106,7 +113,7 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 		ctx: ResolveContext,
 	): boolean => {
 		if (provider.tier === "data") return true;
-		if (ctx.scope === undefined || ctx.scopeId === undefined) return true;
+		if (!namesTenant(ctx)) return true;
 		return provider.shared?.includes(name) === true;
 	};
 
