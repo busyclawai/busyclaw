@@ -12,6 +12,7 @@
 // claw's business from which specs happen to be imported.
 
 import type { JsonObject } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { fetchTool } from "@busyclaw/egress/tool";
 import { cedar } from "@busyclaw/policy-cedar";
 import { runtimeRunOptionsWithCaller } from "@busyclaw/runtime";
@@ -93,7 +94,7 @@ const run = (claw: Claw): Promise<RunResult> =>
 	claw.$context.runtime.generate(
 		"fetch it",
 		{},
-		runtimeRunOptionsWithCaller(undefined, "alice"),
+		runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
 	);
 
 describe("what bounds a sandbox's reach", () => {

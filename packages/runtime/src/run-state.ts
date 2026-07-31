@@ -6,6 +6,7 @@
 import type { RunMode } from "@busyclaw/contracts";
 import { stateError } from "@busyclaw/contracts";
 import type { ModelMessage } from "ai";
+import type { RunAuthority } from "./authority";
 import type { RuntimeRecordingContext } from "./events";
 import type { RuntimeAbortSignal } from "./runtime";
 
@@ -42,6 +43,12 @@ export type RunState = {
 	 *  (the caller wins over the `identity` resolver, which is the caller-LESS fallback). Absent for
 	 *  autonomous runs (cron/engine resume) — identity resolver / a system principal covers those. */
 	callerPrincipal?: string;
+	/** The run's authority — principal, config scope, team/role, subject — resolved ONCE at the entry
+	 *  point, before any tool is selected, and frozen. Every governance door STAMPS this rather than
+	 *  re-running the host's resolvers, so the tool closure, the floor, the audit and the approval all
+	 *  name the same actor in the same tenant. Absent only before the entry point has resolved it.
+	 *  See {@link RunAuthority} for what each split used to cost. */
+	authority?: RunAuthority;
 	/** The approver of a granted `needs-approval` this run is resuming — the ApprovalRecord's `decidedBy`
 	 *  (forge-proof: read from the persisted, PEP-gated approval, never the model/caller). When present the
 	 *  trusted context assembly seeds it as `busyclaw__approvedBy`, so the replayed action's audit records

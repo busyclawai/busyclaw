@@ -11,6 +11,7 @@
 
 import { cedarPolicyPlugin } from "@busyclaw/authz";
 import type { BusyclawPlugin, JsonObject, Secrets } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import {
 	createSpecRegistry,
 	type RuntimeModel,
@@ -124,7 +125,7 @@ const PERMIT = `permit(principal, action == Action::"petstore.getPet", resource)
 const runCtx = { org: "org-a" };
 // The authenticated caller seeds the run's principal (`busyclaw__principal`) via the forge-proof
 // runtime option (as the api handler does); the mapper reads the stamp, never a ctx field (audit #7).
-const asAlice = runtimeRunOptionsWithCaller(undefined, "alice");
+const asAlice = runtimeRunOptionsWithCaller(undefined, userPrincipal("alice"));
 
 /** Register the petstore spec and build the cedar plugin over its rows. The registry stores are
  *  handed to createClaw via `stores` (not `database`) — resolveTools needs them, but the runtime

@@ -12,6 +12,7 @@ import type {
 	Secrets,
 	ToolDefinitionSet,
 } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import {
 	createRegisteredToolProvider,
 	createRuntime,
@@ -204,7 +205,7 @@ const runCtx = { org: "org-a" };
 // The authenticated caller seeds the run's principal (`busyclaw__principal`) via the forge-proof
 // runtime option — exactly how the api handler threads it. The mapper reads this stamp, never a ctx
 // field (audit #7), so the principal lives here, not on `runCtx`.
-const asAlice = runtimeRunOptionsWithCaller(undefined, "alice");
+const asAlice = runtimeRunOptionsWithCaller(undefined, userPrincipal("alice"));
 
 describe("invoker blueprint (composed slice 6a)", () => {
 	it("registers apiKey petstore, dispatches getPet, and shapes the authed request", async () => {

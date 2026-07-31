@@ -109,7 +109,12 @@ export function composeContext(parts: {
 				ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] = ref.scopeId;
 			}
 		}
-		if (identity) {
+		// The caller-LESS fallback, structurally. The authenticated caller is SEEDED before this runs
+		// (`resolveRunAuthority`), so an authenticated run keeps its caller and a cron/engine resume —
+		// which has none — gets the resolver's answer. It used to run unconditionally and be overwritten
+		// afterwards, which meant the resolvers BELOW it (membership, subject) and the tool resolver all
+		// saw the wrong actor: the role was fetched for whoever `identity` named, not for the caller.
+		if (identity && ctx[PRINCIPAL_CONTEXT_KEY] === undefined) {
 			const principal = await identity(ctx);
 			if (typeof principal === "string") ctx[PRINCIPAL_CONTEXT_KEY] = principal;
 		}

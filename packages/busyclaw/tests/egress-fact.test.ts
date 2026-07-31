@@ -14,6 +14,7 @@
 // wrong value, or if the forbid matched everything.
 
 import type { JsonObject } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { cedar } from "@busyclaw/policy-cedar";
 import {
 	createSpecRegistry,
@@ -179,7 +180,7 @@ const run = (claw: Awaited<ReturnType<typeof clawForbiddingOrigin>>) =>
 	claw.$context.runtime.generate(
 		"get pet 7",
 		{ org: "org-a" },
-		runtimeRunOptionsWithCaller(undefined, "alice"),
+		runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
 	);
 
 describe("context.server reaches the floor", () => {
@@ -238,7 +239,7 @@ describe("context.server reaches the floor", () => {
 			claw.$context.runtime.generate(
 				"get pet 7",
 				{},
-				runtimeRunOptionsWithCaller(undefined, "alice"),
+				runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
 			),
 		).resolves.toMatchObject({ status: "completed" });
 		// Refused at the floor — a read the floor would otherwise permit, stopped by where it reaches.
@@ -288,7 +289,7 @@ describe("context.server for an argument-addressed tool", () => {
 		claw.$context.runtime.generate(
 			"fetch it",
 			{},
-			runtimeRunOptionsWithCaller(undefined, "alice"),
+			runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
 		);
 
 	it("the permitted origin goes through", async () => {

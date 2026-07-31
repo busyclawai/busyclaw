@@ -18,7 +18,6 @@ import {
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
-	PRINCIPAL_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
@@ -48,6 +47,12 @@ import {
 	type ModelLoopVendor,
 	toolResultMessage,
 } from "./ai-sdk-loop";
+import {
+	type RunAuthority,
+	resolveRunAuthority,
+	sameConfigScope,
+	stampAuthority,
+} from "./authority";
 import {
 	createToolCatalog,
 	type ToolCatalog,
@@ -596,6 +601,19 @@ export type RuntimeApprovalMetadata = typeof runtimeApprovalMetadata.infer;
 export const runtimeYieldMetadata = ark({
 	version: "'runtime.ai-sdk.yield.v1'",
 	nextStep: "number",
+	/**
+	 * The boundary the yielding run was executing in — compared at resume, refused on mismatch.
+	 *
+	 * A parked APPROVAL has immutable `scope`/`scopeId` columns on its record to compare against; a
+	 * yield checkpoint had nothing, so a continuation could resolve any tenant it liked from the
+	 * caller's `ctx` and finish the run there, against that tenant's registered tools and secrets.
+	 * This is the yield's copy of that anchor. Absent for a run that resolved no config scope at all
+	 * (single-tenant), where there is nothing to disagree about. R-H03.
+	 */
+	"authority?": ark({
+		"scope?": "string | undefined",
+		"scopeId?": "string | undefined",
+	}).or("undefined"),
 	...runtimeResumeStateShape,
 });
 export type RuntimeYieldMetadata = typeof runtimeYieldMetadata.infer;
@@ -1024,6 +1042,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						),
 						...(state.runId !== undefined ? { runId: state.runId } : {}),
 					};
+					// The tenancy anchor a resume compares against. Written only when the run HAS a config
+					// scope — a single-tenant deployment resolves none, and writing an empty anchor would
+					// make every such resume compare something against nothing.
+					const scope = state.authority?.configScope;
+					if (scope !== undefined) {
+						metadata.authority = { scope: scope.scope, scopeId: scope.scopeId };
+					}
 					if (state.recording !== undefined) {
 						metadata.recording = toJsonValue(
 							state.recording,
@@ -1114,17 +1139,19 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const resolveGovernanceContext = async (
 			ctx: Record<string, unknown>,
 		): Promise<Record<string, unknown>> => {
-			const resolved = resolveContext ? await resolveContext(ctx) : ctx;
+			// STAMPS the run's authority; never re-derives it. Core hands over a freshly stripped context
+			// at each of its boundary doors, and this used to re-run the host's identity/membership/
+			// configScope resolvers on every one of them — so a resolver reading a mutable store answered
+			// per door, and the tool closure (resolved once, earlier, without the caller) had already
+			// captured a different answer than any of them. One derivation now, at the entry point, before
+			// tools; this writes it back on. R-H03.
+			//
+			// The seed rule it replaces is unchanged in effect: the authenticated caller IS the run's
+			// principal and wins over the `identity` resolver, which is the caller-LESS fallback
+			// (cron/engine resume → a system principal). Absent caller AND absent resolver → no stamp →
+			// the tool floor fails closed on a modeled action (cedarMapCall denies).
+			const resolved = stampAuthority(ctx, state.authority ?? {});
 			stampRunActions(resolved, runActions);
-			// The authenticated caller SEEDS the one canonical principal. Done HERE — the trusted step,
-			// after `stripReserved` cleared any caller-forged `busyclaw__` keys — so the seed can't be
-			// spoofed. The caller IS the run's initiator, so it WINS over the `identity` resolver (which
-			// `resolveContext` may have stamped): the resolver is the caller-LESS fallback (cron/engine
-			// resume → a system principal). Absent caller AND absent resolver → no stamp → the tool floor
-			// fails closed on a modeled action (cedarMapCall denies).
-			if (state.callerPrincipal !== undefined) {
-				resolved[PRINCIPAL_CONTEXT_KEY] = state.callerPrincipal;
-			}
 			// The approver of a resumed `needs-approval` (forge-proof: from the persisted, PEP-gated
 			// ApprovalRecord's `decidedBy`, set on the resume path — never caller/model). Seeded HERE (the
 			// trusted step, post-strip) so the replayed action's audit records WHO approved it.
@@ -1535,14 +1562,29 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		return core;
 	};
 
-	const resolveRunContext = async (
+	/**
+	 * The run's ONE derivation of authority, plus the context every later door is stamped from.
+	 *
+	 * `callerPrincipal` must be settled before this is called — it is seeded into the context BEFORE the
+	 * host's resolvers run, so membership, subject and configScope all resolve for the actor the run is
+	 * actually authorized as. That ordering is the fix; stamping the caller afterwards (what this used
+	 * to do, one layer down) left every resolver below it answering about someone else.
+	 */
+	const resolveRunAuthorityAndContext = async (
 		ctxInput: Record<string, unknown> | undefined,
+		callerPrincipal: string | undefined,
 		recording: RuntimeRecordingContext | undefined,
 		runId: string | undefined,
-	): Promise<Record<string, unknown>> => {
-		const ctx = stripReserved(ctxInput ?? {});
-		const resolved = resolveContext ? await resolveContext(ctx) : ctx;
-		return stampRedactionContainer(resolved, recording, runId);
+	): Promise<{ authority: RunAuthority; ctx: Record<string, unknown> }> => {
+		const { authority, ctx } = await resolveRunAuthority({
+			ctx: stripReserved(ctxInput ?? {}),
+			callerPrincipal,
+			resolveContext,
+		});
+		return {
+			authority,
+			ctx: stampRedactionContainer(ctx, recording, runId),
+		};
 	};
 
 	const assertYieldable = (options: RuntimeRunOptions | undefined): void => {
@@ -1576,7 +1618,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// approval records, so the two are joinable for a run that has nothing else to join on.
 		state.runId = options?.runId ?? recording?.runId ?? newId("run");
 		const emitCtx = { recording, runId: state.runId };
-		const resolvedCtx = await resolveRunContext(ctx, recording, state.runId);
+		// BEFORE tools: the tool resolver closure-captures the principal and scope it is handed, and the
+		// floor must decide about the same ones.
+		const { authority, ctx: resolvedCtx } = await resolveRunAuthorityAndContext(
+			ctx,
+			state.callerPrincipal,
+			recording,
+			state.runId,
+		);
+		state.authority = authority;
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 		if (onDelta !== undefined) {
@@ -1762,11 +1812,53 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 		if (record.status !== "approved" && record.status !== "executing")
 			return null;
-		const resolvedCtx = await resolveRunContext(
+		// WHOSE AUTHORITY the approved action executes under — fixed by the immutable approval record,
+		// NOT by whoever calls continueRun. `requester` (default) keeps the action the requester's, the
+		// approver merely vouching; `approver` LENDS the approver's authority, which is what makes an
+		// escalation — an action the requester may not perform — actually execute. See
+		// `approvalAuthority` and docs/plans/approvals-authz.md.
+		//
+		// Settled HERE, before the authority is resolved and the tools are picked. It used to be read
+		// forty lines further down, after both — so the resume selected its tools and credentials for
+		// whoever called `continueRun`, then ran the approved call as somebody else.
+		const executingPrincipal =
+			config.approvalAuthority === "approver"
+				? record.decidedBy
+				: record.principal;
+		if (
+			config.approvalAuthority === "approver" &&
+			executingPrincipal === undefined
+		) {
+			// A granted approval always stamps `decidedBy` (the api stamps it from the authenticated
+			// approver) — so this is an invariant violation, not a caller error. Fail LOUD: silently
+			// running with no principal would look like a fail-closed deny for the wrong reason.
+			throw stateError("approval resume cannot assume an absent approver", {
+				approvalId: id,
+			});
+		}
+		const { authority, ctx: resolvedCtx } = await resolveRunAuthorityAndContext(
 			ctx,
+			executingPrincipal,
 			effectiveRecording,
 			effectiveRunId,
 		);
+		// TENANCY DRIFT. `scope`/`scopeId` are immutable columns on the record — the boundary the parked
+		// run was executing in. A resume resolves a FRESH context from the caller's `ctx`, and nothing
+		// compared the two: continuing under a different one selects another tenant's registered tools
+		// and resolves another tenant's credentials for a call a human approved somewhere else. Not a
+		// recoverable difference, so refuse rather than pick a side. R-H03.
+		if (!sameConfigScope(authority, record)) {
+			throw stateError(
+				"the approved action belongs to a different boundary than this resume resolved",
+				{
+					approvalId: id,
+					// The PAIR, not a rendering of it — an absent half is the diagnosis in half these
+					// cases, and `undefined` says that without a sentinel to decode.
+					approvedIn: { scope: record.scope, scopeId: record.scopeId },
+					resumedIn: authority.configScope,
+				},
+			);
+		}
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		// DRIFT. The tool is resolved fresh, as it must be — but a registered source can be
 		// re-registered while an approval sits pending, and the address survives what it points at.
@@ -1802,27 +1894,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = `approval:${id}`;
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
-		// WHOSE AUTHORITY the approved action executes under — fixed by the immutable approval record,
-		// NOT by whoever calls continueRun. `requester` (default) keeps the action the requester's, the
-		// approver merely vouching; `approver` LENDS the approver's authority, which is what makes an
-		// escalation — an action the requester may not perform — actually execute. See
-		// `approvalAuthority` and docs/plans/approvals-authz.md.
-		const executingPrincipal =
-			config.approvalAuthority === "approver"
-				? record.decidedBy
-				: record.principal;
-		if (
-			config.approvalAuthority === "approver" &&
-			executingPrincipal === undefined
-		) {
-			// A granted approval always stamps `decidedBy` (the api stamps it from the authenticated
-			// approver) — so this is an invariant violation, not a caller error. Fail LOUD: silently
-			// running with no principal would look like a fail-closed deny for the wrong reason.
-			throw stateError("approval resume cannot assume an absent approver", {
-				approvalId: id,
-			});
-		}
 		state.callerPrincipal = executingPrincipal;
+		state.authority = authority;
 		// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
 		state.approvedBy = record.decidedBy;
 		state.recording = effectiveRecording;
@@ -1960,7 +2033,30 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			options?.[RUNTIME_RECORDING_OPTION] ?? checkpoint.recording;
 		const runId = options?.runId ?? checkpoint.runId;
 		const emitCtx = { recording, runId };
-		const resolvedCtx = await resolveRunContext(ctx, recording, runId);
+		const callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
+		const { authority, ctx: resolvedCtx } = await resolveRunAuthorityAndContext(
+			ctx,
+			callerPrincipal,
+			recording,
+			runId,
+		);
+		// The same tenancy check the approval resume makes, against the boundary the yielding run
+		// recorded on its checkpoint. A yield is a run continuing after a deadline, not a new run —
+		// resuming it into a different tenant would finish it against another tenant's tools and
+		// secrets. R-H03.
+		if (
+			checkpoint.authority !== undefined &&
+			!sameConfigScope(authority, checkpoint.authority)
+		) {
+			throw stateError(
+				"the yielded run belongs to a different boundary than this resume resolved",
+				{
+					checkpointId,
+					yieldedIn: checkpoint.authority,
+					resumedIn: authority.configScope,
+				},
+			);
+		}
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
 		const selected = selectModel(options?.model);
 
@@ -1968,7 +2064,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		state.runInstanceId = `checkpoint:${checkpointId}`;
 		state.abortSignal = options?.abortSignal;
 		state.runMode = options?.runMode ?? "autonomous";
-		state.callerPrincipal = options?.[RUNTIME_CALLER_OPTION];
+		state.callerPrincipal = callerPrincipal;
+		state.authority = authority;
 		state.recording = recording;
 		state.runId = runId;
 
