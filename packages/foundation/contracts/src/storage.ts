@@ -90,6 +90,23 @@ export function sortByList(
 export type Adapter = {
 	/** Adapter id, e.g. "memory" / "drizzle" — for diagnostics. */
 	id: string;
+	/**
+	 * Check that the database can actually enforce what the declaration requires, and REFUSE if it
+	 * cannot. Optional: an adapter whose backend enforces constraints as part of migrating has nothing
+	 * to verify, and omitting this is the same as passing.
+	 *
+	 * It exists for the backend where "the schema was applied" is an assumption rather than a fact.
+	 * Mongo has no DDL and no migrator — the index script is a document someone is trusted to have
+	 * run, and a collection missing a unique index does not fail, it accepts the duplicate. Every
+	 * lookup-then-create upsert in busyclaw treats the database's rejection as its retry signal, so a
+	 * silently unconstrained collection does not error, it accumulates duplicates.
+	 *
+	 * The ASSEMBLY calls this, not the caller who built the adapter, and that is the point: the
+	 * assembly holds the merged declaration — core models plus every plugin and host extension — while
+	 * whoever constructed the adapter knows only the base. A check run against the wrong schema is a
+	 * check that passes for the wrong reason.
+	 */
+	verifySchema?: (schema: SchemaDeclaration) => Promise<void>;
 	create: (data: {
 		model: string;
 		data: Record<string, unknown>;

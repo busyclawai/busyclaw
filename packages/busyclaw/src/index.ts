@@ -34,7 +34,7 @@ import {
 	type RuntimeEventSink,
 } from "@busyclaw/runtime";
 import { buildSecrets, env } from "@busyclaw/secrets";
-import { entityAdapter } from "@busyclaw/storage-core";
+import { entityAdapter, verifiedAdapter } from "@busyclaw/storage-core";
 import {
 	createAccessGrantStore,
 	createClawsStore,
@@ -742,7 +742,21 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	// `configure`. Built here so the PEP's plugin `shareable` loaders bind against the SAME adapter a
 	// plugin's `configure` builds its store from (a skills loader `entityView`s over it, just like its
 	// store does). storage-durable stores deliberately take the RAW adapter and wrap internally instead.
-	const pluginAdapter = adapter ? entityAdapter(adapter, models) : undefined;
+	// Verified BEFORE the entity lens, once, on first use. A backend that cannot migrate (Mongo has
+	// no DDL — its index script is a document somebody is trusted to have run) gets asked whether it
+	// can actually enforce the declaration, and refuses rather than accepting duplicates into a
+	// collection with no unique index. An adapter that declares no `verifySchema` passes through
+	// untouched.
+	//
+	// The ASSEMBLY supplies the schema, not whoever built the adapter, because only here is it the
+	// merged one — core models plus every plugin and host extension. A check asked about the base
+	// models would pass while the extensions went unprotected.
+	const verifiedBase = adapter
+		? verifiedAdapter(adapter, getBusyclawTables(config))
+		: undefined;
+	const pluginAdapter = verifiedBase
+		? entityAdapter(verifiedBase, models)
+		: undefined;
 	// Registered tools become executable per run (see registeredToolResolver above): the invoker
 	// resolves each row's credential through the one-door reader by its `source` name.
 	const resolveTools = registryStores

@@ -9,6 +9,7 @@
 // same run derive the same id and the unique index is the entire mechanism that makes the second one
 // lose. The first test here is that failure, reproduced.
 
+import { verifiedAdapter } from "@busyclaw/storage-core";
 import { type Db, MongoClient } from "mongodb";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -135,10 +136,18 @@ describe("missingMongoIndexes", () => {
 	});
 });
 
+// The adapter exposes the CHECK; `verifiedAdapter` in the assembly decides when to run it. These
+// drive the pair the way busyclaw does, because that composition is what actually ships — the adapter
+// alone no longer verifies anything on its own, deliberately: only the assembly holds the merged
+// declaration (core models plus every plugin and host extension), and a check asked about the base
+// models would pass while the extensions went unprotected.
 describe("the adapter refuses to write into an unprotected database", () => {
+	const guarded = (target: Db = db) =>
+		verifiedAdapter(mongoAdapter(target), SCHEMA as never);
+
 	it("throws, naming the missing index — and does NOT insert", async () => {
 		await db.collection("effect").insertOne({ id: "seed", status: "x" });
-		const adapter = mongoAdapter(db, { schema: SCHEMA });
+		const adapter = guarded();
 		await expect(
 			adapter.create({
 				model: "effect",
@@ -152,7 +161,7 @@ describe("the adapter refuses to write into an unprotected database", () => {
 
 	it("recovers without a restart once the index exists", async () => {
 		await db.collection("effect").insertOne({ id: "seed", status: "x" });
-		const adapter = mongoAdapter(db, { schema: SCHEMA });
+		const adapter = guarded();
 		await expect(
 			adapter.create({ model: "effect", data: { id: "a", status: "x" } }),
 		).rejects.toThrow();
@@ -164,12 +173,22 @@ describe("the adapter refuses to write into an unprotected database", () => {
 		).resolves.toBeDefined();
 	});
 
-	it("without a schema it verifies nothing — the previous behaviour, unchanged", async () => {
+	it("the RAW adapter still writes — the check is the assembly's to run", async () => {
+		// The capability is exposed, not self-invoked. A host using the adapter directly gets the old
+		// behaviour and can call `assertMongoIndexes` itself; busyclaw's assembly wraps it so the safe
+		// path is the one nobody has to remember.
 		await db.collection("effect").insertOne({ id: "seed", status: "x" });
-		const adapter = mongoAdapter(db);
 		await expect(
-			adapter.create({ model: "effect", data: { id: "b", status: "x" } }),
+			mongoAdapter(db).create({
+				model: "effect",
+				data: { id: "b", status: "x" },
+			}),
 		).resolves.toBeDefined();
+	});
+
+	it("an adapter with no verifySchema is returned UNCHANGED", () => {
+		const plain = { id: "plain" } as never;
+		expect(verifiedAdapter(plain, SCHEMA as never)).toBe(plain);
 	});
 
 	it("verifies ONCE across many writes", async () => {
@@ -181,7 +200,7 @@ describe("the adapter refuses to write into an unprotected database", () => {
 				return Reflect.get(target, prop, receiver);
 			},
 		}) as Db;
-		const adapter = mongoAdapter(counting, { schema: SCHEMA });
+		const adapter = guarded(counting);
 		for (let i = 0; i < 5; i++) {
 			await adapter.create({
 				model: "effect",

@@ -7,12 +7,7 @@
  * the mongodb driver's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type {
-	Adapter,
-	SchemaDeclaration,
-	Where,
-	WhereClause,
-} from "@busyclaw/contracts";
+import type { Adapter, Where, WhereClause } from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
@@ -112,45 +107,18 @@ function strip<T>(doc: Document | null): T | null {
 }
 
 /** Adapt a MongoDB `Db` to the storage Adapter port. busyclaw rows carry their own `id` field. */
-export type MongoAdapterOptions = {
-	/**
-	 * Verify the required unique indexes exist before this adapter does anything.
-	 *
-	 * Supply the same declaration the index script was generated from and the check runs ONCE, lazily,
-	 * on the first operation — so construction stays synchronous and a process that never touches the
-	 * database never pays for it. Absent ⇒ no verification, which is the previous behaviour and the
-	 * reason this exists: the index script was a document somebody was trusted to have run, and
-	 * nothing anywhere found out when they had not.
-	 */
-	schema?: SchemaDeclaration;
-};
-
-export function mongoAdapter(
-	db: Db,
-	options: MongoAdapterOptions = {},
-): Adapter {
+export function mongoAdapter(db: Db): Adapter {
 	const col = (model: string) => db.collection(model);
-	// Memoized on the PROMISE, not the result: concurrent first operations share one verification
-	// rather than racing several `listIndexes` round-trips. A failed check is not cached — the next
-	// operation asks again, so creating the missing index does not require a restart.
-	let verified: Promise<void> | undefined;
-	const ensureVerified = async (): Promise<void> => {
-		const schema = options.schema;
-		if (!schema) return;
-		const pending = verified ?? assertMongoIndexes(db, schema);
-		verified = pending;
-		try {
-			await pending;
-		} catch (error) {
-			verified = undefined;
-			throw error;
-		}
-	};
 	return {
 		id: "mongodb",
 
+		// Mongo cannot migrate, so it verifies instead — see `Adapter.verifySchema`. The ASSEMBLY
+		// calls this with the merged declaration; a schema handed in at construction would be the base
+		// models only, and a check that passes because it was asked the wrong question is worse than
+		// no check, because someone will have read the code and believed it.
+		verifySchema: (schema) => assertMongoIndexes(db, schema),
+
 		async create({ model, data }) {
-			await ensureVerified();
 			await col(model).insertOne({ ...data });
 			return data as never;
 		},

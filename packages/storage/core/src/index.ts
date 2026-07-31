@@ -248,3 +248,5 @@ export function memoryAdapter(): Adapter {
 // Uniqueness-violation normalization — one typed conflict, whichever driver raised it. What makes
 // try-create → on-conflict-re-read writable without knowing the backend.
 export { asConflict, isUniqueViolation } from "./conflict";
+
+export { verifiedAdapter } from "./verified-adapter";
