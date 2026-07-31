@@ -7,13 +7,19 @@
  * the mongodb driver's public API. MIT, © 2024-present Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, Where, WhereClause } from "@busyclaw/contracts";
+import type {
+	Adapter,
+	SchemaDeclaration,
+	Where,
+	WhereClause,
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
 	sortByList,
 } from "@busyclaw/contracts";
 import type { Db, Document, Filter, Sort } from "mongodb";
+import { assertMongoIndexes } from "./verify";
 
 const MONGO_OP = {
 	ne: "$ne",
@@ -106,12 +112,45 @@ function strip<T>(doc: Document | null): T | null {
 }
 
 /** Adapt a MongoDB `Db` to the storage Adapter port. busyclaw rows carry their own `id` field. */
-export function mongoAdapter(db: Db): Adapter {
+export type MongoAdapterOptions = {
+	/**
+	 * Verify the required unique indexes exist before this adapter does anything.
+	 *
+	 * Supply the same declaration the index script was generated from and the check runs ONCE, lazily,
+	 * on the first operation — so construction stays synchronous and a process that never touches the
+	 * database never pays for it. Absent ⇒ no verification, which is the previous behaviour and the
+	 * reason this exists: the index script was a document somebody was trusted to have run, and
+	 * nothing anywhere found out when they had not.
+	 */
+	schema?: SchemaDeclaration;
+};
+
+export function mongoAdapter(
+	db: Db,
+	options: MongoAdapterOptions = {},
+): Adapter {
 	const col = (model: string) => db.collection(model);
+	// Memoized on the PROMISE, not the result: concurrent first operations share one verification
+	// rather than racing several `listIndexes` round-trips. A failed check is not cached — the next
+	// operation asks again, so creating the missing index does not require a restart.
+	let verified: Promise<void> | undefined;
+	const ensureVerified = async (): Promise<void> => {
+		const schema = options.schema;
+		if (!schema) return;
+		const pending = verified ?? assertMongoIndexes(db, schema);
+		verified = pending;
+		try {
+			await pending;
+		} catch (error) {
+			verified = undefined;
+			throw error;
+		}
+	};
 	return {
 		id: "mongodb",
 
 		async create({ model, data }) {
+			await ensureVerified();
 			await col(model).insertOne({ ...data });
 			return data as never;
 		},
@@ -178,3 +217,9 @@ export function mongoAdapter(db: Db): Adapter {
 // `busyclaw db generate --target mongodb` dispatches here.
 export type { MongoGenerateOptions, MongoIndexSpec } from "./generate";
 export { generateMongoIndexes, mongoIndexes } from "./generate";
+export type { MissingMongoIndex } from "./verify";
+export {
+	assertMongoIndexes,
+	missingMongoIndexes,
+	requiredMongoIndexes,
+} from "./verify";
