@@ -8,6 +8,8 @@
 import {
 	type Adapter,
 	endpointRoutesOf,
+	type SecretResolution,
+	UNSCOPED,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { buildSecrets, env } from "@busyclaw/secrets";
@@ -74,6 +76,18 @@ function failingAdapter(message: string): Adapter {
 	};
 }
 
+/**
+ * A whole resolution — what a provider is contractually handed.
+ *
+ * These tests call the provider DIRECTLY, so they stand in for the door: `buildSecrets` collapses an
+ * omitted boundary to UNSCOPED before any provider is consulted, which is why `SecretResolution.configScope`
+ * is total and this provider does not carry an absent-case rule of its own.
+ */
+const asked = (r: Partial<SecretResolution> = {}): SecretResolution => ({
+	configScope: UNSCOPED,
+	...r,
+});
+
 describe("secrets([], { store: true }) — the plugin shape", () => {
 	it("contributes the table and the data-tier store provider statically", () => {
 		const plugin = secrets([], { store: true });
@@ -127,7 +141,7 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 		});
 		expect(second.id).toBe(first.id);
 		expect(
-			await provider.get("MY_NOTION_TOKEN", { principal: "user:alice" }),
+			await provider.get("MY_NOTION_TOKEN", asked({ principal: "user:alice" })),
 		).toEqual({
 			kind: "token",
 			value: "v2",
@@ -158,19 +172,23 @@ describe("the store provider — nearest-scope resolution", () => {
 			createdBy: "user:alice",
 		});
 		expect(
-			await provider.get("MY_TOKEN", {
-				principal: "user:alice",
-				scope: "organization",
-				scopeId: "org-a",
-			}),
+			await provider.get(
+				"MY_TOKEN",
+				asked({
+					principal: "user:alice",
+					configScope: { scope: "organization", scopeId: "org-a" },
+				}),
+			),
 		).toEqual({ kind: "token", value: "alices-own" });
 		// bob saved nothing personally — the org-wide row serves him.
 		expect(
-			await provider.get("MY_TOKEN", {
-				principal: "user:bob",
-				scope: "organization",
-				scopeId: "org-a",
-			}),
+			await provider.get(
+				"MY_TOKEN",
+				asked({
+					principal: "user:bob",
+					configScope: { scope: "organization", scopeId: "org-a" },
+				}),
+			),
 		).toEqual({ kind: "token", value: "org-wide" });
 	});
 
@@ -182,36 +200,40 @@ describe("the store provider — nearest-scope resolution", () => {
 			createdBy: "user:alice",
 		});
 		expect(
-			await provider.get("PRIVATE", { principal: "user:mallory" }),
+			await provider.get("PRIVATE", asked({ principal: "user:mallory" })),
 		).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
-			await provider.get("PRIVATE", {
-				scope: "organization",
-				scopeId: "org-a",
-			}),
+			await provider.get(
+				"PRIVATE",
+				asked({
+					configScope: { scope: "organization", scopeId: "org-a" },
+				}),
+			),
 		).toBeNull();
 	});
 
 	it("an ORG-LESS context resolves personal rows — org is fully additive", async () => {
 		const { provider, store } = connectedStore();
 		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "user:alice" });
-		expect(await provider.get("MY_TOKEN", { principal: "user:alice" })).toEqual(
-			{
-				kind: "token",
-				value: "v",
-			},
-		);
+		expect(
+			await provider.get("MY_TOKEN", asked({ principal: "user:alice" })),
+		).toEqual({
+			kind: "token",
+			value: "v",
+		});
 	});
 
 	it("a miss returns null; infrastructure failure THROWS — never coerced into a miss", async () => {
 		const { provider } = connectedStore();
 		expect(
-			await provider.get("NOWHERE", {
-				principal: "user:alice",
-				scope: "organization",
-				scopeId: "org-a",
-			}),
+			await provider.get(
+				"NOWHERE",
+				asked({
+					principal: "user:alice",
+					configScope: { scope: "organization", scopeId: "org-a" },
+				}),
+			),
 		).toBeNull();
 
 		const broken = secrets([], { store: { key: TEST_KEY } });
@@ -223,7 +245,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		});
 		const [brokenProvider] = broken.secrets.providers;
 		await expect(
-			brokenProvider.get("ANY", { principal: "user:alice" }),
+			brokenProvider.get("ANY", asked({ principal: "user:alice" })),
 		).rejects.toThrow(/connection refused/);
 	});
 
@@ -237,7 +259,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		});
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ANY", { principal: "user:alice" }),
+			provider.get("ANY", asked({ principal: "user:alice" })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(
@@ -250,7 +272,7 @@ describe("the store provider — nearest-scope resolution", () => {
 		const plugin = secrets([], { store: { key: TEST_KEY } });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("ANY", { principal: "user:alice" }),
+			provider.get("ANY", asked({ principal: "user:alice" })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/secret store has no database/),
@@ -278,7 +300,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			},
 		});
 		await expect(
-			provider.get("PTR", { principal: "user:alice" }),
+			provider.get("PTR", asked({ principal: "user:alice" })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/pointers are not supported yet/),
@@ -324,7 +346,7 @@ describe("encryption at rest", () => {
 			createdBy: "user:alice",
 		});
 		expect(
-			await provider.get("ROUNDTRIP", { principal: "user:alice" }),
+			await provider.get("ROUNDTRIP", asked({ principal: "user:alice" })),
 		).toEqual({
 			kind: "token",
 			value: "plain-secret",
@@ -471,7 +493,7 @@ describe("encryption at rest", () => {
 
 			// Bob's read fails loud instead of returning alice's secret.
 			await expect(
-				provider.get("SHARED_NAME", { principal: "user:bob" }),
+				provider.get("SHARED_NAME", asked({ principal: "user:bob" })),
 			).rejects.toThrow(/cannot decrypt stored secret/);
 		});
 	});
@@ -492,7 +514,7 @@ describe("encryption at rest", () => {
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
 		const [provider] = plugin.secrets.providers;
 		await expect(
-			provider.get("LOCKED", { principal: "user:alice" }),
+			provider.get("LOCKED", asked({ principal: "user:alice" })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			// secrets.require names the key and fails loud when nothing resolves it.
@@ -520,7 +542,7 @@ describe("encryption at rest", () => {
 		// nothing to tell them apart. The key id says which key is missing, so an operator who dropped
 		// one still in use has a fixable mistake rather than a row that has silently become garbage.
 		await expect(
-			provider.get("ROTATED", { principal: "user:alice" }),
+			provider.get("ROTATED", asked({ principal: "user:alice" })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/no longer holds/),
@@ -657,9 +679,12 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		// …and the write-side meets the read-side: the row was written under `user:alice`, so the
 		// provider resolves it for the SAME tagged ctx principal sessionIdentity stamps (the round-trip).
 		expect(
-			await provider.get("MY_NOTION_TOKEN", {
-				principal: userPrincipal("alice"),
-			}),
+			await provider.get(
+				"MY_NOTION_TOKEN",
+				asked({
+					principal: userPrincipal("alice"),
+				}),
+			),
 		).toEqual({
 			kind: "token",
 			value: "secret-v1",
@@ -685,10 +710,10 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		// …and the isolation holds on the tagged boundary: alice's row lives at `user:alice`, so
 		// `user:bob` cannot read it through the provider and `user:alice` can (disjoint principals).
 		expect(
-			await provider.get("X", { principal: userPrincipal("bob") }),
+			await provider.get("X", asked({ principal: userPrincipal("bob") })),
 		).toBeNull();
 		expect(
-			await provider.get("X", { principal: userPrincipal("alice") }),
+			await provider.get("X", asked({ principal: userPrincipal("alice") })),
 		).toEqual({
 			kind: "token",
 			value: "alices",
@@ -730,7 +755,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		).toHaveLength(1);
 		// …and the resolved value is the latest (read on the tagged boundary the api wrote under).
 		expect(
-			await provider.get("ROT", { principal: userPrincipal("alice") }),
+			await provider.get("ROT", asked({ principal: userPrincipal("alice") })),
 		).toEqual({
 			kind: "token",
 			value: "v2",
@@ -749,7 +774,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 			[],
 		);
 		expect(
-			await provider.get("GONE", { principal: userPrincipal("alice") }),
+			await provider.get("GONE", asked({ principal: userPrincipal("alice") })),
 		).toBeNull();
 	});
 

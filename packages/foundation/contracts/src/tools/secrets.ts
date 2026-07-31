@@ -9,20 +9,44 @@
 // live INSIDE a provider's `get` — it returns a fresh token like any other material.
 
 import type { Principal } from "../governance/principal";
+import type { ScopeRef } from "../scope";
 
 /** Secret material, shaped by what schemes need — never how to apply it (the spec knows that). */
 export type SecretMaterial =
 	| { kind: "token"; value: string }
 	| { kind: "basic"; username: string; password: string };
 
-/** Context a resolution may narrow on — the org whose binding to use, the acting principal for a
- *  per-user credential. Optional and extensible on purpose: a new fact must never be a breaking
- *  signature change. */
+/**
+ * What a caller BINDS or PASSES — the facts a resolution may narrow on. Optional and extensible on
+ * purpose: a binding is partial by definition (`.with({ principal })` knows the actor and not yet the
+ * boundary), and a new fact must never be a breaking signature change.
+ *
+ * The boundary is ONE field holding the whole pair, not two independent halves. As two, a bound
+ * `{ scope, scopeId }` merged with a later `{ scopeId }` produced a boundary neither side named — the
+ * merge is per-field, so half of one key survived beside half of another. A `ScopeRef` replaces
+ * atomically, which makes that unrepresentable rather than merely unlikely.
+ */
 export type ResolveContext = {
 	/** The run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary, not an organization id: an
-	 *  organization is a plugin, so core cannot name one kind of boundary in a resolution key. */
-	scope?: string;
-	scopeId?: string;
+	 *  organization is a plugin, so core cannot name one kind of boundary in a resolution key. Omitted
+	 *  means the resolution names no tenant, which {@link Secrets} reads as `UNSCOPED`. */
+	configScope?: ScopeRef;
+	principal?: Principal;
+};
+
+/**
+ * What a PROVIDER is asked — the same facts, resolved.
+ *
+ * `configScope` is total here. `buildSecrets` collapses an omitted boundary to `UNSCOPED` at the one
+ * door before any provider is consulted, so a provider never writes its own absent-case rule — which
+ * is exactly how the deployment's credentials came to answer a tenant's miss: each layer decided for
+ * itself what "no scope" meant, and one of them decided it meant "anything goes".
+ *
+ * The same split {@link RehydrationContext} has against `piiContainer`: partial at the caller, whole
+ * at the store.
+ */
+export type SecretResolution = {
+	configScope: ScopeRef;
 	principal?: Principal;
 };
 
@@ -35,7 +59,10 @@ export type SecretProvider = {
 	name: string;
 	/** Resolve `ref` (the backend key, AFTER alias remap) to material, or `null` when this provider
 	 *  has no value for it. THROW for infrastructure failure — never coerce an outage into a miss. */
-	get: (ref: string, ctx: ResolveContext) => Promise<SecretMaterial | null>;
+	get: (
+		ref: string,
+		resolution: SecretResolution,
+	) => Promise<SecretMaterial | null>;
 	/** Per-provider remap of busyclaw's canonical name → this backend's key
 	 *  (`{ CANONICAL_NAME: backendKey }`). Pass-through when absent (zero config in the happy path). */
 	aliases?: Record<string, string>;

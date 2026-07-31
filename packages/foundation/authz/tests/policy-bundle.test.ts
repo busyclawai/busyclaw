@@ -1,3 +1,4 @@
+import { UNSCOPED } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { authzBundleKey, loadPolicyBundle } from "../src/index";
 
@@ -93,8 +94,10 @@ describe("authzBundleKey", () => {
 		).toBe("system");
 	});
 
-	it("an absent config scope ⇒ 'system'", () => {
-		expect(authzBundleKey({ configScope: undefined, changeCount: 5 })).toBe(
+	it("the unscoped boundary ⇒ 'system', by the ordinary rule", () => {
+		// Not a special case any more. Nothing is ever stored in a reserved boundary, so its change
+		// count is 0 and it lands on the shared bundle the same way any uncustomized boundary does.
+		expect(authzBundleKey({ configScope: UNSCOPED, changeCount: 0 })).toBe(
 			"system",
 		);
 	});

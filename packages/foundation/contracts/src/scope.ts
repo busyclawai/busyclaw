@@ -76,21 +76,18 @@ export function isReservedScope(scope: string): boolean {
 /**
  * Whether a pair names a real TENANT — a boundary someone can be a member of.
  *
- * The question several call sites were actually asking while spelling it `scope === undefined`. Once
- * the absent case is a value that spelling stops working, and it was never the right one anyway: a
- * reserved sentinel is present but is not a tenant, and "both halves or neither" was being re-derived
- * at each site. Asking it by name means a site cannot accidentally treat core's stand-in for "no
- * boundary" as somebody's boundary.
+ * One negation, and worth a name anyway: two call sites were asking exactly this while spelling it
+ * `scope === undefined`, and both broke the moment the absent case became a value. The secrets chain
+ * would have fenced the deployment's own credentials off from the runs they exist for; the approval
+ * loader would have routed an ad-hoc run's own approval through a boundary nobody can be a member of
+ * and denied the person their own decision. The question is "is this somebody's boundary", not "is
+ * this field populated", and it reads wrong inline in a way it does not read wrong here.
+ *
+ * Takes a WHOLE {@link ScopeRef}: a half-named boundary is collapsed upstream, at the one place that
+ * answers it, so there is no partial pair left for this to re-check.
  */
-export function namesTenant(ref: {
-	scope?: string | undefined;
-	scopeId?: string | undefined;
-}): boolean {
-	return (
-		ref.scope !== undefined &&
-		ref.scopeId !== undefined &&
-		!isReservedScope(ref.scope)
-	);
+export function namesTenant(ref: ScopeRef): boolean {
+	return !isReservedScope(ref.scope);
 }
 
 /** Refuse a reserved scope where a caller (or a host) is naming the boundary a row will LIVE in.

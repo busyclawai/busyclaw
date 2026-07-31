@@ -49,8 +49,12 @@ export async function applyCredentials(
 	// of the name (name = the registration source); they are read from the spec's securityScheme when the
 	// material is APPLIED below.
 	const resolveCtx: ResolveContext = {
-		scope: context.scope,
-		scopeId: context.scopeId,
+		// Both halves or nothing — the invoker's `CredentialContext` is built from a closure captured at
+		// tool synthesis and can still carry half a pair; omitting it entirely is what the reader reads
+		// as UNSCOPED, and a half-named boundary must land there rather than in a bucket of its own.
+		...(context.scope !== undefined && context.scopeId !== undefined
+			? { configScope: { scope: context.scope, scopeId: context.scopeId } }
+			: {}),
 		principal:
 			context.principal === undefined
 				? undefined

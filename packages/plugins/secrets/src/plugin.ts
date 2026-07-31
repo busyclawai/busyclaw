@@ -3,9 +3,9 @@ import {
 	type BusyclawPluginConfigureContext,
 	type BusyclawPluginRuntime,
 	configurationError,
-	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,
+	type SecretResolution,
 	type Secrets,
 	stateError,
 } from "@busyclaw/contracts";
@@ -171,27 +171,26 @@ function buildStore(options: SecretStoreOptions): {
 		capability: { manage: true },
 		get: async (
 			name: string,
-			ctx: ResolveContext,
+			resolution: SecretResolution,
 		): Promise<SecretMaterial | null> => {
 			// Bootstrap short-circuit — CRITICAL because data-tier means this provider is consulted
 			// FIRST for every name: the store's own master key must never resolve FROM the store
 			// (get → decrypt → resolve key → get …). Immediately a miss; env/vault/config own it.
 			if (name === SECRET_STORE_KEY_NAME) return null;
 			const rows = requireStore();
-			if (ctx.principal !== undefined) {
-				const personal = await rows.get("personal", ctx.principal, name);
+			if (resolution.principal !== undefined) {
+				const personal = await rows.get("personal", resolution.principal, name);
 				if (personal) return materialOf(personal, cipher);
 			}
-			// team rung: ResolveContext carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,
-			// but nothing threads it into secret resolution) — insert `(team, ctx.team)` here when it does.
+			// team rung: SecretResolution carries no team fact yet (the runtime stamps TEAM_CONTEXT_KEY,
+			// but nothing threads it into secret resolution) — insert `(team, …)` here when it does.
 			//
-			// The config-scope rung reads the run's opaque `(scope, scopeId)` pair. BOTH halves or neither: a
-			// label with no id (or an id with no label) names no boundary, and falling back to matching one
-			// half would resolve another scope's credential.
-			if (ctx.scope !== undefined && ctx.scopeId !== undefined) {
-				const scopeWide = await rows.get(ctx.scope, ctx.scopeId, name);
-				if (scopeWide) return materialOf(scopeWide, cipher);
-			}
+			// The config-scope rung reads the run's opaque boundary — a whole pair, always, so there is no
+			// both-halves check to get wrong here. A run that names no tenant carries UNSCOPED, and nothing
+			// is ever stored there, so the lookup simply misses.
+			const { scope, scopeId } = resolution.configScope;
+			const scopeWide = await rows.get(scope, scopeId, name);
+			if (scopeWide) return materialOf(scopeWide, cipher);
 			return null;
 		},
 	};

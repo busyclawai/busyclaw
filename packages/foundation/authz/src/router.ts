@@ -15,17 +15,16 @@ import type {
 	PolicyEngineCapabilities,
 	ScopeRef,
 } from "@busyclaw/contracts";
+import { UNSCOPED } from "@busyclaw/contracts";
 
 export type OrgPolicyRouterConfig = {
 	/** Bundle identity. MUST uniquely identify EVERY input of the bundle — model version,
 	 *  policy-set version, AND the entity source. Scopes may share a key (and thus a bundle) ONLY
 	 *  when all three are identical (the "system" bundle for uncustomized scopes). */
-	keyFor: (boundary: ScopeRef | undefined) => string | Promise<string>;
+	keyFor: (boundary: ScopeRef) => string | Promise<string>;
 	/** Build the compiled bundle for a config scope (e.g. buildAuthzModel(rows) → cedar({model,
 	 *  policies, entities})). Called once per distinct key; cached. */
-	engineFor: (
-		boundary: ScopeRef | undefined,
-	) => PolicyEngine | Promise<PolicyEngine>;
+	engineFor: (boundary: ScopeRef) => PolicyEngine | Promise<PolicyEngine>;
 	capabilities?: PolicyEngineCapabilities;
 	/** LRU size. Default 64. */
 	maxBundles?: number;
@@ -50,13 +49,15 @@ export function createOrgPolicyRouter(
 		async authorize(req, entities) {
 			// Typed by the PARC contract (validated at the gate) — no duck-probing. BOTH halves or no
 			// boundary: half a key names no boundary, and routing on it would hand this decision another
-			// boundary's compiled policy bundle.
+			// boundary's compiled policy bundle. The absent case is UNSCOPED, not `undefined`, so
+			// `keyFor`/`engineFor` are asked one question with one shape — they used to each carry an
+			// `| undefined` and answer it their own way.
 			const scope = req.context.configScope;
 			const scopeId = req.context.configScopeId;
 			const boundary =
 				typeof scope === "string" && typeof scopeId === "string"
 					? { scope, scopeId }
-					: undefined;
+					: UNSCOPED;
 			const key = await config.keyFor(boundary);
 
 			const cached = cache.get(key);

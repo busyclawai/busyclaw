@@ -2,7 +2,9 @@ import type {
 	PolicyEngine,
 	PolicyRequest,
 	PolicyResult,
+	ScopeRef,
 } from "@busyclaw/contracts";
+import { UNSCOPED } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createOrgPolicyRouter } from "../src/index";
 
@@ -114,20 +116,39 @@ describe("createOrgPolicyRouter", () => {
 		expect(builds).toBe(4);
 	});
 
-	it("routes an absent config scope to the undefined (system) bundle", async () => {
+	it("routes a request that names no boundary to UNSCOPED, not to undefined", async () => {
 		// A non-string config-scope key can't reach the router: the PARC request schema types it
 		// (contracts authz/request.ts) and createPolicyPlugin validates every request at the gate.
-		const seen: (unknown | undefined)[] = [];
+		// What it CAN carry is neither half — and that now arrives as the boundary for "no tenant"
+		// rather than as an absent argument each of `keyFor`/`engineFor` had to interpret itself.
+		const seen: ScopeRef[] = [];
 		const router = createOrgPolicyRouter({
-			keyFor: (ref) => ref?.scopeId ?? "system",
+			keyFor: (ref) => ref.scopeId,
 			engineFor: (ref) => {
 				seen.push(ref);
 				return taggedEngine("system");
 			},
 		});
 		await router.authorize(req());
-		// Neither half present ⇒ no config scope at all, not a half-formed ref.
-		expect(seen).toEqual([undefined]);
+		expect(seen).toEqual([UNSCOPED]);
+	});
+
+	it("half a named boundary lands there too — it names no tenant either", async () => {
+		// The label without an id. Routing on it would hand the decision a bundle keyed by half of
+		// somebody's boundary; it collapses to the same one absence does.
+		const seen: ScopeRef[] = [];
+		const router = createOrgPolicyRouter({
+			keyFor: (ref) => ref.scopeId,
+			engineFor: (ref) => {
+				seen.push(ref);
+				return taggedEngine("system");
+			},
+		});
+		await router.authorize({
+			...req(),
+			context: { confirmationUsed: false, configScope: "organization" },
+		});
+		expect(seen).toEqual([UNSCOPED]);
 	});
 
 	it("passes the resolved engine's decision through verbatim", async () => {

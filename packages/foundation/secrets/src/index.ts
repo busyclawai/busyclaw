@@ -19,7 +19,9 @@ import {
 	type ResolveContext,
 	type SecretMaterial,
 	type SecretProvider,
+	type SecretResolution,
 	type Secrets,
+	UNSCOPED,
 } from "@busyclaw/contracts";
 
 export type EnvOptions = {
@@ -110,21 +112,29 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 	const answersFor = (
 		provider: SecretProvider,
 		name: string,
-		ctx: ResolveContext,
+		resolution: SecretResolution,
 	): boolean => {
 		if (provider.tier === "data") return true;
-		if (!namesTenant(ctx)) return true;
+		if (!namesTenant(resolution.configScope)) return true;
 		return provider.shared?.includes(name) === true;
 	};
+
+	/** The ONE place an omitted boundary becomes a value — before any provider is consulted, so no
+	 *  provider writes its own absent-case rule. Mirrors `piiContainer` for the other pair. */
+	const resolutionOf = (ctx: ResolveContext): SecretResolution => ({
+		...ctx,
+		configScope: ctx.configScope ?? UNSCOPED,
+	});
 
 	const get = async (
 		name: string,
 		ctx: ResolveContext = {},
 	): Promise<SecretMaterial | null> => {
+		const resolution = resolutionOf(ctx);
 		for (const provider of ordered) {
-			if (!answersFor(provider, name, ctx)) continue;
+			if (!answersFor(provider, name, resolution)) continue;
 			const key = provider.aliases?.[name] ?? name;
-			const material = await provider.get(key, ctx);
+			const material = await provider.get(key, resolution);
 			if (material !== null) return material;
 		}
 		return null;

@@ -196,7 +196,10 @@ describe("applyCredentials — AND / OR alternatives", () => {
 		// The scheme + scopes are NOT part of the name — they drive APPLICATION (from the securityScheme).
 		expect(seen[0]).toEqual({
 			ref: "petstore",
-			ctx: { scope: "organization", scopeId: "org-a", principal: "user:alice" },
+			ctx: {
+				configScope: { scope: "organization", scopeId: "org-a" },
+				principal: "user:alice",
+			},
 		});
 	});
 });

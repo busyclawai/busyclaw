@@ -68,18 +68,20 @@ export function loadPolicyBundle(input: {
 
 /**
  * The boundary's bundle identity for the policy router — `${scope}:${scopeId}:${changeCount}`, or the shared
- * `"system"` bundle when the org is uncustomized (changeCount 0) or absent. `changeCount` is
+ * `"system"` bundle when the boundary is uncustomized (changeCount 0). `changeCount` is
  * count(authz_change) for the org: the log is APPEND-ONLY, so the count strictly increases and no two
  * authz states share a key — SOUND under add/edit/DELETE (a delete APPENDS an event, bumping the
  * count), where `max(updatedAt)` is not (deleting a non-newest row leaves the max unchanged → a stale
  * bundle). The router reads one cheap `count()` per decision and calls this.
+ *
+ * There is no absent-boundary case to special-case any more. A run that names no tenant carries
+ * UNSCOPED, nothing is ever stored there, so its `changeCount` is 0 and it lands on the shared bundle
+ * by the general rule rather than by a branch that had to be kept in step with it.
  */
 export function authzBundleKey(input: {
-	configScope: ScopeRef | undefined;
+	configScope: ScopeRef;
 	changeCount: number;
 }): string {
-	if (input.configScope === undefined || input.changeCount === 0) {
-		return "system";
-	}
+	if (input.changeCount === 0) return "system";
 	return `${input.configScope.scope}:${input.configScope.scopeId}:${input.changeCount}`;
 }

@@ -180,8 +180,8 @@ export function buildFloorPolicyPlugin(input: {
 	// Built EAGERLY, always — even when a router will serve the decisions. The code-owned set is known
 	// at assembly, so a malformed policy or an over-long annotation must fail HERE, when the claw is
 	// built, rather than on whichever request happens to be first. Routing made every build lazy and
-	// silently moved that failure into traffic; this is also the `undefined`-scope bundle, so nothing
-	// is compiled twice to keep the property.
+	// silently moved that failure into traffic; this is also the bundle every uncustomized boundary
+	// resolves to, so nothing is compiled twice to keep the property.
 	const codeOwned = engineOver(slices);
 	const engine: PolicyEngine = registry
 		? createOrgPolicyRouter({
@@ -195,16 +195,15 @@ export function buildFloorPolicyPlugin(input: {
 					? { capabilities: codeOwned.capabilities }
 					: {}),
 				keyFor: async (ref) =>
-					ref
-						? authzBundleKey({
-								configScope: ref,
-								changeCount: await registry.authzChanges.count(ref),
-							})
-						: "system",
+					authzBundleKey({
+						configScope: ref,
+						changeCount: await registry.authzChanges.count(ref),
+					}),
 				engineFor: async (ref) => {
-					// No boundary ⇒ nothing stored applies, so this IS the code-owned bundle already
-					// compiled above rather than an identical second one.
-					if (!ref) return codeOwned;
+					// No absent-boundary branch. A run that names no tenant carries UNSCOPED, nothing is
+					// ever stored there, so it falls out of the general path below as the code-owned
+					// bundle — by the same rule every uncustomized boundary follows, rather than by a
+					// special case that had to be kept in step with it.
 					const stored = await registry.policySlices.listForScope(ref);
 					const tool = stored.filter(
 						(slice) => slice.plane === "tool" || slice.plane === "both",

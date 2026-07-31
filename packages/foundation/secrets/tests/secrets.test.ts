@@ -2,7 +2,9 @@ import {
 	BusyclawError,
 	RESERVED_SCOPE_PREFIX,
 	type ResolveContext,
+	type ScopeRef,
 	type SecretProvider,
+	type SecretResolution,
 	UNSCOPED,
 } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
@@ -141,14 +143,16 @@ describe("buildSecrets — the one-door resolver", () => {
 			},
 		};
 		await buildSecrets([spy]).get("CANON", {
-			scope: "organization",
-			scopeId: "org_1",
+			configScope: { scope: "organization", scopeId: "org_1" },
 			principal: "user_1",
 		});
 		expect(calls).toEqual([
 			{
 				ref: "backend-key",
-				ctx: { scope: "organization", scopeId: "org_1", principal: "user_1" },
+				ctx: {
+					configScope: { scope: "organization", scopeId: "org_1" },
+					principal: "user_1",
+				},
 			},
 		]);
 	});
@@ -282,18 +286,20 @@ describe("secrets.with — a pre-bound reader", () => {
 			},
 		};
 		const bound = buildSecrets([spy]).with({
-			scope: "organization",
-			scopeId: "org",
+			configScope: { scope: "organization", scopeId: "org" },
 			principal: "alice",
 		});
 		await bound.get("X", { principal: "bob" });
 		expect(calls).toEqual([
-			{ scope: "organization", scopeId: "org", principal: "bob" },
+			{
+				configScope: { scope: "organization", scopeId: "org" },
+				principal: "bob",
+			},
 		]);
 	});
 
 	it("pre-binds ctx onto require too", async () => {
-		const calls: ResolveContext[] = [];
+		const calls: SecretResolution[] = [];
 		const spy: SecretProvider = {
 			name: "spy",
 			capability: { manage: false },
@@ -305,7 +311,9 @@ describe("secrets.with — a pre-bound reader", () => {
 		await buildSecrets([spy])
 			.with({ principal: "alice" })
 			.require("X", { kind: "token" });
-		expect(calls).toEqual([{ principal: "alice" }]);
+		// The bound principal, plus the boundary the reader always names — a binding is partial, what
+		// the provider is asked never is.
+		expect(calls).toEqual([{ principal: "alice", configScope: UNSCOPED }]);
 	});
 
 	// M-12. A tenant-scoped miss used to fall through to deployment infrastructure, handing the tenant
@@ -327,8 +335,7 @@ describe("secrets.with — a pre-bound reader", () => {
 			const secrets = buildSecrets([deployment()]);
 			expect(
 				await secrets.get("PETSTORE", {
-					scope: "organization",
-					scopeId: "org-a",
+					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			).toBeNull();
 		});
@@ -337,8 +344,7 @@ describe("secrets.with — a pre-bound reader", () => {
 			const secrets = buildSecrets([deployment({ shared: ["PETSTORE"] })]);
 			expect(
 				await secrets.get("PETSTORE", {
-					scope: "organization",
-					scopeId: "org-a",
+					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			).toEqual({ kind: "token", value: "deployment-key" });
 		});
@@ -348,8 +354,8 @@ describe("secrets.with — a pre-bound reader", () => {
 				name: "rows",
 				tier: "data",
 				capability: { manage: false },
-				get: async (ref, ctx) =>
-					ctx.scopeId === "org-a" && ref === "PETSTORE"
+				get: async (ref, resolution) =>
+					resolution.configScope.scopeId === "org-a" && ref === "PETSTORE"
 						? { kind: "token", value: "org-a-key" }
 						: null,
 			};
@@ -357,15 +363,13 @@ describe("secrets.with — a pre-bound reader", () => {
 			// org-a configured its own — data beats config, unchanged.
 			expect(
 				await secrets.get("PETSTORE", {
-					scope: "organization",
-					scopeId: "org-a",
+					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			).toEqual({ kind: "token", value: "org-a-key" });
 			// org-b configured nothing. It gets NOTHING, not the deployment's key.
 			expect(
 				await secrets.get("PETSTORE", {
-					scope: "organization",
-					scopeId: "org-b",
+					configScope: { scope: "organization", scopeId: "org-b" },
 				}),
 			).toBeNull();
 		});
@@ -377,7 +381,7 @@ describe("secrets.with — a pre-bound reader", () => {
 			// (an app bot's token, a sandbox credential); if it keyed on the label being a tenant's, it
 			// would lend that credential to whoever named the sentinel. `namesTenant` is the question.
 			const secrets = buildSecrets([deployment()]);
-			expect(await secrets.get("PETSTORE", UNSCOPED)).toEqual({
+			expect(await secrets.get("PETSTORE", { configScope: UNSCOPED })).toEqual({
 				kind: "token",
 				value: "deployment-key",
 			});
@@ -389,19 +393,52 @@ describe("secrets.with — a pre-bound reader", () => {
 			const secrets = buildSecrets([deployment()]);
 			expect(
 				await secrets.get("PETSTORE", {
-					scope: `${RESERVED_SCOPE_PREFIX}something-later`,
-					scopeId: "-",
+					configScope: {
+						scope: `${RESERVED_SCOPE_PREFIX}something-later`,
+						scopeId: "-",
+					},
 				}),
 			).toEqual({ kind: "token", value: "deployment-key" });
 		});
 
-		it("treats half a boundary as unscoped — a scope with no id names no tenant", async () => {
-			const secrets = buildSecrets([deployment()]);
-			// Both halves or neither, the same rule the secret-store plugin applies one layer down.
-			expect(await secrets.get("PETSTORE", { scope: "organization" })).toEqual({
-				kind: "token",
-				value: "deployment-key",
+		it("a later boundary replaces a bound one WHOLE, never half of it", async () => {
+			// What carrying the pair in ONE field buys. The merge is per-field: as two independent halves,
+			// binding `{ scope, scopeId }` and then passing `{ scopeId }` left the bound LABEL beside the
+			// new ID — a boundary neither caller named, which then read another tenant's credential. The
+			// half-named case that test suite used to cover is now unrepresentable rather than handled.
+			const seen: ScopeRef[] = [];
+			const spy: SecretProvider = {
+				name: "spy",
+				tier: "data",
+				capability: { manage: false },
+				get: async (_ref, resolution) => {
+					seen.push(resolution.configScope);
+					return null;
+				},
+			};
+			const bound = buildSecrets([spy]).with({
+				configScope: { scope: "organization", scopeId: "org-a" },
 			});
+			await bound.get("X", {
+				configScope: { scope: "team", scopeId: "team-1" },
+			});
+			expect(seen).toEqual([{ scope: "team", scopeId: "team-1" }]);
+		});
+
+		it("no ctx at all resolves as UNSCOPED — the reader names the boundary, not the caller", async () => {
+			// The other half of totality: a provider is never handed an absent boundary to interpret.
+			const seen: ScopeRef[] = [];
+			const spy: SecretProvider = {
+				name: "spy",
+				tier: "data",
+				capability: { manage: false },
+				get: async (_ref, resolution) => {
+					seen.push(resolution.configScope);
+					return null;
+				},
+			};
+			await buildSecrets([spy]).get("X");
+			expect(seen).toEqual([UNSCOPED]);
 		});
 	});
 });

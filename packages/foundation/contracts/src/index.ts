@@ -546,6 +546,7 @@ export type {
 	SecretMaterial,
 	SecretPointer,
 	SecretProvider,
+	SecretResolution,
 	Secrets,
 } from "./tools/secrets";
 // ── tool sources: what every extractor produces (impls in @busyclaw/runtime) ──
