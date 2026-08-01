@@ -29,6 +29,7 @@ import type {
 	AccessGrantPermission,
 	PolicyRequest,
 	PolicyResult,
+	Principal,
 } from "@busyclaw/contracts";
 import { grantReaches } from "@busyclaw/contracts";
 import type { Entities, EntityJson } from "@cedar-policy/cedar-wasm/nodejs";
@@ -112,7 +113,7 @@ export type PrincipalScope = {
 export type ApiResourceShape = {
 	/** The owner principal (the LIVE owner rule compares it to the caller). Absent/blank for a create /
 	 *  an unresolvable resource — then the owner rule cannot match (rendered as a sentinel owner). */
-	createdBy?: string;
+	createdBy?: Principal;
 	/** The access boundary label (opaque) and its opaque id — the scope-member branch renders the
 	 *  caller's scopes and the resource's requirement against these. */
 	scope?: string;
@@ -123,9 +124,9 @@ export type ApiResourceShape = {
 
 /** The out-of-band caller context — the function-intake image of better-auth's `auth.api.x({ headers
  *  })`: identity travels BESIDE the domain input, never inside it. `principal` is the authz SUBJECT;
- *  absent → the actor floor denies. */
+ *  absent → the principal floor denies. */
 export type ApiCaller = {
-	principal?: string;
+	principal?: Principal;
 };
 
 export type DecideApiCallInput = {
@@ -136,8 +137,14 @@ export type DecideApiCallInput = {
 	method: string;
 	/** The action's required level (`read < use < manage`) — the ONE non-derivable per-method fact. */
 	level: ApiPermissionLevel;
-	/** The authz SUBJECT — the caller's principal. Absent/blank → the actor floor denies before Cedar. */
-	principal: string | undefined;
+	/** The authz SUBJECT — the caller's principal. Absent/blank → the principal floor denies before Cedar.
+	 *
+	 *  `undefined` is LOAD-BEARING and not a missing value: it is the state "identity was never
+	 *  established", and it must not be collapsed into a principal like `system:unauthenticated`. The
+	 *  floor's own first rule is `permit(principal, action in Action::"reads", resource)` — it permits
+	 *  ANY principal to read — so an unestablished identity that became a principal VALUE would be
+	 *  readable by that rule. An absent one cannot be: there is no entity for a policy to match. */
+	principal: Principal | undefined;
 	/** The loaded resource shape (opaque). For a create / no-resource method: `{ grants: [] }`. */
 	resource: ApiResourceShape;
 	/** The caller's scopes (opaque, empty until the org plugin resolves them) — the scope-member
@@ -160,7 +167,7 @@ export type DecideApiCallInput = {
  */
 function buildApiEntities(input: {
 	method: string;
-	principal: string;
+	principal: Principal;
 	level: ApiPermissionLevel;
 	resource: ApiResourceShape;
 	scopes: readonly PrincipalScope[];
@@ -253,7 +260,7 @@ function buildApiEntities(input: {
 
 /**
  * Decide a governed `claw.api` call against the product-api Cedar engine — the api-side analog of the
- * floor's tool gate. The actor floor runs FIRST (absent/blank principal → deny, never reaching Cedar);
+ * floor's tool gate. The principal floor runs FIRST (absent/blank principal → deny, never reaching Cedar);
  * then the opaque shape + the caller's scopes become a per-request `ClawApi::` entity graph the
  * generic baseline (owner ∪ scope ∪ grant, or the create-permit) decides. Returns the engine's
  * `PolicyResult` (the PEP maps a non-permit to a typed authorization error).
@@ -261,7 +268,7 @@ function buildApiEntities(input: {
 export async function decideApiCall(
 	input: DecideApiCallInput,
 ): Promise<PolicyResult> {
-	// The actor floor — an absent OR blank/whitespace caller principal is an immediate deny (a host system
+	// The principal floor — an absent OR blank/whitespace caller principal is an immediate deny (a host system
 	// call passes an explicit `system:` principal, never absence or blank; the facts-vs-posture
 	// discipline). Runs BEFORE Cedar and guarantees a real, non-blank principal downstream — so a sentinel
 	// or empty-string `createdBy` can never coincidentally equal the caller.
@@ -269,7 +276,7 @@ export async function decideApiCall(
 	if (principal === undefined || principal.trim() === "") {
 		return {
 			decision: "deny",
-			reason: `app-authz: ${input.method} requires a caller principal (actor floor)`,
+			reason: `app-authz: ${input.method} requires a caller principal (principal floor)`,
 		};
 	}
 	const entities: Entities = buildApiEntities({

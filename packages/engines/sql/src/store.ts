@@ -53,7 +53,6 @@ export const RunRecord = ark({
 	status: RunStatus,
 	input: JsonRecord,
 	"principal?": OptionalString,
-	"team?": OptionalString,
 	createdAt: "string",
 	updatedAt: "string",
 });
@@ -138,8 +137,7 @@ export type SqlEngineStoreOptions = {
 export type CreateRunInput = {
 	id?: string;
 	input?: Record<string, unknown>;
-	principal?: string;
-	team?: string;
+	principal?: Principal;
 };
 
 export type EnqueueTaskInput = {
@@ -350,7 +348,6 @@ export function createSqlEngineStore(
 						input.principal === undefined
 							? undefined
 							: asPrincipal(input.principal),
-					team: input.team,
 					createdAt: ts,
 					updatedAt: ts,
 				},

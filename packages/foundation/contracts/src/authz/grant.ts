@@ -15,6 +15,7 @@
 import { type } from "arktype";
 import type { EntityInput, EntityRecord } from "../entity";
 import { entity, field } from "../entity";
+import type { Principal } from "../governance/principal";
 import type { RouteLevel } from "../governance/route";
 
 /** A grant's permission LEVEL — the SAME ordered vocabulary the api decision compares against
@@ -155,7 +156,7 @@ export type GrantScope = {
  */
 export function grantReaches(
 	grant: AccessGrant,
-	principal: string,
+	principal: Principal,
 	scopes: readonly GrantScope[],
 ): boolean {
 	if (grant.principalRef === "public") return true;

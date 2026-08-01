@@ -30,7 +30,7 @@ import type {
 	Secrets,
 } from "../tools/secrets";
 import type { AfterGate, BoundaryGate, Gate } from "./boundary";
-import type { ClawApiCaller } from "./principal";
+import type { ClawApiCaller, Principal } from "./principal";
 import type { ReasonCode } from "./reason-codes";
 
 export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
@@ -161,7 +161,10 @@ export type PolicySourceSlice = {
  * grant decision reads it, never the concrete kind.
  */
 export type ShareableResource = {
-	createdBy?: string;
+	/** The OWNER principal — branded, because it is one. A loader reads it off a stored row, so it is a
+	 *  parse boundary: reach the brand with `asPrincipal`, never a cast. The owner rule compares this to
+	 *  the caller, so a bare host id here would silently never match anyone. */
+	createdBy?: Principal;
 	scope?: string;
 	scopeId?: string;
 };

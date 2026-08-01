@@ -57,7 +57,7 @@ import {
 /**
  * The api surface with the caller context appended to every method (flat and nested). A method
  * `(input) => R` becomes `(input, caller?) => R`; a plugin namespace recurses. The caller is OPTIONAL
- * at the type level — you CAN omit it, and then the actor floor denies at runtime (the "zero-config is
+ * at the type level — you CAN omit it, and then the principal floor denies at runtime (the "zero-config is
  * protected" property). Existing single-arg call sites keep compiling; only the runtime denies them.
  */
 export type WithCaller<T> = {
@@ -690,7 +690,7 @@ export function governApi(input: {
 	const enforce = async (spec: {
 		method: string;
 		level: ApiPermissionLevel;
-		principal: string;
+		principal: Principal;
 		resource: ApiResourceShape;
 	}): Promise<void> => {
 		const result = await decideApiCall({
@@ -786,7 +786,7 @@ export function governApi(input: {
 		const principal = caller?.principal;
 		if (principal === undefined || principal.trim() === "") {
 			throw authorizationError(
-				`app-authz denied ${method}: requires a caller principal (actor floor)`,
+				`app-authz denied ${method}: requires a caller principal (principal floor)`,
 				{ method, decision: "deny" },
 			);
 		}
@@ -860,7 +860,7 @@ export function governApi(input: {
 
 			// The handler's SECOND parameter is the authz context, not the raw caller: a check that only
 			// becomes expressible after loading something needs no extra plumbing, and `principal` is
-			// already guaranteed present so no handler re-derives the actor floor.
+			// already guaranteed present so no handler re-derives the principal floor.
 			return fn(domainInput, {
 				caller: caller ?? {},
 				principal,

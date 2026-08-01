@@ -3,7 +3,7 @@
 // machinery: keeping it in the tools barrel forced tools/ to reach upward into ../events and
 // ../runtime and mixed loop concerns into the tool subsystem's public surface.
 
-import type { RunMode } from "@busyclaw/contracts";
+import type { Principal, RunMode } from "@busyclaw/contracts";
 import { stateError } from "@busyclaw/contracts";
 import type { ModelMessage } from "ai";
 import type { RunAuthority } from "./authority";
@@ -42,11 +42,11 @@ export type RunState = {
 	 *  trusted context assembly SEEDS it as `busyclaw__principal`, so the run's principal IS the caller
 	 *  (the caller wins over the `identity` resolver, which is the caller-LESS fallback). Absent for
 	 *  autonomous runs (cron/engine resume) — identity resolver / a system principal covers those. */
-	callerPrincipal?: string;
+	callerPrincipal?: Principal;
 	/** The run's authority — principal, config scope, team/role, subject — resolved ONCE at the entry
 	 *  point, before any tool is selected, and frozen. Every governance door STAMPS this rather than
 	 *  re-running the host's resolvers, so the tool closure, the floor, the audit and the approval all
-	 *  name the same actor in the same tenant. Absent only before the entry point has resolved it.
+	 *  name the same principal in the same tenant. Absent only before the entry point has resolved it.
 	 *  See {@link RunAuthority} for what each split used to cost. */
 	authority?: RunAuthority;
 	/** The approver of a granted `needs-approval` this run is resuming — the ApprovalRecord's `decidedBy`

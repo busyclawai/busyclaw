@@ -20,14 +20,16 @@
 // each caller remembering to ask the same question in the same way.
 
 import {
+	asPrincipal,
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	type ContextResolver,
+	MEMBERSHIPS_CONTEXT_KEY,
+	type Membership,
 	PRINCIPAL_CONTEXT_KEY,
-	ROLE_CONTEXT_KEY,
+	type Principal,
 	type ScopeRef,
 	SUBJECT_CONTEXT_KEY,
-	TEAM_CONTEXT_KEY,
 	UNSCOPED,
 } from "@busyclaw/contracts";
 
@@ -45,7 +47,7 @@ import {
 export type RunAuthority = Readonly<{
 	/** The canonical principal. The authenticated caller when there is one; otherwise the `identity`
 	 *  resolver's answer, which is the caller-LESS fallback (cron, engine resume). */
-	principal?: string;
+	principal?: Principal;
 	/**
 	 * The `(scope, scopeId)` boundary whose durable configuration governs this run — its registered
 	 * tools, policy slices and secrets.
@@ -56,8 +58,11 @@ export type RunAuthority = Readonly<{
 	 * collapses here, at the one place that answers the question.
 	 */
 	configScope: ScopeRef;
-	team?: string;
-	role?: string;
+	/** Every boundary the principal belongs to, and their role in each — frozen with the rest of the
+	 *  authority, so a resolver reading a mutable store cannot answer differently at two doors of the
+	 *  same run. Absent means the deployment resolves no membership at all; `[]` means it resolved and
+	 *  the principal belongs to nothing. */
+	memberships?: readonly Membership[];
 	/** Whose personal data this run is about — the erasure key its PII mappings link to. */
 	subject?: string;
 }>;
@@ -68,8 +73,21 @@ function captureAuthority(ctx: Record<string, unknown>): RunAuthority {
 		typeof ctx[key] === "string" ? ctx[key] : undefined;
 	const scope = str(CONFIG_SCOPE_CONTEXT_KEY);
 	const scopeId = str(CONFIG_SCOPE_ID_CONTEXT_KEY);
+	// Re-establish the BRAND on the way out. The value went into the context as a `Principal` and comes
+	// back as `unknown` — the only place in the run where the type is lost — so this is a parse
+	// boundary, not a cast: a resolver that answered a bare host id (`alice` rather than `user:alice`)
+	// throws HERE, once, instead of stamping a malformed principal that every door downstream then
+	// compares, logs and authorizes against.
+	const rawPrincipal = str(PRINCIPAL_CONTEXT_KEY);
+	// Frozen deeply enough to matter: the array is what a later door re-stamps, so a consumer that
+	// mutated it would change what the NEXT door authorizes against.
+	const rawMemberships = ctx[MEMBERSHIPS_CONTEXT_KEY];
+	const memberships = Array.isArray(rawMemberships)
+		? Object.freeze([...(rawMemberships as readonly Membership[])])
+		: undefined;
 	return Object.freeze({
-		principal: str(PRINCIPAL_CONTEXT_KEY),
+		principal:
+			rawPrincipal === undefined ? undefined : asPrincipal(rawPrincipal),
 		// The ONE place the absent (or half-named) boundary becomes a value — the same move
 		// `piiContainer` makes for the other pair, and for the same reason: an open family of
 		// near-misses collapses to exactly one bucket that everything downstream can look up.
@@ -77,8 +95,7 @@ function captureAuthority(ctx: Record<string, unknown>): RunAuthority {
 			scope !== undefined && scopeId !== undefined
 				? Object.freeze({ scope, scopeId })
 				: UNSCOPED,
-		team: str(TEAM_CONTEXT_KEY),
-		role: str(ROLE_CONTEXT_KEY),
+		...(memberships !== undefined ? { memberships } : {}),
 		subject: str(SUBJECT_CONTEXT_KEY),
 	});
 }
@@ -98,8 +115,9 @@ export function stampAuthority(
 	}
 	ctx[CONFIG_SCOPE_CONTEXT_KEY] = authority.configScope.scope;
 	ctx[CONFIG_SCOPE_ID_CONTEXT_KEY] = authority.configScope.scopeId;
-	if (authority.team !== undefined) ctx[TEAM_CONTEXT_KEY] = authority.team;
-	if (authority.role !== undefined) ctx[ROLE_CONTEXT_KEY] = authority.role;
+	if (authority.memberships !== undefined) {
+		ctx[MEMBERSHIPS_CONTEXT_KEY] = [...authority.memberships];
+	}
 	if (authority.subject !== undefined) {
 		ctx[SUBJECT_CONTEXT_KEY] = authority.subject;
 	}
@@ -120,7 +138,7 @@ export function stampAuthority(
  */
 export async function resolveRunAuthority(input: {
 	ctx: Record<string, unknown>;
-	callerPrincipal: string | undefined;
+	callerPrincipal: Principal | undefined;
 	resolveContext: ContextResolver | undefined;
 }): Promise<{ authority: RunAuthority; ctx: Record<string, unknown> }> {
 	const { ctx, callerPrincipal, resolveContext } = input;

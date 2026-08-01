@@ -6,6 +6,7 @@ import type {
 	InferContext,
 	JsonObject,
 	JsonValue,
+	Principal,
 	Redactor,
 	RunMode,
 	TextDeltaStream,
@@ -197,7 +198,7 @@ export type RuntimeRunOptions = {
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
 	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
 	 *  key, forge-proof). Seeded as `busyclaw__principal` by the trusted context assembly. */
-	readonly [RUNTIME_CALLER_OPTION]?: string;
+	readonly [RUNTIME_CALLER_OPTION]?: Principal;
 };
 
 /**
@@ -393,7 +394,7 @@ export function runtimeRunOptionsWithRecording(
  */
 export function runtimeRunOptionsWithCaller(
 	options: RuntimeRunOptions | undefined,
-	principal: string | undefined,
+	principal: Principal | undefined,
 ): RuntimeRunOptions {
 	return { ...(options ?? {}), [RUNTIME_CALLER_OPTION]: principal };
 }
@@ -1569,13 +1570,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	 * The run's ONE derivation of authority, plus the context every later door is stamped from.
 	 *
 	 * `callerPrincipal` must be settled before this is called — it is seeded into the context BEFORE the
-	 * host's resolvers run, so membership, subject and configScope all resolve for the actor the run is
+	 * host's resolvers run, so membership, subject and configScope all resolve for the principal the run is
 	 * actually authorized as. That ordering is the fix; stamping the caller afterwards (what this used
 	 * to do, one layer down) left every resolver below it answering about someone else.
 	 */
 	const resolveRunAuthorityAndContext = async (
 		ctxInput: Record<string, unknown> | undefined,
-		callerPrincipal: string | undefined,
+		callerPrincipal: Principal | undefined,
 		recording: RuntimeRecordingContext | undefined,
 		runId: string | undefined,
 	): Promise<{ authority: RunAuthority; ctx: Record<string, unknown> }> => {

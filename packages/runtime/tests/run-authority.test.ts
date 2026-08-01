@@ -12,8 +12,8 @@
 import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
+	MEMBERSHIPS_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
-	ROLE_CONTEXT_KEY,
 	type ToolDefinitionSet,
 	UNSCOPED,
 	userPrincipal,
@@ -132,9 +132,9 @@ describe("the run's authority is derived once", () => {
 	});
 
 	it("membership is looked up for the caller, not for the identity resolver's answer", async () => {
-		// `roleMembership` resolves the role FOR `ctx[principal]`. With the caller stamped only
+		// The membership resolver resolves FOR `ctx[principal]`. With the caller stamped only
 		// afterwards, the lookup ran against the resolver's answer — so a run could be authorized as
-		// one person while carrying another person's team and role.
+		// one person while carrying another person's boundaries and roles.
 		const askedAbout: string[] = [];
 		let gateRole: unknown;
 		const runtime = createRuntime({
@@ -142,13 +142,16 @@ describe("the run's authority is derived once", () => {
 			tools: { t: noopTool() },
 			identity: () => "user:resolver-answer",
 			membership: async (ctx) => {
-				const actor = ctx[PRINCIPAL_CONTEXT_KEY];
-				if (typeof actor !== "string") return undefined;
-				askedAbout.push(actor);
-				return {
-					team: "acme",
-					role: actor === "user:caller" ? "admin" : "guest",
-				};
+				const principal = ctx[PRINCIPAL_CONTEXT_KEY];
+				if (typeof principal !== "string") return undefined;
+				askedAbout.push(principal);
+				return [
+					{
+						scope: "team",
+						scopeId: "acme",
+						role: principal === "user:caller" ? "admin" : "guest",
+					},
+				];
 			},
 			plugins: [
 				{
@@ -158,7 +161,7 @@ describe("the run's authority is derived once", () => {
 							id: "watch",
 							matcher: () => true,
 							handler: (_call, ctx) => {
-								gateRole = ctx[ROLE_CONTEXT_KEY];
+								gateRole = ctx[MEMBERSHIPS_CONTEXT_KEY];
 								return { decision: "permit" };
 							},
 						},
@@ -172,7 +175,9 @@ describe("the run's authority is derived once", () => {
 			runtimeRunOptionsWithCaller(undefined, "user:caller"),
 		);
 		expect(askedAbout).toEqual(["user:caller"]);
-		expect(gateRole).toBe("admin");
+		expect(gateRole).toEqual([
+			{ scope: "team", scopeId: "acme", role: "admin" },
+		]);
 	});
 
 	it("the host's resolvers run ONCE per run, not once per door", async () => {
@@ -475,5 +480,42 @@ describe("every run carries a boundary", () => {
 				{ org: "org-a" },
 			),
 		).toEqual({ scope: "organization", scopeId: "org-a" });
+	});
+});
+
+describe("the authority is a PARSE boundary, not a cast", () => {
+	// The principal goes into the context typed and comes back out as `unknown` — the one place in a run
+	// where the brand is lost. `captureAuthority` re-establishes it with `asPrincipal`, so a resolver that
+	// answers a bare host id is rejected HERE, once, instead of stamping a value that every door
+	// downstream then compares, logs and authorizes against. `identity` is typed to return a `Principal`,
+	// so reaching this needs a cast — which is exactly the host that would have gotten through before.
+	const runWithIdentity = async (answer: string): Promise<void> => {
+		const runtime = createRuntime({
+			model: callsInOrder("t"),
+			tools: { t: noopTool() },
+			identity: (() => answer) as never,
+		});
+		await runtime.generate("go", {});
+	};
+
+	it("an untagged host id is refused rather than stamped", async () => {
+		// `alice` — what a host passes when it wires `getSession().user.id` straight through. It is not a
+		// principal: nothing downstream can tell it from a system name, and the owner rule would compare
+		// it against tagged values forever without matching.
+		await expect(runWithIdentity("alice")).rejects.toThrow(/principal/i);
+	});
+
+	it("an unknown kind is refused too — the tag is checked, not just present", async () => {
+		// A colon alone is not the contract. Exactly `user:` and `system:` are principals, so an
+		// `agent:`-tagged value is rejected at the same door — the deliberate absence of an agent
+		// principal kind is enforced here, not only documented.
+		await expect(runWithIdentity("agent:claw-7")).rejects.toThrow(/principal/i);
+	});
+
+	it("a well-formed principal passes through untouched", async () => {
+		// The guard above is worthless if it also rejects the real thing.
+		await expect(
+			runWithIdentity(userPrincipal("alice")),
+		).resolves.toBeUndefined();
 	});
 });

@@ -12,6 +12,7 @@
 
 import {
 	errorMessage,
+	type Principal,
 	safeFailureMessage,
 	stateError,
 	unsupportedOperationError,
@@ -136,7 +137,7 @@ async function runTask(
 	claim: ClaimedTask,
 	abortSignal?: RuntimeAbortSignal,
 	deadlineAt?: string,
-	principal?: string,
+	principal?: Principal,
 ): Promise<TaskExecution> {
 	// runId scopes effect ids and runtime events to the durable run, across attempts and slices;
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
