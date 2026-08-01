@@ -30,7 +30,6 @@ export const runFields = {
 	status: field.enum(runStatusValues, { required: true, index: true }),
 	input: field.jsonObject({ required: true, immutable: true }),
 	principal: field.principal({ index: true, immutable: true }),
-	team: field.string({ index: true, immutable: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;

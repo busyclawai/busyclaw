@@ -163,8 +163,20 @@ export const RESERVED_CONTEXT_PREFIX = "busyclaw__";
 // The well-known reserved context keys (the `busyclaw__` namespace). Governance OWNS the namespace and
 // records the `principal`; the claw's identity/membership wiring populates these. Plugins read them.
 export const PRINCIPAL_CONTEXT_KEY = "busyclaw__principal";
-export const TEAM_CONTEXT_KEY = "busyclaw__team";
-export const ROLE_CONTEXT_KEY = "busyclaw__role";
+/**
+ * Every boundary this principal BELONGS TO, and their role in each.
+ *
+ * Replaced a singular `busyclaw__team` + `busyclaw__role` pair. That pair made core assert two things it
+ * has no business asserting: that a boundary is a *team* (an organization is a plugin — the same reason
+ * `organizationId` became the opaque `(scope, scopeId)` pair), and that a principal is in exactly ONE of
+ * them with exactly ONE role. Neither survives contact with a real deployment: people sit in several
+ * teams, and "admin of payments, member of platform" has no singular `context.role`.
+ *
+ * The `(scope, scopeId)` halves are OPAQUE here — some plugin gives the label meaning. The string form a
+ * policy matches on (`<scope>:<scopeId>`) is deliberately the SAME one `grantReaches` compares, so
+ * membership reads identically on the tool floor and in the api PEP instead of being two vocabularies.
+ */
+export const MEMBERSHIPS_CONTEXT_KEY = "busyclaw__memberships";
 export const CLAW_ID_CONTEXT_KEY = "busyclaw__clawId";
 export const THREAD_ID_CONTEXT_KEY = "busyclaw__threadId";
 export const RUN_ID_CONTEXT_KEY = "busyclaw__runId";
@@ -232,10 +244,37 @@ export function runActionsOf(ctx: unknown): readonly ToolDescriptor[] {
 /** The value vocabulary for `RUN_MODE_CONTEXT_KEY`. */
 export type RunMode = "interactive" | "autonomous";
 
+/**
+ * ONE membership: the opaque boundary a principal belongs to, and their role in it.
+ *
+ * `role` is OPTIONAL because belonging and ranking are different facts — a deployment can answer "which
+ * boundaries is this person in" without having a role vocabulary at all, and a membership with no role
+ * still decides every `scopes.contains(…)` policy.
+ */
+export type Membership = {
+	scope: string;
+	scopeId: string;
+	role?: string;
+};
+
+/** The `<scope>:<scopeId>` string a policy matches a membership on — the SAME form `grantReaches`
+ *  compares a labelled grant against, so the two never drift into separate vocabularies. */
+export function membershipScopeRef(membership: Membership): string {
+	return `${membership.scope}:${membership.scopeId}`;
+}
+
+/** The `<scope>:<scopeId>#<role>` string a policy matches a ROLE-IN-A-BOUNDARY on. Scoped on purpose:
+ *  the old global `context.role == "admin"` could not say WHERE someone was an admin, so a role held in
+ *  one boundary answered for every other one. */
+export function membershipRoleRef(membership: Membership): string | undefined {
+	return membership.role === undefined
+		? undefined
+		: `${membershipScopeRef(membership)}#${membership.role}`;
+}
+
 /** The policy-facing stamped identity facts, unprefixed — what engines put into request context. */
 export type StampedFacts = {
-	role?: string;
-	team?: string;
+	memberships?: readonly Membership[];
 	clawId?: string;
 	configScope?: string;
 	configScopeId?: string;
@@ -252,19 +291,19 @@ export type StampedFacts = {
 export const stampedFacts = type({
 	// Literal keys — these ARE the *_CONTEXT_KEY constants above (arktype defs need literals;
 	// tests/stamped-facts.test.ts builds its context from the constants to guard drift).
-	"busyclaw__role?": "string",
-	"busyclaw__team?": "string",
+	"busyclaw__memberships?": type({
+		scope: "string",
+		scopeId: "string",
+		"role?": "string",
+	}).array(),
 	"busyclaw__clawId?": "string",
 	"busyclaw__configScope?": "string",
 	"busyclaw__configScopeId?": "string",
 	"busyclaw__runMode?": "'interactive' | 'autonomous'",
 }).pipe(
 	(stamps): StampedFacts => ({
-		...(stamps.busyclaw__role !== undefined
-			? { role: stamps.busyclaw__role }
-			: {}),
-		...(stamps.busyclaw__team !== undefined
-			? { team: stamps.busyclaw__team }
+		...(stamps.busyclaw__memberships !== undefined
+			? { memberships: stamps.busyclaw__memberships }
 			: {}),
 		...(stamps.busyclaw__clawId !== undefined
 			? { clawId: stamps.busyclaw__clawId }

@@ -29,8 +29,12 @@ export type CedarSchemaOptions = {
 // origin of the action's binding (a registered tool literally cannot target another server), so an
 // org can write egress policy over `context.server`. Per-action `args` appends when the action's
 // schema projects.
+// `scopes`/`roles` are declared OPTIONAL here but `cedarMapCall` always supplies them (empty sets when
+// the run has no memberships) — the same belt-and-braces `runMode` gets, and for the same reason: a
+// policy reading an ABSENT base errors, and an erroring policy is skipped, which takes a `forbid` down
+// with it. Always-present means `context.scopes.contains(…)` needs no `has` guard to be safe.
 const CONTEXT_FIELDS =
-	"confirmationUsed: Bool, clawId?: String, configScope?: String, configScopeId?: String, role?: String, runMode?: String, server?: String, team?: String";
+	"confirmationUsed: Bool, clawId?: String, configScope?: String, configScopeId?: String, roles?: Set<String>, runMode?: String, scopes?: Set<String>, server?: String";
 
 function renderAction(
 	action: ActionDef,

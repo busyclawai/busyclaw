@@ -24,9 +24,15 @@ export const policyRequest = type({
 		"clawId?": "string",
 		"configScope?": "string",
 		"configScopeId?": "string",
-		"role?": "string",
+		/** Every boundary the principal belongs to, as `<scope>:<scopeId>`. ALWAYS supplied by the engine
+		 *  (empty when it has none) — never optional in a built request, for the same reason `runMode`
+		 *  never is: cedar-wasm ERRORS on an absent base, and an erroring policy is SILENTLY SKIPPED. An
+		 *  unguarded `context.scopes.contains(…)` over a missing base takes a `forbid` down with it. */
+		"scopes?": "string[]",
+		/** The same memberships that carry a role, as `<scope>:<scopeId>#<role>` — so a policy names WHERE
+		 *  a role is held. Also always supplied. */
+		"roles?": "string[]",
 		"runMode?": "'interactive' | 'autonomous'",
-		"team?": "string",
 		"[string]": "unknown",
 	},
 });

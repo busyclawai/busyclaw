@@ -1,9 +1,9 @@
 // createTeamStore — invite-based team membership over the @busyclaw/storage-core Adapter. The sibling
 // of createApprovalStore: `invite` opens a pending invite, `accept` consumes it (single-use, via the
 // atomic consumeOne primitive) and creates a member. `roleOf` is what a claw's
-// `roleMembership({ roleOf })` calls to resolve the actor's role on a team → which authz then reads.
+// `roleMembership({ roleOf })` calls to resolve the principal's role on a team → which authz then reads.
 
-import type { Adapter } from "@busyclaw/contracts";
+import type { Adapter, Membership } from "@busyclaw/contracts";
 import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import {
@@ -20,6 +20,10 @@ import {
 export type TeamMember = typeof teamMemberRecord.infer;
 export type TeamInvite = typeof teamInviteRecord.infer;
 
+/** This store's AUTHORITY name — the `scope` half of every membership it reports. A team defined here
+ *  is `team:<name>`; one defined in better-auth is `betterauth:<id>`. Two sources, no collision. */
+const TEAM_SCOPE = "team";
+
 export type TeamStore = {
 	/** Open a pending invite to a team, with a role. */
 	invite: (input: {
@@ -31,8 +35,12 @@ export type TeamStore = {
 	accept: (inviteId: string, userId: string) => Promise<TeamMember | null>;
 	/** List a team's members. */
 	members: (team: string) => Promise<TeamMember[]>;
-	/** The actor's role on a team, or null if not a member — what `roleMembership({ roleOf })` calls. */
+	/** The principal's role on ONE team, or null if not a member. */
 	roleOf: (team: string, userId: string) => Promise<string | null>;
+	/** EVERY team this user belongs to, as memberships — what `principalMemberships({ membershipsOf })`
+	 *  calls to stamp the run. `scope` is this store's own authority name (`team`), never a taxonomy
+	 *  word, so its ids can never collide with another source's. */
+	membershipsOf: (userId: string) => Promise<Membership[]>;
 	/** Revoke a member's access to a team. */
 	remove: (team: string, userId: string) => Promise<void>;
 };
@@ -103,6 +111,18 @@ export function createTeamStore(
 				where: memberWhere(team, userId),
 			});
 			return row ? row.role : null;
+		},
+
+		async membershipsOf(userId) {
+			const rows = await db.findMany({
+				model: "team_member",
+				where: [{ field: "userId", value: userId }],
+			});
+			return rows.map((row) => ({
+				scope: TEAM_SCOPE,
+				scopeId: row.team,
+				role: row.role,
+			}));
 		},
 
 		async remove(team, userId) {

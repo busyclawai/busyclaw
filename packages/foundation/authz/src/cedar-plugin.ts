@@ -27,6 +27,8 @@ import type {
 import {
 	authorizationError,
 	configurationError,
+	membershipRoleRef,
+	membershipScopeRef,
 	PRINCIPAL_CONTEXT_KEY,
 	stampedFacts,
 	validationError,
@@ -109,6 +111,16 @@ export function cedarMapCall(
 		if (facts instanceof type.errors) {
 			throw validationError("cedar context invalid", facts.summary);
 		}
+		// The two flat projections a policy matches on. `memberships` itself never reaches the request —
+		// see the context below.
+		const { memberships, ...flatFacts } = facts;
+		const scopes: string[] = [];
+		const roles: string[] = [];
+		for (const membership of memberships ?? []) {
+			scopes.push(membershipScopeRef(membership));
+			const roleRef = membershipRoleRef(membership);
+			if (roleRef !== undefined) roles.push(roleRef);
+		}
 		const indexed = modelIndex?.get(call.name);
 		// Model-aware args: only the PROJECTED subset crosses (Cedar records are closed — an undeclared
 		// attr fails request validation; the projection dropped it from the schema).
@@ -130,11 +142,16 @@ export function cedarMapCall(
 			context: {
 				...args,
 				[approvalFlag]: false,
-				...facts,
+				...flatFacts,
 				// runMode is ALWAYS stamped (default autonomous) so policies can reference
 				// context.runMode without the missing-attribute error cedar-wasm raises on an absent
 				// optional — an unknown mode reads as autonomous, the fail-closed default.
 				runMode: facts.runMode ?? "autonomous",
+				// Memberships are PROJECTED, never spread: Cedar records are closed, so the structured
+				// list would fail request validation. Both sets are always present for the same reason
+				// runMode is — an absent base errors, and an erroring policy is skipped.
+				scopes,
+				roles,
 				...(server !== undefined ? { server } : {}),
 			},
 		};

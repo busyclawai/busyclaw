@@ -6,12 +6,12 @@ import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	type ContextResolver,
+	MEMBERSHIPS_CONTEXT_KEY,
+	type Membership,
 	PRINCIPAL_CONTEXT_KEY,
 	type Principal,
-	ROLE_CONTEXT_KEY,
 	type ScopeRef,
 	SUBJECT_CONTEXT_KEY,
-	TEAM_CONTEXT_KEY,
 	type TurnContext,
 	userPrincipal,
 } from "@busyclaw/contracts";
@@ -23,13 +23,21 @@ export type IdentityResolver = (
 	ctx: TurnContext,
 ) => Principal | undefined | Promise<Principal | undefined>;
 
-/** The actor's membership for a run: which team, and their role on it. */
-export type Membership = { team: string; role: string };
-
-/** Resolves the actor's membership (team + role). Runs after identity (it needs the actor). */
+/**
+ * Resolves EVERY boundary the principal belongs to, and their role in each. Runs after identity (it
+ * needs the principal).
+ *
+ * Plural and opaque, where this used to be a single `{ team, role }`. A person sits in several teams,
+ * and a role is held IN a boundary — the singular pair could express neither, so a role held in one
+ * place silently answered for every other. Returning `[]` (or nothing) is a real answer: the run belongs
+ * to no boundary and every `scopes.contains(…)` policy is false, rather than erroring.
+ */
 export type MembershipResolver = (
 	ctx: TurnContext,
-) => Membership | undefined | Promise<Membership | undefined>;
+) =>
+	| readonly Membership[]
+	| undefined
+	| Promise<readonly Membership[] | undefined>;
 
 /** Resolves the run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary whose durable configuration
  *  governs it (registered tools, policy slices, the facts overlay). Both halves are opaque to core: an
@@ -53,24 +61,24 @@ export function sessionIdentity(deps: {
 	};
 }
 
-/** Build a MembershipResolver from any `roleOf(team, actor)` lookup — the native team store, better-auth, your own. */
-export function roleMembership(deps: {
-	roleOf: (
-		team: string,
-		actor: string,
-	) => string | null | Promise<string | null>;
-	/** Where the active team comes from in `ctx`. Default: a non-reserved `team` key. */
-	team?: (ctx: TurnContext) => string | undefined;
+/**
+ * Build a MembershipResolver from any "which boundaries is this principal in" lookup — the native team
+ * store's `membershipsOf`, better-auth's org memberships, an LDAP group query, your own.
+ *
+ * This is the whole adapter. The predecessor (`roleMembership({ roleOf })`) additionally had to be told
+ * where to find the ONE active team on the context, because the model allowed only one; with the lookup
+ * returning every membership there is nothing left to configure.
+ */
+export function principalMemberships(deps: {
+	membershipsOf: (
+		principal: string,
+		ctx: TurnContext,
+	) => readonly Membership[] | Promise<readonly Membership[]>;
 }): MembershipResolver {
-	const teamOf =
-		deps.team ??
-		((ctx) => (typeof ctx.team === "string" ? ctx.team : undefined));
 	return async (ctx) => {
-		const team = teamOf(ctx);
-		const actor = ctx[PRINCIPAL_CONTEXT_KEY];
-		if (team === undefined || typeof actor !== "string") return undefined;
-		const role = await deps.roleOf(team, actor);
-		return role === null ? undefined : { team, role };
+		const principal = ctx[PRINCIPAL_CONTEXT_KEY];
+		if (typeof principal !== "string") return undefined;
+		return await deps.membershipsOf(principal, ctx);
 	};
 }
 
@@ -92,7 +100,7 @@ export type SubjectResolver = (
 	ctx: TurnContext,
 ) => string | undefined | Promise<string | undefined>;
 
-/** Compose identity + membership into ONE core ContextResolver — identity first (membership needs the actor). */
+/** Compose identity + membership into ONE core ContextResolver — identity first (membership needs the principal). */
 export function composeContext(parts: {
 	identity?: IdentityResolver;
 	membership?: MembershipResolver;
@@ -113,19 +121,18 @@ export function composeContext(parts: {
 		// (`resolveRunAuthority`), so an authenticated run keeps its caller and a cron/engine resume —
 		// which has none — gets the resolver's answer. It used to run unconditionally and be overwritten
 		// afterwards, which meant the resolvers BELOW it (membership, subject) and the tool resolver all
-		// saw the wrong actor: the role was fetched for whoever `identity` named, not for the caller.
+		// saw the wrong principal: the role was fetched for whoever `identity` named, not for the caller.
 		if (identity && ctx[PRINCIPAL_CONTEXT_KEY] === undefined) {
 			const principal = await identity(ctx);
 			if (typeof principal === "string") ctx[PRINCIPAL_CONTEXT_KEY] = principal;
 		}
 		if (membership) {
 			const m = await membership(ctx);
-			if (m) {
-				ctx[TEAM_CONTEXT_KEY] = m.team;
-				ctx[ROLE_CONTEXT_KEY] = m.role;
-			}
+			// An EMPTY list is stamped, not skipped: "resolved, belongs to nothing" and "never asked"
+			// must not read the same downstream. The engine's projections are always present either way.
+			if (m !== undefined) ctx[MEMBERSHIPS_CONTEXT_KEY] = [...m];
 		}
-		// LAST: a deployment usually derives the subject from the actor identity resolved above, so it
+		// LAST: a deployment usually derives the subject from the principal identity resolved above, so it
 		// runs where that is already on the context.
 		if (subject) {
 			const subjectId = await subject(ctx);

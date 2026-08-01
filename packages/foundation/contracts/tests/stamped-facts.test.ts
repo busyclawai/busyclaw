@@ -4,10 +4,9 @@ import {
 	CLAW_ID_CONTEXT_KEY,
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
-	ROLE_CONTEXT_KEY,
+	MEMBERSHIPS_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
 	stampedFacts,
-	TEAM_CONTEXT_KEY,
 } from "../src/index";
 
 describe("stampedFacts — the one typed reader of the reserved identity stamps", () => {
@@ -16,16 +15,21 @@ describe("stampedFacts — the one typed reader of the reserved identity stamps"
 		// this test fails.
 		const ctx = {
 			principal: "alice",
-			[ROLE_CONTEXT_KEY]: "approver",
-			[TEAM_CONTEXT_KEY]: "payments",
+			[MEMBERSHIPS_CONTEXT_KEY]: [
+				{ scope: "team", scopeId: "payments", role: "approver" },
+				// A membership with no role at all — belonging and ranking are separate facts.
+				{ scope: "betterauth", scopeId: "org_123" },
+			],
 			[CLAW_ID_CONTEXT_KEY]: "claw-1",
 			[CONFIG_SCOPE_CONTEXT_KEY]: "organization",
 			[CONFIG_SCOPE_ID_CONTEXT_KEY]: "org-a",
 			[RUN_MODE_CONTEXT_KEY]: "autonomous",
 		};
 		expect(stampedFacts(ctx)).toEqual({
-			role: "approver",
-			team: "payments",
+			memberships: [
+				{ scope: "team", scopeId: "payments", role: "approver" },
+				{ scope: "betterauth", scopeId: "org_123" },
+			],
 			clawId: "claw-1",
 			configScope: "organization",
 			configScopeId: "org-a",
@@ -46,8 +50,13 @@ describe("stampedFacts — the one typed reader of the reserved identity stamps"
 		expect(stampedFacts({ [RUN_MODE_CONTEXT_KEY]: "batch" })).toBeInstanceOf(
 			type.errors,
 		);
-		expect(stampedFacts({ [ROLE_CONTEXT_KEY]: 42 })).toBeInstanceOf(
+		expect(stampedFacts({ [MEMBERSHIPS_CONTEXT_KEY]: 42 })).toBeInstanceOf(
 			type.errors,
 		);
+		// A membership missing its `scopeId` half is garbage too — a `<scope>:undefined` ref would match
+		// nothing forever, which is the failure mode that never announces itself.
+		expect(
+			stampedFacts({ [MEMBERSHIPS_CONTEXT_KEY]: [{ scope: "team" }] }),
+		).toBeInstanceOf(type.errors);
 	});
 });

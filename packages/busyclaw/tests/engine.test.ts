@@ -236,7 +236,6 @@ describe("createClaw engine", () => {
 		const run = await claw.api.startRun({
 			ctx: { team: "acme" },
 			prompt: "hello",
-			run: { team: "acme" },
 		});
 		const result = await claw.$context.engine?.work?.();
 
@@ -249,7 +248,6 @@ describe("createClaw engine", () => {
 			id: run.id,
 			status: "completed",
 			principal: OWNER,
-			team: "acme",
 		});
 		await expect(
 			claw.api.listRunEvents({ runId: run.id }, { principal: OWNER }),

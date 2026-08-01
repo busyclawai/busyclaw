@@ -486,11 +486,6 @@ const engineRunMetadataInput = ark({
 			doc: "Pins the durable run id (idempotency / correlation) instead of letting the engine mint one.",
 		},
 	}),
-	"team?": ark("string | undefined").configure({
-		busyclaw: {
-			doc: "Team/boundary tag carried on the durable run for attribution.",
-		},
-	}),
 });
 const engineRunMetadataOrUndefined = engineRunMetadataInput.or("undefined");
 // Both derive straight from the entities' immutable/input flags — every mutable, caller-facing column,
@@ -984,7 +979,7 @@ export const clawApiRoutes = {
 	//          one gate by id, so resuming is the step that actually performs the parked call.
 	//
 	// The `userApprover` floor still applies on top of the decide methods (a human decides, a machine
-	// never does) — that is an actor check, not an ownership one, and it was never a substitute.
+	// never does) — that is a principal check, not an ownership one, and it was never a substitute.
 	getApproval: apiRoute("getApproval", on("read", "approval", "id")),
 	grantApproval: apiRoute("grantApproval", on("use", "approval", "approvalId")),
 	denyApproval: apiRoute("denyApproval", on("use", "approval", "approvalId")),
@@ -1127,7 +1122,7 @@ function requireRuns(runs: ClawRunReadModel | undefined): ClawRunReadModel {
  * already gated WHO may approve (the approval's owner ∪ a manage grant, via the `approval` resource); this
  * floors WHAT KIND — a machine may not approve the very action approval exists to put a human in front of
  * (a system principal that owned the approval would otherwise self-approve). Absent principal can't reach
- * here (the actor floor denied first); the check is belt-and-suspenders for the unsafeOpen path too.
+ * here (the principal floor denied first); the check is belt-and-suspenders for the unsafeOpen path too.
  */
 function userApprover(caller: ClawApiCaller | undefined): Principal {
 	const principal = caller?.principal;
@@ -1419,7 +1414,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// The owner and the access boundary are SERVER-STAMPED from the authenticated caller, never caller
 		// input (docs/plans/stamped-fields.md, #5): `createdBy` = the caller (the owner-rule + erasure key),
 		// and the claw is personal to that caller at create (`scope`/`scopeId`). A caller-less escape-hatch
-		// call (unsafeOpen) stamps system:anonymous rather than crashing; the actor floor already denies an
+		// call (unsafeOpen) stamps system:anonymous rather than crashing; the principal floor already denies an
 		// absent principal for a governed call, so a normal create stamps exactly the caller it always did.
 		createClaw: (args, caller?: ClawApiCaller) => {
 			const principal = caller?.principal ?? SYSTEM_ANONYMOUS;

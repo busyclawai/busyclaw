@@ -133,17 +133,18 @@ describe("@busyclaw/policy-cedar — Cedar PDP", () => {
 		);
 	});
 
-	it("membership: a resolved team role flows into the Cedar context and drives the decision", async () => {
-		// a policy that only permits when the actor's resolved role is `approver`
-		const policies = `permit(principal, action == Action::"send_offer", resource) when { context.role == "approver" };`;
-		// resolveContext stamps busyclaw__role exactly as the claw's `membership` resolver would (the role
-		// came from roleMembership({ roleOf: teamStore.roleOf }) — connecting team membership → the decision)
-		const asRole = (role: string) =>
+	it("membership: a role held IN a boundary flows into the Cedar context and drives the decision", async () => {
+		// The policy names WHERE the role is held. The predecessor asked `context.role == "approver"`,
+		// which could not: a role held in any one boundary answered for every other one.
+		const policies = `permit(principal, action == Action::"send_offer", resource) when { context.roles.contains("team:payments#approver") };`;
+		// resolveContext stamps busyclaw__memberships exactly as the claw's `membership` resolver would
+		// (the list came from principalMemberships({ membershipsOf: teamStore.membershipsOf })).
+		const asRole = (role: string, scopeId = "payments") =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],
 				resolveContext: (ctx) => ({
 					...seedPrincipal(ctx),
-					busyclaw__role: role,
+					busyclaw__memberships: [{ scope: "team", scopeId, role }],
 				}),
 				runTool: runEcho,
 			});
@@ -152,13 +153,37 @@ describe("@busyclaw/policy-cedar — Cedar PDP", () => {
 			{ name: "send_offer", args: {} },
 			{ principal: "alice" },
 		);
-		expect(approver.status).toBe("ok"); // role == approver → permitted
+		expect(approver.status).toBe("ok"); // approver OF payments → permitted
 
 		const operator = await asRole("operator").handleToolCall(
 			{ name: "send_offer", args: {} },
 			{ principal: "alice" },
 		);
-		expect(operator.status).toBe("denied"); // role != approver → no permit matches → deny-by-default
+		expect(operator.status).toBe("denied"); // wrong role → no permit matches → deny-by-default
+
+		// The point of scoping the role: approver of ANOTHER team is not approver here.
+		const elsewhere = await asRole("approver", "platform").handleToolCall(
+			{ name: "send_offer", args: {} },
+			{ principal: "alice" },
+		);
+		expect(elsewhere.status).toBe("denied");
+	});
+
+	it("a run with NO memberships denies rather than erroring the policy away", async () => {
+		// The trap this shape exists to avoid: an ABSENT base errors in cedar-wasm and the policy is
+		// SILENTLY SKIPPED — which for a `forbid` means it fails OPEN. `scopes`/`roles` are therefore
+		// always supplied, empty when the run has none, so an unguarded `.contains(…)` is safe.
+		const policies = `permit(principal, action == Action::"send_offer", resource) when { context.scopes.contains("team:payments") };`;
+		const governance = createGovernance({
+			plugins: [cedarPolicyPlugin({ policies })],
+			resolveContext: (ctx) => seedPrincipal(ctx),
+			runTool: runEcho,
+		});
+		const result = await governance.handleToolCall(
+			{ name: "send_offer", args: {} },
+			{ principal: "alice" },
+		);
+		expect(result.status).toBe("denied");
 	});
 
 	it("the config scope flows from resolution context and cannot be spoofed from caller args", async () => {

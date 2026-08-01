@@ -2,14 +2,18 @@ import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	type ContextResolver,
+	MEMBERSHIPS_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
-	ROLE_CONTEXT_KEY,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { createTeamStore } from "@busyclaw/storage-durable";
 import { describe, expect, it } from "vitest";
-import { composeContext, roleMembership, sessionIdentity } from "../src/index";
+import {
+	composeContext,
+	principalMemberships,
+	sessionIdentity,
+} from "../src/index";
 
 function resolverFor(
 	parts: Parameters<typeof composeContext>[0],
@@ -33,23 +37,33 @@ describe("runtime context", () => {
 		);
 	});
 
-	it("resolves membership role through any roleOf lookup", async () => {
+	it("resolves EVERY membership through any membershipsOf lookup", async () => {
 		const team = createTeamStore(memoryAdapter());
-		const invite = await team.invite({
-			team: "acme",
-			email: "bob@x.com",
-			role: "approver",
-		});
-		await team.accept(invite.id, "bob");
+		for (const [name, role] of [
+			["acme", "approver"],
+			["platform", "member"],
+		]) {
+			const invite = await team.invite({
+				team: name,
+				email: "bob@x.com",
+				role,
+			});
+			await team.accept(invite.id, "bob");
+		}
 
 		const resolve = resolverFor({
 			identity: () => "bob",
-			membership: roleMembership({ roleOf: team.roleOf }),
+			membership: principalMemberships({ membershipsOf: team.membershipsOf }),
 		});
-		const ctx = await resolve({ team: "acme" });
+		// No `team` on the context: which boundary is "active" is not an input any more. The predecessor
+		// had to be told, because it could carry only one.
+		const ctx = await resolve({});
 
 		expect(ctx[PRINCIPAL_CONTEXT_KEY]).toBe("bob");
-		expect(ctx[ROLE_CONTEXT_KEY]).toBe("approver");
+		expect(ctx[MEMBERSHIPS_CONTEXT_KEY]).toEqual([
+			{ scope: "team", scopeId: "acme", role: "approver" },
+			{ scope: "team", scopeId: "platform", role: "member" },
+		]);
 	});
 
 	it("resolves the config scope through a trusted resolver", async () => {
