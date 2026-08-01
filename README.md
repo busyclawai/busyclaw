@@ -140,7 +140,7 @@ Implemented and green internally. Still not a consumable product.
 | `@busyclaw/adapter-core`, `@busyclaw/adapter-nextjs` | the HTTP surface |
 | `@busyclaw/client`, `@busyclaw/cli`, `@busyclaw/vendors` | typed client, CLI, AI SDK bridge |
 | `@busyclaw/channels`, `@busyclaw/secrets-plugin`, `@busyclaw/sandboxes`, `@busyclaw/escalations` | plugins |
-| `@busyclaw/policy-cedar`, `@busyclaw/policy-better-auth` | policy sources |
+| `@busyclaw/policy-cedar` | policy sources |
 | `@busyclaw/egress`, `@busyclaw/otel`, `@busyclaw/errors` | supporting |
 
 ## Development
