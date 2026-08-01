@@ -662,7 +662,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			);
 
 		// Mounted with NO resolveCaller — an unauthenticated request carries no principal (identity never
-		// rides the body: stamped-fields), so the actor floor DENIES before the method's body runs. This
+		// rides the body: stamped-fields), so the principal floor DENIES before the method's body runs. This
 		// is the audit-#1 scenario inverted: the once-open surface now fail-closes with a proper 403, not
 		// a masked 500. The deny is structural — `governApi` only calls the method on a `permit`, so no
 		// claw row can be created here.
@@ -718,7 +718,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 				}),
 			);
 
-		// No caller → the actor floor denies the plugin endpoint (403); the secretStore never runs.
+		// No caller → the principal floor denies the plugin endpoint (403); the secretStore never runs.
 		const denied = await setSecret(toRequestHandler(claw));
 		expect(denied.status).toBe(403);
 		await expect(denied.json()).resolves.toMatchObject({

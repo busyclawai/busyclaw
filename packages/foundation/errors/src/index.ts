@@ -120,7 +120,7 @@ export function unsupportedOperationError(
 	});
 }
 
-/** The app-authz PEP's denial — a governed `claw.api` call the caller may not make (the actor floor
+/** The app-authz PEP's denial — a governed `claw.api` call the caller may not make (the principal floor
  *  rejected an absent principal, or no policy permitted the action at the required level). Fail-loud,
  *  like the tool-gate denials: a product-API caller learns they were denied, never a silent null. */
 export function authorizationError(

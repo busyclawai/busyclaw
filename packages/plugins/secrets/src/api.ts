@@ -35,7 +35,7 @@ const nonEmptyString = type("string")
 // whole access boundary and it is NEVER caller input — a body `principal` would let a caller key a row to
 // a VICTIM (docs/plans/stamped-fields.md, #3). The owner comes SOLELY from the out-of-band app-authz
 // caller argument (`claw.api.secrets.set(input, { principal })`) — the ONE identity path for a governed
-// in-process call, and the actor floor guarantees it is present before the handler runs. (Over HTTP the
+// in-process call, and the principal floor guarantees it is present before the handler runs. (Over HTTP the
 // adapter-ingress seam must resolve the caller from the session/token — a separate follow-on; the raw
 // route hands the handler no caller yet, so an over-the-wire secrets call fails closed until it lands.)
 export const setSecretInput = type({
@@ -140,7 +140,7 @@ export type SecretsPluginApi = {
 
 // `ownerFrom(caller)` lived here: it read `caller?.principal` and threw when absent, backstopping the
 // raw HTTP route the identity seam did not reach. The route builder hands each handler an
-// `AuthzContext` whose `principal` is guaranteed present and non-blank — the actor floor runs before the
+// `AuthzContext` whose `principal` is guaranteed present and non-blank — the principal floor runs before the
 // handler is entered — so the check has moved to the one place that cannot be bypassed, and a local
 // re-derivation of it would now be the only path that could disagree.
 

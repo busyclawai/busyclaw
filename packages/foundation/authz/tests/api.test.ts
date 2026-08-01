@@ -52,7 +52,7 @@ function decide(input: {
 	});
 }
 
-describe("decideApiCall — the actor floor", () => {
+describe("decideApiCall — the principal floor", () => {
 	it("no caller principal → deny (never reaches the engine)", async () => {
 		const result = await decide({
 			method: "getClaw",
@@ -61,7 +61,7 @@ describe("decideApiCall — the actor floor", () => {
 			resource: aliceClaw,
 		});
 		expect(result.decision).toBe("deny");
-		expect(result.reason).toContain("actor floor");
+		expect(result.reason).toContain("principal floor");
 	});
 
 	it("a blank / whitespace principal → deny (never equals a sentinel createdBy)", async () => {
@@ -73,7 +73,7 @@ describe("decideApiCall — the actor floor", () => {
 				resource: aliceClaw,
 			});
 			expect(result.decision).toBe("deny");
-			expect(result.reason).toContain("actor floor");
+			expect(result.reason).toContain("principal floor");
 		}
 	});
 });

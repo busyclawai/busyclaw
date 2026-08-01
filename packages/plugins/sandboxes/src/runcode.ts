@@ -39,7 +39,7 @@ const DEFAULT_DESCRIPTION =
 
 export function runCodeTool(input: {
 	sandbox: Sandbox;
-	/** Per-execution context assembly. Host-supplied; may close over integration/actor. Default: {}
+	/** Per-execution context assembly. Host-supplied; may close over integration/principal. Default: {}
 	 *  (no network, no fs, defaults-only bounds).
 	 *
 	 *  The guest has no network stack of its own — QuickJS has no sockets and no DNS — so nothing

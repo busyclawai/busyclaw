@@ -95,7 +95,7 @@ export type AuthzDecisions = {
 export type AuthzContext = {
 	/** The out-of-band caller as received. */
 	readonly caller: ClawApiCaller;
-	/** The caller's principal, guaranteed present and non-blank — the actor floor ran before the
+	/** The caller's principal, guaranteed present and non-blank — the principal floor ran before the
 	 *  handler was entered, so a handler never has to re-check it. Branded, because it IS one: a handler
 	 *  stamping an identity column takes it straight, with no re-parse and no cast to reach the brand. */
 	readonly principal: Principal;

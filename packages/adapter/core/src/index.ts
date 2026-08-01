@@ -61,7 +61,7 @@ export type ClawRequestHandlerOptions = {
 	 *  header is not ambient and needs none of this.
 	 *
 	 *  FAIL-CLOSED: absent, or returning `undefined` (an unauthenticated request), means no principal —
-	 *  so the actor floor DENIES every governed core api call with a 403 (a plugin endpoint falls to its
+	 *  so the principal floor DENIES every governed core api call with a 403 (a plugin endpoint falls to its
 	 *  own fail-closed owner check). A misconfigured mount is thus safe: it denies, it never exposes.
 	 *  Wiring this seam is what makes the HTTP surface both usable and authorized (audit #1/#3).
 	 *
@@ -122,7 +122,7 @@ function statusForError(error: unknown): number {
 	if (error instanceof BusyclawError) {
 		if (error.code === "BUSYCLAW_VALIDATION_FAILED") return 400;
 		if (error.code === "BUSYCLAW_UNSUPPORTED_OPERATION") return 400;
-		// An app-authz denial (the actor floor / owner∪scope∪grant PEP throws this) is a Forbidden —
+		// An app-authz denial (the principal floor / owner∪scope∪grant PEP throws this) is a Forbidden —
 		// NOT a masked 500. Without this a fail-closed governed call reads as a server error on the wire
 		// (tripping error alarms / client retries) instead of the deliberate deny it is.
 		if (error.code === "BUSYCLAW_AUTHORIZATION_DENIED") return 403;
@@ -791,7 +791,7 @@ export function toRequestHandler(
 		try {
 			// The identity seam: the host resolves the caller from the request (session/token). Threaded
 			// to governed api methods + plugin endpoint handlers as their 2nd arg — identity NEVER rides
-			// the body. Absent resolver ⇒ no caller (the pre-seam default; the actor floor / owner check
+			// the body. Absent resolver ⇒ no caller (the pre-seam default; the principal floor / owner check
 			// then decides).
 			const caller = options.resolveCaller
 				? await options.resolveCaller(request)

@@ -911,7 +911,7 @@ export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
 	const baseApi = createClawApi({ context, newId });
 	// The assembled api BEFORE the PEP — core methods + plugin namespaces. The product-api PEP
 	// (docs/plans/app-authz.md) wraps the WHOLE surface: every governed method routes through
-	// `decideApiCall` (the actor floor + the GENERIC owner∪scope∪grant ACL) before executing. The
+	// `decideApiCall` (the principal floor + the GENERIC owner∪scope∪grant ACL) before executing. The
 	// engine's action model is derived from the assembled method ids (core flat + plugin dotted), so a
 	// plugin method is a first-class `ClawApi::Action` under the same generic baseline.
 	const mergedApi = {

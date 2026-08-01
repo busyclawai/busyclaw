@@ -1,7 +1,7 @@
 // slice-1 proof at the ASSEMBLY: the product-API PEP wraps the whole `claw.api` and enforces the
 // GENERIC ACL end-to-end through `createClaw`. The generic owner∪scope∪grant BRANCHES + level ordering
 // are proven at the decision layer (../../foundation/authz/tests/api.test.ts, via membership/grant
-// stubs — no org plugin, no table needed); here we prove the WIRING: the actor floor, cross-user owner
+// stubs — no org plugin, no table needed); here we prove the WIRING: the principal floor, cross-user owner
 // isolation over a real loaded claw, the create-permit, zero-config protection, and the escape hatches.
 
 import type { ApiPermissionLevel } from "@busyclaw/authz";
@@ -29,12 +29,12 @@ function makeClaw(options?: {
 	});
 }
 
-describe("app-authz PEP — the actor floor", () => {
+describe("app-authz PEP — the principal floor", () => {
 	it("zero-config claw is PROTECTED: a governed call with no caller principal denies out of the box", async () => {
 		const claw = makeClaw();
 		await expect(
 			claw.api.createClaw({ createdBy: ALICE, name: "a" }),
-		).rejects.toThrow(/actor floor|BUSYCLAW_AUTHORIZATION_DENIED/);
+		).rejects.toThrow(/principal floor|BUSYCLAW_AUTHORIZATION_DENIED/);
 		await expect(claw.api.getClaw({ id: "missing" })).rejects.toThrow(
 			/BUSYCLAW_AUTHORIZATION_DENIED/,
 		);
@@ -153,7 +153,7 @@ describe("app-authz PEP — escape hatches", () => {
 });
 
 describe("app-authz PEP — a governed plugin method (secretStore realignment)", () => {
-	it("the caller-arg is the ONE identity path; absent → the actor floor denies", async () => {
+	it("the caller-arg is the ONE identity path; absent → the principal floor denies", async () => {
 		const { db, redactor } = durableRedactor();
 		const claw = createClaw({
 			database: db,
@@ -173,7 +173,7 @@ describe("app-authz PEP — a governed plugin method (secretStore realignment)",
 		await expect(
 			claw.api.secrets.list({}, { principal: BOB }),
 		).resolves.toEqual([]);
-		// the actor floor reaches plugin namespaces too: no caller principal → deny
+		// the principal floor reaches plugin namespaces too: no caller principal → deny
 		await expect(
 			claw.api.secrets.set({ name: "X", value: "y" }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);

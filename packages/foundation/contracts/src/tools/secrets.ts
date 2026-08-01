@@ -18,7 +18,7 @@ export type SecretMaterial =
 
 /**
  * What a caller BINDS or PASSES — the facts a resolution may narrow on. Optional and extensible on
- * purpose: a binding is partial by definition (`.with({ principal })` knows the actor and not yet the
+ * purpose: a binding is partial by definition (`.with({ principal })` knows the principal and not yet the
  * boundary), and a new fact must never be a breaking signature change.
  *
  * The boundary is ONE field holding the whole pair, not two independent halves. As two, a bound

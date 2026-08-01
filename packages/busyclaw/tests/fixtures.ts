@@ -268,7 +268,7 @@ function bindCaller(api: object, principal: string): object {
 
 /**
  * Bind a fixed caller principal onto every governed `claw.api` call (flat + nested plugin namespaces)
- * so a test's existing `claw.api.method(input)` calls satisfy the app-authz actor floor without a
+ * so a test's existing `claw.api.method(input)` calls satisfy the app-authz principal floor without a
  * per-call edit. Pass the claw's `createdBy` so the owner rule permits its claw-scoped reads/writes.
  */
 export function withPrincipal<T extends { readonly api: object }>(

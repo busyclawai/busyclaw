@@ -351,7 +351,7 @@ export function createRegistryStores(
 					scope: existing.scope,
 					scopeId: existing.scopeId,
 					kind: "overlay_changed",
-					// `by` is the row's last actor — deleteById(id) carries no acting principal itself.
+					// `by` is the row's last principal — deleteById(id) carries no acting principal itself.
 					summary: { actionId: existing.actionId, deleted: true },
 					by: existing.updatedBy,
 				});
@@ -471,7 +471,7 @@ export function createRegistryStores(
 				scope: existing.scope,
 				scopeId: existing.scopeId,
 				kind: "policy_changed",
-				// `by` is the row's last actor — delete carries no acting principal itself.
+				// `by` is the row's last principal — delete carries no acting principal itself.
 				summary: { slice: existing.name, deleted: true },
 				by: existing.updatedBy,
 			});

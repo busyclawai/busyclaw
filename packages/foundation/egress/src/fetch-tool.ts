@@ -60,7 +60,7 @@ export type FetchToolInput = Omit<GovernedFetchOptions, "signal"> & {
 	credentials?: {
 		bindings: readonly EgressCredentialBinding[];
 		/** The one door. Bind context with `.with({ scope, scopeId, principal })` before handing it
-		 *  over — per-actor credentials ride that, not a knob here. */
+		 *  over — per-principal credentials ride that, not a knob here. */
 		secrets: Secrets;
 	};
 };

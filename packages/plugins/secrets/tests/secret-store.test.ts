@@ -786,7 +786,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		// carry a `principal` at all, so with no identity there is nothing to key a row to and the call
 		// must fail rather than invent an anonymous owner that later callers would collide on.
 		//
-		// WHERE THE CHECK LIVES: the actor floor is the PEP's, not this handler's. `route.…​.handler()`
+		// WHERE THE CHECK LIVES: the principal floor is the PEP's, not this handler's. `route.…​.handler()`
 		// hands every handler an AuthzContext whose `principal` is already guaranteed present and
 		// non-blank, which is why the handler reads it directly instead of re-deriving it — a local
 		// re-derivation would be the only path that could disagree with the floor. The governed property

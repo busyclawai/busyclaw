@@ -15,7 +15,7 @@ import { type } from "arktype";
  *
  * The form is a tagged string `<kind>:<id>` — one legible column — with exactly two kinds:
  * - **`user:<hostUserId>`** — a human the host authenticated (from the `IdentityResolver`).
- * - **`system:<name>`** — a non-human busyclaw actor: `anonymous` (a stranger's bot conversation),
+ * - **`system:<name>`** — a non-human busyclaw identity: `anonymous` (a stranger's bot conversation),
  *   `engine` (autonomous resume/compensation), `migration`. Build with {@link systemPrincipal}; the
  *   well-known one is {@link SYSTEM_ANONYMOUS}.
  *

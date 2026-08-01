@@ -142,7 +142,7 @@ describe("createClaw approvals", () => {
 		// `system:anonymous` is the real machine identity here: busyclaw has no scheduler principal,
 		// because a scheduled run belongs to a claw and carries whoever delegated it.
 		// Refused. WHICH layer refuses it changed: the ownership gate now runs before the handler, so a
-		// machine that owns nothing is stopped there rather than by the actor floor. Both are correct
+		// machine that owns nothing is stopped there rather than by the principal floor. Both are correct
 		// and the floor still backs it up for a machine that somehow does own the claw — so this
 		// asserts the outcome, and the floor's own message is asserted where it can still be reached.
 		await expect(
