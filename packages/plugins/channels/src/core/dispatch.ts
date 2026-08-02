@@ -85,7 +85,13 @@ export async function handleInbound(input: {
 	// runs, the process dies before `send`, and the delivery is already claimed — so the provider's
 	// retry correctly declines to re-run it and the answer is simply gone. Writing the reply first
 	// means a crash anywhere after this leaves a row `drainOutbox` will finish.
-	await input.outbox.enqueue(key, reply);
+	//
+	// The answer MATTERS. It was discarded, and the send below ran regardless — so on a recovery re-run
+	// (the first attempt recorded a reply and died before confirming it) this sent the text THIS run
+	// produced while `markSent` marked the STORED one delivered. Two different messages, one recorded
+	// and never sent, the other sent and never recorded: both halves of "one reply per delivery" broken
+	// at once. A delivery that already owes a reply belongs to the drain, which sends what was recorded.
+	if (!(await input.outbox.enqueue(key, reply))) return;
 	try {
 		await channel.send({ endpoint, message: reply });
 	} catch (error) {

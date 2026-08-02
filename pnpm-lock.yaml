@@ -109,6 +109,9 @@ importers:
         specifier: workspace:*
         version: link:../../busyclaw
     devDependencies:
+      '@busyclaw/secrets':
+        specifier: workspace:*
+        version: link:../../foundation/secrets
       '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../../plugins/secrets
@@ -186,6 +189,9 @@ importers:
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
@@ -260,6 +266,9 @@ importers:
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
       '@types/react':
         specifier: 19.2.17
         version: 19.2.17
@@ -345,6 +354,9 @@ importers:
       '@busyclaw/core':
         specifier: workspace:*
         version: link:../core
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
       arktype:
         specifier: 2.2.0
         version: 2.2.0
@@ -391,6 +403,12 @@ importers:
       '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
+      '@busyclaw/core':
+        specifier: workspace:*
+        version: link:../../foundation/core
+      '@busyclaw/storage-core':
+        specifier: workspace:*
+        version: link:../../storage/core
       '@noble/hashes':
         specifier: 2.2.0
         version: 2.2.0
@@ -398,18 +416,12 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@busyclaw/core':
-        specifier: workspace:*
-        version: link:../../foundation/core
       '@busyclaw/secrets':
         specifier: workspace:*
         version: link:../../foundation/secrets
       '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../secrets
-      '@busyclaw/storage-core':
-        specifier: workspace:*
-        version: link:../../storage/core
       '@busyclaw/storage-durable':
         specifier: workspace:*
         version: link:../../storage/durable
@@ -488,6 +500,9 @@ importers:
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
@@ -547,6 +562,9 @@ importers:
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../storage/core
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/storage/core:
     dependencies:
@@ -654,6 +672,9 @@ importers:
       '@prisma/client':
         specifier: 6.19.3
         version: 6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3)
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
       prisma:
         specifier: 6.19.3
         version: 6.19.3(typescript@6.0.3)
