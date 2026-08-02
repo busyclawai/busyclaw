@@ -85,7 +85,9 @@ export type AiSdkLoopInput = {
 	onDelta?: (text: string) => void | Promise<void>;
 	/** placeholder → original, for turning streamed deltas into the reader-facing text. Identity when
 	 *  there is no redactor. Buffered so a `{{pii:…}}` token split across deltas is never mangled. */
-	rehydrateValue?: (text: string) => Promise<string>;
+	/** REMOVED — see {@link createStreamGuard}. Streamed deltas are redacted, never re-identified:
+	 *  the stream carries what the transcript carries. Kept out of the input rather than left unused,
+	 *  so nothing can quietly start rehydrating again. */
 };
 
 /**
@@ -266,27 +268,50 @@ export const aiSdkLoop: ModelLoopVendor = {
 };
 
 /**
- * Turns streamed placeholder text into reader-facing text without mangling a `{{pii:…}}` token that
- * straddles two deltas: it holds back everything from the last UNCLOSED `{{` and rehydrates+emits
- * the rest, releasing the tail on flush.
+ * Makes a streamed delta safe to put on the wire, and holds back only what it must.
+ *
+ * R-M04. This used to be a REHYDRATOR: it turned `{{pii:…}}` placeholders back into the real values
+ * as the deltas flew past. So a run whose whole point was that durable state stays tokenized shipped
+ * the untokenized values to the reader anyway — no authorization, no audit, and in direct
+ * contradiction of the api layer, which says so explicitly: "re-identifying deltas as they fly past
+ * would put raw PII on the wire under a flag meant for one audited read." The transcript and the
+ * stream disagreed about what the run had said, and the stream was the leaky one.
+ *
+ * Now the stream carries what the TRANSCRIPT carries. Placeholders stay placeholders, and the text is
+ * run through the same redactor the final result gets, so novel PII the model emits from training or
+ * reassembles from fragments the ingress detector missed is tokenized before it leaves rather than
+ * only after. A caller who wants the original reads it back through `listMessages` once the run has
+ * landed — one audited read of a finished value, which is the shape that was always intended.
+ *
+ * Two things are held back to make that possible, both released on flush:
+ *   - everything from the last UNCLOSED `{{`, so a placeholder split across deltas is never mangled;
+ *   - any trailing partial word, so a value is not offered to the detector cut in half.
+ *
+ * The residual, stated rather than papered over: a span the detector would match ACROSS a held
+ * boundary — a two-word name whose halves land in different emitted chunks — is not caught, because
+ * catching it would mean buffering the whole stream and streaming nothing. The final result is
+ * redacted whole, so what is persisted is complete either way; it is the wire that is best-effort.
  */
-function createStreamRehydrator(
-	rehydrate?: (text: string) => Promise<string>,
-): {
+function createStreamGuard(redact?: (text: string) => Promise<string>): {
 	push: (delta: string) => Promise<string>;
 	flush: () => Promise<string>;
 } {
 	let buffer = "";
 	const emit = async (text: string): Promise<string> =>
-		text === "" ? "" : rehydrate ? await rehydrate(text) : text;
+		text === "" ? "" : redact ? await redact(text) : text;
 	return {
 		push: async (delta) => {
 			buffer += delta;
+			// Never split a placeholder…
 			const lastOpen = buffer.lastIndexOf("{{");
-			const safeEnd =
+			const tokenEnd =
 				lastOpen === -1 || buffer.indexOf("}}", lastOpen) !== -1
 					? buffer.length
 					: lastOpen;
+			// …and never hand the detector half a word: cut at the last whitespace before that point,
+			// so "alice@examp" + "le.com" is offered as one string rather than two unrecognisable ones.
+			const boundary = buffer.slice(0, tokenEnd).search(/\s\S*$/);
+			const safeEnd = boundary === -1 ? 0 : Math.min(boundary + 1, tokenEnd);
 			const ready = buffer.slice(0, safeEnd);
 			buffer = buffer.slice(safeEnd);
 			return emit(ready);
@@ -348,12 +373,18 @@ export async function runAiSdkLoop(
 				};
 			}
 			const streamed = streamText(callParams);
-			const rehydrator = createStreamRehydrator(input.rehydrateValue);
+			// The SAME redactor the final result gets — so the stream and the transcript agree, and a
+			// value tokenized at rest is tokenized on the wire.
+			const guard = createStreamGuard(
+				input.redactValue
+					? async (text) => String(await input.redactValue?.(text))
+					: undefined,
+			);
 			for await (const delta of streamed.textStream) {
-				const shown = await rehydrator.push(delta);
+				const shown = await guard.push(delta);
 				if (shown !== "") await input.onDelta?.(shown);
 			}
-			const tail = await rehydrator.flush();
+			const tail = await guard.flush();
 			if (tail !== "") await input.onDelta?.(tail);
 			return {
 				usage: await streamed.usage,

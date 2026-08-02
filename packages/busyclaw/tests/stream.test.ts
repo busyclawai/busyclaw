@@ -277,3 +277,63 @@ describe("M-09 — streamed model egress reaches the audit", () => {
 		expect(entries(audit)).toHaveLength(1);
 	});
 });
+
+// R-M04. The stream used to REHYDRATE: every `{{pii:…}}` placeholder was turned back into its real
+// value on the way to the reader. A run whose whole point is that durable state stays tokenized
+// therefore shipped the untokenized values anyway — no authorization, no audit — while the api layer
+// documented the opposite rule in a comment nobody enforced.
+//
+// The stream now carries what the TRANSCRIPT carries.
+describe("streamed deltas are redacted, not re-identified", () => {
+	const collect = async (stream: {
+		textStream: AsyncIterable<string>;
+	}): Promise<string> => {
+		let seen = "";
+		for await (const delta of stream.textStream) seen += delta;
+		return seen;
+	};
+
+	it("never puts a value the run tokenized back on the wire", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			model: streamingModel("noted, mailing alice@example.com now"),
+			redaction: { redactor },
+		});
+
+		const stream = await claw.api.stream({
+			prompt: "write to alice@example.com",
+		});
+		const streamed = await collect(stream);
+		const result = await stream.result;
+
+		// The address the model echoed back is NOT on the wire…
+		expect(streamed).not.toContain("alice@example.com");
+		// …it is a placeholder, and the stream says exactly what the finished result says.
+		expect(streamed).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
+		expect(result.text).not.toContain("alice@example.com");
+	});
+
+	// A placeholder split across two deltas must not be mangled into something that no longer
+	// rehydrates — the reason the guard buffers at all.
+	it("keeps a placeholder intact when the model splits it across deltas", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			model: streamingModel("mail alice@example.com and bob@example.com today"),
+			redaction: { redactor },
+		});
+		const stream = await claw.api.stream({ prompt: "hi" });
+		const streamed = await collect(stream);
+		// Two distinct tokens, both well-formed — no truncated `{{pii:` fragments.
+		expect(streamed.match(/\{\{pii:email:[a-z0-9-]+\}\}/g)).toHaveLength(2);
+		expect(streamed).not.toContain("{{pii:email:}}");
+	});
+
+	// Nothing is dropped on the floor: the guard holds back a partial word, and flush releases it.
+	it("emits every word the model produced", async () => {
+		const claw = owned({ model: streamingModel("one two three four five") });
+		const streamed = await collect(await claw.api.stream({ prompt: "hi" }));
+		expect(streamed).toBe("one two three four five");
+	});
+});

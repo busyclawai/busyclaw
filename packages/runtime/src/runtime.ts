@@ -1678,7 +1678,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	};
 
 	// Shared body for generate + stream. `onDelta` present → drive the streaming vendor, pushing
-	// rehydrated (reader-facing) deltas as the model produces them; absent → generate whole.
+	// REDACTED deltas as the model produces them (the stream carries what the transcript carries);
+	// absent → generate whole.
 	const invoke = async (
 		prompt: string,
 		ctx: Record<string, unknown> | undefined,
@@ -1734,15 +1735,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			prompt: redactedPrompt,
 			type: "run.started",
 		});
-		// placeholder → reader-facing text for streamed deltas; identity when there is no redactor.
-		// Unused by generate (it never streams), so it's harmless to pass either way.
-		const rehydrate = (text: string): Promise<string> => {
-			if (config.redactor === undefined) return Promise.resolve(text);
-			return config.redactor.rehydrateValue(
-				text,
-				redactionContextFrom(resolvedCtx),
-			);
-		};
+		// R-M04. A `rehydrate` was built here and handed to the loop, which turned every streamed
+		// placeholder back into its real value on the way to the reader. That contradicted the api
+		// layer's own stated rule — "re-identifying deltas as they fly past would put raw PII on the
+		// wire under a flag meant for one audited read" — and it meant the transcript and the stream
+		// disagreed about what the run had said, with the stream being the leaky one.
+		//
+		// Streamed deltas are now redacted like everything else the run persists (see
+		// `createStreamGuard`), so there is nothing to hand over. A caller who wants the original
+		// reads it back through `listMessages`: one audited read of a finished value.
 		const driver =
 			onDelta !== undefined && loop.stream ? loop.stream : loop.generate;
 		// `usage` rides the loop result only as far as the terminal event — never the public result.
@@ -1766,7 +1767,6 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
 			redactValue: (value) => redactValue(value, resolvedCtx),
 			onDelta,
-			rehydrateValue: rehydrate,
 		});
 		const valid = RuntimeResult(result);
 		if (valid instanceof ark.errors) {
