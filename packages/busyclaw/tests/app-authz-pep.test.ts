@@ -5,6 +5,7 @@
 // isolation over a real loaded claw, the create-permit, zero-config protection, and the escape hatches.
 
 import type { ApiPermissionLevel } from "@busyclaw/authz";
+import { userPrincipal } from "@busyclaw/contracts";
 import { secrets } from "@busyclaw/secrets-plugin";
 import { describe, expect, it } from "vitest";
 import type { ClawApiMethod } from "../src/api";
@@ -12,8 +13,8 @@ import type { AppAuthzConfig } from "../src/authz-pep";
 import { createClaw } from "../src/index";
 import { durableRedactor, textModel } from "./fixtures";
 
-const ALICE = "user:alice";
-const BOB = "user:bob";
+const ALICE = userPrincipal("alice");
+const BOB = userPrincipal("bob");
 
 function makeClaw(options?: {
 	appAuthz?: AppAuthzConfig;
@@ -32,9 +33,9 @@ function makeClaw(options?: {
 describe("app-authz PEP — the principal floor", () => {
 	it("zero-config claw is PROTECTED: a governed call with no caller principal denies out of the box", async () => {
 		const claw = makeClaw();
-		await expect(
-			claw.api.createClaw({ createdBy: ALICE, name: "a" }),
-		).rejects.toThrow(/principal floor|BUSYCLAW_AUTHORIZATION_DENIED/);
+		await expect(claw.api.createClaw({ name: "a" })).rejects.toThrow(
+			/principal floor|BUSYCLAW_AUTHORIZATION_DENIED/,
+		);
 		await expect(claw.api.getClaw({ id: "missing" })).rejects.toThrow(
 			/BUSYCLAW_AUTHORIZATION_DENIED/,
 		);
@@ -45,7 +46,7 @@ describe("app-authz PEP — owner isolation over a loaded claw", () => {
 	it("the creator owns it; a different principal is denied read", async () => {
 		const claw = makeClaw();
 		const created = await claw.api.createClaw(
-			{ createdBy: ALICE, name: "Alice's claw" },
+			{ name: "Alice's claw" },
 			{ principal: ALICE },
 		);
 
@@ -91,7 +92,7 @@ describe("app-authz PEP — the fail-closed loader", () => {
 		const claw = makeClaw();
 		// authorizeScope-style create — any authenticated principal may (the created row is theirs) …
 		const created = await claw.api.createClaw(
-			{ createdBy: ALICE, name: "real" },
+			{ name: "real" },
 			{ principal: ALICE },
 		);
 		expect(created.createdBy).toBe(ALICE);
@@ -107,7 +108,7 @@ describe("app-authz PEP — the create-permit", () => {
 	it("any authenticated principal may create; the created row is then theirs to read", async () => {
 		const claw = makeClaw();
 		const created = await claw.api.createClaw(
-			{ createdBy: BOB, name: "Bob's claw" },
+			{ name: "Bob's claw" },
 			{ principal: BOB },
 		);
 		expect(created.createdBy).toBe(BOB);
@@ -121,7 +122,6 @@ describe("app-authz PEP — escape hatches", () => {
 	it("unsafeOpen restores host-authorizes: a caller-less governed call permits", async () => {
 		const claw = makeClaw({ appAuthz: { unsafeOpen: true } });
 		const created = await claw.api.createClaw({
-			createdBy: ALICE,
 			name: "open",
 		});
 		// getClaw with NO caller would deny under enforcement — unsafeOpen lets it through.
@@ -134,10 +134,10 @@ describe("app-authz PEP — escape hatches", () => {
 		const warnings: string[] = [];
 		const claw = makeClaw({
 			appAuthz: { posture: "shadow" },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		const created = await claw.api.createClaw(
-			{ createdBy: ALICE, name: "shadowed" },
+			{ name: "shadowed" },
 			{ principal: ALICE },
 		);
 		// BOB is not the owner: enforcement WOULD deny, shadow logs it and proceeds (returns the claw).

@@ -73,7 +73,7 @@ describe("the real core schema", () => {
 		const warnings: string[] = [];
 		const code = generatePrismaSchema({
 			schema: REAL,
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 
 		// `@@ignore` means "present in the schema, absent from the client" — a table busyclaw declares

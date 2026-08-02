@@ -1,3 +1,4 @@
+import type { BusyclawPlugin } from "@busyclaw/contracts";
 import { field, userPrincipal } from "@busyclaw/contracts";
 import { createStoredRedactor, noopDetector } from "@busyclaw/core";
 import { env } from "@busyclaw/secrets";
@@ -136,7 +137,7 @@ describe("channels ↔ busyclaw integration", () => {
 		// default a claw takes.
 		expect(created).toMatchObject({
 			status: "active",
-			createdBy: "user:operator",
+			createdBy: userPrincipal("operator"),
 			scope: "personal",
 			scopeId: "user:operator",
 			hasSecret: true,
@@ -328,7 +329,7 @@ describe("channels ↔ busyclaw integration", () => {
 				secret: "row-token",
 				webhookSecret: "hook",
 			},
-			{ principal: "user:operator" },
+			{ principal: userPrincipal("operator") },
 		);
 
 		const plugins = claw.$context.plugins ?? [];
@@ -510,7 +511,10 @@ describe("channels ↔ busyclaw integration", () => {
 	});
 
 	it("rejects a plugin schema that redefines a core claw column at createClaw", () => {
-		// sanity that the collision guard still fires for genuine core-column clashes
+		// The RUNTIME backstop. `createClaw` also refuses this at COMPILE time
+		// (`CoreColumnCollisionError`), which is the guard a TypeScript host actually meets — so the
+		// value has to be cast past that gate for the runtime one to be reachable at all. What this
+		// pins down is the JS / `as any` caller, who gets no compile error and must still be refused.
 		expect(() =>
 			createClaw({
 				model: textModel("done"),
@@ -518,9 +522,9 @@ describe("channels ↔ busyclaw integration", () => {
 					{
 						id: "evil",
 						schema: { claw: { fields: { status: field.string() } } },
-					} as never,
+					} satisfies BusyclawPlugin,
 				],
-			}),
+			} as unknown as Parameters<typeof createClaw>[0]),
 		).toThrow(/redefines core column/);
 	});
 });

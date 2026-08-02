@@ -57,18 +57,40 @@ function failingModel(message: string): RuntimeModel {
 	};
 }
 
+/**
+ * A `Runtime` for the engine, completed with the doors the engine must never open.
+ *
+ * The engine drives `generate` and `continueRun`; every stub here supplied only those and was
+ * accepted because nothing typechecked the tests. Filling the rest with throws keeps the stub honest
+ * about what the engine uses AND turns "the engine reached for something else" into a failure the
+ * test reports, instead of a method that is quietly absent at runtime.
+ */
+function engineRuntime(parts: Partial<Runtime>): Runtime {
+	const unreachable = (door: string) => () => {
+		throw new Error(`the engine must not call runtime.${door}`);
+	};
+	return {
+		generate: unreachable("generate"),
+		stream: unreachable("stream"),
+		continueRun: unreachable("continueRun"),
+		resumeRun: unreachable("resumeRun"),
+		catalog: { tools: [], find: unreachable("catalog.find") },
+		...parts,
+	} as Runtime;
+}
+
 describe("@busyclaw/engine-sql", () => {
 	it("derives its storage schema from entity fields", () => {
-		expect(sqlEngineSchema.run.fields.input).toMatchObject({
+		expect(sqlEngineSchema.run?.fields.input).toMatchObject({
 			type: "json",
 			required: true,
 		});
-		expect(sqlEngineSchema.runtime_task.fields.status).toMatchObject({
+		expect(sqlEngineSchema.runtime_task?.fields.status).toMatchObject({
 			type: "string",
 			required: true,
 			index: true,
 		});
-		expect(sqlEngineSchema.idempotency_key.fields.responseBody).toMatchObject({
+		expect(sqlEngineSchema.idempotency_key?.fields.responseBody).toMatchObject({
 			type: "json",
 			required: true,
 		});
@@ -79,8 +101,7 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), { now: () => current });
 		const run = await store.createRun({
 			input: { prompt: "hello" },
-			principal: "user:alice",
-			team: "acme",
+			principal: userPrincipal("alice"),
 		});
 		const task = await store.enqueueTask({ runId: run.id, kind: "turn" });
 
@@ -181,8 +202,7 @@ describe("@busyclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		const run = await store.createRun({
-			principal: "user:alice",
-			team: "acme",
+			principal: userPrincipal("alice"),
 		});
 
 		await store.appendEvent({
@@ -280,8 +300,7 @@ describe("@busyclaw/engine-sql", () => {
 		});
 		const run = await store.createRun({
 			input: { prompt: "hello" },
-			principal: "user:alice",
-			team: "acme",
+			principal: userPrincipal("alice"),
 		});
 		const task = await store.enqueueTask({
 			runId: run.id,
@@ -376,7 +395,7 @@ describe("@busyclaw/engine-sql", () => {
 		const abortObserved = new Promise<void>((resolve) => {
 			resolveAbort = resolve;
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async (_prompt, _ctx, options) => {
 				const timers = globalThis as typeof globalThis & {
 					setTimeout: (fn: () => void, ms: number) => unknown;
@@ -390,7 +409,7 @@ describe("@busyclaw/engine-sql", () => {
 				return { status: "completed", text: "should not persist", steps: 1 };
 			},
 			continueRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -492,10 +511,10 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({ status: "wat", text: "", steps: 1 }) as never,
 			continueRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -522,7 +541,7 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({
 				status: "waiting_approval",
 				text: "",
@@ -530,7 +549,7 @@ describe("@busyclaw/engine-sql", () => {
 				approvalIds: ["ap1"],
 			}),
 			continueRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -565,13 +584,13 @@ describe("@busyclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		let resumed = "";
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async (id) => {
 				resumed = id;
 				return { status: "completed", text: "sent", steps: 2 };
 			},
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -644,11 +663,11 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:05:00.000Z",
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({ status: "completed", text: "done", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -679,7 +698,7 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({
 				status: "yielded",
 				text: "",
@@ -688,7 +707,7 @@ describe("@busyclaw/engine-sql", () => {
 			}),
 			continueRun: async () => null,
 			resumeRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -730,14 +749,14 @@ describe("@busyclaw/engine-sql", () => {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
 		let resumedFrom = "";
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async (checkpointId) => {
 				resumedFrom = checkpointId;
 				return { status: "completed", text: "done", steps: 3 };
 			},
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,
@@ -765,11 +784,11 @@ describe("@busyclaw/engine-sql", () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
-		const runtime: Runtime = {
+		const runtime = engineRuntime({
 			generate: async () => ({ status: "completed", text: "", steps: 1 }),
 			continueRun: async () => null,
 			resumeRun: async () => null,
-		};
+		});
 		const worker = createSqlEngineWorker({
 			store,
 			runtime,

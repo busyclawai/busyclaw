@@ -124,7 +124,7 @@ function invokerTool(run: (subInvoke: SubInvoke) => Promise<unknown>) {
 describe("@busyclaw/runtime subInvoke", () => {
 	it("governs a nested tool call end-to-end and audits both the parent and the nested call", async () => {
 		let nested: HandleResult | undefined;
-		const denyEmail: BusyclawPlugin = {
+		const denyEmail = {
 			id: "deny-email",
 			gates: [
 				{
@@ -133,7 +133,7 @@ describe("@busyclaw/runtime subInvoke", () => {
 					handler: () => ({ decision: "deny", reason: "blocked by policy" }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const runtime = createRuntime({
 			model: callToolOnceModel("run_code", {}),
 			audit: createMemoryAudit(),

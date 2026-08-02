@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // The stream channel's two budgets: how much it will hold, and how long it will produce.
 //
 // M-16. `runtime.stream` handed deltas to an unbounded array and iterated it. Both halves of that

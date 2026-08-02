@@ -53,10 +53,10 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 
 	it("(1) a plugin-contributed provider resolves via the one door", async () => {
 		const capture = captureSecrets();
-		const providerPlugin: BusyclawPlugin = {
+		const providerPlugin = {
 			id: "stub-provider",
 			secrets: { providers: [stubProvider()] },
-		};
+		} satisfies BusyclawPlugin;
 
 		createClaw({
 			model: textModel("done"),
@@ -89,10 +89,10 @@ describe("plugin-contributed secret providers (createClaw)", () => {
 	it("(3) with no secrets() base plugin: the env default AND a generic plugin provider both resolve", async () => {
 		vi.stubEnv("ENV_BACKED", "from-env");
 		const capture = captureSecrets();
-		const providerPlugin: BusyclawPlugin = {
+		const providerPlugin = {
 			id: "stub-provider",
 			secrets: { providers: [stubProvider()] },
-		};
+		} satisfies BusyclawPlugin;
 
 		// No base-owner plugin ⇒ the assembly's `[env()]` base stays; a generic plugin's providers ADD.
 		createClaw({

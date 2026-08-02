@@ -5,6 +5,7 @@ import {
 	type BusyclawPlugin,
 	PRINCIPAL_CONTEXT_KEY,
 	SYSTEM_ANONYMOUS,
+	userPrincipal,
 } from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
@@ -44,7 +45,7 @@ describe("createClaw approvals", () => {
 			throw new Error("expected approval wait");
 		}
 		const approvalId = waiting.approvalIds[0];
-		await claw.api.grantApproval({ approvalId, by: "user:alice" });
+		await claw.api.grantApproval({ approvalId });
 		await expect(claw.api.continueRun({ approvalId })).resolves.toMatchObject({
 			status: "completed",
 			text: "done",
@@ -105,7 +106,7 @@ describe("createClaw approvals", () => {
 			.entries()
 			.find((e) => e.name === "send_email" && e.status === "ok");
 		if (!approved) throw new Error("expected an executed (ok) audit entry");
-		expect(approved.decidedBy).toBe("user:actor-1");
+		expect(approved.decidedBy).toBe(userPrincipal("actor-1"));
 		expect(auditActorKind(approved)).toBe("agent");
 		expect(auditSupervision(approved)).toBe("approved");
 	});
@@ -151,7 +152,10 @@ describe("createClaw approvals", () => {
 		// An unrelated human may NOT. This is H-02: being logged in used to be the whole check, which in
 		// a multi-tenant deployment means every other tenant's people could decide your approvals.
 		await expect(
-			claw.api.grantApproval({ approvalId }, { principal: "user:unrelated" }),
+			claw.api.grantApproval(
+				{ approvalId },
+				{ principal: userPrincipal("unrelated") },
+			),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		// The claw's owner may — the approval resolves through the claw that parked it.
 		await expect(
@@ -182,8 +186,8 @@ describe("createClaw approvals", () => {
 		// is the "assigned approvers" half of the design: an unrelated human is refused, an assigned one
 		// is not, and which is which is data the owner wrote rather than a property of being logged in.
 		for (const [principalRef, permission] of [
-			["user:approver-9", "use"],
-			["user:random-8", "manage"],
+			[userPrincipal("approver-9"), "use"],
+			[userPrincipal("random-8"), "manage"],
 		] as const) {
 			await claw.api.shareResource({
 				resourceKind: "approval",
@@ -195,41 +199,45 @@ describe("createClaw approvals", () => {
 
 		await claw.api.grantApproval(
 			{ approvalId },
-			{ principal: "user:approver-9" },
+			{ principal: userPrincipal("approver-9") },
 		);
 		// A THIRD party resumes. Under the old convention the replay executed as WHOEVER called
 		// continueRun — so this call could have silently chosen the acting identity.
-		await claw.api.continueRun({ approvalId }, { principal: "user:random-8" });
+		await claw.api.continueRun(
+			{ approvalId },
+			{ principal: userPrincipal("random-8") },
+		);
 
 		const executed = audit
 			.entries()
 			.find((e) => e.name === "send_email" && e.status === "ok");
 		// It ran as the REQUESTER (default `attest`) — not the resumer, not the approver.
-		expect(executed?.principal).toBe("user:actor-1");
-		expect(executed?.decidedBy).toBe("user:approver-9");
+		expect(executed?.principal).toBe(userPrincipal("actor-1"));
+		expect(executed?.decidedBy).toBe(userPrincipal("approver-9"));
 	});
 
 	it("approvalAuthority 'approver' LENDS authority — escalation past the requester's limits (assume)", async () => {
-		const ALICE = "user:alice-requester";
-		const BOB = "user:bob-entitled";
+		const ALICE = userPrincipal("alice-requester");
+		const BOB = userPrincipal("bob-entitled");
 		// A SECOND gate, distinct from the one that demands approval — the replay bypasses only the
 		// demanding gate (by id), so this one re-evaluates against whoever the action executes AS. It
 		// matches only on an approved replay, leaving the drafting step to the approval gate.
-		const sendEntitledTo = (allowed: string): BusyclawPlugin => ({
-			id: "send-entitlement",
-			gates: [
-				{
-					id: "send-entitlement",
-					matcher: (call, ctx) =>
-						call.name === "send_email" &&
-						ctx[APPROVED_BY_CONTEXT_KEY] !== undefined,
-					handler: (_call, ctx) =>
-						ctx[PRINCIPAL_CONTEXT_KEY] === allowed
-							? { decision: "permit" }
-							: { decision: "deny", reason: "not entitled to send" },
-				},
-			],
-		});
+		const sendEntitledTo = (allowed: string) =>
+			({
+				id: "send-entitlement",
+				gates: [
+					{
+						id: "send-entitlement",
+						matcher: (call, ctx) =>
+							call.name === "send_email" &&
+							ctx[APPROVED_BY_CONTEXT_KEY] !== undefined,
+						handler: (_call, ctx) =>
+							ctx[PRINCIPAL_CONTEXT_KEY] === allowed
+								? { decision: "permit" }
+								: { decision: "deny", reason: "not entitled to send" },
+					},
+				],
+			}) satisfies BusyclawPlugin;
 		const run = async (approvalAuthority?: "approver") => {
 			const { db, redactor } = durableRedactor();
 			const audit = createMemoryAudit();

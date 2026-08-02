@@ -1,13 +1,18 @@
-import { govern } from "@busyclaw/contracts";
+import { govern, userPrincipal } from "@busyclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import { createRunCheckpointStore } from "@busyclaw/storage-durable";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, owned, type V2Model } from "./fixtures";
+import {
+	durableRedactor,
+	type MockModel,
+	owned,
+	type V2Model,
+} from "./fixtures";
 
 /** Tool-calls for `toolSteps` model turns, then finishes with text — a run too long for one slice. */
-function multiStepModel(toolSteps: number): V2Model {
+function multiStepModel(toolSteps: number): MockModel {
 	let call = 0;
 	return {
 		specificationVersion: "v4",
@@ -110,7 +115,7 @@ describe("createClaw deadline slicing", () => {
 		expect(first).toMatchObject({ processed: 1, status: "idle" });
 		// getRun/listRunEvents are owner-isolated (app-authz slice 5): read the run AS its principal.
 		await expect(
-			claw.api.getRun({ id: run.id }, { principal: "user:actor-1" }),
+			claw.api.getRun({ id: run.id }, { principal: userPrincipal("actor-1") }),
 		).resolves.toMatchObject({
 			status: "queued",
 		});
@@ -128,16 +133,16 @@ describe("createClaw deadline slicing", () => {
 		expect(third).toMatchObject({ processed: 1, status: "idle" });
 
 		await expect(
-			claw.api.getRun({ id: run.id }, { principal: "user:actor-1" }),
+			claw.api.getRun({ id: run.id }, { principal: userPrincipal("actor-1") }),
 		).resolves.toMatchObject({
 			status: "completed",
-			principal: "user:actor-1",
+			principal: userPrincipal("actor-1"),
 		});
 		expect(toolRuns).toBe(2); // each step executed exactly once across all slices
 
 		const events = await claw.api.listRunEvents(
 			{ runId: run.id },
-			{ principal: "user:actor-1" },
+			{ principal: userPrincipal("actor-1") },
 		);
 		expect(events.map((event) => event.type)).toEqual([
 			"run.started",
@@ -206,7 +211,7 @@ describe("createClaw deadline slicing", () => {
 		// listRunEvents (app-authz slice 5) permit the reads below.
 		const run = await claw.api.startRun({
 			prompt: "hello",
-			run: { principal: "user:actor-1" },
+			run: { principal: userPrincipal("actor-1") },
 		});
 		const result = await cronTask.handler({ claw: {} });
 

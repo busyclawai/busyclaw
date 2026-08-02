@@ -1,3 +1,4 @@
+import { userPrincipal } from "@busyclaw/contracts";
 import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import { describe, expect, it } from "vitest";
 import { durableRedactor, owned, textModel } from "./fixtures";
@@ -22,15 +23,15 @@ describe("a durable run's identity", () => {
 		// `owned()` binds user:actor-1. The body tries to claim someone else.
 		const run = await claw.api.startRun({
 			prompt: "hi",
-			run: { principal: "user:admin" } as never,
+			run: { principal: userPrincipal("admin") } as never,
 		});
 		const record = await claw.api.getRun(
 			{ id: run.id },
-			{ principal: "user:actor-1" },
+			{ principal: userPrincipal("actor-1") },
 		);
 		// `owned()` binds user:actor-1; the body asked for user:admin and does not get it.
-		expect(record?.principal).toBe("user:actor-1");
+		expect(record?.principal).toBe(userPrincipal("actor-1"));
 		// And the forged value is nowhere on the row — not stored, not shadowed.
-		expect(JSON.stringify(record)).not.toContain("user:admin");
+		expect(JSON.stringify(record)).not.toContain(userPrincipal("admin"));
 	});
 });

@@ -6,6 +6,7 @@ import {
 	type SecretProvider,
 	type SecretResolution,
 	UNSCOPED,
+	userPrincipal,
 } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSecrets, env } from "../src/index";
@@ -18,19 +19,25 @@ const envGlobal = (): Record<string, string | undefined> | undefined =>
 describe("env — the environment provider", () => {
 	it("reads a value out of its vars as token material", async () => {
 		const provider = env({ vars: { GITHUB_TOKEN: "ghp_abc" } });
-		expect(await provider.get("GITHUB_TOKEN", {})).toEqual({
+		expect(
+			await provider.get("GITHUB_TOKEN", { configScope: UNSCOPED }),
+		).toEqual({
 			kind: "token",
 			value: "ghp_abc",
 		});
 	});
 
 	it("returns null for a missing key (env var unset)", async () => {
-		expect(await env({ vars: {} }).get("MISSING", {})).toBeNull();
+		expect(
+			await env({ vars: {} }).get("MISSING", { configScope: UNSCOPED }),
+		).toBeNull();
 	});
 
 	it("returns null for an explicitly-undefined key", async () => {
 		expect(
-			await env({ vars: { EMPTY: undefined } }).get("EMPTY", {}),
+			await env({ vars: { EMPTY: undefined } }).get("EMPTY", {
+				configScope: UNSCOPED,
+			}),
 		).toBeNull();
 	});
 
@@ -49,7 +56,7 @@ describe("env — the environment provider", () => {
 		const key = "BUSYCLAW_SECRETS_ENV_PROBE";
 		store[key] = "probe";
 		try {
-			expect(await env().get(key, {})).toEqual({
+			expect(await env().get(key, { configScope: UNSCOPED })).toEqual({
 				kind: "token",
 				value: "probe",
 			});
@@ -144,14 +151,14 @@ describe("buildSecrets — the one-door resolver", () => {
 		};
 		await buildSecrets([spy]).get("CANON", {
 			configScope: { scope: "organization", scopeId: "org_1" },
-			principal: "user_1",
+			principal: userPrincipal("user_1"),
 		});
 		expect(calls).toEqual([
 			{
 				ref: "backend-key",
 				ctx: {
 					configScope: { scope: "organization", scopeId: "org_1" },
-					principal: "user_1",
+					principal: userPrincipal("user_1"),
 				},
 			},
 		]);
@@ -258,8 +265,8 @@ describe("secrets.with — a pre-bound reader", () => {
 			name: "per-principal",
 			tier: "data",
 			capability: { manage: true },
-			get: async (ref, ctx) =>
-				ctx.principal === "alice"
+			get: async (ref, resolution) =>
+				resolution.principal === userPrincipal("alice")
 					? { kind: "token", value: `alice:${ref}` }
 					: null,
 		};
@@ -267,7 +274,9 @@ describe("secrets.with — a pre-bound reader", () => {
 		// No bound principal ⇒ the provider has nothing for it.
 		expect(await secrets.get("TOKEN")).toBeNull();
 		// with({ principal }) threads the principal to every call — the invoker/endpoint per-turn shape.
-		expect(await secrets.with({ principal: "alice" }).get("TOKEN")).toEqual({
+		expect(
+			await secrets.with({ principal: userPrincipal("alice") }).get("TOKEN"),
+		).toEqual({
 			kind: "token",
 			value: "alice:TOKEN",
 		});
@@ -287,13 +296,13 @@ describe("secrets.with — a pre-bound reader", () => {
 		};
 		const bound = buildSecrets([spy]).with({
 			configScope: { scope: "organization", scopeId: "org" },
-			principal: "alice",
+			principal: userPrincipal("alice"),
 		});
-		await bound.get("X", { principal: "bob" });
+		await bound.get("X", { principal: userPrincipal("bob") });
 		expect(calls).toEqual([
 			{
 				configScope: { scope: "organization", scopeId: "org" },
-				principal: "bob",
+				principal: userPrincipal("bob"),
 			},
 		]);
 	});
@@ -309,11 +318,13 @@ describe("secrets.with — a pre-bound reader", () => {
 			},
 		};
 		await buildSecrets([spy])
-			.with({ principal: "alice" })
+			.with({ principal: userPrincipal("alice") })
 			.require("X", { kind: "token" });
 		// The bound principal, plus the boundary the reader always names — a binding is partial, what
 		// the provider is asked never is.
-		expect(calls).toEqual([{ principal: "alice", configScope: UNSCOPED }]);
+		expect(calls).toEqual([
+			{ principal: userPrincipal("alice"), configScope: UNSCOPED },
+		]);
 	});
 
 	// M-12. A tenant-scoped miss used to fall through to deployment infrastructure, handing the tenant

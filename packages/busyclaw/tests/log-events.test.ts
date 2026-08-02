@@ -1,4 +1,4 @@
-import type { EventSink } from "@busyclaw/contracts";
+import type { Event, EventSink } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { type createClaw, logEvents } from "../src/index";
 import {
@@ -13,7 +13,6 @@ import {
 async function createAgentThread(claw: ReturnType<typeof createClaw>) {
 	const agent = await claw.api.createClaw({
 		id: "claw-1",
-		createdBy: "user:actor-1",
 		name: "Recruiting assistant",
 	});
 	const thread = await claw.api.createThread({
@@ -101,7 +100,7 @@ describe("cost ledger example", () => {
 		const claw = owned({
 			database: db,
 			events: {
-				emit(event) {
+				emit(event: Event) {
 					if (event.type !== "run.completed") return;
 					const clawId = event.recording?.clawId;
 					if (clawId === undefined) return;

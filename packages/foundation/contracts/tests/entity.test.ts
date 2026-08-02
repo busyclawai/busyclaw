@@ -23,15 +23,15 @@ function summaryOf(result: unknown): string {
 
 describe("busyclaw core — entity-derived schemas", () => {
 	it("derives approval/effect/PII storage schemas from entity fields", () => {
-		expect(approvalSchema.approval.fields.args).toMatchObject({
+		expect(approvalSchema.approval?.fields.args).toMatchObject({
 			type: "json",
 			required: true,
 		});
-		expect(effectSchema.effect.fields.leaseTokenHash).toMatchObject({
+		expect(effectSchema.effect?.fields.leaseTokenHash).toMatchObject({
 			type: "string",
 			returned: false,
 		});
-		expect(piiMappingSchema.pii_mapping.fields.original).toMatchObject({
+		expect(piiMappingSchema.pii_mapping?.fields.original).toMatchObject({
 			type: "string",
 			required: true,
 			pii: "contains",
@@ -43,13 +43,13 @@ describe("busyclaw core — entity-derived schemas", () => {
 		// database agreed to none of it. Their ids are generated, so two concurrent writers collide on
 		// nothing and leave two rows for one logical registration: later reads pick an arbitrary one,
 		// and an update lands on only one. For policy_slice that is an authz fact.
-		expect(specRegistrationSchema.spec_registration.uniques).toEqual([
+		expect(specRegistrationSchema.spec_registration?.uniques).toEqual([
 			["scope", "scopeId", "source"],
 		]);
-		expect(factsOverlaySchema.facts_overlay.uniques).toEqual([
+		expect(factsOverlaySchema.facts_overlay?.uniques).toEqual([
 			["scope", "scopeId", "actionId"],
 		]);
-		expect(policySliceSchema.policy_slice.uniques).toEqual([
+		expect(policySliceSchema.policy_slice?.uniques).toEqual([
 			["scope", "scopeId", "name"],
 		]);
 	});
@@ -59,12 +59,13 @@ describe("busyclaw core — entity-derived schemas", () => {
 		// primary key. placeholder + scope + scopeId ARE the primary key, so a unique over those states
 		// nothing new — and it would not catch the race it appears to, because two concurrent writers
 		// mint two DIFFERENT placeholders. What they collide on is the value, which originalHash names.
-		expect(piiMappingSchema.pii_mapping.uniques).toEqual([
+		expect(piiMappingSchema.pii_mapping?.uniques).toEqual([
 			["scope", "scopeId", "originalHash"],
 		]);
-		expect(
-			uniqueConstraints("pii_mapping", piiMappingSchema.pii_mapping),
-		).toEqual([
+		const piiMapping = piiMappingSchema.pii_mapping;
+		if (!piiMapping)
+			throw new Error("piiMappingSchema has no pii_mapping model");
+		expect(uniqueConstraints("pii_mapping", piiMapping)).toEqual([
 			{
 				name: "pii_mapping_scope_scopeId_originalHash_uq",
 				columns: ["scope", "scopeId", "originalHash"],
@@ -105,8 +106,8 @@ describe("busyclaw core — entity-derived schemas", () => {
 		expect(update({ name: 123 })).toBeInstanceOf(type.errors);
 
 		// the immutable flag flows into the storage declaration the update path enforces
-		expect(thing.storage.thing.fields.id.immutable).toBe(true);
-		expect(thing.storage.thing.fields.name.immutable).toBeUndefined();
+		expect(thing.storage.thing?.fields.id?.immutable).toBe(true);
+		expect(thing.storage.thing?.fields.name?.immutable).toBeUndefined();
 	});
 });
 
@@ -126,8 +127,12 @@ describe("field.json — one schema drives BOTH the record type and the validato
 	it("infers the record type from the schema (typed json), leaving jsonObject opaque", () => {
 		expectTypeOf<Rec["point"]>().toEqualTypeOf<{ x: number; y: number }>();
 		expectTypeOf<Rec["tags"]>().toEqualTypeOf<string[] | undefined>();
-		// the untyped column is still just JsonObject — proof both forms coexist
-		expectTypeOf<Rec["bag"]>().toEqualTypeOf<JsonObject | undefined>();
+		// The untyped column infers as `unknown` — proof both forms coexist, and the honest shape: an
+		// untyped json column is data nobody has validated, so reading it hands back something the
+		// caller has to narrow. This asserted `JsonObject | undefined` until typed columns landed and
+		// reads became `unknown`; nothing caught the drift, because type assertions in tests were
+		// outside typecheck.
+		expectTypeOf<Rec["bag"]>().toEqualTypeOf<unknown>();
 	});
 
 	it("validates the column on read/parse — a bad shape fails loud, not silently cast", () => {

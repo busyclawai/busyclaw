@@ -125,7 +125,7 @@ describe("runtime resolveTools — per-scope tool resolution", () => {
 			resolveTools: () => ({
 				shared: recordingTool(ran, "registered"),
 			}),
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		await runtime.generate("go", { org: "org-a" });
 		expect(ran).toEqual(["code"]); // the code tool ran; the registered one was skipped
@@ -148,7 +148,7 @@ describe("runtime resolveTools — per-scope tool resolution", () => {
 			tools: { a__b: recordingTool(ran, "code") },
 			configScope: scopeResolver,
 			resolveTools: () => ({ "a.b": recordingTool(ran, "registered") }),
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		await runtime.generate("go", { org: "org-a" });
 		expect(ran).toEqual(["code"]);

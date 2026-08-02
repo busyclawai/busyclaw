@@ -530,11 +530,10 @@ describe("@busyclaw/sandboxes — the execution's shared host budget (R-H13)", (
 			invoker,
 			context: {
 				budget: { maxHostCalls: 2 },
-				network: {
-					allow: ["https://example.com"],
-					lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-					transport: async () => new Response("hi", { status: 200 }),
-				},
+				// `true` is the whole shape — the allow/lookup/transport knob was deleted with
+				// egress.domains. This test never depended on it: the fetch is refused by the exhausted
+				// budget before anything reaches the network.
+				network: true,
 			},
 		});
 

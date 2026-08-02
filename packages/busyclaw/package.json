@@ -22,7 +22,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
@@ -39,12 +39,13 @@
 		"kysely": "0.29.2"
 	},
 	"devDependencies": {
-		"@busyclaw/egress": "workspace:*",
 		"@ai-sdk/azure": "4.0.18",
 		"@busyclaw/core": "workspace:*",
+		"@busyclaw/egress": "workspace:*",
 		"@busyclaw/policy-cedar": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
+		"@types/node": "26.1.1",
 		"ai": "7.0.22"
 	}
 }

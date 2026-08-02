@@ -38,9 +38,16 @@ function appEndpoint(secrets: EndpointContext["secrets"]): EndpointContext {
 /** A fake Bot API server: records every call and serves canned getUpdates results. */
 function fakeApi() {
 	const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
-	const api = {
+	// `fetch` reads `api.updates`, so `api` referenced itself in its own initializer and TS inferred
+	// `any` for the whole thing. Annotating the shape breaks the cycle without changing what is
+	// shared — the test REPLACES `api.updates`, so `fetch` has to read it through the object.
+	const api: {
+		calls: typeof calls;
+		updates: unknown[];
+		fetch: TelegramFetch;
+	} = {
 		calls,
-		updates: [] as unknown[],
+		updates: [],
 		fetch: (async (url, init) => {
 			const body = init?.body
 				? (JSON.parse(init.body) as Record<string, unknown>)

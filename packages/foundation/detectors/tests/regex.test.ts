@@ -11,7 +11,13 @@ import { regexDetector } from "../src/regex/index";
 
 /** Spans sorted by start — the detector makes no ordering promise; the redactor sorts. */
 function spansOf(text: string): PiiSpan[] {
-	return [...regexDetector(text)].sort((a, b) => a.start - b.start);
+	// The Detector port is sync OR async (presidio is async, fail-closed). The regex detector is the
+	// sync one, and this asserts that rather than assuming it.
+	const spans = regexDetector(text);
+	if (spans instanceof Promise) {
+		throw new Error("regexDetector must resolve synchronously");
+	}
+	return [...spans].sort((a, b) => a.start - b.start);
 }
 
 /** Every span must be a substring-exact slice of the text at its own offsets — the invariant the

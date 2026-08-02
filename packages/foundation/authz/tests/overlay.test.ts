@@ -113,11 +113,14 @@ describe("actionInputsFromRegisteredTools", () => {
 	it("fails LOUD on a stored governance blob that no longer validates", () => {
 		expect(() =>
 			actionInputsFromRegisteredTools([
+				// Deliberately invalid — this asserts the RUNTIME validator rejects it, so the value has
+				// to get past the compiler to be tested at all. Typed as the untrusted shape it really
+				// is (a stored row nobody has validated yet) rather than cast at the call.
 				{
 					address: "petstore.addPet",
 					governance: { access: "sideways" }, // not read|write
 					inputSchema: { type: "object" },
-				},
+				} as never,
 			]),
 		).toThrow(/governance invalid/);
 	});

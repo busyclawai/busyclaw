@@ -28,7 +28,9 @@ function fakeClaw(binds: unknown[]) {
 }
 
 /** Configure the plugin against a wrapped adapter and the one-door reader — what createClaw does. */
-function configured(plugin: ReturnType<typeof channels>, secrets?: Secrets) {
+function configured<
+	Plugin extends { configure?: ReturnType<typeof channels>["configure"] },
+>(plugin: Plugin, secrets: Secrets = buildSecrets()) {
 	const built = plugin.configure?.({
 		adapter: entityAdapter(memoryAdapter(), {
 			...channelsModels,

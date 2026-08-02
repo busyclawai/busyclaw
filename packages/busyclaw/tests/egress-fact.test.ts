@@ -59,7 +59,7 @@ const petstore = (): JsonObject => ({
 });
 
 /** Calls `path` once with `args`, then answers "done". */
-function callToolModel(path: string, args: Record<string, unknown>): V2Model {
+function callToolModel(path: string, args: Record<string, unknown>): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -105,7 +105,7 @@ function callToolModel(path: string, args: Record<string, unknown>): V2Model {
 }
 
 /** Calls the registered petstore tool once, then answers "done". */
-function getPetModel(): V2Model {
+function getPetModel(): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",

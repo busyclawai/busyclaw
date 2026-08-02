@@ -21,7 +21,6 @@ describe("createClaw model extension", () => {
 		});
 
 		const created = await claw.api.createClaw({
-			createdBy: "user:actor-1",
 			priority: 7,
 			squad: "growth",
 		});
@@ -48,7 +47,6 @@ describe("createClaw model extension", () => {
 		});
 
 		const created = await claw.api.createClaw({
-			createdBy: "user:actor-1",
 			tag: "vip",
 		});
 		expect(created).toMatchObject({ tag: "vip" });

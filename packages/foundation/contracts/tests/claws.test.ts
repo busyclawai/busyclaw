@@ -136,24 +136,24 @@ describe("busyclaw core — durable Claw contracts", () => {
 		});
 
 		expect(input).not.toBeInstanceOf(type.errors);
-		expect(clawsSchema.claw.fields.id).toMatchObject({
+		expect(clawsSchema.claw?.fields.id).toMatchObject({
 			type: "string",
 			required: true,
 			unique: true,
 		});
-		expect(clawsSchema.claw.fields.context).toMatchObject({
+		expect(clawsSchema.claw?.fields.context).toMatchObject({
 			type: "json",
 			required: true,
 		});
 	});
 
 	it("marks conversation binding external identifiers as PII for erasure sweeps", () => {
-		const fields = clawsSchema.conversation_binding.fields;
-		expect(fields.externalConversationId.pii).toBe("possible");
-		expect(fields.externalActorId.pii).toBe("possible");
-		expect(fields.metadata.pii).toBe("possible");
+		const fields = clawsSchema.conversation_binding?.fields;
+		expect(fields?.externalConversationId?.pii).toBe("possible");
+		expect(fields?.externalActorId?.pii).toBe("possible");
+		expect(fields?.metadata?.pii).toBe("possible");
 		// the opaque discriminator + internal keys are NOT personal data
-		expect(fields.provider.pii).toBeUndefined();
-		expect(fields.endpointKey.pii).toBeUndefined();
+		expect(fields?.provider?.pii).toBeUndefined();
+		expect(fields?.endpointKey?.pii).toBeUndefined();
 	});
 });

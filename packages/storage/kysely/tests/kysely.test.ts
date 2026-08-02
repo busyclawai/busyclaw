@@ -145,7 +145,7 @@ describe("@busyclaw/storage-kysely — Kysely adapter (SQLite)", () => {
 		await a.create({ model: "token", data: { id: "t1", digest: "abc" } });
 		const results = await Promise.all(
 			Array.from({ length: 5 }, () =>
-				a.consumeOne<{ id: string }>({
+				a.consumeOne({
 					model: "token",
 					where: [{ field: "id", value: "t1" }],
 				}),

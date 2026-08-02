@@ -109,6 +109,17 @@ const exec = async (
 	return (await execute(args, {})) as InvokerResponse;
 };
 
+/** The synthesized tool's executor by path. Both lookups can miss — the path may not be there, and
+ *  `toolExecutor` returns undefined for a definition with no `execute` — and either is a real failure
+ *  worth naming, not an `undefined` that surfaces as "cannot invoke" three frames later. */
+function executorAt(tools: ToolDefinitionSet, path: string) {
+	const tool = tools[path];
+	if (!tool) throw new Error(`no synthesized tool at "${path}"`);
+	const execute = toolExecutor(tool);
+	if (!execute) throw new Error(`the tool at "${path}" has no executor`);
+	return execute;
+}
+
 describe("createRegisteredToolProvider", () => {
 	it("a GET builds the right URL and returns the parsed body", async () => {
 		const { fn, calls } = fakeFetch(
@@ -420,7 +431,7 @@ describe("createRegisteredToolProvider", () => {
 			{ scope: "organization", scopeId: "org-a" },
 		);
 		await expect(
-			toolExecutor(tools["petstore.getPet"])({ petId: 1 }, {}),
+			executorAt(tools, "petstore.getPet")({ petId: 1 }, {}),
 		).rejects.toThrow(/unapproved origin/);
 		// Nothing was sent, and — the point of the ordering — the secret was never even resolved.
 		expect(calls).toHaveLength(0);
@@ -456,7 +467,7 @@ describe("createRegisteredToolProvider", () => {
 			{ scope: "organization", scopeId: "org-a" },
 		);
 		await expect(
-			toolExecutor(tools["petstore.getPet"])({}, {}),
+			executorAt(tools, "petstore.getPet")({}, {}),
 		).rejects.toThrow();
 		// A blocked target used to have the credential placed on its plan before anyone asked whether
 		// the destination was reachable at all.
@@ -478,7 +489,7 @@ describe("createRegisteredToolProvider", () => {
 			scope: "organization",
 			scopeId: "org-a",
 		});
-		await toolExecutor(tools["petstore.getPet"])(
+		await executorAt(tools, "petstore.getPet")(
 			{ petId: 1 },
 			{ effectId: "run:r1:tool:c1" },
 		);
@@ -506,7 +517,7 @@ describe("createRegisteredToolProvider", () => {
 			],
 			{ scope: "organization", scopeId: "org-a" },
 		);
-		await toolExecutor(tools["petstore.getPet"])(
+		await executorAt(tools, "petstore.getPet")(
 			{ petId: 1 },
 			{ effectId: "run:r1:tool:c1" },
 		);
@@ -527,7 +538,7 @@ describe("createRegisteredToolProvider", () => {
 			scopeId: "org-a",
 		});
 		// No effectId in the call options — a key nothing tracks would be decoration.
-		await toolExecutor(tools["petstore.getPet"])({ petId: 1 }, {});
+		await executorAt(tools, "petstore.getPet")({ petId: 1 }, {});
 		expect(
 			(calls[0]?.init.headers as Record<string, string>)["idempotency-key"],
 		).toBeUndefined();

@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // `claw.api.stream` — the shape of the thing it hands back.
 //
 // This exists because that shape broke and nothing noticed. The only test that touched streaming
@@ -15,13 +16,14 @@ import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
 	durableRedactor,
+	type MockModel,
 	owned,
 	type V2Model,
 	withPrincipal,
 } from "./fixtures";
 
 /** A v4 model that really streams: one chunk per word, then a finish. */
-function streamingModel(text: string): V2Model {
+function streamingModel(text: string): MockModel {
 	const usage = {
 		inputTokens: {
 			total: 1,
@@ -129,7 +131,6 @@ async function conversation(model: V2Model) {
 	const api = withPrincipal(claw, ACTOR).api;
 	const agent = await api.createClaw({
 		id: "claw-1",
-		createdBy: ACTOR,
 		name: "Assistant",
 	});
 	const thread = await api.createThread({

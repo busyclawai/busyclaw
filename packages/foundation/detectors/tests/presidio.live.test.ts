@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // The live leg — gated on PRESIDIO_URL, so CI without a container skips it. What MockEngine cannot
 // prove: the real analyzer's wire shape, and that a real spaCy model finds entities at offsets our
 // code-point→UTF-16 conversion makes substring-exact.

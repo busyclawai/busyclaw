@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // The STRUCTURAL client-bundle guarantee (docs/plans/claw-client-plan.md, FINAL doc-channel
 // decision): described/documented schemas live in server module graphs the client never imports,
 // enforced by TEST rather than by tree-shaking behavior. Three invariants over the SOURCE (so the

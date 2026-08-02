@@ -215,7 +215,7 @@ describe("redact-at-ingress coherence", () => {
 		if (yielded.status !== "yielded") throw new Error("expected yield");
 
 		const preYieldTokens = new Set(
-			(JSON.stringify(events).match(TOKENS) ?? []).concat(
+			(JSON.stringify(events).match(TOKENS) ?? ([] as string[])).concat(
 				received.prompts.join("\n").match(TOKENS) ?? [],
 			),
 		);

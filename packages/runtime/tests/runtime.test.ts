@@ -2,6 +2,7 @@ import type {
 	BusyclawPlugin,
 	Detector,
 	EffectStore,
+	Event,
 	PiiSpan,
 } from "@busyclaw/contracts";
 import { RUN_MODE_CONTEXT_KEY, userPrincipal } from "@busyclaw/contracts";
@@ -93,13 +94,17 @@ function scriptedModel(received: { prompt: string }): V2Model {
 	};
 }
 
-function textOnlyModel(text: string): V2Model {
+/** `onGenerate` fires when the provider is actually reached — the hook belongs here rather than in a
+ *  spread-and-override at the call site, where the V2|V3|V4 union leaves `doGenerate` with no single
+ *  signature to write. */
+function textOnlyModel(text: string, onGenerate?: () => void): V2Model {
 	return {
 		specificationVersion: "v4",
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async () => ({
+			...(onGenerate?.(), {}),
 			content: [{ type: "text", text }],
 			finishReason: { unified: "stop", raw: undefined },
 			usage: {
@@ -203,7 +208,7 @@ describe("@busyclaw/runtime", () => {
 				now: () => "2026-01-01T00:00:00.000Z",
 			},
 			events: {
-				async emit(event) {
+				async emit(event: RuntimeEvent) {
 					events.push(event);
 					if (event.type === "run.completed") {
 						await Promise.resolve();
@@ -252,19 +257,19 @@ describe("@busyclaw/runtime", () => {
 			model: textOnlyModel("done"),
 			events: [
 				{
-					emit(event) {
+					emit(event: RuntimeEvent) {
 						if (event.type === "run.completed") {
 							throw new Error("observer sink unavailable");
 						}
 					},
 				},
 				{
-					emit(event) {
+					emit(event: RuntimeEvent) {
 						seenAfter.push(event.type);
 					},
 				},
 			],
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 
 		const result = await runtime.generate("hello");
@@ -282,7 +287,7 @@ describe("@busyclaw/runtime", () => {
 		const runtime = createRuntime({
 			model: textOnlyModel("done"),
 			recording: {
-				emit(event) {
+				emit(event: RuntimeEvent) {
 					if (event.type === "run.completed") {
 						throw new Error("recording sink unavailable");
 					}
@@ -302,7 +307,7 @@ describe("@busyclaw/runtime", () => {
 			model: scriptedModel({ prompt: "" }),
 			audit: createMemoryAudit(),
 			database: db,
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -316,7 +321,7 @@ describe("@busyclaw/runtime", () => {
 							properties: { to: { type: "string" } },
 							required: ["to"],
 						}),
-						execute: async ({ to }) => {
+						execute: async ({ to }): Promise<{ sent: boolean }> => {
 							throw new Error(`cannot email ${to}`);
 						},
 					}),
@@ -339,7 +344,7 @@ describe("@busyclaw/runtime", () => {
 
 		const result = await createRuntime({
 			model: textOnlyModel("done"),
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 		}).generate("hello", { busyclaw__recording: { clawId: "claw-1" } });
 
 		expect(result.status).toBe("completed");
@@ -352,7 +357,7 @@ describe("@busyclaw/runtime", () => {
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
 			database: db,
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -424,27 +429,11 @@ describe("@busyclaw/runtime", () => {
 
 	it("fails closed before provider execution when a model boundary asks for an approval wait", async () => {
 		let providerRan = false;
+		const model = textOnlyModel("done", () => {
+			providerRan = true;
+		});
 		const runtime = createRuntime({
-			model: {
-				...textOnlyModel("done"),
-				doGenerate: async () => {
-					providerRan = true;
-					return {
-						content: [{ type: "text", text: "done" }],
-						finishReason: { unified: "stop", raw: undefined },
-						usage: {
-							inputTokens: {
-								total: 1,
-								noCache: undefined,
-								cacheRead: undefined,
-								cacheWrite: undefined,
-							},
-							outputTokens: { total: 1, text: undefined, reasoning: undefined },
-						},
-						warnings: [],
-					};
-				},
-			},
+			model,
 			plugins: [
 				{
 					id: "model-approval-policy",
@@ -968,7 +957,7 @@ describe("@busyclaw/runtime", () => {
 	it("stamps runMode into the gate context — interactive from options, autonomous by default", async () => {
 		const seen: unknown[] = [];
 		// A gate observes the resolved context — it sees the runtime-stamped busyclaw__runMode.
-		const capture: BusyclawPlugin = {
+		const capture = {
 			id: "capture-runmode",
 			gates: [
 				{
@@ -980,7 +969,7 @@ describe("@busyclaw/runtime", () => {
 					},
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const makeRuntime = () =>
 			createRuntime({
 				model: scriptedModel({ prompt: "" }),
@@ -1011,7 +1000,7 @@ describe("@busyclaw/runtime", () => {
 		const events: RuntimeEvent[] = [];
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			tools: {
 				send_email: govern(
 					tool({
@@ -1069,7 +1058,7 @@ describe("@busyclaw/runtime", () => {
 		const runtime = createRuntime({
 			model: failingModel,
 			redactor: createMemoryRedactor(emailDetector),
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 		});
 
 		await expect(runtime.generate("hello")).rejects.toThrow(
@@ -1091,7 +1080,7 @@ describe("@busyclaw/runtime", () => {
 		const events: RuntimeEvent[] = [];
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			tools: {
 				send_email: govern(
 					tool({
@@ -1124,7 +1113,7 @@ describe("@busyclaw/runtime", () => {
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
 			database: db,
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -1171,7 +1160,7 @@ describe("@busyclaw/runtime", () => {
 		const events: RuntimeEvent[] = [];
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			events: { emit: (event) => events.push(event) },
+			events: { emit: (event) => void events.push(event) },
 			tools: {
 				send_email: govern(
 					tool({
@@ -1221,6 +1210,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 				gateId: "policy",
 				reason: "no",
 				reasonCode: "DENIED",
+				demands: [{ gateId: "policy", reason: "no" }],
 				...bags,
 			}),
 		).toEqual({
@@ -1242,6 +1232,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 				status: "needs-approval",
 				gateId: "policy",
 				reason: "approval required",
+				demands: [{ gateId: "policy", reason: "approval required" }],
 				...bags,
 			}),
 		).toMatchObject({
@@ -1255,6 +1246,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			status: "denied",
 			gateId: "policy",
 			reason: "no",
+			demands: [{ gateId: "policy", reason: "no" }],
 			annotations: { escalate: "betterauth:team_eng" },
 		});
 		expect(result).not.toHaveProperty("annotations");

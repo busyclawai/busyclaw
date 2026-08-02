@@ -1,4 +1,5 @@
 import type {
+	Event,
 	EventSink,
 	PiiMapping,
 	PiiMappingStore,
@@ -23,7 +24,6 @@ import {
 async function createAgentThread(claw: ReturnType<typeof createClaw>) {
 	const agent = await claw.api.createClaw({
 		id: "claw-1",
-		createdBy: "user:actor-1",
 		name: "Recruiting assistant",
 	});
 	const thread = await claw.api.createThread({
@@ -47,7 +47,7 @@ describe("plugin.eventSinks", () => {
 					id: "listener",
 					eventSinks: [
 						{
-							emit(event) {
+							emit(event: Event) {
 								seen.push(event.type);
 							},
 						},
@@ -102,7 +102,7 @@ describe("plugin.eventSinks", () => {
 				},
 			],
 			redaction: { redactor },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		const { agent, thread } = await createAgentThread(claw);
 
@@ -141,7 +141,7 @@ describe("plugin.eventSinks", () => {
 					id: "closure",
 					eventSinks: [
 						{
-							emit(event) {
+							emit(event: Event) {
 								seen.push(`${mode}:${event.type}`);
 							},
 						},
@@ -180,7 +180,7 @@ describe("plugin.eventSinks", () => {
 					id: "notifier",
 					eventSinks: [
 						{
-							emit(event) {
+							emit(event: Event) {
 								seen.push(event.type);
 							},
 						},
@@ -229,7 +229,7 @@ describe("door redaction", () => {
 	function observed() {
 		const received: Record<string, unknown>[] = [];
 		const sink: EventSink = {
-			emit(event) {
+			emit(event: Event) {
 				received.push(event);
 			},
 		};
@@ -265,7 +265,7 @@ describe("door redaction", () => {
 					id: "listener",
 					eventSinks: [
 						{
-							emit(event) {
+							emit(event: Event) {
 								pluginSeen.push(event);
 							},
 						},
@@ -414,13 +414,11 @@ describe("door redaction", () => {
 		});
 		await claw.api.createClaw({
 			id: "strict-claw",
-			createdBy: "user:actor-1",
 			name: "strict",
 			redaction: "strict",
 		});
 		await claw.api.createClaw({
 			id: "raw-claw",
-			createdBy: "user:actor-1",
 			name: "raw",
 			redaction: "raw",
 		});
@@ -542,7 +540,6 @@ describe("door redaction", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "user:actor-1",
 			name: "assistant",
 		});
 		const thread = await claw.api.createThread({

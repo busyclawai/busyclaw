@@ -102,7 +102,6 @@ describe("plugin redaction handles", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "user:actor-1",
 			name: "assistant",
 		});
 		const thread = await claw.api.createThread({
@@ -145,13 +144,11 @@ describe("plugin redaction handles", () => {
 		});
 		await claw.api.createClaw({
 			id: "strict-claw",
-			createdBy: "user:actor-1",
 			name: "strict",
 			redaction: "strict",
 		});
 		await claw.api.createClaw({
 			id: "raw-claw",
-			createdBy: "user:actor-1",
 			name: "raw",
 			redaction: "raw",
 		});

@@ -7,6 +7,7 @@ import type {
 	SpecRegistrationRecord,
 	SpecRegistrationStore,
 } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import {
 	createRegistryStores,
@@ -191,7 +192,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		expect(report.added.sort()).toEqual([
 			"petstore.addPet",
@@ -208,7 +209,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			"petstore",
 		);
 		expect(stored?.contentVersion).toBe(report.contentVersion);
-		expect(stored?.registeredBy).toBe("user:alice");
+		expect(stored?.registeredBy).toBe(userPrincipal("alice"));
 	});
 
 	it("re-registration with an operation removed DELETES exactly that row (fail-closed)", async () => {
@@ -218,7 +219,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		};
 		await registry.registerOpenApiSpec({ ...input, document: petstore() });
 		const report = await registry.registerOpenApiSpec({
@@ -240,7 +241,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		};
 		const first = await registry.registerOpenApiSpec({
 			...input,
@@ -271,7 +272,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 			document: petstore(),
 		};
 		const first = await registry.registerOpenApiSpec(input);
@@ -291,7 +292,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				scopeId: "org-a",
 				source: "Bad.Slug",
 				document: petstore(),
-				registeredBy: "user:alice",
+				registeredBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow("invalid registration source");
 		expect(stores.tools.size).toBe(0);
@@ -306,7 +307,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				scopeId: "org-a",
 				source: "petstore",
 				document: petstore(),
-				registeredBy: "user:alice",
+				registeredBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow("too large");
 		expect(stores.tools.size).toBe(0);
@@ -321,7 +322,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		expect(
 			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
@@ -331,7 +332,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			summary: { source: "petstore", contentVersion: report.contentVersion },
-			by: "user:alice",
+			by: userPrincipal("alice"),
 		});
 	});
 
@@ -343,7 +344,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		expect(report.added).toHaveLength(4); // the append is a no-op; registration still works
 	});
@@ -366,7 +367,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scopeId: "org-a",
 			source: "svc",
 			document,
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		expect(report.added).toEqual(["svc.dup"]);
 		expect(report.skipped).toHaveLength(1);
@@ -395,7 +396,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 					scopeId: "org-a",
 					source: "svc",
 					document: petstore(),
-					registeredBy: "user:alice",
+					registeredBy: userPrincipal("alice"),
 				}),
 			).rejects.toThrow("duplicate registered tool address");
 			expect(stores.tools.size).toBe(0);
@@ -415,7 +416,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		};
 		await registry.registerOpenApiSpec({ ...input, document: petstore() });
 		const before = [...stores.tools.values()].map((row) => ({
@@ -446,7 +447,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		};
 		const withScheme = (scheme: JsonObject) => {
 			const document = petstore() as JsonObject & {
@@ -478,7 +479,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			source: "petstore",
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		};
 		await registry.registerOpenApiSpec({ ...input, document: petstore() });
 		// The pin must not make ordinary re-registration (a rotate, a schema edit) fail — only a MOVE.
@@ -528,7 +529,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 				scopeId: "org-a",
 				source: "petstore",
 				document: petstore(),
-				registeredBy: "user:alice",
+				registeredBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow(/bundle version append failed/);
 
@@ -556,7 +557,7 @@ describe("createSpecRegistry — governed openapi registration", () => {
 			scopeId: "org-a",
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		expect(report.added).toHaveLength(4);
 		expect(
@@ -604,7 +605,7 @@ describe("registerOpenApiSpec — a source's origins cannot be extended", () => 
 		scope: "organization",
 		scopeId: "org-a",
 		source: "petstore",
-		registeredBy: "user:alice",
+		registeredBy: userPrincipal("alice"),
 	};
 
 	/** The same document plus one operation living at `origin`. */
@@ -679,7 +680,7 @@ describe("registerOpenApiSpec — the generated egress ceiling", () => {
 			...scope,
 			source: "petstore",
 			document: petstore(),
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 
 	it("bounds the source to the origin its operations declare, and forbids only", async () => {
@@ -703,7 +704,7 @@ describe("registerOpenApiSpec — the generated egress ceiling", () => {
 			mode: "enforce",
 			plane: "tool",
 			managedBy: "spec:petstore",
-			updatedBy: "user:bob",
+			updatedBy: userPrincipal("bob"),
 		});
 		const report = await register(stores);
 		const [after] = await stores.policySlices.listForScope(scope);
@@ -725,7 +726,7 @@ describe("registerOpenApiSpec — the generated egress ceiling", () => {
 			plane: "tool",
 			// What the human door stamps. Writing to a generated name is what detaches it.
 			managedBy: "operator",
-			updatedBy: "user:bob",
+			updatedBy: userPrincipal("bob"),
 		});
 
 		const report = await register(stores);
@@ -748,7 +749,7 @@ describe("registerOpenApiSpec — the generated egress ceiling", () => {
 				servers: [{ url: "https://api.petstore.example/v1" }],
 				paths: {},
 			},
-			registeredBy: "user:alice",
+			registeredBy: userPrincipal("alice"),
 		});
 		// A ceiling outliving the operations it bounded is a rule nobody can trace to a source.
 		expect(await stores.policySlices.listForScope(scope)).toEqual([]);

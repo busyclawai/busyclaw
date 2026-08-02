@@ -4,6 +4,7 @@
 // network. `typeof claw` is the only thing that crosses to the client's type side.
 
 import { toRequestHandler } from "@busyclaw/adapter-core";
+import { userPrincipal } from "@busyclaw/contracts";
 import { secrets } from "@busyclaw/secrets-plugin";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import type { Claw } from "busyclaw";
@@ -54,7 +55,7 @@ function buildClawAndClient() {
 	const handler = toRequestHandler(claw as unknown as Claw, {
 		// The identity seam: the host resolves the caller from the request (here a fixed test principal) —
 		// the sole over-the-wire identity path now that the body carries no `principal`.
-		resolveCaller: () => ({ principal: "user:alice" }),
+		resolveCaller: () => ({ principal: userPrincipal("alice") }),
 	});
 	const client = createClawClient<typeof claw>({
 		baseUrl: "https://app.test/api/busyclaw",
@@ -72,7 +73,7 @@ describe("end-to-end: createClaw + toRequestHandler + createClawClient", () => {
 		expect(set.error).toBeNull();
 		expect(set.data).toMatchObject({
 			// createdBy is the SEAM-resolved caller (user:alice), never a body value.
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 			kind: "value",
 			name: "NOTION",
 		});
@@ -89,7 +90,7 @@ describe("end-to-end: createClaw + toRequestHandler + createClawClient", () => {
 		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors;
 		// identity rides the caller argument here.
 		await expect(
-			claw.api.secrets.list({}, { principal: "user:alice" }),
+			claw.api.secrets.list({}, { principal: userPrincipal("alice") }),
 		).resolves.toMatchObject([{ name: "NOTION" }]);
 
 		const removed = await client.secrets.delete({ name: "NOTION" });

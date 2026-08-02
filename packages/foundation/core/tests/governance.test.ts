@@ -8,6 +8,7 @@ import {
 	SCOPE_CONTEXT_KEY,
 	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
+	UNSCOPED,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
@@ -164,7 +165,8 @@ describe("busyclaw governance — the neutral pipeline", () => {
 				saved.find((mapping) => mapping.placeholder === placeholder)
 					?.original ?? null,
 			findByHash: () => null,
-			deleteForSubject: () => {},
+			deleteForSubject: () => 0,
+			isErased: () => false,
 		};
 		const ec = createGovernance({
 			redactor: createStoredRedactor({ detector: emailDetector, mappings }),
@@ -798,6 +800,9 @@ describe("busyclaw governance — durable approval continuation", () => {
 				gateId: "oversight",
 				toolName: "x",
 				args: {},
+				demands: [],
+				scope: UNSCOPED.scope,
+				scopeId: UNSCOPED.scopeId,
 				createdAt: "t",
 			}),
 		).toBeNull();

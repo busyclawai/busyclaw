@@ -1,3 +1,4 @@
+import { userPrincipal } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createRegistryStores } from "../src/registry";
@@ -15,7 +16,7 @@ const sliceInput = (
 	// A stored slice states its plane like a plugin-contributed one does (R-H04). These fixtures are
 	// agent-surface policy.
 	plane: "tool" as const,
-	updatedBy: "user:admin",
+	updatedBy: userPrincipal("admin"),
 });
 
 const stamps = () => {
@@ -38,7 +39,7 @@ describe("createRegistryStores — policy_slice", () => {
 			mode: "enforce",
 			plane: "tool",
 			cedar: sliceInput("org-a").cedar,
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 	});
 
@@ -52,7 +53,7 @@ describe("createRegistryStores — policy_slice", () => {
 			cedar: `permit(principal, action, resource);`,
 			mode: "shadow",
 			plane: "tool",
-			updatedBy: "user:bob",
+			updatedBy: userPrincipal("bob"),
 		});
 		expect(second.id).toBe(first.id); // replace-in-place, not a new row
 		expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
@@ -63,7 +64,7 @@ describe("createRegistryStores — policy_slice", () => {
 		});
 		expect(listed).toHaveLength(1); // one row per (org, name)
 		expect(listed[0]?.mode).toBe("shadow");
-		expect(listed[0]?.updatedBy).toBe("user:bob");
+		expect(listed[0]?.updatedBy).toBe(userPrincipal("bob"));
 	});
 
 	// An upsert used to write a hand-picked few columns, so `plane` was accepted by the input schema
@@ -155,7 +156,7 @@ describe("createRegistryStores — policy_slice", () => {
 				name: "x",
 				mode: "enforce",
 				plane: "tool",
-				updatedBy: "user:a",
+				updatedBy: userPrincipal("a"),
 				createdAt: "t",
 				updatedAt: "t",
 			},
@@ -177,7 +178,7 @@ describe("createRegistryStores — policy_slice", () => {
 				name: "x",
 				cedar: "permit(principal, action, resource);",
 				mode: "sometimes", // not enforce|shadow|off
-				updatedBy: "user:a",
+				updatedBy: userPrincipal("a"),
 				createdAt: "t",
 				updatedAt: "t",
 			},

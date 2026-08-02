@@ -1,15 +1,21 @@
 import type {
 	BusyclawPlugin,
 	BusyclawPluginConfigureContext,
+	Event,
 } from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { describe, expect, it } from "vitest";
-import { pluginEventSink, type RuntimeEventSink } from "../src/events";
+import {
+	pluginEventSink,
+	type RuntimeEvent,
+	type RuntimeEventSink,
+} from "../src/events";
 
 // A recorder standing in for a real runtime sink (durable, in-memory, etc.).
 function recordingSink(log?: { order: string[]; label?: string }) {
 	const observed: { type: string }[] = [];
 	const sink: RuntimeEventSink = {
-		emit(event) {
+		emit(event: RuntimeEvent) {
 			observed.push(event);
 			if (log) log.order.push(`${log.label ?? "sink"}:${event.type}`);
 		},
@@ -27,15 +33,16 @@ describe("pluginEventSink", () => {
 				recording: recording.sink,
 				observers: [observer.sink],
 			}),
+			secrets: buildSecrets(),
 		};
 
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "emitter",
 			configure(ctx) {
 				void ctx.events?.emit({ type: "skill.demo", skillId: "s1" });
 				return undefined;
 			},
-		};
+		} satisfies BusyclawPlugin;
 
 		plugin.configure?.(context);
 		// emit may be async on the sink side; let microtasks flush.
@@ -60,7 +67,7 @@ describe("pluginEventSink", () => {
 				},
 				after.sink,
 			],
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 
 		await expect(port.emit({ type: "skill.demo" })).resolves.toBeUndefined();
@@ -92,7 +99,7 @@ describe("pluginEventSink", () => {
 	it("awaits async sinks for every event", async () => {
 		const order: string[] = [];
 		const slow: RuntimeEventSink = {
-			async emit(event) {
+			async emit(event: RuntimeEvent) {
 				await Promise.resolve();
 				order.push(event.type);
 			},
@@ -109,28 +116,31 @@ describe("pluginEventSink", () => {
 		const { sink, observed } = recordingSink();
 		const context: BusyclawPluginConfigureContext = {
 			events: pluginEventSink({ observers: [sink] }),
+			secrets: buildSecrets(),
 		};
 
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "quiet",
-			configure() {
+			// Takes the context and ignores it — declaring `configure()` with no parameter made passing
+			// one a type error, which is not what "never touches events" is supposed to mean.
+			configure(_ctx) {
 				return undefined;
 			},
-		};
+		} satisfies BusyclawPlugin;
 
 		expect(() => plugin.configure?.(context)).not.toThrow();
 		expect(observed).toEqual([]);
 	});
 
 	it("works when no events port is provided (optional)", () => {
-		const context: BusyclawPluginConfigureContext = {};
-		const plugin: BusyclawPlugin = {
+		const context: BusyclawPluginConfigureContext = { secrets: buildSecrets() };
+		const plugin = {
 			id: "optional",
 			configure(ctx) {
 				void ctx.events?.emit({ type: "skill.demo" });
 				return undefined;
 			},
-		};
+		} satisfies BusyclawPlugin;
 
 		expect(() => plugin.configure?.(context)).not.toThrow();
 	});

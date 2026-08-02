@@ -18,7 +18,14 @@ import { type } from "arktype";
  * their own). Kept open on purpose — core never hardcodes skill/channel event types.
  */
 export const event = type({ type: "string" });
-export type Event = typeof event.infer;
+/**
+ * Intersected with an index signature so the OPEN part above is true in the type, not only at
+ * runtime. arktype accepts undeclared keys, and plugins are expected to add their own — but the bare
+ * `.infer` is exactly `{ type: string }`, so every plugin emitting a payload hit an excess-property
+ * error. Nothing caught the contradiction because it only shows at a call site, and the call sites
+ * were tests, which were outside typecheck.
+ */
+export type Event = typeof event.infer & Record<string, unknown>;
 
 /**
  * The port plugins receive (via `BusyclawPluginConfigureContext.events`) to emit operational

@@ -18,13 +18,13 @@ import { cedar } from "@busyclaw/policy-cedar";
 import { runtimeRunOptionsWithCaller } from "@busyclaw/runtime";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import { durableRedactor, type V2Model } from "./fixtures";
+import { durableRedactor, type MockModel, type V2Model } from "./fixtures";
 
 const DECLARED = "https://93.184.216.34";
 const OTHER = "https://93.184.216.35";
 
 /** Calls `busyclaw.fetch` once at `url`, then reports what it got back. */
-function fetchModel(url: string): V2Model {
+function fetchModel(url: string): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",

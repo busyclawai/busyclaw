@@ -2,7 +2,13 @@ import type {
 	BusyclawPlugin,
 	BusyclawPluginConfigureContext,
 } from "@busyclaw/contracts";
-import { endpoints, route, validationError } from "@busyclaw/contracts";
+import {
+	endpoints,
+	route,
+	userPrincipal,
+	validationError,
+} from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { secrets, storedSecretModels } from "@busyclaw/secrets-plugin";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { type } from "arktype";
@@ -24,7 +30,7 @@ describe("@busyclaw/adapter-core", () => {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					id: "claw-1",
-					createdBy: "user:user-1",
+					createdBy: userPrincipal("user-1"),
 				}),
 				method: "POST",
 			}),
@@ -32,7 +38,7 @@ describe("@busyclaw/adapter-core", () => {
 
 		expect(post.status).toBe(200);
 		await expect(post.json()).resolves.toMatchObject({
-			data: { id: "claw-1", createdBy: "user:user-1" },
+			data: { id: "claw-1", createdBy: userPrincipal("user-1") },
 			ok: true,
 		});
 		const get = await handler(
@@ -54,7 +60,7 @@ describe("@busyclaw/adapter-core", () => {
 	});
 
 	it("supports plugin routes and rejects conflicts", async () => {
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "telegram",
 			routes: [
 				{
@@ -63,7 +69,7 @@ describe("@busyclaw/adapter-core", () => {
 					handler: async () => ({ body: { ok: true, route: "telegram" } }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const claw = { api: {} } as unknown as Claw;
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
@@ -92,7 +98,7 @@ describe("@busyclaw/adapter-core", () => {
 	});
 
 	it("matches a parameterized route and binds path params to ctx.params", async () => {
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "channels",
 			routes: [
 				{
@@ -101,7 +107,7 @@ describe("@busyclaw/adapter-core", () => {
 					handler: async ({ params }) => ({ body: { ok: true, params } }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const claw = { api: {} } as unknown as Claw;
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
@@ -119,7 +125,7 @@ describe("@busyclaw/adapter-core", () => {
 	});
 
 	it("prefers a static route over an overlapping pattern", async () => {
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "channels",
 			routes: [
 				{
@@ -133,7 +139,7 @@ describe("@busyclaw/adapter-core", () => {
 					handler: async () => ({ body: { ok: true, matched: "static" } }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const claw = { api: {} } as unknown as Claw;
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
@@ -179,7 +185,7 @@ describe("@busyclaw/adapter-core", () => {
 	});
 
 	it("url-decodes param values and does not over-match on segment count", async () => {
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "channels",
 			routes: [
 				{
@@ -188,7 +194,7 @@ describe("@busyclaw/adapter-core", () => {
 					handler: async ({ params }) => ({ body: { ok: true, params } }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const claw = { api: {} } as unknown as Claw;
 		const handler = toRequestHandler(claw, { plugins: [plugin] });
 
@@ -214,7 +220,7 @@ describe("@busyclaw/adapter-core", () => {
 
 	it("runs plugin cron tasks through the built-in cron route", async () => {
 		const seen: Array<{ id: string; limit?: number }> = [];
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "channel:telegram",
 			cron: [
 				{
@@ -229,7 +235,7 @@ describe("@busyclaw/adapter-core", () => {
 					},
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		const claw = {
 			api: {},
 			$context: {
@@ -419,9 +425,9 @@ const SECRET_STORE_TEST_KEY = "0123456789abcdef".repeat(4);
 function secretsApiOverMemory() {
 	const plugin = secrets([], { store: { key: SECRET_STORE_TEST_KEY } });
 	const adapter = entityAdapter(memoryAdapter(), storedSecretModels);
-	const runtime = plugin.configure?.({
-		adapter,
-	} as BusyclawPluginConfigureContext);
+	// `secrets` is REQUIRED on the context (the assembly always builds one over the env default), so
+	// the plugin never `?.`-chains it. The old cast let this stand a context up without one.
+	const runtime = plugin.configure?.({ adapter, secrets: buildSecrets() });
 	const api = runtime?.api?.(undefined);
 	if (!api) throw new Error("expected the secrets plugin to contribute an api");
 	return api;
@@ -439,7 +445,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		// The identity seam: the host resolves the caller from the request (here a fixed test principal).
 		// Over the wire the BODY never carries a principal — the resolved caller is the sole identity path.
 		const handler = toRequestHandler({ api } as unknown as Claw, {
-			resolveCaller: () => ({ principal: "user:alice" }),
+			resolveCaller: () => ({ principal: userPrincipal("alice") }),
 		});
 
 		// The in-process path is untouched: the namespace method is the handler itself, and identity rides
@@ -447,7 +453,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		await expect(
 			api.secrets.set(
 				{ name: "SEEDED", value: "v0" },
-				{ principal: "user:alice" },
+				{ principal: userPrincipal("alice") },
 			),
 		).resolves.toMatchObject({ name: "SEEDED", kind: "value" });
 
@@ -468,7 +474,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			name: "NOTION",
 			kind: "value",
 			// createdBy is the SEAM-resolved caller, not a body value.
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		// Values are write-only: the routed surface returns the metadata VIEW, never the material.
 		expect(setBody.data.value).toBeUndefined();
@@ -503,7 +509,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 	it("validates endpoint input at the HTTP boundary before the handler runs", async () => {
 		const api = secretsApiOverMemory();
 		const handler = toRequestHandler({ api } as unknown as Claw, {
-			resolveCaller: () => ({ principal: "user:alice" }),
+			resolveCaller: () => ({ principal: userPrincipal("alice") }),
 		});
 
 		const response = await handler(
@@ -565,7 +571,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 	it("fails loud when a plugin route collides with a mounted endpoint", () => {
 		const api = secretsApiOverMemory();
-		const rogue: BusyclawPlugin = {
+		const rogue = {
 			id: "rogue",
 			routes: [
 				{
@@ -574,7 +580,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 					handler: async () => ({ body: { ok: true } }),
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 
 		expect(() =>
 			toRequestHandler({ api } as unknown as Claw, { plugins: [rogue] }),
@@ -617,7 +623,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			appAuthz: { unsafeOpen: true },
 		});
 		const handler = toRequestHandler(claw as unknown as Claw, {
-			resolveCaller: () => ({ principal: "user:alice" }),
+			resolveCaller: () => ({ principal: userPrincipal("alice") }),
 		});
 
 		const set = await handler(
@@ -635,7 +641,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		// The same assembled claw's in-process surface saw the HTTP write — one namespace, two doors;
 		// identity rides the caller argument here too.
 		await expect(
-			claw.api.secrets.list({}, { principal: "user:alice" }),
+			claw.api.secrets.list({}, { principal: userPrincipal("alice") }),
 		).resolves.toMatchObject([{ name: "E2E" }]);
 	});
 
@@ -684,12 +690,12 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		// load-bearing over-the-wire identity seam.
 		const created = await createClawRequest(
 			toRequestHandler(claw, {
-				resolveCaller: () => ({ principal: "user:alice" }),
+				resolveCaller: () => ({ principal: userPrincipal("alice") }),
 			}),
 		);
 		expect(created.status).toBe(200);
 		await expect(created.json()).resolves.toMatchObject({
-			data: { createdBy: "user:alice" },
+			data: { createdBy: userPrincipal("alice") },
 			ok: true,
 		});
 	});
@@ -730,7 +736,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		// same governed method the in-process `claw.api.secrets.set({...}, { principal })` call takes.
 		const set = await setSecret(
 			toRequestHandler(claw, {
-				resolveCaller: () => ({ principal: "user:alice" }),
+				resolveCaller: () => ({ principal: userPrincipal("alice") }),
 			}),
 		);
 		expect(set.status).toBe(200);
@@ -754,7 +760,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 			redaction: { posture: "raw" },
 		}) as unknown as Claw;
 		const handler = toRequestHandler(claw, {
-			resolveCaller: () => ({ principal: "user:alice" }),
+			resolveCaller: () => ({ principal: userPrincipal("alice") }),
 		});
 
 		const bad = await handler(

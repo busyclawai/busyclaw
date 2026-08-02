@@ -105,7 +105,7 @@ describe("@busyclaw/storage-core — memory adapter", () => {
 		// Fire several consumes for the same row concurrently — exactly one gets it.
 		const results = await Promise.all(
 			Array.from({ length: 5 }, () =>
-				db.consumeOne<{ id: string }>({
+				db.consumeOne({
 					model: "token",
 					where: [{ field: "id", value: "t1" }],
 				}),
@@ -113,7 +113,7 @@ describe("@busyclaw/storage-core — memory adapter", () => {
 		);
 		const winners = results.filter((r) => r !== null);
 		expect(winners).toHaveLength(1);
-		expect(winners[0]?.id).toBe("t1");
+		expect(winners[0]).toMatchObject({ id: "t1" });
 		expect(await db.count({ model: "token" })).toBe(0); // consumed
 	});
 

@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // The Prisma schema generator. Pure: SchemaDeclaration in, source text out — so these assert on the
 // emitted code, and on the two things easiest to get quietly wrong: declaration ORDER and COMPOSITE
 // primary keys, which busyclaw has and Better Auth's generators never see.
@@ -131,7 +132,7 @@ describe("prisma — the real PII vault schema", () => {
 		const warnings: string[] = [];
 		const code = generatePrismaSchema({
 			schema: { ...piiMappingSchema, ...piiSubjectSchema },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 
 		expect(code).toContain("@@id([placeholder, scope, scopeId])");
@@ -160,7 +161,7 @@ describe("prisma — models with no declared key", () => {
 		const warnings: string[] = [];
 		const code = generatePrismaSchema({
 			schema: keyless,
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		expect(code).toContain("@@ignore");
 		expect(code).toContain("No primary key declared");

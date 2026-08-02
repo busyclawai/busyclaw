@@ -2,7 +2,7 @@
 	"name": "@busyclaw/storage-kysely",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Kysely adapter for the @busyclaw/storage-core Adapter port — works with any Kysely SQL dialect. Patterns adapted from Better Auth (MIT).",
+	"description": "Kysely adapter for the @busyclaw/storage-core Adapter port \u2014 works with any Kysely SQL dialect. Patterns adapted from Better Auth (MIT).",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"exports": {
@@ -18,7 +18,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run tests",
 		"typecheck": "tsc --noEmit"
 	},

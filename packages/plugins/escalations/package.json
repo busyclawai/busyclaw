@@ -2,7 +2,7 @@
 	"name": "@busyclaw/escalations",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The escalations() plugin for busyclaw: declares the `escalate` and `guidance` Cedar policy annotations — a policy that says who should be asked (@escalate(\"betterauth:team_eng\")) reaches the host's onEscalate when a call parks or is denied, and one that says what to do instead (@guidance(\"…\")) reaches the agent. An observer: it changes no decision.",
+	"description": "The escalations() plugin for busyclaw: declares the `escalate` and `guidance` Cedar policy annotations \u2014 a policy that says who should be asked (@escalate(\"betterauth:team_eng\")) reaches the host's onEscalate when a call parks or is denied, and one that says what to do instead (@guidance(\"\u2026\")) reaches the agent. An observer: it changes no decision.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
@@ -31,7 +31,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run tests",
 		"typecheck": "tsc --noEmit"
 	},

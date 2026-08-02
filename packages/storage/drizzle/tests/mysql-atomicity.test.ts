@@ -34,7 +34,11 @@ const approval = mysqlTable("approval", {
 const schema = { approval };
 
 let pool: mysql.Pool | undefined;
-let database: ReturnType<typeof drizzle> | undefined;
+// Derived from the CALL, not from the bare factory: drizzle's overloads differ by whether a schema
+// (and which mode) is passed, so `ReturnType<typeof drizzle>` is a different handle than the one
+// this file actually builds.
+const connect = (p: mysql.Pool) => drizzle(p, { schema, mode: "default" });
+let database: ReturnType<typeof connect> | undefined;
 
 async function reachable(): Promise<boolean> {
 	try {
@@ -52,9 +56,9 @@ const suite = live ? describe : describe.skip;
 beforeAll(async () => {
 	if (!live) return;
 	pool = mysql.createPool(URL);
-	database = drizzle(pool, { schema, mode: "default" });
-	await database.execute(sql`DROP TABLE IF EXISTS approval`);
-	await database.execute(
+	database = connect(pool);
+	await database?.execute(sql`DROP TABLE IF EXISTS approval`);
+	await database?.execute(
 		sql`CREATE TABLE approval (id VARCHAR(191) PRIMARY KEY, status VARCHAR(64), leaseId VARCHAR(191))`,
 	);
 });

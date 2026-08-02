@@ -2,7 +2,7 @@
 	"name": "@busyclaw/core",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The busyclaw governance & privacy kernel: the redactor, hash-chained audit, approval gate, and createGovernance — the non-bypassable pipeline. Re-exports @busyclaw/contracts.",
+	"description": "The busyclaw governance & privacy kernel: the redactor, hash-chained audit, approval gate, and createGovernance \u2014 the non-bypassable pipeline. Re-exports @busyclaw/contracts.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
@@ -30,7 +30,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run tests",
 		"typecheck": "tsc --noEmit"
 	},

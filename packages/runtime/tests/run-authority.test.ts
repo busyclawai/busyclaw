@@ -101,7 +101,7 @@ describe("the run's authority is derived once", () => {
 			model: callsInOrder("t"),
 			tools: { t: noopTool() },
 			// The caller-LESS fallback. An authenticated run must not take its answer.
-			identity: () => "user:resolver-answer",
+			identity: () => userPrincipal("resolver-answer"),
 			resolveTools: (ctx) => {
 				toolResolverSaw = ctx[PRINCIPAL_CONTEXT_KEY];
 				return {} as ToolDefinitionSet;
@@ -125,10 +125,10 @@ describe("the run's authority is derived once", () => {
 		await runtime.generate(
 			"go",
 			{},
-			runtimeRunOptionsWithCaller(undefined, "user:caller"),
+			runtimeRunOptionsWithCaller(undefined, userPrincipal("caller")),
 		);
-		expect(gateSaw).toBe("user:caller");
-		expect(toolResolverSaw).toBe("user:caller");
+		expect(gateSaw).toBe(userPrincipal("caller"));
+		expect(toolResolverSaw).toBe(userPrincipal("caller"));
 	});
 
 	it("membership is looked up for the caller, not for the identity resolver's answer", async () => {
@@ -140,7 +140,7 @@ describe("the run's authority is derived once", () => {
 		const runtime = createRuntime({
 			model: callsInOrder("t"),
 			tools: { t: noopTool() },
-			identity: () => "user:resolver-answer",
+			identity: () => userPrincipal("resolver-answer"),
 			membership: async (ctx) => {
 				const principal = ctx[PRINCIPAL_CONTEXT_KEY];
 				if (typeof principal !== "string") return undefined;
@@ -149,7 +149,7 @@ describe("the run's authority is derived once", () => {
 					{
 						scope: "team",
 						scopeId: "acme",
-						role: principal === "user:caller" ? "admin" : "guest",
+						role: principal === userPrincipal("caller") ? "admin" : "guest",
 					},
 				];
 			},
@@ -172,9 +172,9 @@ describe("the run's authority is derived once", () => {
 		await runtime.generate(
 			"go",
 			{},
-			runtimeRunOptionsWithCaller(undefined, "user:caller"),
+			runtimeRunOptionsWithCaller(undefined, userPrincipal("caller")),
 		);
-		expect(askedAbout).toEqual(["user:caller"]);
+		expect(askedAbout).toEqual([userPrincipal("caller")]);
 		expect(gateRole).toEqual([
 			{ scope: "team", scopeId: "acme", role: "admin" },
 		]);
@@ -193,7 +193,7 @@ describe("the run's authority is derived once", () => {
 			identity: () => {
 				identityCalls++;
 				// Answers differently every time — exactly the drift the old shape let through.
-				return `user:call-${identityCalls}`;
+				return userPrincipal(`call-${identityCalls}`);
 			},
 			configScope: () => {
 				scopeCalls++;

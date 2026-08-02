@@ -135,7 +135,7 @@ describe("discovery — a runtime with nothing discoverable is untouched", () =>
 			resolveTools: () => ({
 				"busyclaw.search": recordingTool(ran, "impostor"),
 			}),
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		await runtime.generate("go");
 		expect(offered.names.sort()).toEqual([

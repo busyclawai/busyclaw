@@ -1,3 +1,5 @@
+import type { Event } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
@@ -12,14 +14,13 @@ import {
 	withPrincipal,
 } from "./fixtures";
 
-const ACTOR = "user:actor-1";
+const ACTOR = userPrincipal("actor-1");
 
 async function createAgentThread(claw: ReturnType<typeof createClaw>) {
 	// The app-authz caller is bound to the claw owner, so its owner rule permits the claw-scoped calls.
 	const api = withPrincipal(claw, ACTOR).api;
 	const agent = await api.createClaw({
 		id: "claw-1",
-		createdBy: ACTOR,
 		name: "Recruiting assistant",
 	});
 	const thread = await api.createThread({
@@ -156,7 +157,7 @@ describe("createClaw send", () => {
 		const approvalId = sent.result.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
-		await api.grantApproval({ approvalId, by: "user:alice" });
+		await api.grantApproval({ approvalId });
 		const resumed = await api.continueRun({ approvalId });
 
 		expect(resumed).toMatchObject({ status: "completed", text: "done" });
@@ -220,18 +221,18 @@ describe("createClaw send", () => {
 		await api.shareResource({
 			resourceKind: "approval",
 			resourceId: approvalId,
-			principalRef: "user:alice",
+			principalRef: userPrincipal("alice"),
 			permission: "use",
 		});
 		// `decidedBy` is stamped from the caller (arg 2), never a body `by` — alice denies here, so the
 		// denial records decidedBy = user:alice (docs/plans/stamped-fields.md, #6).
 		await api.denyApproval(
 			{ approvalId, reason: "Not allowed" },
-			{ principal: "user:alice" },
+			{ principal: userPrincipal("alice") },
 		);
 		await expect(api.continueRun({ approvalId })).resolves.toMatchObject({
 			approvalId,
-			decidedBy: "user:alice",
+			decidedBy: userPrincipal("alice"),
 			reason: "Not allowed",
 			status: "denied",
 		});
@@ -253,7 +254,7 @@ describe("createClaw send", () => {
 			}),
 		).toMatchObject([
 			{
-				error: { decidedBy: "user:alice", reason: "Not allowed" },
+				error: { decidedBy: userPrincipal("alice"), reason: "Not allowed" },
 				status: "failed",
 			},
 		]);
@@ -351,7 +352,7 @@ describe("createClaw send", () => {
 			},
 			model: textModel("done"),
 			redaction: { redactor },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		const { api, agent, thread } = await createAgentThread(claw);
 
@@ -393,7 +394,7 @@ describe("createClaw send", () => {
 					},
 				},
 				{
-					emit(event) {
+					emit(event: Event) {
 						seen.push(event.type);
 					},
 				},
@@ -411,7 +412,7 @@ describe("createClaw send", () => {
 				},
 			],
 			redaction: { redactor },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 
 		expect(claw.api).toBeDefined();
@@ -481,7 +482,6 @@ describe("createClaw send", () => {
 		const apiA = withPrincipal(clawA, ACTOR).api;
 		const agentA = await apiA.createClaw({
 			id: "claw-a",
-			createdBy: ACTOR,
 			name: "A",
 		});
 		const threadA = await apiA.createThread({
@@ -527,7 +527,6 @@ describe("createClaw send", () => {
 		const apiB = withPrincipal(clawB, ACTOR).api;
 		const agentB = await apiB.createClaw({
 			id: "claw-b",
-			createdBy: ACTOR,
 			name: "B",
 		});
 		const threadB = await apiB.createThread({

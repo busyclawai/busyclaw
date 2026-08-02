@@ -233,13 +233,13 @@ describe("secrets assembly wiring (createClaw)", () => {
 
 	it("(c) the one-door reader is injected into the plugin configure context", async () => {
 		let received: Secrets | undefined;
-		const probe: BusyclawPlugin = {
+		const probe = {
 			id: "secrets-probe",
 			configure: (context) => {
 				received = context.secrets;
 				return undefined;
 			},
-		};
+		} satisfies BusyclawPlugin;
 		vi.stubEnv("some-credential", "value-in-env");
 
 		// No database needed — the reader is built regardless of storage.

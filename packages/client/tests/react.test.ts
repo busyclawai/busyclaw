@@ -142,7 +142,6 @@ describe("atom → hook renaming and re-rendering", () => {
 		await act(async () => {
 			const granted = await client.grantApproval({
 				approvalId: "appr-1",
-				by: "user:reviewer",
 			});
 			expect(granted.error).toBeNull();
 			await until(() => latest().data?.length === 0);

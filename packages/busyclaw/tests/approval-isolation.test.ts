@@ -6,6 +6,7 @@
 // qualify. Every case below hands the stranger a real approval id, because an id is not a boundary:
 // it leaks through a URL, a log, a screenshot, a support ticket.
 
+import { userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	approvalToolModel,
@@ -14,9 +15,9 @@ import {
 	owned,
 } from "./fixtures";
 
-const OWNER = { principal: "user:actor-1" } as const;
-const STRANGER = { principal: "user:stranger" } as const;
-const REVIEWER = { principal: "user:reviewer" } as const;
+const OWNER = { principal: userPrincipal("actor-1") } as const;
+const STRANGER = { principal: userPrincipal("stranger") } as const;
+const REVIEWER = { principal: userPrincipal("reviewer") } as const;
 
 const DENIED = /BUSYCLAW_AUTHORIZATION_DENIED/;
 

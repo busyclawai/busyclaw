@@ -4,13 +4,14 @@
 // `{ principal }`, NEVER the body. The forged body values are injected via `as never` to stand in for
 // exactly that untyped wire input; the assertions prove the CALLER wins. (The positive stamping is also
 // proven in app-authz-pep / send / conversation-binding / secret-store; here we prove the forge is inert.)
+import { userPrincipal } from "@busyclaw/contracts";
 import { secrets } from "@busyclaw/secrets-plugin";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import { durableRedactor, textModel } from "./fixtures";
 
-const ALICE = "user:alice";
-const VICTIM = "user:victim";
+const ALICE = userPrincipal("alice");
+const VICTIM = userPrincipal("victim");
 
 function makeClaw() {
 	const { db, redactor } = durableRedactor();
@@ -66,7 +67,7 @@ describe("stamped identity fields — the caller wins over a forged body (runtim
 			{
 				resourceKind: "claw",
 				resourceId: created.id,
-				principalRef: "user:bob",
+				principalRef: userPrincipal("bob"),
 				permission: "use",
 				grantedBy: VICTIM,
 			} as never,

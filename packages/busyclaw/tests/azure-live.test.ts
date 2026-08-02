@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Live model integration for the branded `busyclaw` package — this SPENDS TOKENS, so it is doubly
 // gated: it runs only when `AI_TESTS_ENABLED=1` is set AND the Azure OpenAI creds are present. The
 // explicit flag means creds sitting in the shell can never trigger a paid call by accident; without

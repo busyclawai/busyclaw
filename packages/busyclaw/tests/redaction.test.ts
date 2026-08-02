@@ -11,11 +11,11 @@ import {
 	resolveRedaction,
 	withImmutableRedaction,
 } from "../src/redaction";
-import { emailDetector, owned, textModel } from "./fixtures";
+import { emailDetector, type MockModel, owned, textModel } from "./fixtures";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
-function promptCaptureModel(received: { prompt: string }): V2Model {
+function promptCaptureModel(received: { prompt: string }): MockModel {
 	return {
 		specificationVersion: "v4",
 		provider: "mock",
@@ -62,7 +62,7 @@ describe("createClaw redaction group", () => {
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
 			redaction: { posture: "raw" },
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		expect(
 			warnings.filter((message) => message.includes('posture "raw"')),
@@ -274,7 +274,6 @@ describe("governed read path (view + forgetSubject)", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "user:actor-1",
 			name: "assistant",
 		});
 		const thread = await claw.api.createThread({

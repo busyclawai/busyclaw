@@ -21,7 +21,7 @@ describe("createClaw warn seam", () => {
 			// A durable mapping store without indexKey — the keyless-durable warning fires at boot.
 			// (Bare-array shorthand: strict posture over these detectors, no indexKey.)
 			redaction: [emailDetector],
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		expect(
 			warnings.some(
@@ -44,7 +44,7 @@ describe("createClaw warn seam", () => {
 					secrets: { expects: [{ name: "BUSYCLAW_TEST_UNRESOLVABLE" }] },
 				},
 			],
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 		});
 		// Boot validation is fire-and-forget — wait for the probe to land.
 		await vi.waitFor(() => {

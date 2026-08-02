@@ -6,6 +6,7 @@
 // scopes, never a kind/tier/role, and the LEVEL ordering (`read < use < manage`) is Cedar's, not a
 // TS compare.
 
+import { type Principal, userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	API_ACCESS_BASELINE,
@@ -24,8 +25,8 @@ const engine = cedarApiEngine({
 	createMethods: ["createClaw"],
 });
 
-const ALICE = "user:alice";
-const BOB = "user:bob";
+const ALICE = userPrincipal("alice");
+const BOB = userPrincipal("bob");
 
 /** A claw owned by ALICE, in an opaque scope, no grants — the baseline resource for the tests. */
 const aliceClaw: ApiResourceShape = {
@@ -38,7 +39,7 @@ const aliceClaw: ApiResourceShape = {
 function decide(input: {
 	method: string;
 	level: "read" | "use" | "manage";
-	principal: string | undefined;
+	principal: Principal | undefined;
 	resource?: ApiResourceShape;
 	scopes?: readonly PrincipalScope[];
 }) {
@@ -65,7 +66,13 @@ describe("decideApiCall — the principal floor", () => {
 	});
 
 	it("a blank / whitespace principal → deny (never equals a sentinel createdBy)", async () => {
-		for (const blank of ["", "   ", "\t"]) {
+		// Cast deliberately, and this is the one shape that earns it: the brand is a COMPILE-time
+		// guarantee over code busyclaw owns, and the floor exists for the values that arrive from
+		// somewhere it does not — a decoded token, a stored row, a request body. Feeding a well-formed
+		// principal here would test the compiler, not the floor.
+		for (const blank of ["", "   ", "\t"].map(
+			(b) => b as unknown as Principal,
+		)) {
 			const result = await decide({
 				method: "getClaw",
 				level: "read",
@@ -214,7 +221,7 @@ describe("decideApiCall — grant (generic, stubbed as data, leveled Cedar `in`)
 		const publicGrant = await decide({
 			method: "getClaw",
 			level: "read",
-			principal: "user:stranger",
+			principal: userPrincipal("stranger"),
 			resource: {
 				...aliceClaw,
 				grants: [{ principalRef: "public", level: "read" }],

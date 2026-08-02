@@ -12,7 +12,12 @@ import { cedar } from "@busyclaw/policy-cedar";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
-import { durableRedactor, owned, type V2Model } from "./fixtures";
+import {
+	durableRedactor,
+	type MockModel,
+	owned,
+	type V2Model,
+} from "./fixtures";
 
 type WireCall = { name: string; input?: string };
 
@@ -34,7 +39,7 @@ const search = (query: string): WireCall => ({
 function callingModel(
 	script: WireCall | readonly WireCall[],
 	seen: { results: string[]; offered: string[] },
-): V2Model {
+): MockModel {
 	const calls = Array.isArray(script)
 		? (script as readonly WireCall[])
 		: [script as WireCall];
@@ -116,10 +121,11 @@ const publishTool = (ran: string[]): ToolDefinition =>
 		{ access: "read" },
 	);
 
-const docsPlugin = (ran: string[]): BusyclawPlugin => ({
-	id: "docs",
-	tools: { admin: { publish: publishTool(ran) } },
-});
+const docsPlugin = (ran: string[]) =>
+	({
+		id: "docs",
+		tools: { admin: { publish: publishTool(ran) } },
+	}) satisfies BusyclawPlugin;
 
 describe("busyclaw__search — what is there, and what it takes", () => {
 	it("returns the canonical path, the description and the input SCHEMA", async () => {
@@ -221,7 +227,7 @@ const GUIDANCE =
  *  AUDIENCE on it is what decides which reader gets it. Both are on the same rule here, which is how
  *  they are actually written: `@escalate` names who can unblock it, `@guidance` tells the agent what
  *  to do about it. */
-const escalationPlugin: BusyclawPlugin = {
+const escalationPlugin = {
 	id: "escalations-test",
 	policyAnnotations: [
 		{ key: "escalate" },
@@ -237,7 +243,7 @@ const escalationPlugin: BusyclawPlugin = {
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
 		},
 	],
-};
+} satisfies BusyclawPlugin;
 
 describe("busyclaw__search — disclosing what the floor would say", () => {
 	it("marks a usable tool available, and passes the parking one's guidance — but never the target", async () => {

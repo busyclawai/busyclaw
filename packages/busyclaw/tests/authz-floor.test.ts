@@ -5,7 +5,10 @@
 // the engine here — the engine is the assembly's; `cedar()` only contributes policy TEXT.
 
 import type { BusyclawPlugin } from "@busyclaw/contracts";
-import { MODEL_ANNOTATION_MAX_LENGTH } from "@busyclaw/contracts";
+import {
+	MODEL_ANNOTATION_MAX_LENGTH,
+	userPrincipal,
+} from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
 import { cedar } from "@busyclaw/policy-cedar";
 import { runtimeRunOptionsWithCaller } from "@busyclaw/runtime";
@@ -14,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
 import {
 	durableRedactor,
+	type MockModel,
 	owned,
 	textModel,
 	type V2Model,
@@ -21,7 +25,7 @@ import {
 } from "./fixtures";
 
 /** A mock model that calls `toolName` once (step 0), then answers "done" (step 1). */
-function toolCallModel(toolName: string): V2Model {
+function toolCallModel(toolName: string): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -67,7 +71,7 @@ function toolCallModel(toolName: string): V2Model {
 }
 
 /** The same, but recording every tool RESULT it is handed back — what the MODEL actually reads. */
-function resultRecordingModel(toolName: string, seen: string[]): V2Model {
+function resultRecordingModel(toolName: string, seen: string[]): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -232,7 +236,7 @@ describe("createClaw authz floor (slice 0)", () => {
 describe("identity seam — audit #7 (the stamped principal is the ONE the floor reads)", () => {
 	it("a forged ctx.principal does NOT drive the decision; audit records the stamped principal", async () => {
 		// The inverted #7 repro: a FORGED unprefixed `principal: "admin"` in the ctx, next to the stamped
-		// `busyclaw__principal: "user:bob"` the caller seeds. A slice FORBIDS bob's read (but would let the
+		// `busyclaw__principal: userPrincipal("bob")` the caller seeds. A slice FORBIDS bob's read (but would let the
 		// forged admin read, since SYSTEM_POSTURE permits reads for any principal).
 		let readRan = false;
 		const audit = createMemoryAudit();
@@ -254,7 +258,7 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 		const result = await claw.$context.runtime.generate(
 			"read",
 			{ principal: "admin" },
-			runtimeRunOptionsWithCaller(undefined, "user:bob"),
+			runtimeRunOptionsWithCaller(undefined, userPrincipal("bob")),
 		);
 		// DENIED — the mapper used the STAMPED bob (whom the forbid targets), not the forged admin (whom
 		// the floor would have let read). Pre-fix (mapper read `ctx.principal`), this read would have RUN.
@@ -263,7 +267,7 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 		// …and the audit recorded bob — the SAME identity the decision was made as (no divergence).
 		const readEntry = audit.entries().find((entry) => entry.name === "readDoc");
 		expect(readEntry?.status).toBe("denied");
-		expect(readEntry?.principal).toBe("user:bob");
+		expect(readEntry?.principal).toBe(userPrincipal("bob"));
 	});
 
 	it("the caller of a run becomes the floor's principal (the seed, end-to-end through the api)", async () => {
@@ -285,15 +289,15 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 					}),
 				],
 			}),
-			"user:alice",
+			userPrincipal("alice"),
 		);
-		// The api caller `{ principal: "user:alice" }` (injected by withPrincipal at arg index 1) is seeded
+		// The api caller `{ principal: userPrincipal("alice") }` (injected by withPrincipal at arg index 1) is seeded
 		// as `busyclaw__principal` in the trusted context assembly.
 		const result = await claw.api.generate({ prompt: "read", ctx: {} });
 		expect(result.status).toBe("completed");
 		expect(readRan).toBe(false);
 		const readEntry = audit.entries().find((entry) => entry.name === "readDoc");
-		expect(readEntry?.principal).toBe("user:alice");
+		expect(readEntry?.principal).toBe(userPrincipal("alice"));
 	});
 
 	it("no stamped principal → the floor fails CLOSED (a modeled action is refused)", async () => {
@@ -319,33 +323,34 @@ describe("identity seam — audit #7 (the stamped principal is the ONE the floor
 // owns the meaning), and a declared key on a DETERMINING policy rides the decision out to an
 // after-gate. That is how an escalation gets routed without Cedar needing a third decision type.
 describe("policy annotations — declared by plugins, carried on the decision", () => {
-	const escalationPlugin = (seen: string[]): BusyclawPlugin => ({
-		id: "escalation",
-		// The declaration IS the allowlist: only these keys leave the engine.
-		policyAnnotations: [{ key: "escalate" }],
-		policies: [
-			{
-				name: "escalate:accessibility-team",
-				mode: "enforce",
-				// The TOOL floor: `Action::"writes"` is an agent-surface action group.
-				plane: "tool",
-				cedar: `@escalate("team:accessibility")
+	const escalationPlugin = (seen: string[]) =>
+		({
+			id: "escalation",
+			// The declaration IS the allowlist: only these keys leave the engine.
+			policyAnnotations: [{ key: "escalate" }],
+			policies: [
+				{
+					name: "escalate:accessibility-team",
+					mode: "enforce",
+					// The TOOL floor: `Action::"writes"` is an agent-surface action group.
+					plane: "tool",
+					cedar: `@escalate("team:accessibility")
 permit(principal, action in Action::"writes", resource) when { context.confirmationUsed };`,
-			},
-		],
-		afterGates: [
-			{
-				id: "escalation-router",
-				matcher: () => true,
-				handler: (_call, _ctx, outcome) => {
-					// The plugin acts on its OWN annotation — here just recording where it would route.
-					if ("annotations" in outcome && outcome.annotations?.escalate) {
-						seen.push(outcome.annotations.escalate);
-					}
 				},
-			},
-		],
-	});
+			],
+			afterGates: [
+				{
+					id: "escalation-router",
+					matcher: () => true,
+					handler: (_call, _ctx, outcome) => {
+						// The plugin acts on its OWN annotation — here just recording where it would route.
+						if ("annotations" in outcome && outcome.annotations?.escalate) {
+							seen.push(outcome.annotations.escalate);
+						}
+					},
+				},
+			],
+		}) satisfies BusyclawPlugin;
 
 	it("a declared annotation on the deciding policy reaches the after-gate", async () => {
 		const routed: string[] = [];
@@ -423,7 +428,7 @@ describe("policy annotations — the audience wall, end to end", () => {
 		guidance?: string;
 	}) => {
 		const { db, redactor } = durableRedactor();
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "salary-policy",
 			policyAnnotations: [
 				{ key: "escalate" },
@@ -450,7 +455,7 @@ forbid(principal, action == Action::"read_salary", resource);`,
 					},
 				},
 			],
-		};
+		} satisfies BusyclawPlugin;
 		return owned({
 			database: db,
 			model: resultRecordingModel("read_salary", input.seen),
@@ -561,18 +566,19 @@ describe("the floor's action inventory has no holes (H-04)", () => {
 // happened to apply.
 
 describe("policy planes are isolated", () => {
-	const wideOpen = (plane: "tool" | "api" | "both"): BusyclawPlugin => ({
-		id: `wide:${plane}`,
-		policies: [
-			{
-				name: `wide:${plane}`,
-				mode: "enforce",
-				// Names no resource type, so nothing about it says which plane it is for.
-				cedar: "permit(principal, action, resource);",
-				plane,
-			},
-		],
-	});
+	const wideOpen = (plane: "tool" | "api" | "both") =>
+		({
+			id: `wide:${plane}`,
+			policies: [
+				{
+					name: `wide:${plane}`,
+					mode: "enforce",
+					// Names no resource type, so nothing about it says which plane it is for.
+					cedar: "permit(principal, action, resource);",
+					plane,
+				},
+			],
+		}) satisfies BusyclawPlugin;
 
 	it("a TOOL-plane permit does not reach the product api", async () => {
 		// The defect, stated as the thing that must not happen: a stranger must still be denied a
@@ -586,11 +592,10 @@ describe("policy planes are isolated", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "user:actor-1",
 			name: "private",
 		});
 
-		const stranger = withPrincipal(claw, "user:actor-2").api;
+		const stranger = withPrincipal(claw, userPrincipal("actor-2")).api;
 		await expect(stranger.getClaw({ id: agent.id })).rejects.toThrow();
 	});
 
@@ -604,11 +609,10 @@ describe("policy planes are isolated", () => {
 		});
 		const agent = await claw.api.createClaw({
 			id: "claw-1",
-			createdBy: "user:actor-1",
 			name: "private",
 		});
 
-		const stranger = withPrincipal(claw, "user:actor-2").api;
+		const stranger = withPrincipal(claw, userPrincipal("actor-2")).api;
 		await expect(stranger.getClaw({ id: agent.id })).resolves.toBeDefined();
 	});
 });

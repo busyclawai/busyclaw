@@ -4,7 +4,7 @@ import type {
 	ClawEngineHandle,
 	ClawRunReadModel,
 } from "../src/index";
-import { drainWork } from "../src/index";
+import { drainWork, userPrincipal } from "../src/index";
 
 type RuntimeLike = {
 	run: (prompt: string) => Promise<{ prompt: string; status: "ok" }>;
@@ -87,7 +87,7 @@ describe("engine-core contract", () => {
 			engine.startRun({
 				ctx: { team: "acme" },
 				prompt: "hello",
-				run: { principal: "alice", id: "run-id", team: "acme" },
+				run: { principal: userPrincipal("alice"), id: "run-id", team: "acme" },
 			}),
 		).resolves.toEqual({ id: "run-id" });
 		await expect(

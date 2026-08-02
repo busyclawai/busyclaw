@@ -42,24 +42,24 @@ describe("runtime context", () => {
 		for (const [name, role] of [
 			["acme", "approver"],
 			["platform", "member"],
-		]) {
+		] as const) {
 			const invite = await team.invite({
 				team: name,
 				email: "bob@x.com",
 				role,
 			});
-			await team.accept(invite.id, "bob");
+			await team.accept(invite.id, userPrincipal("bob"));
 		}
 
 		const resolve = resolverFor({
-			identity: () => "bob",
+			identity: () => userPrincipal("bob"),
 			membership: principalMemberships({ membershipsOf: team.membershipsOf }),
 		});
 		// No `team` on the context: which boundary is "active" is not an input any more. The predecessor
 		// had to be told, because it could carry only one.
 		const ctx = await resolve({});
 
-		expect(ctx[PRINCIPAL_CONTEXT_KEY]).toBe("bob");
+		expect(ctx[PRINCIPAL_CONTEXT_KEY]).toBe(userPrincipal("bob"));
 		expect(ctx[MEMBERSHIPS_CONTEXT_KEY]).toEqual([
 			{ scope: "team", scopeId: "acme", role: "approver" },
 			{ scope: "team", scopeId: "platform", role: "member" },

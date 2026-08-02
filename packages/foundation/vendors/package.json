@@ -2,7 +2,7 @@
 	"name": "@busyclaw/vendors",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Vendor-coupled authoring glue for busyclaw, one subpath per vendor. `@busyclaw/vendors/ai-sdk`: tool() defines a governed AI-SDK tool in one place — the model-facing definition plus the governance stamp. Feather-light: contracts + the vendor SDK only, no runtime.",
+	"description": "Vendor-coupled authoring glue for busyclaw, one subpath per vendor. `@busyclaw/vendors/ai-sdk`: tool() defines a governed AI-SDK tool in one place \u2014 the model-facing definition plus the governance stamp. Feather-light: contracts + the vendor SDK only, no runtime.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
@@ -28,7 +28,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},

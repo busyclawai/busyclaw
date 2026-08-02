@@ -236,7 +236,8 @@ describe("deterministic placeholders (indexKey)", () => {
 				findByHash: () => (lost ? WINNER : null),
 				resolve: (placeholder) =>
 					placeholder === WINNER.placeholder ? WINNER.original : null,
-				deleteForSubject: () => {},
+				deleteForSubject: () => 0,
+				isErased: () => false,
 			},
 		};
 	}
@@ -299,7 +300,8 @@ describe("deterministic placeholders (indexKey)", () => {
 			},
 			findByHash: () => null,
 			resolve: () => null,
-			deleteForSubject: () => {},
+			deleteForSubject: () => 0,
+			isErased: () => false,
 		};
 		const redactor = createStoredRedactor({
 			detector: emailDetector,
@@ -379,7 +381,8 @@ describe("deterministic placeholders (indexKey)", () => {
 			save: () => {},
 			resolve: () => null,
 			findByHash: () => null,
-			deleteForSubject: () => {},
+			deleteForSubject: () => 0,
+			isErased: () => false,
 		};
 		createStoredRedactor({ mappings: durableShim, warn });
 		expect(warn).toHaveBeenCalledTimes(1);

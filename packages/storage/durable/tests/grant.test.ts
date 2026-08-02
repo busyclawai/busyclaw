@@ -1,3 +1,4 @@
+import { userPrincipal } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createAccessGrantStore } from "../src/grant";
@@ -13,18 +14,18 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 		const record = await store.create({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 			permission: "use",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 		expect(record.id).toMatch(/^[0-9a-f]{32}$/);
 		expect(record.createdAt).toBe("2026-01-01T00:00:00Z");
 		expect(record).toMatchObject({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 			permission: "use",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 	});
 
@@ -33,17 +34,17 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 		await store.create({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 			permission: "manage",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 		// A grant on a DIFFERENT resource of the same kind must not leak in.
 		await store.create({
 			resourceKind: "claw",
 			resourceId: "claw-2",
-			principalRef: "user:carol",
+			principalRef: userPrincipal("carol"),
 			permission: "read",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 		// A grant of a DIFFERENT kind, same id, must not leak in either (kinds are opaque + distinct).
 		await store.create({
@@ -51,7 +52,7 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			resourceId: "claw-1",
 			principalRef: "public",
 			permission: "read",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 
 		const grants = await store.listForResources([
@@ -59,7 +60,7 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 		]);
 		// The PEP-facing projection: { principalRef, level } only — audit columns stay in the store.
 		expect(grants.get("claw")?.get("claw-1")).toEqual([
-			{ principalRef: "user:bob", level: "manage" },
+			{ principalRef: userPrincipal("bob"), level: "manage" },
 		]);
 		// Neither the same-kind sibling nor the same-id other kind came along.
 		expect(grants.get("claw")?.get("claw-2")).toBeUndefined();
@@ -69,24 +70,28 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 	it("answers for many resources across kinds in one call", async () => {
 		const store = createAccessGrantStore(memoryAdapter());
 		for (const row of [
-			{ resourceKind: "claw", resourceId: "claw-1", principalRef: "user:bob" },
+			{
+				resourceKind: "claw",
+				resourceId: "claw-1",
+				principalRef: userPrincipal("bob"),
+			},
 			{
 				resourceKind: "claw",
 				resourceId: "claw-2",
-				principalRef: "user:carol",
+				principalRef: userPrincipal("carol"),
 			},
 			{ resourceKind: "thread", resourceId: "t-1", principalRef: "public" },
 			// Not asked for — must not come back even though its kind is.
 			{
 				resourceKind: "claw",
 				resourceId: "claw-9",
-				principalRef: "user:mallory",
+				principalRef: userPrincipal("mallory"),
 			},
 		]) {
 			await store.create({
 				...row,
 				permission: "read",
-				grantedBy: "user:alice",
+				grantedBy: userPrincipal("alice"),
 			});
 		}
 
@@ -98,10 +103,10 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			{ resourceKind: "claw", resourceId: "claw-nothing" },
 		]);
 		expect(grants.get("claw")?.get("claw-1")).toEqual([
-			{ principalRef: "user:bob", level: "read" },
+			{ principalRef: userPrincipal("bob"), level: "read" },
 		]);
 		expect(grants.get("claw")?.get("claw-2")).toEqual([
-			{ principalRef: "user:carol", level: "read" },
+			{ principalRef: userPrincipal("carol"), level: "read" },
 		]);
 		expect(grants.get("thread")?.get("t-1")).toEqual([
 			{ principalRef: "public", level: "read" },
@@ -120,16 +125,16 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 		await store.create({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 			permission: "read",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 		await store.create({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 			permission: "manage",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 		// A grant to a DIFFERENT principal on the same resource must survive the unshare.
 		await store.create({
@@ -137,13 +142,13 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			resourceId: "claw-1",
 			principalRef: "public",
 			permission: "read",
-			grantedBy: "user:alice",
+			grantedBy: userPrincipal("alice"),
 		});
 
 		const removed = await store.delete({
 			resourceKind: "claw",
 			resourceId: "claw-1",
-			principalRef: "user:bob",
+			principalRef: userPrincipal("bob"),
 		});
 		expect(removed).toBe(2);
 		expect(
@@ -164,9 +169,9 @@ describe("createAccessGrantStore — the generic shareable-resource ACL", () => 
 			store.create({
 				resourceKind: "claw",
 				resourceId: "claw-1",
-				principalRef: "user:bob",
+				principalRef: userPrincipal("bob"),
 				permission: "activate" as never,
-				grantedBy: "user:alice",
+				grantedBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow();
 	});

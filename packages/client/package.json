@@ -2,7 +2,7 @@
 	"name": "@busyclaw/client",
 	"version": "0.0.0",
 	"type": "module",
-	"description": "The vanilla busyclaw client: table-driven base api calls, convention-routed plugin namespaces over a recursive proxy, and nanostores reactivity — typed from `typeof claw` with zero server runtime in the bundle.",
+	"description": "The vanilla busyclaw client: table-driven base api calls, convention-routed plugin namespaces over a recursive proxy, and nanostores reactivity \u2014 typed from `typeof claw` with zero server runtime in the bundle.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
@@ -39,7 +39,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run tests",
 		"typecheck": "tsc --noEmit"
 	},
@@ -60,6 +60,7 @@
 		"@busyclaw/adapter-core": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
+		"@types/node": "26.1.1",
 		"@types/react": "19.2.17",
 		"@types/react-dom": "19.2.3",
 		"busyclaw": "workspace:*",

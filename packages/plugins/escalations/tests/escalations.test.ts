@@ -262,7 +262,7 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 			},
 			// The plugin takes no warn of its own: the door is `createClaw({ warn })`, threaded through
 			// the runtime and governance into the after-gate handler. A host configures one door, once.
-			warn: (message) => void warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 			plugins: [
 				escalations({
 					onEscalate: () => {

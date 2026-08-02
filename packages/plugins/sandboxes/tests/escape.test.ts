@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Isolation hardening — ESCAPE: a hostile guest cannot reach the network, the host filesystem,
 // host process/env globals, or host internals. Every test encodes a boundary that MUST hold; a
 // failure here is a genuine finding, not a flaky test. Provider-level (executeInSandbox + a stub

@@ -19,7 +19,12 @@ import { cedar } from "@busyclaw/policy-cedar";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw, govern } from "../src/index";
-import { durableRedactor, owned, type V2Model } from "./fixtures";
+import {
+	durableRedactor,
+	type MockModel,
+	owned,
+	type V2Model,
+} from "./fixtures";
 
 /** One wire call the mock model emits: a tool name and the JSON input beside it. */
 type WireCall = { name: string; input?: string };
@@ -38,7 +43,7 @@ const viaExecute = (
 function callingModel(
 	call: WireCall | null,
 	offered: { names: string[] },
-): V2Model {
+): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -109,13 +114,14 @@ const recordingTool = (
 	);
 
 /** The reference plugin: one top-level tool and one grouped tool, at both access classes. */
-const docsPlugin = (ran: string[]): BusyclawPlugin => ({
-	id: "docs",
-	tools: {
-		search: recordingTool(ran, "search", "read"),
-		admin: { publish: recordingTool(ran, "publish", "write") },
-	},
-});
+const docsPlugin = (ran: string[]) =>
+	({
+		id: "docs",
+		tools: {
+			search: recordingTool(ran, "search", "read"),
+			admin: { publish: recordingTool(ran, "publish", "write") },
+		},
+	}) satisfies BusyclawPlugin;
 
 describe("plugin.tools — nesting, addressing, and dispatch", () => {
 	it("a plugin's tools are DISCOVERABLE by default — the model is offered the meta-tools", async () => {
@@ -338,7 +344,7 @@ describe("plugin.tools — one id past the provider edge", () => {
 			toolResults: [],
 		};
 		const inner = callingModel(viaExecute("docs.admin.publish"), { names: [] });
-		const model: V2Model = {
+		const model: MockModel = {
 			...inner,
 			doGenerate: async (options) => {
 				for (const message of options.prompt) {

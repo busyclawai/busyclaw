@@ -7,6 +7,7 @@ import {
 	type RouteLevel,
 	userPrincipal,
 } from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { drainOutbox } from "../src/core/dispatch";
@@ -92,7 +93,9 @@ type RegistrationsApi = {
 	revoke: (input: unknown, ctx: AuthzContext) => Promise<unknown>;
 };
 
-function registrationsApi(plugin: ChannelsPlugin): RegistrationsApi {
+function registrationsApi(plugin: {
+	api?: (input: Record<string, unknown>) => unknown;
+}): RegistrationsApi {
 	const api = plugin.api?.({}) as {
 		channels: { registrations: RegistrationsApi };
 	};
@@ -147,14 +150,14 @@ function configured(
 	plugin: ChannelsPlugin,
 	// Pass one when the TEST needs to reach the same rows the plugin writes.
 	adapter: Adapter = db(),
-): ChannelsPlugin {
-	const built = plugin.configure?.({ adapter });
+) {
+	const built = plugin.configure?.({ adapter, secrets: buildSecrets() });
 	if (!built) throw new Error("expected configure to build the plugin");
 	return built;
 }
 
 /** A BYO channels() plugin over the given transports. */
-function registrationsPlugin(list: readonly Channel[]): ChannelsPlugin {
+function registrationsPlugin(list: readonly Channel[]) {
 	return configured(channels(list, { registrations: { enabled: true } }));
 }
 

@@ -60,7 +60,9 @@ describe("base api calls (table-driven off CLAW_API_METHOD_NAMES)", () => {
 		);
 		const client = createClawClient({ fetch });
 
-		const result = await client.createClaw({ createdBy: "user:alice" });
+		// `name`, not `createdBy` — the latter is STAMPED from the caller and is not in the input
+		// schema at all, so the body this test used to assert was a field the api never accepts.
+		const result = await client.createClaw({ name: "shared" });
 
 		expect(calls).toHaveLength(1);
 		const call = calls[0];
@@ -69,9 +71,7 @@ describe("base api calls (table-driven off CLAW_API_METHOD_NAMES)", () => {
 		expect(new Headers(call?.init?.headers).get("content-type")).toBe(
 			"application/json",
 		);
-		expect(JSON.parse(String(call?.init?.body))).toEqual({
-			createdBy: "user:alice",
-		});
+		expect(JSON.parse(String(call?.init?.body))).toEqual({ name: "shared" });
 		expect(result.error).toBeNull();
 		expect(result.data).toEqual({ id: "claw-1" });
 	});
@@ -321,7 +321,6 @@ describe("reactivity — signal toggles and query atoms", () => {
 
 		const granted = await client.grantApproval({
 			approvalId: "appr-1",
-			by: "user:reviewer",
 		});
 		expect(granted.error).toBeNull();
 

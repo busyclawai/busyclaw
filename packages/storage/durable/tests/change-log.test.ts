@@ -1,3 +1,4 @@
+import { userPrincipal } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createRegistryStores } from "../src/registry";
@@ -17,7 +18,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scopeId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "reads-only" },
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 		expect(record.id).toMatch(/^[0-9a-f]{32}$/);
 		expect(record.at).toBe("2026-01-01T00:00:00Z");
@@ -29,7 +30,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 		expect(listed[0]).toMatchObject({
 			kind: "policy_changed",
 			summary: { slice: "reads-only" },
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 	});
 
@@ -39,7 +40,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "spec_registered",
-			by: "user:alice",
+			by: userPrincipal("alice"),
 		});
 		expect(record.summary).toBeUndefined();
 	});
@@ -53,7 +54,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "overlay_changed",
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 		expect(
 			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
@@ -62,7 +63,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "policy_changed",
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 		expect(
 			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
@@ -75,13 +76,13 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "policy_changed",
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 		await authzChanges.append({
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "policy_changed",
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 		expect(
 			await authzChanges.count({ scope: "organization", scopeId: "org-a" }),
@@ -100,20 +101,20 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 			scopeId: "org-a",
 			kind: "spec_registered",
 			summary: { source: "petstore" },
-			by: "user:alice",
+			by: userPrincipal("alice"),
 		});
 		await authzChanges.append({
 			scope: "organization",
 			scopeId: "org-b",
 			kind: "policy_changed",
-			by: "user:bob",
+			by: userPrincipal("bob"),
 		});
 		await authzChanges.append({
 			scope: "organization",
 			scopeId: "org-a",
 			kind: "policy_changed",
 			summary: { slice: "guard" },
-			by: "user:alice",
+			by: userPrincipal("alice"),
 		});
 		const a = await authzChanges.listForScope({
 			scope: "organization",
@@ -134,7 +135,7 @@ describe("createRegistryStores — authz_change (append-only log)", () => {
 				scopeId: "org-bad",
 				kind: "mystery", // not a known change kind
 				at: "t",
-				by: "user:a",
+				by: userPrincipal("a"),
 			},
 		});
 		await expect(
@@ -150,7 +151,7 @@ const slice = (scopeId: string, name: string) => ({
 	cedar: `forbid(principal, action == Action::"x", resource);`,
 	mode: "enforce" as const,
 	plane: "tool" as const,
-	updatedBy: "user:admin",
+	updatedBy: userPrincipal("admin"),
 });
 
 const overlay = (scopeId: string, actionId: string) => ({
@@ -158,7 +159,7 @@ const overlay = (scopeId: string, actionId: string) => ({
 	scopeId,
 	actionId,
 	access: "read" as const,
-	updatedBy: "user:admin",
+	updatedBy: userPrincipal("admin"),
 });
 
 describe("authz changes are appended on every mutation", () => {
@@ -177,7 +178,7 @@ describe("authz changes are appended on every mutation", () => {
 		expect(change).toMatchObject({
 			kind: "policy_changed",
 			summary: { slice: "guard" },
-			by: "user:admin",
+			by: userPrincipal("admin"),
 		});
 	});
 

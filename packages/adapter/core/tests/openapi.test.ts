@@ -6,6 +6,7 @@
 
 import type { BusyclawPluginConfigureContext } from "@busyclaw/contracts";
 import { endpoints, route } from "@busyclaw/contracts";
+import { buildSecrets } from "@busyclaw/secrets";
 import { secrets, storedSecretModels } from "@busyclaw/secrets-plugin";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { type } from "arktype";
@@ -20,9 +21,9 @@ const SECRET_STORE_TEST_KEY = "0123456789abcdef".repeat(4);
 function secretsApiOverMemory() {
 	const plugin = secrets([], { store: { key: SECRET_STORE_TEST_KEY } });
 	const adapter = entityAdapter(memoryAdapter(), storedSecretModels);
-	const runtime = plugin.configure?.({
-		adapter,
-	} as BusyclawPluginConfigureContext);
+	// `secrets` is REQUIRED on the context (the assembly always builds one over the env default), so
+	// the plugin never `?.`-chains it. The old cast let this stand a context up without one.
+	const runtime = plugin.configure?.({ adapter, secrets: buildSecrets() });
 	const api = runtime?.api?.(undefined);
 	if (!api) throw new Error("expected the secrets plugin to contribute an api");
 	return api;

@@ -1,4 +1,4 @@
-import { conflictError, UNSCOPED } from "@busyclaw/contracts";
+import { conflictError, UNSCOPED, userPrincipal } from "@busyclaw/contracts";
 import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
 import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
@@ -19,7 +19,7 @@ const specInput = (scopeId: string, source = "petstore") => ({
 		skipped: [],
 		warnings: [],
 	},
-	registeredBy: "user:alice",
+	registeredBy: userPrincipal("alice"),
 });
 
 const toolInput = (scopeId: string, name = "addPet", source = "petstore") => ({
@@ -30,7 +30,7 @@ const toolInput = (scopeId: string, name = "addPet", source = "petstore") => ({
 	address: `${source}.${name}`,
 	description: "Create a pet",
 	inputSchema: { type: "object", properties: { name: { type: "string" } } },
-	governance: { access: "write", groups: ["creates", "tag:pets"] },
+	governance: { access: "write" as const, groups: ["creates", "tag:pets"] },
 	binding: { method: "post", path: "/pets" },
 	// Where this row's credential may be sent, and how it is placed — pinned at registration, not
 	// re-derived from the binding at use time.
@@ -47,7 +47,7 @@ const overlayInput = (scopeId: string, actionId = "petstore.addPet") => ({
 	groups: ["audited"],
 	resource: "Pet",
 	audit: true,
-	updatedBy: "user:alice",
+	updatedBy: userPrincipal("alice"),
 });
 
 const stamps = () => {
@@ -66,7 +66,7 @@ describe("createRegistryStores over memory adapter", () => {
 		);
 		expect(read?.specBlob).toEqual(specInput("org-a").specBlob); // parsed back, not a string
 		expect(read?.report).toEqual(specInput("org-a").report);
-		expect(read?.registeredBy).toBe("user:alice");
+		expect(read?.registeredBy).toBe(userPrincipal("alice"));
 	});
 
 	it("spec_registration upsert REPLACES by (scope, scopeId, source), id preserved", async () => {
@@ -77,7 +77,7 @@ describe("createRegistryStores over memory adapter", () => {
 		const second = await specRegistrations.upsert({
 			...specInput("org-a"),
 			contentVersion: "spec-v2",
-			registeredBy: "user:bob",
+			registeredBy: userPrincipal("bob"),
 		});
 		expect(second.id).toBe(first.id); // replace-in-place
 		expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
@@ -88,7 +88,7 @@ describe("createRegistryStores over memory adapter", () => {
 		});
 		expect(all).toHaveLength(1); // one row per (org, source)
 		expect(all[0]?.contentVersion).toBe("spec-v2");
-		expect(all[0]?.registeredBy).toBe("user:bob");
+		expect(all[0]?.registeredBy).toBe(userPrincipal("bob"));
 	});
 
 	it("registered_tool round-trips schema/governance/binding and updates in place", async () => {
@@ -149,7 +149,7 @@ describe("createRegistryStores over memory adapter", () => {
 			scopeId: "org-a",
 			actionId: "petstore.addPet",
 			access: "write",
-			updatedBy: "user:bob",
+			updatedBy: userPrincipal("bob"),
 		});
 		const listed = await factsOverlay.listForScope({
 			scope: "organization",
@@ -222,7 +222,7 @@ describe("createRegistryStores over memory adapter", () => {
 				scopeId: "org-bad",
 				source: "x",
 				contentVersion: "v",
-				registeredBy: "user:a",
+				registeredBy: userPrincipal("a"),
 				createdAt: "t",
 				updatedAt: "t",
 			},
@@ -428,7 +428,7 @@ describe("nothing may be stored in a reserved boundary", () => {
 				cedar: "permit(principal, action, resource);",
 				mode: "enforce" as const,
 				plane: "tool" as const,
-				updatedBy: "user:admin",
+				updatedBy: userPrincipal("admin"),
 			}),
 		).rejects.toThrow(/reserved/);
 	});

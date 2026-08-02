@@ -8,18 +8,21 @@ import type { BusyclawPlugin } from "@busyclaw/contracts";
 import {
 	accessGrantFields,
 	accessGrantPrincipalRef,
+	userPrincipal,
 } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import { durableRedactor, textModel } from "./fixtures";
 
-const ALICE = "user:alice";
-const BOB = "user:bob";
-const CAROL = "user:carol";
-const STRANGER = "user:stranger";
+const ALICE = userPrincipal("alice");
+const BOB = userPrincipal("bob");
+const CAROL = userPrincipal("carol");
+const STRANGER = userPrincipal("stranger");
 
-function makeClaw(plugins: readonly BusyclawPlugin[] = []) {
+function makeClaw<const Plugins extends readonly BusyclawPlugin[]>(
+	plugins: Plugins = [] as unknown as Plugins,
+) {
 	const { db, redactor } = durableRedactor();
 	return createClaw({
 		database: db,
@@ -33,7 +36,7 @@ describe("app-authz slice 5 — a user grant goes LIVE through the share api", (
 	it("share user:bob(use) → bob is use/read-permitted, manage-denied; the owner is unaffected", async () => {
 		const claw = makeClaw();
 		const created = await claw.api.createClaw(
-			{ createdBy: ALICE, name: "shared" },
+			{ name: "shared" },
 			{ principal: ALICE },
 		);
 
@@ -44,7 +47,6 @@ describe("app-authz slice 5 — a user grant goes LIVE through the share api", (
 				resourceId: created.id,
 				principalRef: BOB,
 				permission: "use",
-				grantedBy: ALICE,
 			},
 			{ principal: ALICE },
 		);
@@ -70,17 +72,13 @@ describe("app-authz slice 5 — a user grant goes LIVE through the share api", (
 
 	it("a public grant permits ANYONE at the granted level, but not above it", async () => {
 		const claw = makeClaw();
-		const created = await claw.api.createClaw(
-			{ createdBy: ALICE },
-			{ principal: ALICE },
-		);
+		const created = await claw.api.createClaw({}, { principal: ALICE });
 		await claw.api.shareResource(
 			{
 				resourceKind: "claw",
 				resourceId: created.id,
 				principalRef: "public",
 				permission: "read",
-				grantedBy: ALICE,
 			},
 			{ principal: ALICE },
 		);
@@ -98,10 +96,7 @@ describe("app-authz slice 5 — a user grant goes LIVE through the share api", (
 describe("app-authz slice 5 — the share/unshare api is itself governed (manage on the target)", () => {
 	it("only a caller who MANAGES the target may share it; unshare revokes", async () => {
 		const claw = makeClaw();
-		const created = await claw.api.createClaw(
-			{ createdBy: ALICE },
-			{ principal: ALICE },
-		);
+		const created = await claw.api.createClaw({}, { principal: ALICE });
 
 		// bob neither owns nor holds a grant → cannot share alice's claw (manage required)
 		await expect(
@@ -111,7 +106,6 @@ describe("app-authz slice 5 — the share/unshare api is itself governed (manage
 					resourceId: created.id,
 					principalRef: CAROL,
 					permission: "read",
-					grantedBy: BOB,
 				},
 				{ principal: BOB },
 			),
@@ -124,7 +118,6 @@ describe("app-authz slice 5 — the share/unshare api is itself governed (manage
 				resourceId: created.id,
 				principalRef: BOB,
 				permission: "use",
-				grantedBy: ALICE,
 			},
 			{ principal: ALICE },
 		);
@@ -148,10 +141,7 @@ describe("app-authz slice 5 — the share/unshare api is itself governed (manage
 describe("app-authz slice 5 — thread access is its claw's ∪ its own", () => {
 	it("a claw grant reaches the thread (inheritance); a thread's own grant reaches a principal with no claw grant", async () => {
 		const claw = makeClaw();
-		const created = await claw.api.createClaw(
-			{ createdBy: ALICE },
-			{ principal: ALICE },
-		);
+		const created = await claw.api.createClaw({}, { principal: ALICE });
 		const thread = await claw.api.createThread(
 			{ clawId: created.id },
 			{ principal: ALICE },
@@ -164,7 +154,6 @@ describe("app-authz slice 5 — thread access is its claw's ∪ its own", () => 
 				resourceId: created.id,
 				principalRef: BOB,
 				permission: "use",
-				grantedBy: ALICE,
 			},
 			{ principal: ALICE },
 		);
@@ -182,7 +171,6 @@ describe("app-authz slice 5 — thread access is its claw's ∪ its own", () => 
 				resourceId: thread.id,
 				principalRef: CAROL,
 				permission: "read",
-				grantedBy: ALICE,
 			},
 			{ principal: ALICE },
 		);
@@ -192,7 +180,10 @@ describe("app-authz slice 5 — thread access is its claw's ∪ its own", () => 
 
 		// a principal with neither is denied
 		await expect(
-			claw.api.getThread({ id: thread.id }, { principal: "user:nobody" }),
+			claw.api.getThread(
+				{ id: thread.id },
+				{ principal: userPrincipal("nobody") },
+			),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 	});
 });
@@ -211,7 +202,6 @@ describe("app-authz slice 5 — fail-closed is preserved with the grant store wi
 					resourceId: "ghost",
 					principalRef: BOB,
 					permission: "read",
-					grantedBy: ALICE,
 				},
 				{ principal: ALICE },
 			),
@@ -245,7 +235,6 @@ describe("app-authz slice 5 — a plugin's shareable kind is governed with ZERO 
 					resourceId: "w1",
 					principalRef: BOB,
 					permission: "read",
-					grantedBy: ALICE,
 				},
 				{ principal: ALICE },
 			),
@@ -259,7 +248,6 @@ describe("app-authz slice 5 — a plugin's shareable kind is governed with ZERO 
 					resourceId: "w1",
 					principalRef: CAROL,
 					permission: "read",
-					grantedBy: BOB,
 				},
 				{ principal: BOB },
 			),
@@ -273,7 +261,6 @@ describe("app-authz slice 5 — a plugin's shareable kind is governed with ZERO 
 					resourceId: "g1",
 					principalRef: BOB,
 					permission: "read",
-					grantedBy: ALICE,
 				},
 				{ principal: ALICE },
 			),
@@ -288,7 +275,7 @@ describe("app-authz slice 5 — a PLUGIN-registered shareable kind is owner-isol
 	// rather than a real plugin, so the registry's regression coverage can't rot with whatever plugin
 	// happens to exist — this previously rode on the skills plugin, deleted with the package.
 	const OWNER_OF: Record<string, string> = { "doc-1": ALICE };
-	const docsPlugin: BusyclawPlugin = {
+	const docsPlugin = {
 		id: "docs",
 		shareable: [
 			{
@@ -302,7 +289,7 @@ describe("app-authz slice 5 — a PLUGIN-registered shareable kind is owner-isol
 				},
 			},
 		],
-	};
+	} satisfies BusyclawPlugin;
 
 	it("the owner may share it; a non-owner is denied", async () => {
 		const db = memoryAdapter();
@@ -362,7 +349,7 @@ describe("grantee ref shape (accessGrantPrincipalRef)", () => {
 	it("accepts `public` and any tagged authority — a new source needs no change here", () => {
 		for (const ref of [
 			"public",
-			"user:alice",
+			userPrincipal("alice"),
 			"betterauth:org_123",
 			"workday:dept_456",
 		]) {

@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // The ROOT entry must stay importable without react installed — react is an optional peer that
 // only the `./react` subpath needs. Proven at the source of truth: a walk of the relative import
 // graphs from the root and plugins entries (so a stray `import ... from "react"` anywhere in

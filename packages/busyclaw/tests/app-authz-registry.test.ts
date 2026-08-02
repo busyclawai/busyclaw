@@ -10,7 +10,7 @@ import type {
 	ClawRunReadModel,
 	ClawsStore,
 } from "@busyclaw/contracts";
-import { asPrincipal } from "@busyclaw/contracts";
+import { asPrincipal, type Principal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	buildApiPolicyEngine,
@@ -26,9 +26,17 @@ const STRANGER = "user:stranger";
 type Governed = {
 	[method: string]: (
 		input: unknown,
-		caller?: { principal?: string },
+		caller?: { principal?: Principal },
 	) => Promise<unknown>;
 };
+
+/** One governed method by name. The lookup is an index read, so it can miss — and a wrapper that
+ *  dropped a method is exactly the failure worth naming rather than "cannot invoke undefined". */
+function on(governed: Governed, method: string) {
+	const fn = governed[method];
+	if (!fn) throw new Error(`the governed api has no "${method}"`);
+	return fn;
+}
 
 // A stub api the PEP wraps — two governed reads (`getRun` = run kind, `getClaw` = claw kind). The engine
 // is stateless (its bundle depends only on the method ids + baseline), so one instance serves every test.
@@ -82,14 +90,14 @@ describe("app-authz slice 5 — run owner-isolation via the run loader", () => {
 	it("getRun is permitted for the run's principal, denied for another, denied for a ghost", async () => {
 		const governed = govern({ runs });
 		await expect(
-			governed.getRun({ id: "run-alice" }, { principal: ALICE }),
+			on(governed, "getRun")({ id: "run-alice" }, { principal: ALICE }),
 		).resolves.toEqual({ ran: { id: "run-alice" } });
 		await expect(
-			governed.getRun({ id: "run-alice" }, { principal: BOB }),
+			on(governed, "getRun")({ id: "run-alice" }, { principal: BOB }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		// a not-found run fails closed (no owner to isolate)
 		await expect(
-			governed.getRun({ id: "ghost" }, { principal: ALICE }),
+			on(governed, "getRun")({ id: "ghost" }, { principal: ALICE }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 	});
 });
@@ -151,11 +159,11 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 		});
 		// bob holds the matching membership → the team grant reaches him
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: BOB }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: BOB }),
 		).resolves.toEqual({ got: { id: "claw-1" } });
 		// carol has no membership → the SAME grant is dormant → deny
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: CAROL }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: CAROL }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 	});
 
@@ -174,14 +182,14 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 		const governed = govern({
 			clawsStore,
 			grantStore: grantStoreWith(rows),
-			warn: (message) => warnings.push(message),
+			warn: (message: string) => void warnings.push(message),
 			resolvePrincipalScopes: () => [
 				{ scope: "busyclaw:uncontained", scopeId: "-", level: "manage" },
 			],
 		});
 
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: STRANGER }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: STRANGER }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		// Dropped LOUDLY — a host emitting a reserved scope has a bug, and silence is the worst way to
 		// learn about it.
@@ -198,13 +206,13 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 
 		// no grant → a stranger is denied
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: STRANGER }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: STRANGER }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 
 		// INSERT a public grant (pure data — the same fixed engine)
 		rows.set("claw:claw-1", [{ principalRef: "public", level: "read" }]);
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: STRANGER }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: STRANGER }),
 		).resolves.toEqual({ got: { id: "claw-1" } });
 		// the decision flipped, yet the compiled bundle never moved
 		expect(
@@ -214,7 +222,7 @@ describe("app-authz slice 5 — a team grant is dormant without scopes", () => {
 		// DELETE (unshare) → flips back; bundle STILL unchanged
 		rows.delete("claw:claw-1");
 		await expect(
-			governed.getClaw({ id: "claw-1" }, { principal: STRANGER }),
+			on(governed, "getClaw")({ id: "claw-1" }, { principal: STRANGER }),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		expect(
 			loadPolicyBundle({ system: API_ACCESS_BASELINE, slices: [] }).live,

@@ -45,8 +45,11 @@ function connectedStore(options: SecretStoreOptions = {}) {
 	const db = entityAdapter(memoryAdapter(), storedSecretModels);
 	// configure fills the store/reader slots AND returns the runtime half — the management api, which
 	// closes over the same store the provider reads (so a set here resolves through provider.get).
-	const runtime = plugin.configure?.({ adapter: db });
-	const [provider] = plugin.secrets.providers;
+	const runtime = plugin.configure?.({ adapter: db, secrets: buildSecrets() });
+	const provider = plugin.secrets?.providers?.[0];
+	// A secrets plugin that contributes no provider is a real failure, and every test below reads
+	// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+	if (!provider) throw new Error("secrets() contributed no provider");
 	return {
 		api: runtime?.api?.(undefined).secrets,
 		db,
@@ -94,7 +97,10 @@ describe("secrets([], { store: true }) — the plugin shape", () => {
 		expect(plugin.id).toBe("busyclaw.secrets");
 		expect(plugin.$RequiresDatabase).toBe(true);
 		expect(plugin.schema?.stored_secret).toBeDefined();
-		const [provider] = plugin.secrets.providers;
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		expect(provider).toMatchObject({
 			name: "store",
 			tier: "data",
@@ -118,7 +124,7 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 		const record = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v1",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(record).toMatchObject({
 			scope: "personal",
@@ -132,16 +138,19 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 		const first = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v1",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		const second = await store.set({
 			name: "MY_NOTION_TOKEN",
 			value: "v2",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(second.id).toBe(first.id);
 		expect(
-			await provider.get("MY_NOTION_TOKEN", asked({ principal: "user:alice" })),
+			await provider.get(
+				"MY_NOTION_TOKEN",
+				asked({ principal: userPrincipal("alice") }),
+			),
 		).toEqual({
 			kind: "token",
 			value: "v2",
@@ -151,7 +160,7 @@ describe("stored-secrets store — (scope, scopeId, name) rows", () => {
 	it("rejects a set without a value — the store writes value-kind rows", async () => {
 		const { store } = connectedStore();
 		await expect(
-			store.set({ name: "NO_MATERIAL", createdBy: "user:alice" }),
+			store.set({ name: "NO_MATERIAL", createdBy: userPrincipal("alice") }),
 		).rejects.toThrow(/value is required/);
 	});
 });
@@ -162,20 +171,20 @@ describe("the store provider — nearest-scope resolution", () => {
 		await store.set({
 			name: "MY_TOKEN",
 			value: "org-wide",
-			createdBy: "user:admin",
+			createdBy: userPrincipal("admin"),
 			scope: "organization",
 			scopeId: "org-a",
 		});
 		await store.set({
 			name: "MY_TOKEN",
 			value: "alices-own",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(
 			await provider.get(
 				"MY_TOKEN",
 				asked({
-					principal: "user:alice",
+					principal: userPrincipal("alice"),
 					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			),
@@ -185,7 +194,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			await provider.get(
 				"MY_TOKEN",
 				asked({
-					principal: "user:bob",
+					principal: userPrincipal("bob"),
 					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			),
@@ -197,10 +206,13 @@ describe("the store provider — nearest-scope resolution", () => {
 		await store.set({
 			name: "PRIVATE",
 			value: "alices",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(
-			await provider.get("PRIVATE", asked({ principal: "user:mallory" })),
+			await provider.get(
+				"PRIVATE",
+				asked({ principal: userPrincipal("mallory") }),
+			),
 		).toBeNull();
 		// and a personal row never doubles as an org-wide one
 		expect(
@@ -215,9 +227,16 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("an ORG-LESS context resolves personal rows — org is fully additive", async () => {
 		const { provider, store } = connectedStore();
-		await store.set({ name: "MY_TOKEN", value: "v", createdBy: "user:alice" });
+		await store.set({
+			name: "MY_TOKEN",
+			value: "v",
+			createdBy: userPrincipal("alice"),
+		});
 		expect(
-			await provider.get("MY_TOKEN", asked({ principal: "user:alice" })),
+			await provider.get(
+				"MY_TOKEN",
+				asked({ principal: userPrincipal("alice") }),
+			),
 		).toEqual({
 			kind: "token",
 			value: "v",
@@ -230,7 +249,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			await provider.get(
 				"NOWHERE",
 				asked({
-					principal: "user:alice",
+					principal: userPrincipal("alice"),
 					configScope: { scope: "organization", scopeId: "org-a" },
 				}),
 			),
@@ -242,10 +261,12 @@ describe("the store provider — nearest-scope resolution", () => {
 				failingAdapter("connection refused"),
 				storedSecretModels,
 			),
+			secrets: buildSecrets(),
 		});
-		const [brokenProvider] = broken.secrets.providers;
+		const brokenProvider = broken.secrets?.providers?.[0];
+		if (!brokenProvider) throw new Error("secrets() contributed no provider");
 		await expect(
-			brokenProvider.get("ANY", asked({ principal: "user:alice" })),
+			brokenProvider.get("ANY", asked({ principal: userPrincipal("alice") })),
 		).rejects.toThrow(/connection refused/);
 	});
 
@@ -256,10 +277,14 @@ describe("the store provider — nearest-scope resolution", () => {
 				failingAdapter("SqliteError: no such table: stored_secret"),
 				storedSecretModels,
 			),
+			secrets: buildSecrets(),
 		});
-		const [provider] = plugin.secrets.providers;
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		await expect(
-			provider.get("ANY", asked({ principal: "user:alice" })),
+			provider.get("ANY", asked({ principal: userPrincipal("alice") })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(
@@ -270,9 +295,12 @@ describe("the store provider — nearest-scope resolution", () => {
 
 	it("fails loud when resolved before configure wires a database", async () => {
 		const plugin = secrets([], { store: { key: TEST_KEY } });
-		const [provider] = plugin.secrets.providers;
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		await expect(
-			provider.get("ANY", asked({ principal: "user:alice" })),
+			provider.get("ANY", asked({ principal: userPrincipal("alice") })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/secret store has no database/),
@@ -288,7 +316,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			model: "stored_secret",
 			data: {
 				id: "ptr-1",
-				createdBy: "user:alice",
+				createdBy: userPrincipal("alice"),
 				scope: "personal",
 				scopeId: "user:alice",
 				name: "PTR",
@@ -300,7 +328,7 @@ describe("the store provider — nearest-scope resolution", () => {
 			},
 		});
 		await expect(
-			provider.get("PTR", asked({ principal: "user:alice" })),
+			provider.get("PTR", asked({ principal: userPrincipal("alice") })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/pointers are not supported yet/),
@@ -314,7 +342,7 @@ describe("data-tier precedence through buildSecrets", () => {
 		await store.set({
 			name: "SHARED_NAME",
 			value: "from-store",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		// env FIRST in the listing — tier ordering must still consult the store first.
 		const secrets = buildSecrets([
@@ -322,18 +350,18 @@ describe("data-tier precedence through buildSecrets", () => {
 			provider,
 		]);
 		expect(
-			await secrets.get("SHARED_NAME", { principal: "user:alice" }),
+			await secrets.get("SHARED_NAME", { principal: userPrincipal("alice") }),
 		).toEqual({
 			kind: "token",
 			value: "from-store",
 		});
 		// a store miss falls through to the config tier — env still serves everyone else.
-		expect(await secrets.get("SHARED_NAME", { principal: "user:bob" })).toEqual(
-			{
-				kind: "token",
-				value: "from-env",
-			},
-		);
+		expect(
+			await secrets.get("SHARED_NAME", { principal: userPrincipal("bob") }),
+		).toEqual({
+			kind: "token",
+			value: "from-env",
+		});
 	});
 });
 
@@ -343,10 +371,13 @@ describe("encryption at rest", () => {
 		await store.set({
 			name: "ROUNDTRIP",
 			value: "plain-secret",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		expect(
-			await provider.get("ROUNDTRIP", asked({ principal: "user:alice" })),
+			await provider.get(
+				"ROUNDTRIP",
+				asked({ principal: userPrincipal("alice") }),
+			),
 		).toEqual({
 			kind: "token",
 			value: "plain-secret",
@@ -358,13 +389,13 @@ describe("encryption at rest", () => {
 		await store.set({
 			name: "AT_REST",
 			value: "plain-secret",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		const raw = (await db.findOne({
 			model: "stored_secret",
 			where: [
 				{ field: "scope", value: "personal" },
-				{ field: "scopeId", value: "user:alice", connector: "AND" },
+				{ field: "scopeId", value: userPrincipal("alice"), connector: "AND" },
 				{ field: "name", value: "AT_REST", connector: "AND" },
 			],
 		})) as { value?: string } | null;
@@ -418,7 +449,7 @@ describe("encryption at rest", () => {
 		it("refuses to open under another secret's name", async () => {
 			const sealed = await sealFor(
 				"personal",
-				"user:alice",
+				userPrincipal("alice"),
 				"STRIPE_KEY",
 				"sk_live_a",
 			);
@@ -462,19 +493,19 @@ describe("encryption at rest", () => {
 			await store.set({
 				name: "SHARED_NAME",
 				value: "alice-secret",
-				createdBy: "user:alice",
+				createdBy: userPrincipal("alice"),
 			});
 			await store.set({
 				name: "SHARED_NAME",
 				value: "bob-secret",
-				createdBy: "user:bob",
+				createdBy: userPrincipal("bob"),
 			});
 
 			const aliceRow = (await db.findOne({
 				model: "stored_secret",
 				where: [
 					{ field: "scope", value: "personal" },
-					{ field: "scopeId", value: "user:alice", connector: "AND" },
+					{ field: "scopeId", value: userPrincipal("alice"), connector: "AND" },
 					{ field: "name", value: "SHARED_NAME", connector: "AND" },
 				],
 			})) as { value?: string } | null;
@@ -485,7 +516,7 @@ describe("encryption at rest", () => {
 				model: "stored_secret",
 				where: [
 					{ field: "scope", value: "personal" },
-					{ field: "scopeId", value: "user:bob", connector: "AND" },
+					{ field: "scopeId", value: userPrincipal("bob"), connector: "AND" },
 					{ field: "name", value: "SHARED_NAME", connector: "AND" },
 				],
 				update: { value: aliceRow.value },
@@ -493,7 +524,7 @@ describe("encryption at rest", () => {
 
 			// Bob's read fails loud instead of returning alice's secret.
 			await expect(
-				provider.get("SHARED_NAME", asked({ principal: "user:bob" })),
+				provider.get("SHARED_NAME", asked({ principal: userPrincipal("bob") })),
 			).rejects.toThrow(/cannot decrypt stored secret/);
 		});
 	});
@@ -507,14 +538,17 @@ describe("encryption at rest", () => {
 		await seeder.set({
 			name: "LOCKED",
 			value: "material",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		// …but the plugin has no config key and its reader resolves nothing.
 		const plugin = secrets([], { store: true });
 		plugin.configure?.({ adapter: db, secrets: buildSecrets([]) });
-		const [provider] = plugin.secrets.providers;
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		await expect(
-			provider.get("LOCKED", asked({ principal: "user:alice" })),
+			provider.get("LOCKED", asked({ principal: userPrincipal("alice") })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			// secrets.require names the key and fails loud when nothing resolves it.
@@ -532,17 +566,20 @@ describe("encryption at rest", () => {
 		await seeder.set({
 			name: "ROTATED",
 			value: "material",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		const plugin = secrets([], { store: { key: OTHER_KEY } });
-		plugin.configure?.({ adapter: db });
-		const [provider] = plugin.secrets.providers;
+		plugin.configure?.({ adapter: db, secrets: buildSecrets() });
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		// M-13 made this failure NAMEABLE. It used to be "cannot decrypt" — one message covering a
 		// rotated key, a tampered row, and a relocated value alike, because the envelope carried
 		// nothing to tell them apart. The key id says which key is missing, so an operator who dropped
 		// one still in use has a fixable mistake rather than a row that has silently become garbage.
 		await expect(
-			provider.get("ROTATED", asked({ principal: "user:alice" })),
+			provider.get("ROTATED", asked({ principal: userPrincipal("alice") })),
 		).rejects.toMatchObject({
 			code: "BUSYCLAW_CONFIGURATION_ERROR",
 			message: expect.stringMatching(/no longer holds/),
@@ -562,15 +599,16 @@ describe("encryption at rest", () => {
 		await before.set({
 			name: "CARRIED",
 			value: "still-readable",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 
 		// Rotation: the NEW key first (it seals), the old one behind it (it still opens).
 		const after = createStoredSecretsStore(db, {
 			cipher: cipherFor(OTHER_KEY, TEST_KEY),
 		});
-		const row = await after.get("personal", "user:alice", "CARRIED");
-		if (!row) throw new Error("expected the row");
+		const row = await after.get("personal", userPrincipal("alice"), "CARRIED");
+		// `value` is absent on a POINTER-kind row, so the type asks; this test wrote a value-kind one.
+		if (!row?.value) throw new Error("expected a value-kind row");
 		expect(
 			await cipherFor(OTHER_KEY, TEST_KEY).open(row.value, {
 				scope: "personal",
@@ -588,17 +626,23 @@ describe("encryption at rest", () => {
 		await before.set({
 			name: "MOVED",
 			value: "v1",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
-		const sealedBefore = (await before.get("personal", "user:alice", "MOVED"))
-			?.value;
+		const sealedBefore = (
+			await before.get("personal", userPrincipal("alice"), "MOVED")
+		)?.value;
 
 		const after = createStoredSecretsStore(db, {
 			cipher: cipherFor(OTHER_KEY, TEST_KEY),
 		});
-		await after.set({ name: "MOVED", value: "v2", createdBy: "user:alice" });
-		const sealedAfter = (await after.get("personal", "user:alice", "MOVED"))
-			?.value;
+		await after.set({
+			name: "MOVED",
+			value: "v2",
+			createdBy: userPrincipal("alice"),
+		});
+		const sealedAfter = (
+			await after.get("personal", userPrincipal("alice"), "MOVED")
+		)?.value;
 
 		const oldId = secretKeyId(parseSecretStoreKey(TEST_KEY));
 		const newId = secretKeyId(parseSecretStoreKey(OTHER_KEY));
@@ -614,7 +658,10 @@ describe("encryption at rest", () => {
 		// which without the short-circuit would recurse: get → decrypt → resolve key → get …).
 		const plugin = secrets([], { store: true });
 		const db = entityAdapter(memoryAdapter(), storedSecretModels);
-		const [provider] = plugin.secrets.providers;
+		const provider = plugin.secrets?.providers?.[0];
+		// A secrets plugin that contributes no provider is a real failure, and every test below reads
+		// through this one — naming it here beats `undefined` surfacing as a confusing assertion later.
+		if (!provider) throw new Error("secrets() contributed no provider");
 		const reader = buildSecrets([
 			env({ vars: { [SECRET_STORE_KEY_NAME]: TEST_KEY } }),
 			provider,
@@ -627,26 +674,28 @@ describe("encryption at rest", () => {
 		await seeder.set({
 			name: SECRET_STORE_KEY_NAME,
 			value: "not-the-key",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		await seeder.set({
 			name: "USER_TOKEN",
 			value: "sealed",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 
 		// The key name resolves from ENV (the short-circuit made the data tier a miss)…
 		expect(
-			await reader.get(SECRET_STORE_KEY_NAME, { principal: "user:alice" }),
+			await reader.get(SECRET_STORE_KEY_NAME, {
+				principal: userPrincipal("alice"),
+			}),
 		).toEqual({ kind: "token", value: TEST_KEY });
 		// …and a normal name resolves THROUGH that same reader-resolved key: the full loop — store
 		// row → decrypt → lazy key via env — with no recursion and no hang.
-		expect(await reader.get("USER_TOKEN", { principal: "user:alice" })).toEqual(
-			{
-				kind: "token",
-				value: "sealed",
-			},
-		);
+		expect(
+			await reader.get("USER_TOKEN", { principal: userPrincipal("alice") }),
+		).toEqual({
+			kind: "token",
+			value: "sealed",
+		});
 	});
 });
 
@@ -732,6 +781,7 @@ describe("the personal management api — claw.api.secrets.*", () => {
 		}
 		expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
 		const [listed] = await api.list({}, { principal: userPrincipal("alice") });
+		if (!listed) throw new Error("expected one listed row");
 		for (const key of ["value", "provider", "ref"]) {
 			expect(listed).not.toHaveProperty(key);
 		}
@@ -835,7 +885,11 @@ describe("stored-secrets store — input bounds", () => {
 		// Trimming silently would make `" AWS_KEY"` and `"AWS_KEY"` the same row, which hides that one
 		// caller is deriving names from something untrusted.
 		await expect(
-			store().set({ name: " AWS_KEY", value: "v", createdBy: "user:alice" }),
+			store().set({
+				name: " AWS_KEY",
+				value: "v",
+				createdBy: userPrincipal("alice"),
+			}),
 		).rejects.toThrow(/whitespace/);
 	});
 
@@ -847,14 +901,14 @@ describe("stored-secrets store — input bounds", () => {
 		"üñî",
 	])("refuses a non-canonical name (%j)", async (name) => {
 		await expect(
-			store().set({ name, value: "v", createdBy: "user:alice" }),
+			store().set({ name, value: "v", createdBy: userPrincipal("alice") }),
 		).rejects.toThrow(/stored secret name/);
 	});
 
 	it("accepts the ordinary shapes a real secret name takes", async () => {
 		for (const name of ["AWS_KEY", "stripe.live", "gh-token", "v2_KEY.9"]) {
 			await expect(
-				store().set({ name, value: "v", createdBy: "user:alice" }),
+				store().set({ name, value: "v", createdBy: userPrincipal("alice") }),
 			).resolves.toBeDefined();
 		}
 	});
@@ -864,7 +918,7 @@ describe("stored-secrets store — input bounds", () => {
 			store().set({
 				name: "A".repeat(200),
 				value: "v",
-				createdBy: "user:alice",
+				createdBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow(/out of range/);
 
@@ -872,7 +926,7 @@ describe("stored-secrets store — input bounds", () => {
 			store().set({
 				name: "BIG",
 				value: "x".repeat(100_000),
-				createdBy: "user:alice",
+				createdBy: userPrincipal("alice"),
 			}),
 		).rejects.toThrow(/too large/);
 	});
@@ -884,7 +938,7 @@ describe("stored-secrets store — input bounds", () => {
 			store().set({
 				name: "BIG",
 				value: `sk-live-${"x".repeat(100_000)}`,
-				createdBy: "user:alice",
+				createdBy: userPrincipal("alice"),
 			}),
 		).rejects.not.toThrow(/sk-live/);
 	});
@@ -911,19 +965,21 @@ describe("stored-secrets store — one resolution key, one row", () => {
 		const first = await store.set({
 			name: "KEPT",
 			value: "v1",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		const second = await store.set({
 			name: "KEPT",
 			value: "v2",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 
 		expect(second.id).toBe(first.id);
 		expect(second.createdAt).toBe(first.createdAt);
 		expect(second.updatedAt).not.toBe(first.updatedAt);
 		expect(second.value).not.toBe(first.value);
-		expect(await store.list("personal", "user:alice")).toHaveLength(1);
+		expect(await store.list("personal", userPrincipal("alice"))).toHaveLength(
+			1,
+		);
 	});
 
 	it("derives the row id from the natural key, so a rival row is a CONFLICT not a race", async () => {
@@ -936,17 +992,17 @@ describe("stored-secrets store — one resolution key, one row", () => {
 		const alice = await store.set({
 			name: "SHARED_NAME",
 			value: "a",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 		const bob = await store.set({
 			name: "SHARED_NAME",
 			value: "b",
-			createdBy: "user:bob",
+			createdBy: userPrincipal("bob"),
 		});
 		const again = await store.set({
 			name: "SHARED_NAME",
 			value: "a2",
-			createdBy: "user:alice",
+			createdBy: userPrincipal("alice"),
 		});
 
 		expect(alice.id).not.toBe(bob.id); // different boundary, different row

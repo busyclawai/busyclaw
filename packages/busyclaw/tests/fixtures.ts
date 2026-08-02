@@ -13,6 +13,15 @@ import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { createClaw } from "../src/index";
 
 export type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
+/**
+ * The V4 member of that union — what every fixture here actually builds.
+ *
+ * `V2Model` is `V2 | V3 | V4`, so a spread-and-override of `doGenerate` has no single call signature
+ * to check against: `options` lands as `any` and the return type widens to the union, which then
+ * fails the model gate at `createClaw` with an error about a missing model. Narrowing says which one
+ * these mocks are.
+ */
+export type MockModel = Extract<V2Model, { specificationVersion: "v4" }>;
 
 export const emailDetector: Detector = (text) => {
 	const spans: PiiSpan[] = [];
@@ -34,7 +43,7 @@ export const emailDetector: Detector = (text) => {
 export function textModel(
 	text: string,
 	options: { modelId?: string } = {},
-): V2Model {
+): MockModel {
 	return {
 		specificationVersion: "v4",
 		provider: "mock",
@@ -65,7 +74,7 @@ export function textModel(
  * from training, or reassembles from fragments the ingress detector missed. The prompt is fully
  * tokenized, so this is output-side PII with no mapping behind it.
  */
-export function volunteersPiiModel(email: string): V2Model {
+export function volunteersPiiModel(email: string): MockModel {
 	return {
 		specificationVersion: "v4",
 		provider: "mock",
@@ -98,7 +107,7 @@ export function volunteersPiiModel(email: string): V2Model {
  * run through a tool RESULT — the path the RUNTIME redacts (and therefore the namespace the runtime
  * mints into), as opposed to a user message, which the api has already tokenized before the run.
  */
-export function lookupToolModel(): V2Model {
+export function lookupToolModel(): MockModel {
 	let step = 0;
 	const usage = {
 		inputTokens: {
@@ -160,7 +169,7 @@ export function lookupTool(email: string): ToolDefinition {
 	);
 }
 
-export function approvalToolModel(): V2Model {
+export function approvalToolModel(): MockModel {
 	let step = 0;
 	return {
 		specificationVersion: "v4",
@@ -303,7 +312,7 @@ export const owned: typeof createClaw = (config) =>
  * It permits the `writes` GROUP and nothing else. The floor's sealed forbids still outrank it, and a
  * tool's OWN gate still runs — so this exempts a suite from the floor, never from governance.
  */
-export const floorPermitsWrites: BusyclawPlugin = {
+export const floorPermitsWrites = {
 	id: "test:permit-writes",
 	policies: [
 		{
@@ -315,4 +324,4 @@ export const floorPermitsWrites: BusyclawPlugin = {
 			plane: "tool",
 		},
 	],
-};
+} satisfies BusyclawPlugin;

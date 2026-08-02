@@ -22,6 +22,7 @@ import {
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
+	userPrincipal,
 } from "@busyclaw/contracts";
 import { createGovernance } from "@busyclaw/core";
 import { memoryAdapter } from "@busyclaw/storage-core";
@@ -165,7 +166,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: FORBID_READ,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-y", "readDoc")).status).toBe("denied");
 	});
@@ -179,7 +180,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: FORBID_READ,
 			mode: "shadow",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		const result = await call("org-s", "readDoc");
 		expect(result.status).toBe("ok"); // the live decision (permit) stands
@@ -196,7 +197,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: FORBID_READ,
 			mode: "off",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-o", "readDoc")).status).toBe("ok");
 		expect(divergences).toHaveLength(0);
@@ -211,7 +212,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-e", "readDoc")).status).toBe("ok"); // guard doesn't touch reads
 		// Edit the SAME slice to forbid readDoc — the upsert appends → count bumps → router rebuilds.
@@ -222,7 +223,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: FORBID_READ,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-e", "readDoc")).status).toBe("denied");
 	});
@@ -239,7 +240,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: FORBID_READ,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		await stores.policySlices.upsert({
 			scope: "organization",
@@ -248,7 +249,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: `permit(principal, action == Action::"writeDoc", resource) when { context.confirmationUsed };`,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-d", "readDoc")).status).toBe("denied");
 		// Delete the OLDER forbidding slice.
@@ -283,7 +284,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: "this is not valid cedar @@@",
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		await expect(
 			coreFor("org-bad").handleToolCall(
@@ -304,7 +305,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: `permit(principal, action == Action::"writeDoc", resource);`,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		// interactive: a human is present → the customer permit relaxes the floor → the write runs.
 		expect((await call("org-floor", "writeDoc", "interactive")).status).toBe(
@@ -332,7 +333,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: `this is not valid cedar`,
 			mode: "shadow",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		const before = ran.length;
 		expect((await call("org-badshadow", "readDoc")).status).toBe("ok"); // live survives
@@ -353,7 +354,7 @@ describe("policy-slice blueprint (composed slice 6b)", () => {
 			cedar: `forbid(principal, action == Action::"reedDoc", resource);`, // typo: reedDoc != readDoc
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
+			updatedBy: userPrincipal("admin"),
 		});
 		expect((await call("org-typo", "readDoc")).status).toBe("ok"); // the typo'd forbid never fires
 	});
@@ -373,7 +374,6 @@ describe("policy-slice api surface", () => {
 			cedar: `permit(principal, action, resource);`,
 			mode: "enforce",
 			plane: "tool",
-			updatedBy: "user:admin",
 		});
 		expect(created.id).toBeTruthy();
 		expect(

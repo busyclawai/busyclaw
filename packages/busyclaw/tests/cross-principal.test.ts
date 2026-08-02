@@ -10,12 +10,13 @@
 // through a URL, a log, a screenshot, a shared transcript. Every case below hands Bob the real id and
 // asserts the answer is still no.
 
+import { userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import { durableRedactor, textModel } from "./fixtures";
 
-const ALICE = { principal: "user:alice" } as const;
-const BOB = { principal: "user:bob" } as const;
+const ALICE = { principal: userPrincipal("alice") } as const;
+const BOB = { principal: userPrincipal("bob") } as const;
 
 const DENIED = /BUSYCLAW_AUTHORIZATION_DENIED/;
 
@@ -233,7 +234,7 @@ describe("cross-principal isolation — Bob knows the id and is still refused", 
 				{
 					resourceKind: "claw",
 					resourceId: owned.id,
-					principalRef: "user:bob",
+					principalRef: userPrincipal("bob"),
 					permission: "manage",
 				},
 				BOB,

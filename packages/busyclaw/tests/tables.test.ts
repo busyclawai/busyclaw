@@ -134,10 +134,10 @@ describe("getBusyclawTables — table-level constraints survive assembly", () =>
 	it("still carries them when a plugin EXTENDS the model", () => {
 		// Extension is the case that would quietly lose them: a plugin adding a column re-merges the
 		// field map, and if the constraint rode only on the original entity it would not survive.
-		const plugin: BusyclawPlugin = {
+		const plugin = {
 			id: "ext",
 			schema: { policy_slice: { fields: { note: field.string() } } },
-		};
+		} satisfies BusyclawPlugin;
 		const tables = getBusyclawTables({ plugins: [plugin] });
 		expect(tables["policy_slice"]?.fields?.note).toBeDefined();
 		expect((tables["policy_slice"]?.uniques ?? []).map((k) => [...k])).toEqual([

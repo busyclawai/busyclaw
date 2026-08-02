@@ -36,13 +36,14 @@ afterAll(async () => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-/** A decision that vetted loopback — standing in for whatever the floor approved. */
-const decisionFor = (host: string): EgressDecision =>
-	({
-		pinnedAddress: "127.0.0.1",
-		family: 4,
-		host,
-	}) as EgressDecision;
+/** A decision that vetted loopback — standing in for whatever the floor approved. Built to the real
+ *  shape rather than cast to it: the cast was hiding a `host` field the type never had and a `url`
+ *  it required, which is the one thing a decision carries that the connection cannot re-derive. */
+const decisionFor = (host: string): EgressDecision => ({
+	url: `http://${host}/`,
+	pinnedAddress: "127.0.0.1",
+	family: 4,
+});
 
 describe("pinnedFetch + pinnedConnection", () => {
 	it("carries an allowed request over the pinned address", async () => {

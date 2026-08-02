@@ -1,11 +1,12 @@
 import type { ClawEngineFactory } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
 import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 
 /** The principal `owned()` binds onto every api call — and now what a durable run is stamped with. */
-const OWNER = "user:actor-1";
+const OWNER = userPrincipal("actor-1");
 
 import { createClaw } from "../src/index";
 import {
@@ -184,7 +185,6 @@ describe("createClaw engine", () => {
 
 		await claw.api.grantApproval({
 			approvalId: parked.approvalIds[0],
-			by: "user:alice",
 		});
 		// A THIRD PARTY resumes. The worker seeds the run row's principal so a durable slice executes as
 		// somebody — and the run row for THIS task is stamped from whoever called continueEngineRun. If
@@ -196,12 +196,12 @@ describe("createClaw engine", () => {
 		await claw.api.shareResource({
 			resourceKind: "approval",
 			resourceId: parked.approvalIds[0],
-			principalRef: "user:stranger",
+			principalRef: userPrincipal("stranger"),
 			permission: "manage",
 		});
 		const resume = await claw.api.continueEngineRun(
 			{ approvalId: parked.approvalIds[0] },
-			{ principal: "user:stranger" },
+			{ principal: userPrincipal("stranger") },
 		);
 		const completed = await claw.$context.engine?.work?.();
 
@@ -215,9 +215,9 @@ describe("createClaw engine", () => {
 			.filter((entry) => entry.name === "send_email");
 		expect(replayed.length).toBeGreaterThan(0);
 		for (const entry of replayed) {
-			expect(entry.principal).not.toBe("user:stranger");
+			expect(entry.principal).not.toBe(userPrincipal("stranger"));
 		}
-		expect(replayed.at(-1)?.principal).toBe("user:actor-1");
+		expect(replayed.at(-1)?.principal).toBe(userPrincipal("actor-1"));
 	});
 
 	it("enqueues and executes a SQL-engine runtime run", async () => {

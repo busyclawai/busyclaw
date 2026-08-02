@@ -18,7 +18,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run tests",
 		"typecheck": "tsc --noEmit"
 	},
@@ -33,6 +33,7 @@
 	},
 	"devDependencies": {
 		"@busyclaw/secrets": "workspace:*",
-		"@busyclaw/storage-core": "workspace:*"
+		"@busyclaw/storage-core": "workspace:*",
+		"@types/node": "26.1.1"
 	}
 }
