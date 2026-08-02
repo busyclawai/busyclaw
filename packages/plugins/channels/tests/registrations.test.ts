@@ -22,7 +22,10 @@ import {
 	channels,
 	endpointId,
 } from "../src/index";
-import { channelRegistrationsModels } from "../src/registrations/schema";
+import {
+	channelRegistrationEntity,
+	channelRegistrationsModels,
+} from "../src/registrations/schema";
 import { createChannelRegistrationsStore } from "../src/registrations/store";
 
 // Stores and the configure context take the schema-aware adapter the assembly provides in
@@ -1098,5 +1101,40 @@ describe("registering cannot take over an existing row unasked (R-H09)", () => {
 			await store.rotate(lookup, { webhookSecret: "later" }, created.updatedAt),
 		).toBeNull();
 		expect((await store.getByKey(lookup))?.webhookSecret).toBe("rotated");
+	});
+});
+
+// R-H09, the physical half. The webhookSecret is the INBOUND ROUTING KEY — the webhook route finds
+// the row by matching it — so two rows sharing one makes routing ambiguous, and which bot receives a
+// tenant's traffic becomes a question of row order.
+//
+// The column's own doc has always said "must be unique per provider" and the store checked it with a
+// read before the write. That is the same time-of-check gap as the registration race one layer up:
+// two registers can both read "free" and both write. A physical unique is the only thing that makes
+// the claim true under concurrency, and it is what turns a lost race into a loud conflict rather
+// than a silently ambiguous route.
+describe("the inbound routing key is physically unique (R-H09)", () => {
+	it("declares (provider, webhookSecret) as a natural key", () => {
+		expect(
+			channelRegistrationEntity.storage.channel_registration?.uniques,
+		).toContainEqual(["provider", "webhookSecret"]);
+	});
+
+	it("refuses a second registration claiming a taken secret", async () => {
+		const store = createChannelRegistrationsStore(db(), { now });
+		await store.register({
+			provider: "fake",
+			endpointKey: "alice-bot",
+			webhookSecret: "shared-hook",
+			createdBy: ALICE,
+		});
+		await expect(
+			store.register({
+				provider: "fake",
+				endpointKey: "mallory-bot",
+				webhookSecret: "shared-hook",
+				createdBy: MALLORY,
+			}),
+		).rejects.toThrow(/webhookSecret already in use/);
 	});
 });

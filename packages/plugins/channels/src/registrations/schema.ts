@@ -106,6 +106,16 @@ export const channelRegistrationFields = {
 export const channelRegistrationEntity = entity(
 	"channel_registration",
 	channelRegistrationFields,
+	{
+		// The webhookSecret is the INBOUND ROUTING KEY — the webhook route resolves the row by matching
+		// it — so two rows sharing one makes routing ambiguous, and which bot receives a tenant's
+		// traffic becomes a question of row order. The column's doc has always claimed this; the store
+		// enforced it by reading before writing, which is the same time-of-check gap as the
+		// registration race above (two registers both read "free", both write). A physical unique is
+		// what makes the claim true under concurrency, turning a lost race into a loud conflict
+		// instead of a silently ambiguous route. R-H09.
+		uniques: [["provider", "webhookSecret"]],
+	},
 );
 export const channelRegistrationRecord = channelRegistrationEntity.record;
 
