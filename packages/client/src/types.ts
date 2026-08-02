@@ -5,25 +5,34 @@
 // ever imported at runtime.
 
 import type {
+	ClawClientAtomListener,
+	ClawClientError,
+	ClawClientFetch,
+	ClawClientPlugin,
+	ClawClientStore,
+	ClawFetchOptions,
+	ClawResult,
 	EndpointHttpMethod,
 	UnionToIntersection,
 } from "@busyclaw/contracts";
 import type { Claw } from "busyclaw";
 import type { ReadableAtom } from "nanostores";
 
-/** What a failed call resolves with. `status` is the HTTP status — `0` when the transport itself
- *  failed (fetch threw: DNS, abort, a broken stub). `code` is the server's stable BusyclawErrorCode
- *  when the envelope carried one. */
-export type ClawClientError = {
-	status: number;
-	message: string;
-	code?: string;
+// The client-plugin PROTOCOL lives in @busyclaw/contracts — the package both a plugin author and
+// this client already depend on — and is re-exported here so `@busyclaw/client`'s surface is
+// unchanged. It used to be defined here, which forced a plugin shipping its own client half to
+// depend on the client package, and the client already depends (for its tests) on the assembly that
+// depends on the plugins: turbo names that cycle outright. The same split better-auth makes, where
+// `BetterAuthClientPlugin` is defined in @better-auth/core and re-exported from better-auth/client.
+export type {
+	ClawClientAtomListener,
+	ClawClientError,
+	ClawClientFetch,
+	ClawClientPlugin,
+	ClawClientStore,
+	ClawFetchOptions,
+	ClawResult,
 };
-
-/** Every remote call resolves this — never throws for HTTP/envelope errors. */
-export type ClawResult<T> =
-	| { data: T; error: null }
-	| { data: null; error: ClawClientError };
 
 /** The injectable transport: any WHATWG-compatible fetch. This is the load-bearing seam — a
  *  native-app host bridge or a test stub slots in here; the client never touches globals when one
@@ -33,22 +42,6 @@ export type ClawFetchLike = (
 	init?: RequestInit,
 ) => Promise<Response>;
 
-export type ClawFetchOptions = {
-	/** Wire verb; defaults to GET. GET sends `?input=<json>`, POST sends a JSON body. */
-	method?: EndpointHttpMethod;
-	/** The call input. */
-	input?: unknown;
-	signal?: AbortSignal;
-};
-
-/** The envelope-parsed fetch handed to client plugins (`getActions`/`getAtoms`): path-relative,
- *  base-url/headers/hooks already applied, resolves `{ data, error }`. Calls through it do NOT
- *  trigger atom signals (query refetches must never re-signal themselves). */
-export type ClawClientFetch = <T = unknown>(
-	path: string,
-	options?: ClawFetchOptions,
-) => Promise<ClawResult<T>>;
-
 /** The per-request context the `onRequest`/`onResponse` hooks see. `url` and `init` are the live
  *  values — `onRequest` may mutate them (extra headers, a rewritten target) before send. */
 export type ClawClientRequest = {
@@ -57,44 +50,6 @@ export type ClawClientRequest = {
 	method: EndpointHttpMethod;
 	url: string;
 	init: RequestInit;
-};
-
-/** The signal registry client plugins share: toggle/observe boolean signal atoms by name across
- *  plugins. Unknown names FAIL LOUD (deviation from better-auth's silent skip). */
-export type ClawClientStore = {
-	notify: (signal: string) => void;
-	listen: (signal: string, listener: (value: boolean) => void) => () => void;
-	atoms: Readonly<Record<string, ReadableAtom<unknown>>>;
-};
-
-export type ClawClientAtomListener = {
-	/** Matches the route path of a successful MUTATING (POST) call, e.g. `"/grant-approval"`. */
-	matcher: (path: string) => boolean;
-	/** Name of a boolean signal atom some plugin's `getAtoms` contributed. A name no plugin
-	 *  contributed fails loud at client CONSTRUCTION, not silently at call time. */
-	signal: string;
-};
-
-export type ClawClientPlugin = {
-	id: string;
-	/** TYPE-ONLY phantom carrying the server plugin's type (`{} as ServerPlugin`) so its `$Api`
-	 *  namespaces type the client even without `typeof claw`. `{}` at runtime — never read. */
-	$InferServerPlugin?: unknown;
-	/** Client-side methods merged onto the client root. Key collisions (base api methods, other
-	 *  plugins' actions/atoms, `$fetch`/`$store`) fail loud at construction. */
-	getActions?: (
-		$fetch: ClawClientFetch,
-		$store: ClawClientStore,
-	) => Record<string, unknown>;
-	/** State atoms merged onto the client root under their own names (framework bindings rename to
-	 *  hooks later). `$`-prefixed boolean atoms are signals by convention. */
-	getAtoms?: ($fetch: ClawClientFetch) => Record<string, ReadableAtom<unknown>>;
-	/** Verb overrides for proxy-routed paths whose server endpoint declared a `method` the
-	 *  `get*`/`list*` name rule cannot derive. */
-	pathMethods?: Readonly<Record<string, EndpointHttpMethod>>;
-	/** Refetch wiring: after a successful mutating call whose path matches, the named signal atom
-	 *  toggles (10ms deferred, deduped per call) and subscribed query atoms refetch. */
-	atomListeners?: readonly ClawClientAtomListener[];
 };
 
 export type ClawClientOptions = {

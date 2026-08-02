@@ -16,52 +16,21 @@
 
 import type { Adapter, JsonObject, JsonValue } from "@busyclaw/contracts";
 import {
-	BusyclawError,
 	type EntityField,
 	entity,
 	field,
+	// The ONE conflict predicate, from @busyclaw/errors via contracts. A local copy here also tested
+	// the driver-level violation — which that predicate's own doc refuses ("Never widen this to
+	// 'looks like a duplicate'"), and which cannot reach this code anyway: the assembly wraps its
+	// adapter with `entityAdapter`, whose every write normalizes a driver violation into the typed
+	// conflict before it gets here.
+	isConflict,
 	type SchemaDeclaration,
 } from "@busyclaw/contracts";
-import { entityView, isUniqueViolation } from "@busyclaw/storage-core";
+import { entityView } from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
-/**
- * Is this the database saying "that row already exists"?
- *
- * The whole insert-as-claim shape rests on telling ONE failure apart from every other. A duplicate
- * means somebody else got here first, and the recovery is to re-read and adopt the winner. Anything
- * else means the write did not happen at all — and the two must not be answered the same way, because
- * the answer to a duplicate is "carry on, it is handled".
- *
- * A bare `catch` collapsed them, so a dropped connection, a missing table, or a misconfigured adapter
- * read as "already claimed" and the caller proceeded as though the delivery were safely somebody's.
- * That is the shape that loses a message while reporting 200.
- *
- * Both spellings are accepted because both arrive honestly: the assembly wraps its adapter with
- * `entityAdapter`, which normalizes a driver's violation into the typed conflict, while a host passing
- * an unwrapped adapter gets whatever its driver raised. Anything unrecognised is NOT a conflict and is
- * rethrown with its identity and stack intact — guessing wrong turns a real outage into a silent
- * success, which is strictly worse than a loud failure.
- */
-function isConflict(error: unknown): boolean {
-	return (
-		(error instanceof BusyclawError && error.code === "BUSYCLAW_CONFLICT") ||
-		isUniqueViolation(error)
-	);
-}
-
-// The lifecycle of one inbound delivery, as a state machine rather than a marker.
-//
-// `pending` is the state that did not exist, and its absence is what lost messages. The row was
-// created ALREADY `processing`, by the request that was also running the turn — so the row recorded
-// that somebody was working, never that there was work TO DO. When that somebody died, nothing was
-// left describing the message: the payload had never been stored, the provider had been answered 200,
-// and the lease simply lapsed with no one to hand it to.
-//
-// Admitted work now lands `pending` and is claimed separately. The two questions are different — "is
-// this delivery known?" (dedupe) and "is somebody running it right now?" (the lease) — and collapsing
-// them into one insert is what made an unclaimed message unrepresentable.
 export const channelDeliveryStatusValues = [
 	"pending",
 	"processing",

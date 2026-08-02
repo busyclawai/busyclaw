@@ -2,7 +2,6 @@
 // entity schema DSL, and the port/schema definitions every busyclaw package speaks. One explicit
 // public surface (no `export *`); the engine that runs these contracts is @busyclaw/core.
 
-// ── errors ───────────────────────────────────────────────────────────────────
 export type { BusyclawErrorCode, BusyclawErrorInput } from "@busyclaw/errors";
 export {
 	authorizationError,
@@ -178,6 +177,16 @@ export {
 	toolResultRecord,
 	toolResultStatus,
 } from "./claws/schema";
+// ── errors ───────────────────────────────────────────────────────────────────
+export type {
+	ClawClientAtomListener,
+	ClawClientError,
+	ClawClientFetch,
+	ClawClientPlugin,
+	ClawClientStore,
+	ClawFetchOptions,
+	ClawResult,
+} from "./client";
 // ── primitives: json + the entity schema DSL ─────────────────────────────────
 export type { JsonObject, JsonPrimitive, JsonValue } from "./common";
 export { jsonObject, jsonValue } from "./common";

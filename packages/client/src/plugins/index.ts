@@ -1,27 +1,18 @@
-// Exemplar client plugins — the two contract shapes in the wild: `secretsClient()` is PURE TYPE
-// (a phantom carrying the server namespace, zero runtime), `approvalsClient()` is PURE REACTIVITY
-// (a query atom + the signal that refetches it). Both import server types via `import type` only.
+// Client plugins for the BASE api — the surface `busyclaw` itself serves, which is the only surface
+// this package may know about. `approvalsClient()` is PURE REACTIVITY: a query atom plus the signal
+// that refetches it.
+//
+// A plugin's client half belongs to THAT PLUGIN, not here. `secretsClient()` used to live in this
+// file, which made `@busyclaw/client` import `@busyclaw/secrets-plugin` — an import that survived
+// into the published .d.ts, so a consumer typechecking against the client alone could not resolve
+// it. It now ships from `@busyclaw/secrets-plugin/client`, the arrangement `@better-auth/stripe`
+// uses and the reason better-auth's own client never hears about its plugins.
 
 import type { ApprovalRecord } from "@busyclaw/contracts";
 import { toKebabCase } from "@busyclaw/contracts/governance/endpoints";
-import type { SecretsStorePlugin } from "@busyclaw/secrets-plugin";
 import { atom } from "nanostores";
 import { createQueryAtom } from "../query";
 import type { ClawClientPlugin } from "../types";
-
-/**
- * Client half of `secrets(…, { store })`: carries the server plugin's `$Api` as a TYPE-ONLY
- * phantom so `client.secrets.*` is typed even without `typeof claw`. Contributes nothing at
- * runtime — the calls themselves ride the convention proxy (`POST /secrets/set`,
- * `POST /secrets/delete`, `GET /secrets/list` — verbs from the same name rule the server mounts
- * with, so no `pathMethods` needed).
- */
-export function secretsClient() {
-	return {
-		id: "busyclaw.secrets",
-		$InferServerPlugin: {} as SecretsStorePlugin,
-	} satisfies ClawClientPlugin;
-}
 
 // Paths derive through the ONE contracts splitter — never hand-written kebab, so the matcher and
 // the route the client actually calls cannot drift apart.

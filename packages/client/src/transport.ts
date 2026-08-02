@@ -4,6 +4,7 @@
 // against the contracts envelope — never cast. Resolves `{ data, error }`, never throws: a
 // transport-level throw (DNS, abort, a broken injected fetch) becomes `error.status: 0`.
 
+import type { AbortLifetime } from "@busyclaw/contracts";
 import type { ClawResponseEnvelope } from "@busyclaw/contracts/claw-api";
 import { parseClawResponseEnvelope } from "@busyclaw/contracts/claw-api";
 import type { EndpointHttpMethod } from "@busyclaw/contracts/governance/endpoints";
@@ -20,8 +21,27 @@ export type TransportRequest = {
 	path: string;
 	method: EndpointHttpMethod;
 	input?: unknown;
-	signal?: AbortSignal;
+	/** The PROTOCOL's {@link AbortLifetime}, not `AbortSignal` — @busyclaw/contracts builds without the
+	 *  DOM lib on purpose, so the shared client-plugin vocabulary cannot name one. A real signal
+	 *  satisfies it and is passed straight through; see {@link toAbortSignal}. */
+	signal?: AbortLifetime;
 };
+
+/**
+ * Bridge a protocol {@link AbortLifetime} to the real `AbortSignal` `fetch` requires.
+ *
+ * A real signal passes straight through. Anything else — a structural lifetime from a host with no
+ * DOM globals — gets a controller wired to it, so it actually aborts the request. The alternative
+ * was a cast, which types fine and then silently does nothing when the value is not a real signal:
+ * a caller would pass an abort and watch the request run to completion with no error anywhere.
+ */
+function toAbortSignal(lifetime: AbortLifetime): AbortSignal {
+	if (lifetime instanceof AbortSignal) return lifetime;
+	const controller = new AbortController();
+	if (lifetime.aborted) controller.abort();
+	else lifetime.addEventListener("abort", () => controller.abort());
+	return controller.signal;
+}
 
 export type Transport = (
 	request: TransportRequest,
@@ -88,7 +108,7 @@ export function createTransport(options: ClawClientOptions): Transport {
 				headers.set("content-type", "application/json");
 				init.body = JSON.stringify(request.input ?? {});
 			}
-			if (request.signal) init.signal = request.signal;
+			if (request.signal) init.signal = toAbortSignal(request.signal);
 			const context: ClawClientRequest = {
 				init,
 				method: request.method,

@@ -6,12 +6,13 @@
 import { toRequestHandler } from "@busyclaw/adapter-core";
 import { userPrincipal } from "@busyclaw/contracts";
 import { secrets } from "@busyclaw/secrets-plugin";
+// The plugin ships its own client half — the client package no longer knows this plugin exists.
+import { secretsClient } from "@busyclaw/secrets-plugin/client";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import type { Claw } from "busyclaw";
 import { createClaw } from "busyclaw";
 import { describe, expect, it } from "vitest";
 import { createClawClient } from "../src/index";
-import { secretsClient } from "../src/plugins/index";
 
 // 32 bytes hex — the shape the secrets() store master key demands.
 const SECRET_STORE_TEST_KEY = "0123456789abcdef".repeat(4);
