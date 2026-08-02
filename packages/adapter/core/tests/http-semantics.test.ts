@@ -62,6 +62,40 @@ describe("M-10 — media type", () => {
 			error: { message: expect.stringContaining("content type") },
 		});
 	});
+
+	// R-M13. The guard returned early whenever the header was ABSENT — "no body declared, nothing was
+	// parsed as one" — and then the very next line read the body and JSON.parsed it anyway. So the
+	// whole media-type defence was reachable-around by leaving something OUT, which is the easiest
+	// thing in the world for a raw HTTP client to do.
+	//
+	// The body is BYTES on purpose: `new Request(url, { body: "..." })` has the platform fill in
+	// `text/plain` for you, so a string body cannot express "no content type" and a test written with
+	// one proves nothing — it exercises the text/plain branch that already worked. A Uint8Array (or a
+	// typeless Blob) is the shape that genuinely arrives header-less.
+	it("refuses a body sent with no content type at all", async () => {
+		const request = new Request(`${base}/create-claw`, {
+			method: "POST",
+			body: new TextEncoder().encode(JSON.stringify({ id: "c1" })),
+		});
+		expect(request.headers.get("content-type")).toBeNull();
+
+		const response = await toRequestHandler(echoClaw())(request);
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			error: { message: expect.stringContaining("content type") },
+		});
+	});
+
+	// …and a request that genuinely carries NO body still needs no header: the check is about what
+	// arrived, not about what was claimed, so a bodiless POST is not collateral.
+	it("still accepts a bodiless request with no content type", async () => {
+		const response = await toRequestHandler(echoClaw())(
+			new Request(`${base}/create-claw`, { method: "POST" }),
+		);
+		await expect(response.json()).resolves.not.toMatchObject({
+			error: { message: expect.stringContaining("content type") },
+		});
+	});
 });
 
 describe("L-10 — one representation, no duplicates", () => {

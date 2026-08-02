@@ -33,9 +33,11 @@ export const clawRedactionFields = {
 export type StrictRedactionConfig = {
 	/** Every container redacted. The default arm. */
 	posture?: "strict";
-	/** What counts as PII: the detectors to run, unioned (regex + Presidio + your own). Omit or
-	 *  empty → armed-but-silent (mechanism on, nothing detected). Overlaps across detectors are
-	 *  resolved centrally (earliest start wins, ties to the longer span) — no `composeDetectors`. */
+	/** What counts as PII: the detectors to run, unioned (regex + Presidio + your own). REQUIRED
+	 *  under this posture unless a custom `redactor` is supplied — omitting both used to arm the
+	 *  mechanism and detect nothing, which is a deployment that asked for redaction and persisted
+	 *  cleartext with no symptom. Overlaps across detectors are resolved centrally (earliest start
+	 *  wins, ties to the longer span) — no `composeDetectors`. */
 	detectors?: readonly Detector[];
 	/** Dedup key — deterministic placeholders per (value, kind, container). Loss/rotation only
 	 *  resets dedup, never rehydration. */
@@ -201,6 +203,26 @@ export function resolveRedaction(input: {
 		throw configurationError(
 			"redaction.redactor is mutually exclusive with detectors/indexKey",
 			{ reason: "a custom redactor owns its own detection and dedup" },
+		);
+	}
+	// A posture that PROMISES redaction must be able to redact. `strict` (and the strict arm of
+	// `per-claw`) with no detector and no custom redactor was accepted and did nothing: the mechanism
+	// armed, the mapping store built, every value passing through untouched. A deployment asked for
+	// redaction, was told yes, and persisted cleartext — the failure mode with no symptom, because
+	// everything downstream behaves exactly as it does when there is genuinely no PII to find.
+	//
+	// "This deployment does not redact" stays expressible, and says so out loud: posture "raw" warns
+	// at boot and refuses per-subject erasure rather than pretending. What is no longer expressible is
+	// asking for strict and silently getting raw.
+	if (detector === undefined && cfg.redactor === undefined) {
+		const posture = cfg.posture ?? "strict";
+		throw configurationError(
+			`redaction posture "${posture}" has nothing to detect with`,
+			{
+				posture,
+				reason:
+					'pass detectors: [...] (or a custom redactor) — or posture: "raw" if this deployment genuinely persists unredacted values',
+			},
 		);
 	}
 	let strict: Redactor;

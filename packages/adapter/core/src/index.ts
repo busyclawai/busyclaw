@@ -373,9 +373,25 @@ const SIMPLE_REQUEST_TYPES = new Set([
  * cookie-authenticated deployment; see `resolveCaller`, which is where a host has the request in
  * hand and can make that call.
  */
-function assertJsonContentType(request: BusyclawRouteRequest): void {
+function assertJsonContentType(
+	request: BusyclawRouteRequest,
+	hasBody: boolean,
+): void {
+	// R-M13. A body is not DECLARED by a header — it is sent. This used to return early whenever the
+	// content-type was absent, on the reasoning that "no body was declared, so nothing was parsed as
+	// one" — but the very next line read the body and JSON.parsed it regardless. A cross-site form
+	// POST that simply omits the header therefore sailed past the guard and executed as the logged-in
+	// user: exactly the shape the guard exists to remove, reachable by leaving something OUT.
+	//
+	// So the question is asked about what arrived, not about what was claimed.
+	if (!hasBody) return;
 	const header = request.headers.get("content-type");
-	if (header === null || header === "") return; // no body declared — nothing was parsed as one
+	if (header === null || header === "") {
+		throw validationError(
+			"unsupported content type",
+			"a request body requires an explicit application/json content type",
+		);
+	}
 	const media = header.split(";")[0]?.trim().toLowerCase() ?? "";
 	if (media === "application/json" || media.endsWith("+json")) return;
 	throw validationError(
@@ -432,8 +448,12 @@ async function readInput(
 		}
 		return Object.fromEntries(search.entries());
 	}
-	assertJsonContentType(request);
+	// Read FIRST, then judge: the check needs to know whether a body actually arrived, and only the
+	// read can answer that (content-length is absent under chunked encoding). Safe to do in this
+	// order because `readRequestBody` is itself bounded — an oversized body is refused by the read,
+	// not by anything downstream of it.
 	const text = await readRequestBody(request);
+	assertJsonContentType(request, text.length > 0);
 	return text ? (JSON.parse(text) as unknown) : {};
 }
 

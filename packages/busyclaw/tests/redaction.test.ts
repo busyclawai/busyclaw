@@ -130,15 +130,38 @@ describe("createClaw redaction group", () => {
 		expect(received.prompt).toMatch(/\{\{pii:secret:[a-z0-9-]+\}\}/);
 	});
 
-	it("armed-but-silent (no detector): no placeholder contract in the system prompt", async () => {
+	// R-M05. This used to be "armed-but-silent": `redaction: {}` was accepted, the mechanism armed,
+	// the mapping store built, and every value passed through untouched — a deployment that asked for
+	// redaction, was told yes, and persisted cleartext. The failure had no symptom, because a
+	// detector that finds nothing is indistinguishable from a corpus with nothing to find.
+	it("refuses a strict posture with nothing to detect with", () => {
+		expect(() =>
+			owned({
+				database: memoryAdapter(),
+				model: textModel("ok"),
+				redaction: {},
+			}),
+		).toThrow(/nothing to detect with/);
+		// …and an explicit strict posture is refused the same way, not just the bare shorthand.
+		expect(() =>
+			owned({
+				database: memoryAdapter(),
+				model: textModel("ok"),
+				redaction: { posture: "strict" },
+			}),
+		).toThrow(/nothing to detect with/);
+	});
+
+	// "This deployment does not redact" is still sayable — it just has to say so.
+	it("still allows a deployment to declare it persists unredacted", async () => {
 		const received = { prompt: "" };
 		const claw = owned({
 			database: memoryAdapter(),
 			model: promptCaptureModel(received),
-			redaction: {},
+			redaction: { posture: "raw" },
 		});
 		await claw.$context.runtime.generate("email a@b.com the offer");
-		expect(received.prompt).toContain("a@b.com"); // nothing detected
+		expect(received.prompt).toContain("a@b.com");
 		expect(received.prompt).not.toContain("privacy placeholders");
 	});
 
