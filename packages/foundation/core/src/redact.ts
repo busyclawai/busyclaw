@@ -278,11 +278,26 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 				erasedContainers.get(subjectId)?.has(erasureKey(container)) === true
 			);
 		},
-		deleteForSubject(subjectId) {
-			const keys = subjectToKeys.get(subjectId);
-			// The mark goes down for every container this subject appeared in. Nothing found ⇒ nothing
-			// marked: erasure names a subject with no container, so the only containers it can name are
-			// the ones the subject's own rows named.
+		deleteForSubject(subjectId, container) {
+			const all = subjectToKeys.get(subjectId);
+			// `container` BOUNDS which of this subject's rows are in scope. Omitted ⇒ all of them, the
+			// deployment-wide DSR sweep this verb used to be the only form of.
+			const keys =
+				all === undefined
+					? undefined
+					: container === undefined
+						? [...all]
+						: [...all].filter((key) => {
+								const mapping = byKey.get(key);
+								return (
+									mapping !== undefined &&
+									mapping.scope === container.scope &&
+									mapping.scopeId === container.scopeId
+								);
+							});
+			// The mark goes down for every container actually erased from — which is now at most the
+			// one named. A tombstone for a container the request never touched would report a standing
+			// erasure that did not happen.
 			const marks = erasedContainers.get(subjectId) ?? new Set<string>();
 			for (const key of keys ?? []) {
 				const mapping = byKey.get(key);
@@ -300,7 +315,11 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			for (const set of subjectToKeys.values()) {
 				for (const key of keys) set.delete(key);
 			}
-			subjectToKeys.delete(subjectId);
+			// Only the erased keys leave this subject's index; a bounded sweep leaves the rest.
+			if (all !== undefined) {
+				for (const key of keys) all.delete(key);
+				if (all.size === 0) subjectToKeys.delete(subjectId);
+			}
 			return erased;
 		},
 	};

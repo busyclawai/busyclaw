@@ -258,7 +258,12 @@ describe("plugin redaction handles", () => {
 		expect(token).toMatch(TOKEN);
 		expect(await rehydrate(token)).toBe("reach subject@x.com");
 
-		await claw.api.forgetSubject({ subjectId: "subject-1" });
+		// The DEPLOYMENT-WIDE sweep, through the trusted handle rather than the api. A plugin's own
+		// ("plugin", id) container is not a resource anybody manages, so `api.forgetSubject` — which
+		// resolves the named container as a resource and needs `manage` on it — cannot reach one. That
+		// is the split R-H01 introduced: a request names a container it has a claim on; in-process
+		// code holding the handle can still erase everywhere, which is what a real DSR needs.
+		await claw.$context.redaction?.forgetSubject("subject-1");
 
 		// Crypto-shredded: the mapping is gone, so the plugin's own token is now inert too.
 		expect(await rehydrate(token)).toBe(token);

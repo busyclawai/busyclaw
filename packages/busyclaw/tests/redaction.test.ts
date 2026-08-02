@@ -1,7 +1,7 @@
 // The createClaw `redaction` config group: posture resolution, the boot decision, per-claw
 // routing, birth-immutability, and the schema injection. See docs/plans/redaction-dx-plan.md.
 import type { ClawsStore, Detector, PiiSpan } from "@busyclaw/contracts";
-import { field } from "@busyclaw/contracts";
+import { field, UNCONTAINED, userPrincipal } from "@busyclaw/contracts";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import type { wrapLanguageModel } from "ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,13 @@ import {
 	resolveRedaction,
 	withImmutableRedaction,
 } from "../src/redaction";
-import { emailDetector, type MockModel, owned, textModel } from "./fixtures";
+import {
+	emailDetector,
+	type MockModel,
+	owned,
+	textModel,
+	withPrincipal,
+} from "./fixtures";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -403,7 +409,11 @@ describe("governed read path (view + forgetSubject)", () => {
 		});
 		expect(JSON.stringify(before)).toContain("subject@x.com");
 
-		await claw.api.forgetSubject({ subjectId: "subject-1" });
+		await claw.api.forgetSubject({
+			subjectId: "subject-1",
+			scope: "claw",
+			scopeId: "claw-1",
+		});
 
 		const after = await claw.api.listMessages({
 			threadId: thread.id,
@@ -427,14 +437,112 @@ describe("governed read path (view + forgetSubject)", () => {
 			redaction: { posture: "raw" },
 			warn: () => {}, // the expected raw-posture boot warning is not this test's subject
 		});
-		await expect(raw.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
-			/erasure is impossible/,
-		);
+		// A claw the caller OWNS, so the container resolves and authorization passes — this test is
+		// about the posture refusing, and it would otherwise be answered by the PEP first and never
+		// reach the thing it is asking about.
+		const rawClaw = await raw.api.createClaw({ id: "c1", name: "raw" });
+		await expect(
+			raw.api.forgetSubject({
+				subjectId: "s1",
+				scope: "claw",
+				scopeId: rawClaw.id,
+			}),
+		).rejects.toThrow(/erasure is impossible/);
 
-		const none = owned({ model: textModel("ok") });
-		await expect(none.api.forgetSubject({ subjectId: "s1" })).rejects.toThrow(
-			/no redaction configured/,
-		);
+		// No database ⇒ no claws store ⇒ no claw to own, so there is no container this caller could
+		// have a claim on. The PEP is not what this case is about, and `unsafeOpen` says that out loud
+		// rather than reaching the redaction check by accident.
+		const none = owned({
+			model: textModel("ok"),
+			appAuthz: { unsafeOpen: true },
+		});
+		await expect(
+			none.api.forgetSubject({ subjectId: "s1", scope: "claw", scopeId: "c1" }),
+		).rejects.toThrow(/no redaction configured/);
+	});
+	// R-H01 — erasure names the container it acts in, and the container's own owner rule authorizes it.
+	//
+	// `forgetSubject` took a bare `subjectId`. The rows it deletes have always carried `(scope, scopeId)`,
+	// but the REQUEST named none — so the sweep crossed every container the subject appeared in, and the
+	// route had nothing to resolve against, which is why it was `callerOnly`. Over HTTP that is an
+	// unbounded delete of any subject's mappings by any authenticated caller: destructive, cross-tenant,
+	// and irreversible by construction, since a crypto-shred is the point.
+	//
+	// The container is part of the request now, and it binds exactly like `shareResource` does — the
+	// caller NAMES a kind and an id, and the generic owner ∪ scope ∪ grant rule decides it at `manage`.
+	// A `("claw", clawId)` container therefore asks the claw's owner rule; an unregistered kind resolves
+	// nothing and denies. Erasing across EVERY container is still a real DSR need and still possible —
+	// from in-process trusted code holding the redaction handle, never from the wire.
+	describe("forgetSubject is bounded by a container (R-H01)", () => {
+		it("erases in the named container and leaves another one's mappings intact", async () => {
+			const { claw, db } = await chatClaw();
+			const { createPiiMappingStore } = await import(
+				"@busyclaw/storage-durable"
+			);
+			const mappings = createPiiMappingStore(db);
+			// The SAME subject and the SAME token, in two containers. Only one is named by the request.
+			for (const scopeId of ["claw-1", "claw-2"]) {
+				await mappings.save(
+					{
+						placeholder: "{{pii:email:seededtoken00}}",
+						original: "subject@x.com",
+						kind: "email",
+						scope: "claw",
+						scopeId,
+						createdAt: "2026-07-13T00:00:00.000Z",
+					},
+					["subject-1"],
+				);
+			}
+
+			const { erased } = await claw.api.forgetSubject({
+				subjectId: "subject-1",
+				scope: "claw",
+				scopeId: "claw-1",
+			});
+			expect(erased).toBe(1);
+
+			// Gone where it was asked for…
+			expect(
+				await mappings.resolve("{{pii:email:seededtoken00}}", {
+					scope: "claw",
+					scopeId: "claw-1",
+				}),
+			).toBeNull();
+			// …and untouched where it was not. The bare-subjectId sweep destroyed both.
+			expect(
+				await mappings.resolve("{{pii:email:seededtoken00}}", {
+					scope: "claw",
+					scopeId: "claw-2",
+				}),
+			).toBe("subject@x.com");
+		});
+
+		it("denies a caller with no claim on the named container", async () => {
+			// The reason the container had to reach the request at all: with nothing to resolve, the route
+			// authorized against the caller alone and every authenticated stranger passed.
+			const { claw } = await chatClaw();
+			await expect(
+				withPrincipal(claw, userPrincipal("stranger")).api.forgetSubject({
+					subjectId: "subject-1",
+					scope: "claw",
+					scopeId: "claw-1",
+				}),
+			).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+		});
+
+		it("denies a container kind nothing registers — fail closed, not fall through", async () => {
+			// `busyclaw:uncontained` is core's stand-in for "this mapping belongs to no boundary". Nothing
+			// registers that kind, so it resolves no resource and denies. An uncontained mapping is not
+			// erasable from the wire, which is the correct answer rather than an oversight.
+			const { claw } = await chatClaw();
+			await expect(
+				claw.api.forgetSubject({
+					subjectId: "subject-1",
+					...UNCONTAINED,
+				}),
+			).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+		});
 	});
 });
 

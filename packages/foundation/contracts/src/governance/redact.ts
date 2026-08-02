@@ -178,14 +178,24 @@ export type PiiMappingStore = {
 	) => PiiMapping | null | Promise<PiiMapping | null>;
 	/** Right-to-be-forgotten: delete every mapping this subject appears on (multi-subject safe). */
 	/**
-	 * Crypto-shred every mapping this subject appears on, and report HOW MANY.
+	 * Crypto-shred the mappings this subject appears on, and report HOW MANY.
 	 *
 	 * The count is the point. Erasure used to answer `void`, so "shredded every mapping this person
 	 * appears on" and "found nothing, because nothing was ever linked to them" were the same reply —
 	 * and the second is the likely one, since a subject is only linked when trusted code stamps it.
 	 * A compliance answer that cannot distinguish those is worse than no answer: it is a false one.
+	 *
+	 * `container` BOUNDS the sweep. Omitted, it crosses every container the subject appears in — the
+	 * deployment-wide DSR answer, and the only behaviour this port had. That is a real need and it
+	 * stays reachable, but it is not something a request should be able to ask for: the rows have
+	 * always carried `(scope, scopeId)` while the REQUEST named none, so the public api had nothing
+	 * to authorize against and any authenticated caller could erase any subject anywhere (R-H01).
+	 * Naming a container is what lets a caller's claim on it be checked.
 	 */
-	deleteForSubject: (subjectId: string) => number | Promise<number>;
+	deleteForSubject: (
+		subjectId: string,
+		container?: ScopeRef,
+	) => number | Promise<number>;
 	/**
 	 * Has this subject been erased from this container? Reads the tombstone.
 	 *

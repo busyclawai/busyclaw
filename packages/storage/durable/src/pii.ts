@@ -1,4 +1,4 @@
-import type { Adapter } from "@busyclaw/contracts";
+import type { Adapter, ScopeRef } from "@busyclaw/contracts";
 import {
 	type PiiMapping,
 	type PiiMappingStore,
@@ -166,13 +166,30 @@ export function createPiiMappingStore(
 			return row !== null;
 		},
 
-		async deleteForSubject(subjectId: string) {
+		async deleteForSubject(subjectId: string, container?: ScopeRef) {
 			// Find every (placeholder, container) this subject appears on (multi-subject safe), then
 			// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
 			// value's subject rows, scoped to its OWN container so a namesake elsewhere is untouched.
+			//
+			// A `container` narrows the FIND, not the deletes below: those were already per-container
+			// (a shred must never reach a namesake in another one), so bounding the sweep is entirely a
+			// question of which subject rows are in scope. Omitted ⇒ every container, which is the
+			// deployment-wide DSR answer and the only one this verb used to give.
 			const subjectRows = await db.findMany({
 				model: "pii_subject",
-				where: [{ field: "subjectId", value: subjectId }],
+				where: [
+					{ field: "subjectId", value: subjectId },
+					...(container
+						? ([
+								{ field: "scope", value: container.scope, connector: "AND" },
+								{
+									field: "scopeId",
+									value: container.scopeId,
+									connector: "AND",
+								},
+							] as const)
+						: []),
+				],
 			});
 			const seen = new Set<string>();
 			let erased = 0;

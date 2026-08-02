@@ -245,7 +245,11 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
 	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
 	 *  no redaction configured): a no-op "success" would be false comfort. */
-	forgetSubject: (input: { subjectId: string }) => Promise<{ erased: number }>;
+	forgetSubject: (input: {
+		subjectId: string;
+		scope: string;
+		scopeId: string;
+	}) => Promise<{ erased: number }>;
 
 	createToolCall: (input: CreateToolCallInput) => Promise<ToolCallRecord>;
 	getToolCall: (input: { id: string }) => Promise<ToolCallRecord | null>;
@@ -566,7 +570,17 @@ const sendMessageInput = ark({
 const forgetSubjectInput = ark({
 	subjectId: ark("string").configure({
 		busyclaw: {
-			doc: "The data-subject key crypto-shredded across every PII mapping; fails loud (not a silent success) when the deployment cannot honor erasure, and is audited as `pii.erasure`.",
+			doc: "The data-subject key crypto-shredded across this container's PII mappings; fails loud (not a silent success) when the deployment cannot honor erasure, and is audited as `pii.erasure`.",
+		},
+	}),
+	scope: ark("string").configure({
+		busyclaw: {
+			doc: "The container KIND to erase within ('claw', 'run', or a plugin's). Resolved as a resource of that kind and authorized at `manage`, so naming a container you have no claim on denies.",
+		},
+	}),
+	scopeId: ark("string").configure({
+		busyclaw: {
+			doc: "The container's id — with `scope` it names exactly which mappings are in scope. Erasure across EVERY container is a trusted in-process call on the redaction handle, never a request.",
 		},
 	}),
 });
@@ -916,17 +930,19 @@ export const clawApiRoutes = {
 	getMessage: apiRoute("getMessage", on("read", "message", "id")),
 	listMessages: apiRoute("listMessages", on("read", "thread", "threadId")),
 	sendMessage: apiRoute("sendMessage", on("use", "claw", "clawId")),
-	// forgetSubject erases by bare `subjectId` with no container in its input and no anchor in the data
-	// model, so over HTTP it was an unbounded delete of any subject's mappings. `deleteForSubject` is not
-	// container-scoped at the port yet, so there is nothing honest to resolve — this states the gap
-	// rather than dressing it as personal scope. Re-anchor it on `(scope, scopeId)` with the per-run PII
-	// container work.
-	forgetSubject: apiRoute(
-		"forgetSubject",
-		callerOnly(
-			"KNOWN GAP: erasure takes only a subjectId — no container in the input and none at the store port — so there is no boundary to resolve and any caller can erase any subject's mappings",
-		),
-	),
+	// R-H01. Erasure used to take a bare `subjectId` — no container in the request, nothing to resolve,
+	// so the route authorized against the caller alone and any authenticated stranger could shred any
+	// subject's mappings everywhere. The rows always carried `(scope, scopeId)`; only the request did
+	// not. It does now, and binds exactly like `shareResource`: the caller NAMES a kind and an id, and
+	// the generic owner ∪ scope ∪ grant rule decides it at `manage`. A `("claw", clawId)` container
+	// therefore asks the claw's own owner rule, and a kind nothing registers resolves nothing and
+	// denies. Deployment-wide erasure stays a real DSR need and stays reachable — from trusted
+	// in-process code holding the redaction handle, which is not a surface a stranger can reach.
+	forgetSubject: apiRoute("forgetSubject", {
+		mode: "resource",
+		level: "manage",
+		resolve: (input) => ({ kind: input.scope, id: input.scopeId }),
+	}),
 	createToolCall: apiRoute("createToolCall", on("use", "claw", "clawId")),
 	getToolCall: apiRoute("getToolCall", on("read", "toolCall", "id")),
 	// Keyed by (runId, provider tool-call id): tool-call ids are unique only WITHIN a run, so the pair is
@@ -1516,12 +1532,15 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return { ...stream, userMessage };
 		},
 
-		async forgetSubject({ subjectId }) {
-			const erased = await requireRedaction().forgetSubject(subjectId);
+		async forgetSubject({ subjectId, scope, scopeId }) {
+			const erased = await requireRedaction().forgetSubject(subjectId, {
+				scope,
+				scopeId,
+			});
 			// The count rides into the audit too. "Erasure requested and nothing was found" is the
 			// answer a regulator asks for, and it is indistinguishable from a completed shred unless
 			// somebody wrote the number down at the moment it was true.
-			await auditPrivacy("pii.erasure", { subjectId, erased });
+			await auditPrivacy("pii.erasure", { subjectId, scope, scopeId, erased });
 			return { erased };
 		},
 
