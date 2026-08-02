@@ -8,13 +8,14 @@
 
 import type { Adapter } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
-import { describe, expect, it } from "vitest";
-import { handleInbound } from "../src/core/dispatch";
+import { describe, expect, it, vi } from "vitest";
+import { dispatchWebhook, handleInbound } from "../src/core/dispatch";
 import {
 	channelDeliveryModels,
 	channelOutboxModels,
 	createDeliveryInbox,
 	createDeliveryOutbox,
+	type DeliveryInbox,
 	type DeliveryOutbox,
 	deliveryRowId,
 	type OutboundRecord,
@@ -72,8 +73,8 @@ describe("a storage failure is not a duplicate", () => {
 		const inbox = createDeliveryInbox(adapter);
 		const outbox = createDeliveryOutbox(adapter);
 
-		expect(await inbox.claim(key, LEASE_MS)).toBe(true);
-		expect(await inbox.claim(key, LEASE_MS)).toBe(false);
+		expect(await inbox.claim(key, LEASE_MS)).not.toBeNull();
+		expect(await inbox.claim(key, LEASE_MS)).toBeNull();
 
 		expect(await outbox.enqueue(key, reply)).toBe(true);
 		expect(await outbox.enqueue(key, reply)).toBe(false);
@@ -281,5 +282,254 @@ describe("the delivery key cannot be forged apart", () => {
 				deliveryId: "u-1",
 			}),
 		).toBe("9717d18829f87f3e107350a6790570dee58e6a4eed4f72e4a11cbe80575618b3");
+	});
+});
+
+// The claim used to record only WHEN it went stale, which answers "has the holder gone away?" and
+// cannot answer "am I still the holder?". So a turn whose lease lapsed and was re-taken went on to
+// call complete and marked the delivery finished while its successor was still running it — and the
+// successor's work then looked like a second, unclaimed turn against a row it no longer owned.
+describe("a displaced holder cannot finish over its successor", () => {
+	// A clock the test drives, so a lapse is a fact rather than a wait.
+	const clock = (start = "2026-01-01T00:00:00.000Z") => {
+		let t = Date.parse(start);
+		return {
+			now: () => new Date(t).toISOString(),
+			advance: (ms: number) => {
+				t += ms;
+			},
+		};
+	};
+
+	it("refuses a completion from a lease that was re-taken", async () => {
+		const time = clock();
+		const adapter = db();
+		const inbox = createDeliveryInbox(adapter, { now: time.now });
+
+		const first = await inbox.claim(key, 1000);
+		expect(first).not.toBeNull();
+		if (!first) throw new Error("expected the first claim to succeed");
+
+		// It dies. The lease lapses and a recovery takes over.
+		time.advance(2000);
+		const second = await inbox.claim(key, 1000);
+		expect(second).not.toBeNull();
+		if (!second) throw new Error("expected the recovery to take the delivery");
+		expect(second.leaseId).not.toBe(first.leaseId);
+
+		// The corpse comes back to life and tries to finish. It must not.
+		expect(await inbox.complete(key, first.leaseId)).toBe(false);
+		// …and the row is still the successor's to finish, not marked done behind its back.
+		expect(await inbox.complete(key, second.leaseId)).toBe(true);
+	});
+
+	it("tells a displaced holder its lease is gone", async () => {
+		const time = clock();
+		const inbox = createDeliveryInbox(db(), { now: time.now });
+
+		const first = await inbox.claim(key, 1000);
+		if (!first) throw new Error("expected the first claim to succeed");
+		// While it still holds the lease, saying "still here" works.
+		expect(await inbox.heartbeat(key, first.leaseId, 1000)).toBe(true);
+
+		time.advance(2000);
+		const second = await inbox.claim(key, 1000);
+		if (!second) throw new Error("expected the recovery to take the delivery");
+
+		expect(await inbox.heartbeat(key, first.leaseId, 1000)).toBe(false);
+		expect(await inbox.heartbeat(key, second.leaseId, 1000)).toBe(true);
+	});
+
+	// The point of the heartbeat: a turn that is SLOW is not a turn that is DEAD, and only the second
+	// should be recoverable. Without it, a long tool chain lost its delivery to a recovery that then
+	// ran the same message a second time.
+	it("keeps a live but slow turn from being reclaimed", async () => {
+		const time = clock();
+		const inbox = createDeliveryInbox(db(), { now: time.now });
+
+		const held = await inbox.claim(key, 1000);
+		if (!held) throw new Error("expected the claim to succeed");
+
+		// The turn outlives its original window, but says so.
+		time.advance(800);
+		expect(await inbox.heartbeat(key, held.leaseId, 1000)).toBe(true);
+		time.advance(800);
+		expect(await inbox.heartbeat(key, held.leaseId, 1000)).toBe(true);
+
+		// A recovery arriving now finds a live lease and leaves it alone.
+		expect(await inbox.claim(key, 1000)).toBeNull();
+		// …and the holder still finishes its own work.
+		expect(await inbox.complete(key, held.leaseId)).toBe(true);
+	});
+
+	// Two recoveries racing the same lapsed lease: the where pins the lease each of them read, so the
+	// second matches nothing rather than taking a row the first already took.
+	it("lets exactly one recovery take a lapsed lease", async () => {
+		const time = clock();
+		const inbox = createDeliveryInbox(db(), { now: time.now });
+		const first = await inbox.claim(key, 1000);
+		if (!first) throw new Error("expected the first claim to succeed");
+
+		time.advance(2000);
+		const [a, b] = await Promise.all([
+			inbox.claim(key, 1000),
+			inbox.claim(key, 1000),
+		]);
+		expect([a, b].filter((claim) => claim !== null)).toHaveLength(1);
+	});
+});
+
+// A correct store proves nothing if the dispatch never presents the lease. These pin the WIRING: the
+// claim's lease id is what reaches complete, a refused completion is reported as not-processed, and
+// the heartbeat actually fires while the turn is in flight.
+describe("the dispatch carries the lease it was given", () => {
+	const endpoint: EndpointContext = {
+		provider: "fake",
+		endpointKey: "acme-bot",
+		mode: "webhook",
+	};
+
+	const channel = (): Channel => ({
+		provider: "fake",
+		supports: { webhook: true, poll: false },
+		mode: "webhook",
+		verify: () => true,
+		parseInbound: () => [
+			{
+				deliveryId: "u-1",
+				externalConversationId: "chat-1",
+				text: "hello",
+			},
+		],
+		send: async () => {},
+	});
+
+	const claw = (onTurn?: () => Promise<void>) => ({
+		api: {
+			bindConversation: async () => ({
+				claw: { id: "claw-1" },
+				thread: { id: "thread-1" },
+			}),
+			sendMessage: async () => {
+				await onTurn?.();
+				return { result: { status: "completed", text: "answer" } };
+			},
+		},
+	});
+
+	const request = { headers: { get: () => null }, rawBody: "u-1" };
+
+	it("presents the claim's own lease id at completion", async () => {
+		const completedWith: string[] = [];
+		const inbox: DeliveryInbox = {
+			claim: async () => ({ leaseId: "lease-A" }),
+			heartbeat: async () => true,
+			complete: async (_key, leaseId) => {
+				completedWith.push(leaseId);
+				return true;
+			},
+		};
+
+		const result = await dispatchWebhook({
+			claw: claw(),
+			channel: channel(),
+			endpoint,
+			request,
+			persist: async () => {},
+			inbox,
+		});
+
+		expect(completedWith).toEqual(["lease-A"]);
+		expect(
+			(result.body as { data: { processed: number } }).data.processed,
+		).toBe(1);
+	});
+
+	// A refused completion means this attempt was displaced mid-turn. It did not handle the delivery —
+	// the attempt that owns it did — so it must not report that it did.
+	it("does not report a delivery it was displaced from as processed", async () => {
+		const inbox: DeliveryInbox = {
+			claim: async () => ({ leaseId: "lease-A" }),
+			heartbeat: async () => true,
+			// The recovery took it while the turn was running.
+			complete: async () => false,
+		};
+
+		const result = await dispatchWebhook({
+			claw: claw(),
+			channel: channel(),
+			endpoint,
+			request,
+			persist: async () => {},
+			inbox,
+		});
+
+		expect(
+			(result.body as { data: { processed: number } }).data.processed,
+		).toBe(0);
+	});
+
+	it("says 'still here' while the turn is in flight", async () => {
+		vi.useFakeTimers();
+		try {
+			const beats: string[] = [];
+			const inbox: DeliveryInbox = {
+				claim: async () => ({ leaseId: "lease-A" }),
+				heartbeat: async (_key, leaseId) => {
+					beats.push(leaseId);
+					return true;
+				},
+				complete: async () => true,
+			};
+
+			await dispatchWebhook({
+				claw: claw(async () => {
+					// The turn outlives a heartbeat interval (a third of the 15-minute lease).
+					await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+				}),
+				channel: channel(),
+				endpoint,
+				request,
+				persist: async () => {},
+				inbox,
+			});
+
+			// Two intervals elapsed, and every beat presented the lease this attempt holds.
+			expect(beats.length).toBeGreaterThanOrEqual(2);
+			expect(new Set(beats)).toEqual(new Set(["lease-A"]));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// …and the timer does not outlive the turn: a stopped heartbeat stops asking.
+	it("stops beating once the turn is done", async () => {
+		vi.useFakeTimers();
+		try {
+			const beats: string[] = [];
+			const inbox: DeliveryInbox = {
+				claim: async () => ({ leaseId: "lease-A" }),
+				heartbeat: async () => {
+					beats.push("beat");
+					return true;
+				},
+				complete: async () => true,
+			};
+
+			await dispatchWebhook({
+				claw: claw(),
+				channel: channel(),
+				endpoint,
+				request,
+				persist: async () => {},
+				inbox,
+			});
+
+			const afterTurn = beats.length;
+			await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+			expect(beats.length).toBe(afterTurn);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

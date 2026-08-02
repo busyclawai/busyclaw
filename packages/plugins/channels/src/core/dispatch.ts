@@ -203,10 +203,71 @@ async function relayOnce(input: {
 	};
 	// Claimed BEFORE the turn: a claim taken afterwards would be recording history, and the second
 	// arrival is already halfway through its own run by then.
-	if (!(await inbox.claim(key, DELIVERY_LEASE_MS))) return false;
-	await relay();
-	await inbox.complete(key);
-	return true;
+	const claimed = await inbox.claim(key, DELIVERY_LEASE_MS);
+	if (claimed === null) return false;
+	// The lease is EXTENDED while the turn runs, not merely set once at the start. A turn that
+	// legitimately outran a fixed window — a long tool chain, a slow model — was indistinguishable
+	// from a dead one, so a recovery took over work that was never stuck and ran it a second time.
+	const stopHeartbeat = startLeaseHeartbeat({
+		inbox,
+		key,
+		leaseId: claimed.leaseId,
+		leaseMs: DELIVERY_LEASE_MS,
+	});
+	try {
+		await relay();
+	} finally {
+		stopHeartbeat();
+	}
+	// FENCED. A completion from a lease that is no longer current is refused, so a runner displaced by
+	// a recovery cannot mark the delivery finished over the top of the attempt now running it.
+	//
+	// There is nothing to cancel when that happens: `sendMessage` takes no abort signal, so a displaced
+	// turn runs to its end. The damage is bounded to wasted work rather than a duplicate message — its
+	// reply meets the outbox's one-reply-per-delivery rule and is not sent. Reported as NOT processed,
+	// because the attempt that owns the delivery is the one entitled to say it handled it.
+	return await inbox.complete(key, claimed.leaseId);
+}
+
+/**
+ * Keep saying "still here" until the turn is done, and give up the moment the lease is gone.
+ *
+ * Unref'd so a pending tick never holds a process open, and stopped in a `finally` so a turn that
+ * throws does not leave a timer extending a lease nobody is using. The same shape the approval lease
+ * uses (`startApprovalHeartbeat`), which is where this problem was solved the first time.
+ */
+function startLeaseHeartbeat(input: {
+	inbox: DeliveryInbox;
+	key: DeliveryKey;
+	leaseId: string;
+	leaseMs: number;
+}): () => void {
+	const timers = globalThis as typeof globalThis & {
+		setInterval: (fn: () => void, ms: number) => { unref?: () => void };
+		clearInterval: (timer: unknown) => void;
+	};
+	let stopped = false;
+	const stop = () => {
+		if (stopped) return;
+		stopped = true;
+		timers.clearInterval(timer);
+	};
+	const timer = timers.setInterval(
+		() => {
+			void input.inbox
+				.heartbeat(input.key, input.leaseId, input.leaseMs)
+				// Lost, or unreachable: either way this runner has no lease to extend, and continuing to
+				// ask would only keep a timer alive for a row that is not ours.
+				.then((held) => {
+					if (!held) stop();
+				})
+				.catch(stop);
+		},
+		// A third of the window, so two ticks can be missed before the lease actually lapses.
+		Math.max(250, Math.floor(input.leaseMs / 3)),
+	) as { unref?: () => void };
+	timer.unref?.();
+	return stop;
 }
 
 /**

@@ -24,7 +24,7 @@ import {
 } from "@busyclaw/contracts";
 import { entityView, isUniqueViolation } from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
 /**
  * Is this the database saying "that row already exists"?
@@ -77,6 +77,20 @@ export const channelDeliveryFields = {
 	 *  delivery forever, and the provider's retry — the one thing that could recover it — would be
 	 *  turned away by the claim its own crashed predecessor left behind. */
 	leaseExpiresAt: field.string({ index: true }),
+	/**
+	 * WHICH attempt holds this delivery — the fence.
+	 *
+	 * The expiry alone answers "has the holder gone away?", and that was the only question the row
+	 * could answer. It cannot answer "am I still the holder?", so a slow turn whose lease lapsed and
+	 * was re-taken went on to call `complete` and marked the delivery finished while its successor was
+	 * still running it. The successor's work then looked like a second, unclaimed turn.
+	 *
+	 * Every transition after the claim is matched on this, so a runner that lost its lease can no
+	 * longer act on the row — the same rule the approval lease applies, for the same reason.
+	 */
+	leaseId: field.string({
+		doc: "Identifies the attempt holding this delivery. Completion and heartbeat are accepted only from the lease that is current, so a runner whose lease lapsed and was re-taken cannot finish over its successor.",
+	}),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
@@ -125,21 +139,43 @@ export function deliveryRowId(key: {
 	);
 }
 
+/** The proof that an attempt holds a delivery — carried back into every later transition on it. */
+export type DeliveryClaim = { leaseId: string };
+
 /** What a dispatch asks of the inbox. Absent entirely when the claw has no database — the same
  *  deployment shape that has no registration rows either. */
 export type DeliveryInbox = {
 	/**
 	 * Take this delivery, or report that somebody already has.
 	 *
-	 * `true` ⇒ it is yours to process. `false` ⇒ it is already completed, or being processed right now
-	 * under a live lease, and this attempt must not run the turn again. A `processing` row whose lease
-	 * has LAPSED is re-takeable exactly once more: that is a turn which died mid-flight, and the
-	 * provider's retry is the only thing that can recover it.
+	 * A claim ⇒ it is yours to process, and the `leaseId` is the proof to present at every later step.
+	 * `null` ⇒ it is already completed, or being processed right now under a live lease, and this
+	 * attempt must not run the turn again. A `processing` row whose lease has LAPSED is re-takeable
+	 * exactly once more: that is a turn which died mid-flight, and a retry is the only thing that can
+	 * recover it.
 	 */
-	claim: (key: DeliveryKey, leaseMs: number) => Promise<boolean>;
-	/** Mark it handled. The row is RETAINED — it is the memory that keeps a later retry from looking
-	 *  new, so removing it would reopen the hole it was created to close. */
-	complete: (key: DeliveryKey) => Promise<void>;
+	claim: (key: DeliveryKey, leaseMs: number) => Promise<DeliveryClaim | null>;
+	/**
+	 * Say "still here", or learn that the lease is gone.
+	 *
+	 * `false` means a recovery re-took this delivery and the caller no longer owns it. Without this a
+	 * claim got ONE fixed window and no way to extend it, so a turn that legitimately outran the lease
+	 * — a long tool chain, a slow model — was indistinguishable from a dead one and was reclaimed
+	 * while it was still running.
+	 */
+	heartbeat: (
+		key: DeliveryKey,
+		leaseId: string,
+		leaseMs: number,
+	) => Promise<boolean>;
+	/**
+	 * Mark it handled, and say whether this attempt was still the one entitled to.
+	 *
+	 * `false` ⇒ the lease was re-taken and the row now belongs to somebody else; this attempt's work
+	 * is discarded rather than written over theirs. The row is RETAINED either way — it is the memory
+	 * that keeps a later retry from looking new, so removing it would reopen the hole it closed.
+	 */
+	complete: (key: DeliveryKey, leaseId: string) => Promise<boolean>;
 };
 
 export type DeliveryKey = {
@@ -149,6 +185,31 @@ export type DeliveryKey = {
 };
 
 export type DeliveryInboxOptions = { now?: () => string };
+
+/** A fresh lease id — the same 16 random bytes the approval lease mints, for the same purpose. */
+const newLeaseId = (): string => bytesToHex(randomBytes(16));
+
+/**
+ * The where-clause that pins the lease a recovery READ, so two recoveries cannot both take the row.
+ *
+ * Prefers the lease id and falls back to the expiry only when the row predates that column — a
+ * delivery claimed before the fence existed carries no lease to pin, and refusing to recover those
+ * would strand every claim already sitting in a deployment's database at upgrade time.
+ */
+function leaseFence(
+	leaseId: string | null | undefined,
+	leaseExpiresAt: string | null | undefined,
+): { field: "leaseId" | "leaseExpiresAt"; value: string; connector: "AND" }[] {
+	if (leaseId != null) {
+		return [{ field: "leaseId", value: leaseId, connector: "AND" }];
+	}
+	if (leaseExpiresAt != null) {
+		return [
+			{ field: "leaseExpiresAt", value: leaseExpiresAt, connector: "AND" },
+		];
+	}
+	return [];
+}
 
 /** Back the inbox with a storage adapter. */
 export function createDeliveryInbox(
@@ -166,6 +227,7 @@ export function createDeliveryInbox(
 		async claim(key, leaseMs) {
 			const id = deliveryRowId(key);
 			const stamp = now();
+			const leaseId = newLeaseId();
 			try {
 				// The INSERT is the claim. Two processes racing the same delivery both try it and the
 				// database picks one — no read-then-write window for both to pass through.
@@ -175,12 +237,13 @@ export function createDeliveryInbox(
 						...key,
 						id,
 						status: "processing",
+						leaseId,
 						leaseExpiresAt: leaseUntil(leaseMs),
 						createdAt: stamp,
 						updatedAt: stamp,
 					},
 				});
-				return true;
+				return { leaseId };
 			} catch (error) {
 				// ONLY a duplicate means somebody has it. Every other failure means this claim was never
 				// recorded, and answering "somebody else has it" would hand the delivery to a holder that
@@ -192,44 +255,62 @@ export function createDeliveryInbox(
 					model: "channel_delivery",
 					where: [{ field: "id", value: id }],
 				});
-				if (!existing || existing.status === "completed") return false;
+				if (!existing || existing.status === "completed") return null;
 				if (
 					existing.leaseExpiresAt != null &&
 					existing.leaseExpiresAt >= now()
 				) {
-					return false;
+					return null;
 				}
+				// The where pins the lease we READ, so two recoveries cannot both take it — and the row
+				// leaves this call carrying a NEW lease id, which is what makes the displaced holder's
+				// later `complete` match nothing.
 				const taken = await db.update({
 					model: "channel_delivery",
 					where: [
 						{ field: "id", value: id },
 						{ field: "status", value: "processing", connector: "AND" },
-						...(existing.leaseExpiresAt != null
-							? [
-									{
-										field: "leaseExpiresAt" as const,
-										value: existing.leaseExpiresAt,
-										connector: "AND" as const,
-									},
-								]
-							: []),
+						...leaseFence(existing.leaseId, existing.leaseExpiresAt),
 					],
 					update: {
+						leaseId,
 						leaseExpiresAt: leaseUntil(leaseMs),
 						updatedAt: now(),
 					},
 				});
-				// The where pins the lapsed lease we read, so two recoveries cannot both take it.
-				return taken !== null;
+				return taken === null ? null : { leaseId };
 			}
 		},
 
-		async complete(key) {
-			await db.update({
+		async heartbeat(key, leaseId, leaseMs) {
+			// Same ownership question `complete` asks, asked early and often: a row that is no longer
+			// ours matches nothing, and the caller learns it has been displaced instead of running on
+			// to write over its successor.
+			const extended = await db.update({
 				model: "channel_delivery",
-				where: [{ field: "id", value: deliveryRowId(key) }],
+				where: [
+					{ field: "id", value: deliveryRowId(key) },
+					{ field: "status", value: "processing", connector: "AND" },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: { leaseExpiresAt: leaseUntil(leaseMs), updatedAt: now() },
+			});
+			return extended !== null;
+		},
+
+		async complete(key, leaseId) {
+			// FENCED. Without the lease in this where, a runner whose lease had lapsed and been re-taken
+			// still marked the delivery completed — over the top of the successor that was running it,
+			// whose own work then finished against a row it no longer appeared to own.
+			const finished = await db.update({
+				model: "channel_delivery",
+				where: [
+					{ field: "id", value: deliveryRowId(key) },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
 				update: { status: "completed", updatedAt: now() },
 			});
+			return finished !== null;
 		},
 	};
 }
