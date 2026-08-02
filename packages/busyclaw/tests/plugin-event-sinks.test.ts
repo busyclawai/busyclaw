@@ -21,7 +21,24 @@ import {
 	textModel,
 } from "./fixtures";
 
-async function createAgentThread(claw: ReturnType<typeof createClaw>) {
+/** Generic over the claw, because `ReturnType<typeof createClaw>` is the claw of the DEFAULT config —
+ *  a claw built with plugins, events or a concrete model is a different `Claw<…>` and does not fit it.
+ *  Constrained to the two methods it calls. */
+async function createAgentThread<
+	Claw extends {
+		readonly api: {
+			createClaw: (input: {
+				id: string;
+				name: string;
+			}) => Promise<{ id: string }>;
+			createThread: (input: {
+				id: string;
+				clawId: string;
+				title: string;
+			}) => Promise<{ id: string }>;
+		};
+	},
+>(claw: Claw): Promise<{ agent: { id: string }; thread: { id: string } }> {
 	const agent = await claw.api.createClaw({
 		id: "claw-1",
 		name: "Recruiting assistant",

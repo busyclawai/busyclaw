@@ -16,7 +16,31 @@ import {
 
 const ACTOR = userPrincipal("actor-1");
 
-async function createAgentThread(claw: ReturnType<typeof createClaw>) {
+/** Generic over the claw, because `ReturnType<typeof createClaw>` is the claw of the DEFAULT config —
+ *  a claw built with plugins, events or a concrete model is a different `Claw<…>` and does not fit it.
+ *  Constrained to the two methods this helper itself calls, and it hands back the CALLER's own `api`
+ *  so everything downstream keeps its concrete type. */
+async function createAgentThread<
+	Claw extends {
+		readonly api: {
+			createClaw: (input: {
+				id: string;
+				name: string;
+			}) => Promise<{ id: string }>;
+			createThread: (input: {
+				id: string;
+				clawId: string;
+				title: string;
+			}) => Promise<{ id: string }>;
+		};
+	},
+>(
+	claw: Claw,
+): Promise<{
+	api: Claw["api"];
+	agent: { id: string };
+	thread: { id: string };
+}> {
 	// The app-authz caller is bound to the claw owner, so its owner rule permits the claw-scoped calls.
 	const api = withPrincipal(claw, ACTOR).api;
 	const agent = await api.createClaw({

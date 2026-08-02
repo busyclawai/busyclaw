@@ -25,7 +25,7 @@ import { createRegistryStores } from "@busyclaw/storage-durable";
 import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
-import type { V2Model } from "./fixtures";
+import type { MockModel, V2Model } from "./fixtures";
 
 /** A public IP LITERAL server: the egress floor validates it without DNS, so nothing here resolves
  *  a name or touches the network. This is the origin the registered tool DECLARES. */
@@ -101,7 +101,7 @@ function callToolModel(path: string, args: Record<string, unknown>): MockModel {
 		doStream: async () => {
 			throw new Error("stream not used");
 		},
-	} as unknown as V2Model;
+	} as unknown as MockModel;
 }
 
 /** Calls the registered petstore tool once, then answers "done". */
@@ -148,7 +148,7 @@ function getPetModel(): MockModel {
 		doStream: async () => {
 			throw new Error("stream not used");
 		},
-	} as unknown as V2Model;
+	} as unknown as MockModel;
 }
 
 /** Register the petstore spec and build a claw whose only policy SOURCE forbids reaching `origin`. */

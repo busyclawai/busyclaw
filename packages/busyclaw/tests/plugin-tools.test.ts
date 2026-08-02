@@ -401,15 +401,21 @@ describe("plugin.tools — one id past the provider edge", () => {
 });
 
 describe("plugin.tools — collisions fail loud", () => {
-	const collide = (input: {
+	// Generic over the plugin list: `readonly BusyclawPlugin[]` erases each plugin's `$HasCron`, and
+	// the assembly then demands a `cronHandler` none of these needs.
+	const collide = <const Plugins extends readonly BusyclawPlugin[]>(input: {
 		tools?: Record<string, ToolDefinition>;
-		plugins: readonly BusyclawPlugin[];
+		plugins: Plugins;
 	}) =>
 		createClaw({
 			model: callingModel(null, { names: [] }),
 			...(input.tools ? { tools: input.tools } : {}),
 			plugins: input.plugins,
-		});
+			// The cron gate cannot be evaluated HERE. `RequireCronHandler<…>` is a conditional over the
+			// config, and inside a generic wrapper the plugin list is still a type parameter, so the
+			// conditional never reduces and TS refuses whatever it is handed. The gate does its job at
+			// every real call site, where the list is a literal; a wrapper is the one place it cannot.
+		} as unknown as Parameters<typeof createClaw>[0]);
 
 	it("a plugin tool that lands on a HOST tool's name", () => {
 		const ran: string[] = [];

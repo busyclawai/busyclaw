@@ -28,10 +28,12 @@ import {
 	createRegisteredToolProvider,
 	createRuntime,
 	defaultRuntimeNewId,
+	type ModelPool,
 	pluginEventSink,
 	type Runtime,
 	type RuntimeConfig,
 	type RuntimeEventSink,
+	type RuntimeModel,
 } from "@busyclaw/runtime";
 import { buildSecrets, env } from "@busyclaw/secrets";
 import { entityAdapter, verifiedAdapter } from "@busyclaw/storage-core";
@@ -588,36 +590,39 @@ function registeredToolResolver(
 }
 
 /**
- * `createClaw` constraint: a claw needs exactly one model source. Resolves to `unknown` (no-op) when
- * `model` is present, or `models` is a non-empty pool; otherwise to an error-shaped type whose keys
- * name the problem in the compile error. Mirrors {@link RequireNoCoreColumnCollision}. The runtime
- * `createModelSelector` backstops JS / `as any` callers.
+ * `createClaw` constraint: a claw needs exactly one model source — `model` OR `models`, never both.
+ *
+ * STRUCTURAL, deliberately, where the other gates are conditional error types. A conditional over
+ * `Config` is evaluated DURING the same inference that types the argument, so an unannotated callback
+ * anywhere in that argument — `warn: (m) => …`, `emit(event) {…}`, a plugin's `configure(ctx) {…}` —
+ * forces TS to resolve `Config` before it is finished, the conditional sees a partial one, and it
+ * falls to its error branch. The message that came out said "createClaw needs a model" to a caller
+ * who was plainly passing one: an error naming the wrong problem, with no path from what it said to
+ * what was actually wrong. It fired on twenty call sites in this repo alone.
+ *
+ * Nothing fixes that while the check is a conditional — `NoInfer`, moving the gate to its own
+ * parameter, and putting the concrete constraint first in the intersection were all measured and all
+ * still misfire; carrying it in the constraint is a circular constraint outright. Taking it off the
+ * inference path is the only thing that works, and an exclusive union is how TS says "exactly one of
+ * these" without a conditional. The `?: never` arms are what make it exclusive: an object carrying
+ * BOTH keys matches neither member.
+ *
+ * The cost, stated: an EMPTY `models` pool is no longer a compile error, because "has at least one
+ * key" has no structural form. `createModelSelector` throws on it at construction — loudly, at boot,
+ * before any traffic — along with both-at-once and multiple-defaults. The compile gate was always a
+ * convenience over that; it is now a slightly smaller one.
  */
-export type RequireModelOrModels<Config> = Config extends { model: object }
-	? Config extends { models: object }
-		? {
-				readonly "ERROR: `model` and `models` are mutually exclusive": never;
-				readonly "FIX: use the single-model `model`, or the `models` pool — not both": never;
-			}
-		: unknown
-	: Config extends { models: infer Pool }
-		? [keyof Pool] extends [never]
-			? {
-					readonly "ERROR: the `models` pool is empty": never;
-					readonly "FIX: add at least one named model, e.g. models: { fast: … }": never;
-				}
-			: unknown
-		: {
-				readonly "ERROR: createClaw needs a model": never;
-				readonly "FIX: pass `model` (single) or a non-empty `models` pool": never;
-			};
+export type ClawModelSource =
+	| { models: ModelPool; model?: never }
+	| { model: RuntimeModel; models?: never };
 
-export function createClaw<const Config extends ClawConfig<RuntimeConfig>>(
+export function createClaw<
+	const Config extends ClawConfig<RuntimeConfig> & ClawModelSource,
+>(
 	config: Config &
 		RequireCronHandler<Config> &
 		RequireUniquePluginRoutePaths<Config> &
 		RequireNoCoreColumnCollision<Config> &
-		RequireModelOrModels<Config> &
 		RequireDatabaseForPlugins<Config>,
 ): Claw<ResolvedConfig<Config>> {
 	const adapter = config.database

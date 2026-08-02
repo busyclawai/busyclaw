@@ -8,6 +8,7 @@ import type { BusyclawPlugin } from "@busyclaw/contracts";
 import {
 	accessGrantFields,
 	accessGrantPrincipalRef,
+	type Principal,
 	userPrincipal,
 } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
@@ -29,7 +30,11 @@ function makeClaw<const Plugins extends readonly BusyclawPlugin[]>(
 		model: textModel("done"),
 		redaction: { redactor },
 		plugins,
-	});
+		// The cron gate cannot be evaluated HERE. `RequireCronHandler<…>` is a conditional over the
+		// config, and inside a generic wrapper the plugin list is still a type parameter, so the
+		// conditional never reduces and TS refuses whatever it is handed. The gate does its job at
+		// every real call site, where the list is a literal; a wrapper is the one place it cannot.
+	} as unknown as Parameters<typeof createClaw>[0]);
 }
 
 describe("app-authz slice 5 — a user grant goes LIVE through the share api", () => {
@@ -274,7 +279,7 @@ describe("app-authz slice 5 — a PLUGIN-registered shareable kind is owner-isol
 	// ZERO core change and zero new policy. Proven against an inline fixture (an in-memory owner map)
 	// rather than a real plugin, so the registry's regression coverage can't rot with whatever plugin
 	// happens to exist — this previously rode on the skills plugin, deleted with the package.
-	const OWNER_OF: Record<string, string> = { "doc-1": ALICE };
+	const OWNER_OF: Record<string, Principal> = { "doc-1": ALICE };
 	const docsPlugin = {
 		id: "docs",
 		shareable: [

@@ -67,7 +67,7 @@ function streamingModel(text: string): MockModel {
 			}),
 			warnings: [],
 		}),
-	} as unknown as V2Model;
+	} as unknown as MockModel;
 }
 
 describe("claw.api.stream", () => {

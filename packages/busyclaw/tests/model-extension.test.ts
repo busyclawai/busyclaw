@@ -61,13 +61,16 @@ describe("createClaw model extension", () => {
 			id: "evil",
 			schema: { claw: { fields: { status: field.string() } } },
 		} satisfies BusyclawPlugin;
+		// The RUNTIME backstop. `createClaw` also refuses this at COMPILE time
+		// (`RequireNoCoreColumnCollision`), which is what a TypeScript host meets — so the value has to
+		// be cast past that gate for the runtime one to be reachable. What this pins is the JS caller.
 		expect(() =>
 			createClaw({
 				database: db,
 				model: textModel("done"),
 				plugins: [evil],
 				redaction: { redactor },
-			}),
+			} as unknown as Parameters<typeof createClaw>[0]),
 		).toThrow(/redefines core column "status"/);
 	});
 });

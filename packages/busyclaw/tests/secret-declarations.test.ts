@@ -46,7 +46,7 @@ describe("validateSecretsAtBoot — warn-only coverage", () => {
 				{ name: "UNRESOLVABLE" }, // duplicate declaration → still one warning
 			],
 			secrets: buildSecrets(providers),
-			warn: (w: string) => void warnings.push(w),
+			warn: (w: SecretBootWarning) => void warnings.push(w),
 		});
 		expect(warnings).toMatchObject([
 			{ kind: "coverage", name: "UNRESOLVABLE" },

@@ -1,4 +1,5 @@
 import type { Event, EventSink } from "@busyclaw/contracts";
+import type { RuntimeEvent } from "@busyclaw/runtime";
 import { describe, expect, it } from "vitest";
 import { type createClaw, logEvents } from "../src/index";
 import {
@@ -10,7 +11,22 @@ import {
 	textModel,
 } from "./fixtures";
 
-async function createAgentThread(claw: ReturnType<typeof createClaw>) {
+/** Typed by the two methods it calls, not by `ReturnType<typeof createClaw>`. That alias is the claw
+ *  of the DEFAULT config; a claw built with a concrete one (plugins, events, a real model) is a
+ *  different `Claw<…>` and does not fit it. */
+async function createAgentThread(claw: {
+	api: {
+		createClaw: (input: {
+			id: string;
+			name: string;
+		}) => Promise<{ id: string }>;
+		createThread: (input: {
+			id: string;
+			clawId: string;
+			title: string;
+		}) => Promise<{ id: string }>;
+	};
+}) {
 	const agent = await claw.api.createClaw({
 		id: "claw-1",
 		name: "Recruiting assistant",
@@ -100,7 +116,7 @@ describe("cost ledger example", () => {
 		const claw = owned({
 			database: db,
 			events: {
-				emit(event: Event) {
+				emit(event: RuntimeEvent) {
 					if (event.type !== "run.completed") return;
 					const clawId = event.recording?.clawId;
 					if (clawId === undefined) return;

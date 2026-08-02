@@ -10,7 +10,11 @@ import type {
 	ClawRunReadModel,
 	ClawsStore,
 } from "@busyclaw/contracts";
-import { asPrincipal, type Principal } from "@busyclaw/contracts";
+import {
+	asPrincipal,
+	type Principal,
+	userPrincipal,
+} from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	buildApiPolicyEngine,
@@ -18,10 +22,10 @@ import {
 	governApi,
 } from "../src/authz-pep";
 
-const ALICE = "user:alice";
-const BOB = "user:bob";
-const CAROL = "user:carol";
-const STRANGER = "user:stranger";
+const ALICE = userPrincipal("alice");
+const BOB = userPrincipal("bob");
+const CAROL = userPrincipal("carol");
+const STRANGER = userPrincipal("stranger");
 
 type Governed = {
 	[method: string]: (
@@ -56,12 +60,14 @@ function govern(opts: {
 	grantStore?: AccessGrantStore;
 	resolvePrincipalScopes?: (principal: string) => readonly PrincipalScope[];
 	warn?: (message: string) => void;
+	approvals?: Parameters<typeof governApi>[0]["approvals"];
 }): Governed {
 	return governApi({
 		api,
 		engine,
 		clawsStore: opts.clawsStore,
 		runs: opts.runs,
+		approvals: opts.approvals,
 		grantStore: opts.grantStore,
 		adapter: undefined,
 		plugins: [],

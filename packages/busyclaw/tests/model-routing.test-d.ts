@@ -94,10 +94,10 @@ describe("model routing — type safety", () => {
 		createClaw({ plugins: [] });
 	});
 
-	test("createClaw rejects an empty models pool", () => {
-		// @ts-expect-error — empty pool
-		createClaw({ models: {} });
-	});
+	// "rejects an empty models pool" moved to model-routing.test.ts. The model gate is a structural
+	// union now (see `ClawModelSource`), and "this record has at least one key" has no structural
+	// form — so an empty pool is caught by `createModelSelector` at construction instead. The check
+	// did not disappear; the tier it lives in did, and the test followed it there.
 
 	test("createClaw rejects `model` and `models` together", () => {
 		// @ts-expect-error — mutually exclusive

@@ -207,6 +207,9 @@ describe("cross-principal isolation — Bob knows the id and is still refused", 
 					name: "guard",
 					cedar: "permit(principal, action, resource);",
 					mode: "enforce",
+					// A stored slice declares which plane it governs (R-H04) — the point here is that the
+					// call is DENIED, but it has to be a well-formed one to prove that.
+					plane: "tool",
 				},
 				BOB,
 			),

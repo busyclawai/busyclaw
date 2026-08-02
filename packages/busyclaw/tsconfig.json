@@ -5,6 +5,5 @@
 		"types": [],
 		"lib": ["ES2023", "DOM"]
 	},
-	"//": "TESTS ARE NOT CHECKED HERE YET — the one package still opted out. 69 errors remain, and they are not one shape: shareable-loader return types, `unknown` run results, index reads under noUncheckedIndexedAccess, and several contextually-typed parameters that go circular against createClaw's `const Config` gates. Everything mechanical has already been fixed; what is left wants judgment per site. Add \"tests\" to `include` when they are.",
-	"include": ["src"]
+	"include": ["src", "tests"]
 }

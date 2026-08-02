@@ -8,6 +8,7 @@
 
 import type {
 	BusyclawPlugin,
+	BusyclawPluginConfigureContext,
 	SecretProvider,
 	Secrets,
 } from "@busyclaw/contracts";
@@ -28,17 +29,21 @@ function stubProvider(overrides: Partial<SecretProvider> = {}): SecretProvider {
 	};
 }
 
-/** Capture the one-door reader the assembly injects into a plugin's configure context. */
-function captureSecrets(): { plugin: BusyclawPlugin; read: () => Secrets } {
+/** Capture the one-door reader the assembly injects into a plugin's configure context.
+ *
+ * No `: BusyclawPlugin` on the return. Annotating it widens the plugin to the broad type, which
+ * ERASES its `$HasCron` — and `createClaw` then demands a `cronHandler` this plugin has no cron to
+ * need. `satisfies` checks the same shape without throwing the evidence away. */
+function captureSecrets() {
 	let received: Secrets | undefined;
 	return {
 		plugin: {
 			id: "secrets-capture",
-			configure: (context) => {
+			configure: (context: BusyclawPluginConfigureContext) => {
 				received = context.secrets;
 				return undefined;
 			},
-		},
+		} satisfies BusyclawPlugin,
 		read: () => {
 			if (received === undefined) throw new Error("configure never ran");
 			return received;

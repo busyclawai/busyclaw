@@ -31,7 +31,7 @@ function fetchModel(url: string): MockModel {
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
-		doGenerate: async (options: unknown) => {
+		doGenerate: async (options: Parameters<MockModel["doGenerate"]>[0]) => {
 			const usage = {
 				inputTokens: {
 					total: 1,
@@ -72,7 +72,7 @@ function fetchModel(url: string): MockModel {
 		doStream: async () => {
 			throw new Error("stream not used");
 		},
-	} as unknown as V2Model;
+	} as unknown as MockModel;
 }
 
 const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -90,12 +90,22 @@ type Claw = {
 	};
 };
 
-const run = (claw: Claw): Promise<RunResult> =>
+// Typed by the ONE thing it reaches for. `Claw` here is the claw of a specific config, and every
+// suite below builds a differently-shaped one — naming the surface keeps them all assignable.
+const run = (claw: {
+	$context: { runtime: { generate: RuntimeGenerate } };
+}): Promise<RunResult> =>
 	claw.$context.runtime.generate(
 		"fetch it",
 		{},
 		runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
 	);
+
+type RuntimeGenerate = (
+	prompt: string,
+	ctx?: Record<string, unknown>,
+	options?: Record<string | symbol, unknown>,
+) => Promise<RunResult>;
 
 describe("what bounds a sandbox's reach", () => {
 	// A blanket permit is the worst case an operator can write, and the one a cross-source ceiling

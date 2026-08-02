@@ -1,7 +1,11 @@
 import type { ClawEngineFactory } from "@busyclaw/contracts";
 import { userPrincipal } from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
-import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
+import {
+	createSqlEngineStore,
+	sqlEngine,
+	type WorkerTickResult,
+} from "@busyclaw/engine-sql";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 
@@ -13,6 +17,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	type MockModel,
 	owned,
 	textModel,
 } from "./fixtures";
@@ -64,6 +69,36 @@ function fakeWorkflowEngine(
 	};
 }
 
+/**
+ * What the engine's `work()` produced, as the tick result it actually is.
+ *
+ * `EngineWorkResult` is `unknown` at the contract on purpose — an engine's work result is its own
+ * business and core never reads it. This suite drives engine-sql, whose result is a
+ * `WorkerTickResult`. Only the DISCRIMINANT is validated, because that is the only field these tests
+ * branch on and a plain union has no schema to parse against: an unrecognised status fails here,
+ * naming what came back, instead of surfacing as a confusing assertion three lines down.
+ */
+const TICK_STATUSES = [
+	"idle",
+	"waiting_approval",
+	"yielded",
+	"completed",
+	"failed",
+] as const;
+
+function workResult(value: unknown): WorkerTickResult {
+	const status = (value as { status?: unknown } | null | undefined)?.status;
+	if (
+		typeof status !== "string" ||
+		!TICK_STATUSES.includes(status as (typeof TICK_STATUSES)[number])
+	) {
+		throw new Error(
+			`engine work result has no known status: ${JSON.stringify(value)}`,
+		);
+	}
+	return value as WorkerTickResult;
+}
+
 describe("createClaw engine", () => {
 	it("runs through a non-SQL engine factory", async () => {
 		const events: string[] = [];
@@ -78,7 +113,7 @@ describe("createClaw engine", () => {
 			ctx: { team: "acme" },
 			prompt: "hello",
 		});
-		const result = await claw.$context.engine?.work?.();
+		const result = workResult(await claw.$context.engine?.work?.());
 
 		expect(run).toEqual({ id: "fake-1" });
 		expect(result).toEqual({ status: "completed", steps: 1, text: "done" });
@@ -175,16 +210,16 @@ describe("createClaw engine", () => {
 		const first = await claw.api.startRun({
 			prompt: "email alice@personal.com",
 		});
-		const parked = await claw.$context.engine?.work?.();
+		const parked = workResult(await claw.$context.engine?.work?.());
 
 		expect(parked.status).toBe("waiting_approval");
-		if (parked.status !== "waiting_approval" || !parked.approvalIds[0]) {
+		if (parked.status !== "waiting_approval" || !parked.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
 		expect(first.id).toMatch(/^[0-9a-f]{32}$/);
 
 		await claw.api.grantApproval({
-			approvalId: parked.approvalIds[0],
+			approvalId: parked.approvalIds?.[0],
 		});
 		// A THIRD PARTY resumes. The worker seeds the run row's principal so a durable slice executes as
 		// somebody — and the run row for THIS task is stamped from whoever called continueEngineRun. If
@@ -195,15 +230,15 @@ describe("createClaw engine", () => {
 		// getting to choose the identity the approved action executes as.
 		await claw.api.shareResource({
 			resourceKind: "approval",
-			resourceId: parked.approvalIds[0],
+			resourceId: parked.approvalIds?.[0],
 			principalRef: userPrincipal("stranger"),
 			permission: "manage",
 		});
 		const resume = await claw.api.continueEngineRun(
-			{ approvalId: parked.approvalIds[0] },
+			{ approvalId: parked.approvalIds?.[0] },
 			{ principal: userPrincipal("stranger") },
 		);
-		const completed = await claw.$context.engine?.work?.();
+		const completed = workResult(await claw.$context.engine?.work?.());
 
 		expect(completed.status).toBe("completed");
 		expect(resume.id).toMatch(/^[0-9a-f]{32}$/);
@@ -237,7 +272,7 @@ describe("createClaw engine", () => {
 			ctx: { team: "acme" },
 			prompt: "hello",
 		});
-		const result = await claw.$context.engine?.work?.();
+		const result = workResult(await claw.$context.engine?.work?.());
 
 		expect(result.status).toBe("completed");
 		expect(run.id).toMatch(/^[0-9a-f]{32}$/);
@@ -268,41 +303,43 @@ describe("createClaw engine", () => {
 		const abortObserved = new Promise<void>((resolve) => {
 			resolveAbort = resolve;
 		});
+		// Annotated as MockModel — the V4 member — so `doGenerate` has ONE signature and `options`
+		// (which this test reads `abortSignal` off) is contextually typed. Spread inline, TS has the
+		// V2|V3|V4 union and no single parameter type to give it.
+		const abortingModel: MockModel = {
+			...textModel("done"),
+			doGenerate: async (options) => {
+				const timers = globalThis as typeof globalThis & {
+					setTimeout: (fn: () => void, ms: number) => unknown;
+				};
+				while (!options.abortSignal?.aborted) {
+					await new Promise<void>((resolve) => timers.setTimeout(resolve, 10));
+				}
+				resolveAbort();
+				return {
+					content: [{ type: "text", text: "should not persist" }],
+					finishReason: { unified: "stop", raw: undefined },
+					usage: {
+						inputTokens: {
+							total: 1,
+							noCache: undefined,
+							cacheRead: undefined,
+							cacheWrite: undefined,
+						},
+						outputTokens: { total: 1, text: undefined, reasoning: undefined },
+					},
+					warnings: [],
+				};
+			},
+		};
 		const claw = owned({
 			cronHandler: false,
 			engine: sqlEngine({ store, workerId: "worker-1", leaseTtlMs: 1 }),
-			model: {
-				...textModel("done"),
-				doGenerate: async (options) => {
-					const timers = globalThis as typeof globalThis & {
-						setTimeout: (fn: () => void, ms: number) => unknown;
-					};
-					while (!options.abortSignal?.aborted) {
-						await new Promise<void>((resolve) =>
-							timers.setTimeout(resolve, 10),
-						);
-					}
-					resolveAbort();
-					return {
-						content: [{ type: "text", text: "should not persist" }],
-						finishReason: { unified: "stop", raw: undefined },
-						usage: {
-							inputTokens: {
-								total: 1,
-								noCache: undefined,
-								cacheRead: undefined,
-								cacheWrite: undefined,
-							},
-							outputTokens: { total: 1, text: undefined, reasoning: undefined },
-						},
-						warnings: [],
-					};
-				},
-			},
+			model: abortingModel,
 		});
 
 		const run = await claw.api.startRun({ prompt: "hello" });
-		const result = await claw.$context.engine?.work?.();
+		const result = workResult(await claw.$context.engine?.work?.());
 
 		expect(result).toMatchObject({ status: "failed", task: null });
 		await abortObserved;

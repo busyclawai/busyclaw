@@ -14,6 +14,7 @@ import {
 	createPolicyPlugin,
 	createShadowPolicyEngine,
 	loadPolicyBundle,
+	type NamedPolicies,
 	type ShadowDivergence,
 	SYSTEM_POSTURE,
 } from "@busyclaw/authz";
@@ -46,7 +47,12 @@ const stamps = () => {
 
 /** Compile a neutral model + policy text into a Cedar PolicyEngine — the host's engineFor unit. The
  *  system posture conditions on groups + facts (no args), so no projection wrapper is needed. */
-function compile(model: AuthzModel, policies: string): PolicyEngine {
+function compile(
+	model: AuthzModel,
+	// A NAMED set (name → cedar), which is what a bundle carries so the determining-policy trail can
+	// say which rule fired. A bare string is still accepted for a hand-written set.
+	policies: string | NamedPolicies,
+): PolicyEngine {
 	return cedarEngine({
 		policies,
 		entities: actionEntitiesFromModel(model) as never,
@@ -106,8 +112,13 @@ function setup() {
 				...(typeof scopeId === "string"
 					? { configScope: "organization", configScopeId: scopeId }
 					: {}),
-				// Always present (default autonomous) — mirrors the real cedar() mapCall.
-				runMode: typeof runMode === "string" ? runMode : "autonomous",
+				// Always present (default autonomous) — mirrors the real cedar() mapCall. Narrowed to the
+				// literal pair the PARC context declares: `runMode` is read off the turn context, so it
+				// arrives `unknown`, and the "absent" case is exactly the one that must default.
+				runMode:
+					runMode === "interactive" || runMode === "autonomous"
+						? runMode
+						: "autonomous",
 			},
 		};
 	};
