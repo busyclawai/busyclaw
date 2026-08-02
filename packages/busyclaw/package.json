@@ -32,6 +32,7 @@
 		"@busyclaw/engine-sql": "workspace:*",
 		"@busyclaw/runtime": "workspace:*",
 		"@busyclaw/secrets": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
 		"@busyclaw/storage-durable": "workspace:*",
 		"@busyclaw/storage-kysely": "workspace:*",
 		"@busyclaw/vendors": "workspace:*",
@@ -44,7 +45,6 @@
 		"@busyclaw/egress": "workspace:*",
 		"@busyclaw/policy-cedar": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
-		"@busyclaw/storage-core": "workspace:*",
 		"@types/node": "26.1.1",
 		"ai": "7.0.22"
 	}
