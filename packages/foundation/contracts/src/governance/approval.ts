@@ -190,6 +190,20 @@ export type ApprovalStore = {
 		leaseId: string,
 		result: JsonObjectType,
 	) => Promise<ApprovalRecord | null>;
+	/**
+	 * Extend a live lease, or report that it is gone. `null` means this runner no longer owns the
+	 * approval — a recovery reclaimed it — and the caller must stop.
+	 *
+	 * Without this a resume got ONE fixed lease and no way to say "still here". A slow tool or model
+	 * tail outlived it and a second runner took over work that was never stuck, which is the race
+	 * `complete` can only detect after the fact. Same ownership check `complete` makes, for the same
+	 * reason: only the current lease may act. R-H08.
+	 */
+	heartbeat: (
+		id: string,
+		leaseId: string,
+		leaseMs: number,
+	) => Promise<ApprovalRecord | null>;
 	/** List approvals, optionally filtered — the human-review queue reads `{ status: "pending" }`. */
 	list: (filter?: {
 		status?: ApprovalStatus;

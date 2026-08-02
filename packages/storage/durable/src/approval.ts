@@ -146,6 +146,23 @@ export function createApprovalStore(
 			return taken ? { record: taken, leaseId } : null;
 		},
 
+		async heartbeat(id, leaseId, leaseMs) {
+			// The same WHERE `complete` uses: id + executing + THIS lease. A runner whose lease was
+			// re-taken matches no row and learns it has lost, which is the only honest answer — the
+			// row it would be extending belongs to somebody else now.
+			return db.update({
+				model: MODEL,
+				where: [
+					{ field: "id", value: id },
+					{ field: "status", value: "executing", connector: "AND" },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: {
+					leaseExpiresAt: new Date(Date.parse(now()) + leaseMs).toISOString(),
+				},
+			});
+		},
+
 		async complete(id, leaseId, result) {
 			// Only the CURRENT lease may finish. A runner whose lease lapsed and was re-taken has lost
 			// the right to write a terminal result — otherwise it would overwrite the answer its

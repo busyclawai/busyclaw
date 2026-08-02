@@ -68,6 +68,13 @@ function recordingStore(): { store: ApprovalStore; created: ApprovalRecord[] } {
 			rows.set(id, u);
 			return { record: u, leaseId };
 		},
+		// Same ownership rule as `complete`, which is the whole contract: only the current lease may
+		// act. This double keeps no clock, so a held lease never lapses and a beat always succeeds —
+		// the lapsed case is the durable store's to prove.
+		heartbeat: async (id, leaseId) => {
+			const r = rows.get(id);
+			return r?.status === "executing" && r.leaseId === leaseId ? r : null;
+		},
 		complete: async (id, leaseId, result) => {
 			const r = rows.get(id);
 			if (r?.status !== "executing" || r.leaseId !== leaseId) return null;

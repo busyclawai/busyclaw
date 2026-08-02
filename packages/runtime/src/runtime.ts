@@ -274,6 +274,10 @@ export type RuntimeConfig = {
 	/** The durable approval store. Defaults to one over `database`; supply your own to back approvals
 	 *  somewhere else. Same shape as {@link RuntimeConfig.effectStore}. */
 	approvalStore?: ApprovalStore;
+	/** How long a resume's execution lease lasts, in ms. Default 15 minutes — see
+	 *  {@link APPROVAL_LEASE_MS} for why that is deliberately generous. The keepalive renews it at a
+	 *  third of this, so lowering it makes both the beat and the recovery window shorter together. */
+	approvalLeaseMs?: number;
 	effectLeaseTtlMs?: number;
 	database?: Adapter;
 	environment?: RuntimeEnvironment;
@@ -542,6 +546,52 @@ function startEffectHeartbeat(input: {
 			.catch(() => {
 				if (!stopped) input.abortController.abort();
 			});
+	}, intervalMs) as { unref?: () => void };
+	timer.unref?.();
+	return () => {
+		if (stopped) return;
+		stopped = true;
+		timers.clearInterval(timer);
+	};
+}
+
+/**
+ * Keep a resume's approval lease alive while it works, and stop it the moment the lease is gone.
+ *
+ * A resume took ONE fixed lease and never said "still here", so a slow tool or model tail outlived it
+ * and a second runner took over work that was never stuck. `complete` can only detect that afterwards
+ * — by then both runners have executed. This is the half that prevents it. R-H08.
+ *
+ * Mirrors {@link startEffectHeartbeat}, including why a failed beat aborts: an infrastructure error is
+ * not proof the lease is HELD, and continuing on that assumption is the same duplicate execution by a
+ * different route.
+ */
+function startApprovalHeartbeat(input: {
+	store: ApprovalStore;
+	approvalId: string;
+	leaseId: string;
+	leaseMs: number;
+	abortController: RuntimeAbortController;
+	onLost: () => void;
+}): () => void {
+	const intervalMs = Math.max(250, Math.floor(input.leaseMs / 3));
+	const timers = globalThis as typeof globalThis & {
+		setInterval: (fn: () => void, ms: number) => { unref?: () => void };
+		clearInterval: (timer: unknown) => void;
+	};
+	let stopped = false;
+	const lost = () => {
+		if (stopped) return;
+		input.onLost();
+		input.abortController.abort();
+	};
+	const timer = timers.setInterval(() => {
+		void input.store
+			.heartbeat(input.approvalId, input.leaseId, input.leaseMs)
+			.then((record) => {
+				if (!record) lost();
+			})
+			.catch(lost);
 	}, intervalMs) as { unref?: () => void };
 	timer.unref?.();
 	return () => {
@@ -1912,158 +1962,215 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// Null means it cannot be taken: not granted, expired, or being run right now by someone whose
 		// lease has not lapsed. Recovery of an abandoned execution is the `executing` case above plus a
 		// lapsed lease, and the store decides that, not the caller.
-		const claimed = await approvalStore.claim(id, APPROVAL_LEASE_MS);
+		const approvalLeaseMs = config.approvalLeaseMs ?? APPROVAL_LEASE_MS;
+		const claimed = await approvalStore.claim(id, approvalLeaseMs);
 		if (!claimed) return null;
-		const selected = selectModel(options?.model);
-
-		const state = createRunState();
-		state.runInstanceId = `approval:${id}`;
-		state.abortSignal = options?.abortSignal;
-		state.runMode = options?.runMode ?? "autonomous";
-		state.callerPrincipal = executingPrincipal;
-		state.authority = authority;
-		// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
-		state.approvedBy = record.decidedBy;
-		state.recording = effectiveRecording;
-		state.runId = effectiveRunId;
-		state.currentToolCallId = checkpoint.toolCallId;
-		state.currentToolPath = checkpoint.toolName;
-		state.currentToolInput = checkpoint.toolInput;
-		const checkpointMessages = checkpoint.messages;
-		state.currentMessages = checkpointMessages;
-		state.currentStep = checkpoint.step;
-		state.currentApprovalWaitId = checkpoint.waitId;
-		state.currentEffectId = `approval:${id}:tool:${checkpoint.toolCallId}`;
-
-		// No shim. The old one substituted a consume that always succeeded, so an already-taken
-		// approval could be re-run without limit — the single-use guarantee the store implemented was
-		// deliberately handed a way around itself. The lease is taken above, once, by the layer that
-		// can also finish it.
-		const core = createRunCore(state, approvalStore, runTools);
-		const toolStartedAt = Date.now();
-		const toolResult = await core.continueRun(claimed.record, ctx);
-		const toolDurationMs = Date.now() - toolStartedAt;
-		if (!toolResult) return null;
-		if (toolResult.status === "needs-approval") {
-			throw stateError("approval resume required another approval", {
+		// The keepalive covers everything this runner does while holding the lease — the approved tool
+		// is REPLAYED below, before the model loop, and that replay is exactly the slow part a fixed
+		// lease could not outlive. Its abort lands on the RUN's own signal, the one `abortIfNeeded`
+		// checks at each tool boundary, rather than on the vendor's: the AI SDK merges what it is
+		// handed into a real `AbortSignal` and cannot take a structural one, and a tool boundary is
+		// where stopping matters because that is where side effects happen.
+		let leaseLost = false;
+		const leaseAbort = createRuntimeAbortController();
+		const callerSignal = options?.abortSignal;
+		const resumeSignal = {
+			get aborted() {
+				return leaseAbort.signal.aborted || callerSignal?.aborted === true;
+			},
+		};
+		const supersededError = () =>
+			stateError("approval execution lost its lease mid-run", {
 				approvalId: id,
-				gateId: toolResult.gateId,
+				reason:
+					"another runner reclaimed it; retry once that runner has recorded its result",
 			});
-		}
-
-		// Ingress: the approved tool's output is redacted ONCE — the tool.completed event and the
-		// resumed transcript share the same placeholder text.
-		const output =
-			toolResult.status === "ok"
-				? await redactValue(toolResult.output, resolvedCtx)
-				: governanceToolResult(toolResult);
-		if (toolResult.status === "ok") {
-			await emitEvent(emitCtx, {
-				durationMs: toolDurationMs,
-				...(state.currentEffectId !== undefined
-					? { effectId: state.currentEffectId }
-					: {}),
-				...(output !== undefined ? { output } : {}),
-				step: checkpoint.step,
-				toolCallId: checkpoint.toolCallId,
-				toolName: checkpoint.toolName,
-				type: "tool.completed",
-			});
-		} else {
-			await emitEvent(emitCtx, {
-				reason: toolResult.reason,
-				reasonCode: toolResult.reasonCode,
-				step: checkpoint.step,
-				toolCallId: checkpoint.toolCallId,
-				toolName: checkpoint.toolName,
-				type: "tool.denied",
-			});
-		}
-		// The one place the resume touches the WIRE: the checkpoint stores the canonical path, and the
-		// provider needs the result back under the name it emitted. `toolModelName` is total and
-		// deterministic, so re-deriving reproduces exactly the name the offered toolset carries — no
-		// second id to keep in sync, and nothing to drift if a tool is re-addressed (a re-addressed
-		// tool fails CLOSED at dispatch above instead, which is the outcome we want). A call routed
-		// through the `execute` meta-tool is the one case with nothing to re-derive — the provider
-		// emitted the META-tool's name, and the target was never offered — so the checkpoint carries
-		// that name for this line alone.
-		const messages = [
-			...checkpointMessages,
-			toolResultMessage(
-				checkpoint.toolCallId,
-				checkpoint.toolWireName ?? toolModelName(checkpoint.toolName),
-				output,
-			),
-		];
-
-		const resumeState = createRunState();
-		resumeState.runInstanceId = `${state.runInstanceId}:resume`;
-		resumeState.abortSignal = options?.abortSignal;
-		resumeState.runMode = options?.runMode ?? "autonomous";
-		// The run CONTINUES under the same authority the approved action ran with — carried explicitly,
-		// or every tool call after a resume would be principal-less and fail closed at the tool floor.
-		resumeState.callerPrincipal = executingPrincipal;
-		resumeState.approvedBy = record.decidedBy;
-		resumeState.recording = effectiveRecording;
-		resumeState.runId = effectiveRunId;
-		// Post-resume steps only — the terminal event's usage is honest about this invocation.
-		const { usage: runUsage, ...result } = await loop.generate({
-			model: selected.model,
-			rawPii: selected.rawPii,
-			tools: projection.tools,
-			resolveToolCall: projection.resolveCall,
-			knownToolPath: projection.hasPath,
-			system: config.system,
-			messages,
-			startStep: checkpoint.step + 1,
-			ctx,
-			resolvedCtx,
-			core: createRunCore(resumeState, approvalStore, runTools),
-			state: resumeState,
-			maxSteps,
-			now,
-			abortSignal: options?.abortSignal,
-			deadlineAt: options?.deadlineAt,
-			persistYieldCheckpoint: yieldCheckpointPersister(resumeState),
-			emitEvent: (payload) => emitEvent(emitCtx, payload),
-			redactValue: (value) => redactValue(value, resolvedCtx),
+		const stopHeartbeat = startApprovalHeartbeat({
+			store: approvalStore,
+			approvalId: id,
+			leaseId: claimed.leaseId,
+			leaseMs: approvalLeaseMs,
+			abortController: leaseAbort,
+			onLost: () => {
+				leaseLost = true;
+			},
 		});
-		const valid = RuntimeResult(result);
-		if (valid instanceof ark.errors) {
-			throw validationError(
-				"runtime.continueRun result invalid",
-				valid.summary,
-			);
-		}
-		// Close the lease FIRST, then announce. A `null` means the lease lapsed mid-run and a recovery
-		// took over: this runner is STALE, and stale is not success. It used to emit a terminal event
-		// and hand the caller its own result anyway, so one approval had two answers — the winner's,
-		// persisted and served to every later resume, and this one's, which went to whoever happened to
-		// hold this call, with no way to tell them apart. R-H08.
-		const completed = await approvalStore.complete(id, claimed.leaseId, valid);
-		if (completed === null) {
-			// The recovery owns the terminal answer. Serve THAT — it is what every later resume gets,
-			// and the caller asked what happened to this approval, not what this process computed.
-			const winner = await approvalStore.get(id);
-			const stored = winner?.result;
-			if (stored === undefined) {
-				// Superseded, and the winner has not landed an answer yet. There is nothing honest to
-				// return: this run's result is void and the real one does not exist. Fail loud rather
-				// than invent either.
-				throw stateError("approval execution was superseded mid-run", {
+		try {
+			const selected = selectModel(options?.model);
+
+			const state = createRunState();
+			state.runInstanceId = `approval:${id}`;
+			state.abortSignal = resumeSignal;
+			state.runMode = options?.runMode ?? "autonomous";
+			state.callerPrincipal = executingPrincipal;
+			state.authority = authority;
+			// The approver (the granted approval's `decidedBy`) rides into the replayed action's audit.
+			state.approvedBy = record.decidedBy;
+			state.recording = effectiveRecording;
+			state.runId = effectiveRunId;
+			state.currentToolCallId = checkpoint.toolCallId;
+			state.currentToolPath = checkpoint.toolName;
+			state.currentToolInput = checkpoint.toolInput;
+			const checkpointMessages = checkpoint.messages;
+			state.currentMessages = checkpointMessages;
+			state.currentStep = checkpoint.step;
+			state.currentApprovalWaitId = checkpoint.waitId;
+			state.currentEffectId = `approval:${id}:tool:${checkpoint.toolCallId}`;
+
+			// No shim. The old one substituted a consume that always succeeded, so an already-taken
+			// approval could be re-run without limit — the single-use guarantee the store implemented was
+			// deliberately handed a way around itself. The lease is taken above, once, by the layer that
+			// can also finish it.
+			const core = createRunCore(state, approvalStore, runTools);
+			const toolStartedAt = Date.now();
+			const toolResult = await core.continueRun(claimed.record, ctx);
+			const toolDurationMs = Date.now() - toolStartedAt;
+			if (!toolResult) return null;
+			if (toolResult.status === "needs-approval") {
+				throw stateError("approval resume required another approval", {
 					approvalId: id,
-					reason:
-						"another runner reclaimed the lease; retry once it has recorded its result",
+					gateId: toolResult.gateId,
 				});
 			}
-			const parsed = RuntimeResult(stored);
-			if (parsed instanceof ark.errors) {
-				throw validationError("stored approval result invalid", parsed.summary);
+
+			// Ingress: the approved tool's output is redacted ONCE — the tool.completed event and the
+			// resumed transcript share the same placeholder text.
+			const output =
+				toolResult.status === "ok"
+					? await redactValue(toolResult.output, resolvedCtx)
+					: governanceToolResult(toolResult);
+			if (toolResult.status === "ok") {
+				await emitEvent(emitCtx, {
+					durationMs: toolDurationMs,
+					...(state.currentEffectId !== undefined
+						? { effectId: state.currentEffectId }
+						: {}),
+					...(output !== undefined ? { output } : {}),
+					step: checkpoint.step,
+					toolCallId: checkpoint.toolCallId,
+					toolName: checkpoint.toolName,
+					type: "tool.completed",
+				});
+			} else {
+				await emitEvent(emitCtx, {
+					reason: toolResult.reason,
+					reasonCode: toolResult.reasonCode,
+					step: checkpoint.step,
+					toolCallId: checkpoint.toolCallId,
+					toolName: checkpoint.toolName,
+					type: "tool.denied",
+				});
 			}
-			return parsed;
+			// The one place the resume touches the WIRE: the checkpoint stores the canonical path, and the
+			// provider needs the result back under the name it emitted. `toolModelName` is total and
+			// deterministic, so re-deriving reproduces exactly the name the offered toolset carries — no
+			// second id to keep in sync, and nothing to drift if a tool is re-addressed (a re-addressed
+			// tool fails CLOSED at dispatch above instead, which is the outcome we want). A call routed
+			// through the `execute` meta-tool is the one case with nothing to re-derive — the provider
+			// emitted the META-tool's name, and the target was never offered — so the checkpoint carries
+			// that name for this line alone.
+			const messages = [
+				...checkpointMessages,
+				toolResultMessage(
+					checkpoint.toolCallId,
+					checkpoint.toolWireName ?? toolModelName(checkpoint.toolName),
+					output,
+				),
+			];
+
+			const resumeState = createRunState();
+			resumeState.runInstanceId = `${state.runInstanceId}:resume`;
+			resumeState.abortSignal = options?.abortSignal;
+			resumeState.runMode = options?.runMode ?? "autonomous";
+			// The run CONTINUES under the same authority the approved action ran with — carried explicitly,
+			// or every tool call after a resume would be principal-less and fail closed at the tool floor.
+			resumeState.callerPrincipal = executingPrincipal;
+			resumeState.approvedBy = record.decidedBy;
+			resumeState.recording = effectiveRecording;
+			resumeState.runId = effectiveRunId;
+			resumeState.abortSignal = resumeSignal;
+			// Post-resume steps only — the terminal event's usage is honest about this invocation.
+			const loopResult = await loop.generate({
+				model: selected.model,
+				rawPii: selected.rawPii,
+				tools: projection.tools,
+				resolveToolCall: projection.resolveCall,
+				knownToolPath: projection.hasPath,
+				system: config.system,
+				messages,
+				startStep: checkpoint.step + 1,
+				ctx,
+				resolvedCtx,
+				core: createRunCore(resumeState, approvalStore, runTools),
+				state: resumeState,
+				maxSteps,
+				now,
+				abortSignal: options?.abortSignal,
+				deadlineAt: options?.deadlineAt,
+				persistYieldCheckpoint: yieldCheckpointPersister(resumeState),
+				emitEvent: (payload) => emitEvent(emitCtx, payload),
+				redactValue: (value) => redactValue(value, resolvedCtx),
+			});
+			const { usage: runUsage, ...result } = loopResult;
+			if (leaseLost) {
+				// Stopped because the lease went, not because the work finished. Nothing this runner
+				// computed counts, and `complete` below would refuse it anyway.
+				throw supersededError();
+			}
+			const valid = RuntimeResult(result);
+			if (valid instanceof ark.errors) {
+				throw validationError(
+					"runtime.continueRun result invalid",
+					valid.summary,
+				);
+			}
+			// Close the lease FIRST, then announce. A `null` means the lease lapsed mid-run and a recovery
+			// took over: this runner is STALE, and stale is not success. It used to emit a terminal event
+			// and hand the caller its own result anyway, so one approval had two answers — the winner's,
+			// persisted and served to every later resume, and this one's, which went to whoever happened to
+			// hold this call, with no way to tell them apart. R-H08.
+			const completed = await approvalStore.complete(
+				id,
+				claimed.leaseId,
+				valid,
+			);
+			if (completed === null) {
+				// The recovery owns the terminal answer. Serve THAT — it is what every later resume gets,
+				// and the caller asked what happened to this approval, not what this process computed.
+				const winner = await approvalStore.get(id);
+				const stored = winner?.result;
+				if (stored === undefined) {
+					// Superseded, and the winner has not landed an answer yet. There is nothing honest to
+					// return: this run's result is void and the real one does not exist. Fail loud rather
+					// than invent either.
+					throw stateError("approval execution was superseded mid-run", {
+						approvalId: id,
+						reason:
+							"another runner reclaimed the lease; retry once it has recorded its result",
+					});
+				}
+				const parsed = RuntimeResult(stored);
+				if (parsed instanceof ark.errors) {
+					throw validationError(
+						"stored approval result invalid",
+						parsed.summary,
+					);
+				}
+				return parsed;
+			}
+			await emitRunOutcome(emitCtx, valid, runUsage);
+			return valid;
+		} catch (error) {
+			// The abort surfaces as a generic "runtime aborted" from whichever boundary saw it first.
+			// Naming the real reason here is the difference between an operator reading "something
+			// stopped" and reading "another runner owns this now, retry after it lands".
+			if (leaseLost) throw supersededError();
+			throw error;
+		} finally {
+			// Always. A leaked beat would keep renewing the lease of a runner that has gone, which is
+			// the exact failure the lease exists to end.
+			stopHeartbeat();
 		}
-		await emitRunOutcome(emitCtx, valid, runUsage);
-		return valid;
 	};
 
 	const resumeRun = async (

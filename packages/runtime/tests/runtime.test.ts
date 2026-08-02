@@ -1703,3 +1703,69 @@ describe("a superseded approval resume does not report success", () => {
 		).toHaveLength(0);
 	});
 });
+
+// R-H08 clause 3 — a resume says "still here" while it works, and stops when it is not.
+//
+// A resume took ONE fifteen-minute lease and never renewed it. A slow tool or model tail outlived it
+// and a second runner reclaimed work that was never stuck — the race the completion check can only
+// notice afterwards, by which point both runners have executed. The keepalive is the half that
+// prevents it rather than reporting it.
+describe("an approval lease is kept alive, and lost is stopped", () => {
+	it("aborts the run when the store says the lease is gone", async () => {
+		const db = memoryAdapter();
+		let toolStarted = 0;
+		let toolFinished = 0;
+		const real = createApprovalStore(db);
+		const approvalStore = {
+			...real,
+			// The lease has moved on. This is precisely what a reclaimed approval reports.
+			heartbeat: async () => null,
+		};
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			approvalStore,
+			// Short enough that the keepalive fires while the tool is still running — the beat interval
+			// is a third of the lease, so this makes the race observable in milliseconds instead of
+			// waiting out fifteen minutes.
+			approvalLeaseMs: 900,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (): Promise<{ sent: boolean }> => {
+							toolStarted += 1;
+							await new Promise((resolve) => setTimeout(resolve, 800));
+							toolFinished += 1;
+							return { sent: true };
+						},
+					}),
+					{ gate: () => ({ decision: "needs-approval" }) },
+				),
+			},
+		});
+		const waiting = await runtime.generate("email alice@personal.com");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected an approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await approvalStore.grant(approvalId, userPrincipal("alice"));
+
+		await expect(runtime.continueRun(approvalId)).rejects.toThrow(
+			/lost its lease mid-run/,
+		);
+		// It got as far as running the approved tool — the abort lands at the next boundary, not
+		// mid-call — and then stopped instead of continuing into steps it no longer owned.
+		expect(toolStarted).toBe(1);
+		expect(toolFinished).toBe(1);
+	}, 15_000);
+});
