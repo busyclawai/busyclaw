@@ -271,6 +271,9 @@ export type RuntimeConfig = {
 	 */
 	approvalAuthority?: "requester" | "approver";
 	effectStore?: EffectStore;
+	/** The durable approval store. Defaults to one over `database`; supply your own to back approvals
+	 *  somewhere else. Same shape as {@link RuntimeConfig.effectStore}. */
+	approvalStore?: ApprovalStore;
 	effectLeaseTtlMs?: number;
 	database?: Adapter;
 	environment?: RuntimeEnvironment;
@@ -883,7 +886,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			"database-backed runtime approvals require a durable redactor",
 		);
 	}
-	const approvalStore = adapter ? createApprovalStore(adapter) : undefined;
+	// Resolved like its sibling `effectStore` below — a host may bring its own. It used to be built
+	// from the adapter unconditionally while the effect store honoured an override, which is an
+	// inconsistency between two ports that do the same kind of job, and it made the one race this
+	// resume has (a reclaimed lease) unreachable from a test.
+	const approvalStore =
+		config.approvalStore ??
+		(adapter ? createApprovalStore(adapter) : undefined);
 	const effectStore =
 		config.effectStore ?? (adapter ? createEffectStore(adapter) : undefined);
 	const runCheckpointStore = adapter
@@ -2026,12 +2035,34 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				valid.summary,
 			);
 		}
+		// Close the lease FIRST, then announce. A `null` means the lease lapsed mid-run and a recovery
+		// took over: this runner is STALE, and stale is not success. It used to emit a terminal event
+		// and hand the caller its own result anyway, so one approval had two answers — the winner's,
+		// persisted and served to every later resume, and this one's, which went to whoever happened to
+		// hold this call, with no way to tell them apart. R-H08.
+		const completed = await approvalStore.complete(id, claimed.leaseId, valid);
+		if (completed === null) {
+			// The recovery owns the terminal answer. Serve THAT — it is what every later resume gets,
+			// and the caller asked what happened to this approval, not what this process computed.
+			const winner = await approvalStore.get(id);
+			const stored = winner?.result;
+			if (stored === undefined) {
+				// Superseded, and the winner has not landed an answer yet. There is nothing honest to
+				// return: this run's result is void and the real one does not exist. Fail loud rather
+				// than invent either.
+				throw stateError("approval execution was superseded mid-run", {
+					approvalId: id,
+					reason:
+						"another runner reclaimed the lease; retry once it has recorded its result",
+				});
+			}
+			const parsed = RuntimeResult(stored);
+			if (parsed instanceof ark.errors) {
+				throw validationError("stored approval result invalid", parsed.summary);
+			}
+			return parsed;
+		}
 		await emitRunOutcome(emitCtx, valid, runUsage);
-		// Close the lease and record what this approval produced. Every later resume is served this
-		// answer instead of executing again. A `null` here means the lease lapsed mid-run and a
-		// recovery took over — that runner owns the terminal result now, so this one does not
-		// overwrite it, and the caller still gets the result it computed.
-		await approvalStore.complete(id, claimed.leaseId, valid);
 		return valid;
 	};
 

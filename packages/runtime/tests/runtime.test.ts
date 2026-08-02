@@ -13,6 +13,7 @@ import {
 } from "@busyclaw/core";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import {
+	createApprovalStore,
 	createEffectStore,
 	createPiiMappingStore,
 } from "@busyclaw/storage-durable";
@@ -23,6 +24,7 @@ import {
 	createRuntime,
 	govern,
 	type RuntimeEvent,
+	type RuntimeResult,
 	runtimeRunOptionsWithRecording,
 } from "../src/index";
 
@@ -1557,5 +1559,147 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			// count is what makes that visible instead of reading as a completed shred.
 			expect(await mappings.deleteForSubject("person-7")).toBe(0);
 		});
+	});
+});
+
+// R-H08 — a runner that LOST its lease has not succeeded.
+//
+// `complete(id, leaseId, result)` returns null when the lease has moved on: a recovery reclaimed the
+// approval mid-run and owns the terminal answer now. The runtime used to ignore that null and hand
+// the caller its own computed result anyway — the comment even said so ("the caller still gets the
+// result it computed"). So one approval had two answers: the winner's, which is persisted and served
+// to every later resume, and the loser's, which went to whoever happened to be holding this call.
+// The caller had no way to tell which they had.
+//
+// It emitted a terminal run event too, before the completion was even attempted, so a run that lost
+// announced an outcome that never counted.
+describe("a superseded approval resume does not report success", () => {
+	it("returns the WINNER's stored result, not its own", async () => {
+		const db = memoryAdapter();
+		let toolRuns = 0;
+		const winners: RuntimeResult = {
+			status: "completed",
+			text: "the recovery's answer",
+			steps: 1,
+		};
+		// The real sequence, not a shortcut: this runner starts on an APPROVED record, the recovery
+		// finishes while it works, and the loss is discovered when its own `complete` is refused.
+		const real = createApprovalStore(db);
+		let superseded = false;
+		const approvalStore = {
+			...real,
+			complete: async () => {
+				superseded = true;
+				return null;
+			},
+			get: async (id: string) => {
+				const record = await real.get(id);
+				if (record === null) return null;
+				return superseded
+					? { ...record, status: "completed" as const, result: winners }
+					: record;
+			},
+		};
+
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			approvalStore,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (): Promise<{ sent: boolean }> => {
+							toolRuns += 1;
+							return { sent: true };
+						},
+					}),
+					{ gate: () => ({ decision: "needs-approval" }) },
+				),
+			},
+		});
+		const waiting = await runtime.generate("email alice@personal.com");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected an approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await approvalStore.grant(approvalId, userPrincipal("alice"));
+
+		expect(await runtime.continueRun(approvalId)).toEqual(winners);
+		expect(toolRuns).toBe(1);
+	});
+
+	it("announces no outcome for the run it lost", async () => {
+		// The terminal event used to be emitted BEFORE the completion was even attempted, so a
+		// superseded runner announced a result that never counted — and observers, transcripts and
+		// anything else downstream took it at face value. Closing the lease first is what orders this.
+		const db = memoryAdapter();
+		const events: RuntimeEvent[] = [];
+		const winners: RuntimeResult = {
+			status: "completed",
+			text: "the recovery's answer",
+			steps: 1,
+		};
+		const real = createApprovalStore(db);
+		let superseded = false;
+		const approvalStore = {
+			...real,
+			complete: async () => {
+				superseded = true;
+				return null;
+			},
+			get: async (id: string) => {
+				const record = await real.get(id);
+				if (record === null) return null;
+				return superseded
+					? { ...record, status: "completed" as const, result: winners }
+					: record;
+			},
+		};
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			approvalStore,
+			events: { emit: (event: RuntimeEvent) => void events.push(event) },
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (): Promise<{ sent: boolean }> => ({ sent: true }),
+					}),
+					{ gate: () => ({ decision: "needs-approval" }) },
+				),
+			},
+		});
+		const waiting = await runtime.generate("email alice@personal.com");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected an approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await approvalStore.grant(approvalId, userPrincipal("alice"));
+		events.length = 0;
+
+		await runtime.continueRun(approvalId);
+		expect(
+			events.filter((event) => event.type === "run.completed"),
+		).toHaveLength(0);
 	});
 });
