@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "A runnable Next.js chat wired to a real governed claw — streaming, redacted, inspectable.",
+	"description": "A runnable Next.js chat wired to a real governed claw \u2014 streaming, redacted, inspectable.",
 	"license": "MIT",
 	"author": "Konstantin Ponomarev",
 	"scripts": {
@@ -19,7 +19,6 @@
 		"@ai-sdk/react": "4.0.23",
 		"@busyclaw/adapter-core": "workspace:*",
 		"@busyclaw/adapter-nextjs": "workspace:*",
-		"@busyclaw/client": "workspace:*",
 		"@busyclaw/contracts": "workspace:*",
 		"@busyclaw/detectors": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",

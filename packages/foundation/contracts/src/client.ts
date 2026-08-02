@@ -1,21 +1,25 @@
 // The CLIENT-PLUGIN protocol — the vocabulary a plugin author needs to declare a client half,
 // without depending on the client implementation.
 //
-// It lived in @busyclaw/client, which made the arrow point the wrong way: a plugin shipping its own
-// client half had to depend on the client package, and the client package already depends (for its
-// tests) on the assembly, which depends on the plugins. Turbo names that exactly —
-// "Circular package dependency detected: @busyclaw/adapter-core, @busyclaw/client,
-// @busyclaw/secrets-plugin, busyclaw" — and the workaround was worse than the cycle: the plugin's
-// client half was kept INSIDE @busyclaw/client, so the client imported a plugin it has no business
-// knowing about, and that import leaked into its published .d.ts.
+// It lived in the client, which made the arrow point the wrong way: a plugin shipping its own client
+// half had to depend on the client package, and the client depended (for its tests) on the assembly,
+// which depends on the plugins. Turbo named it — "Circular package dependency detected:
+// @busyclaw/adapter-core, @busyclaw/client, @busyclaw/secrets-plugin, busyclaw" — and the workaround
+// was worse than the cycle: the plugin's client half was kept INSIDE the client package, so the
+// client imported a plugin it has no business knowing about, and that import leaked into its
+// published .d.ts.
 //
 // So the contract moves to the package both halves already depend on. This is the same split
 // better-auth makes: `BetterAuthClientPlugin` is defined in @better-auth/core, the shared package,
 // and merely RE-EXPORTED from better-auth/client — which is why an out-of-tree plugin like
 // @better-auth/stripe can ship `./client` without the core client ever hearing about it.
 //
+// It stays here now that the client is a `busyclaw/client` subpath, and for the same reason: a
+// plugin cannot depend on `busyclaw` (busyclaw depends on the plugins), so the shared vocabulary
+// has to live below both.
+//
 // Protocol, not implementation: no fetch runs here, no atom is created. @busyclaw/client re-exports
-// every name below, so its public surface is unchanged.
+// every name below, so `busyclaw/client`'s public surface is unchanged.
 
 import type { ReadableAtom } from "nanostores";
 import type { AbortLifetime } from "./governance/boundary";

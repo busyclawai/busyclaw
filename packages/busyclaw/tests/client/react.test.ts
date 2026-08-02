@@ -10,9 +10,9 @@ import { atom } from "nanostores";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
-import type { ClawClientPlugin, ClawFetchLike } from "../src/index";
-import { approvalsClient } from "../src/plugins/index";
-import { createClawClient } from "../src/react/index";
+import type { ClawClientPlugin, ClawFetchLike } from "../../src/client/index";
+import { approvalsClient } from "../../src/client/plugins/index";
+import { createClawClient } from "../../src/client/react/index";
 
 // React's `act` batching is opt-in; without the flag it warns and skips the flushing we rely on.
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

@@ -22,9 +22,11 @@ const ALLOWED_CONTRACTS_SUBPATHS = [
 	"@busyclaw/contracts/governance/endpoints",
 ] as const;
 
-const clientSrcDir = fileURLToPath(new URL("../src", import.meta.url));
+const clientSrcDir = fileURLToPath(
+	new URL("../../src/client", import.meta.url),
+);
 const contractsDir = fileURLToPath(
-	new URL("../../foundation/contracts", import.meta.url),
+	new URL("../../../foundation/contracts", import.meta.url),
 );
 
 function sourceFilesUnder(dir: string): string[] {

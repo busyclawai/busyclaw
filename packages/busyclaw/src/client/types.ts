@@ -15,11 +15,19 @@ import type {
 	EndpointHttpMethod,
 	UnionToIntersection,
 } from "@busyclaw/contracts";
-import type { Claw } from "busyclaw";
 import type { ReadableAtom } from "nanostores";
+// RELATIVE now. The client is a subpath of this package (`busyclaw/client`), so the server types it
+// infers from are reachable without a package specifier — which is the whole reason the fold
+// happened: as a separate package its emitted .d.ts named `busyclaw`, and a consumer typechecking
+// against the client alone could not resolve it. Same arrangement better-auth uses, where
+// `better-auth/client` reads `Auth` from `../types`.
+//
+// TYPE-ONLY, so no server runtime crosses: the import is erased, and `react-free.test.ts` proves the
+// root entry's RUNTIME graph never reaches server code or react.
+import type { Claw } from "../index";
 
 // The client-plugin PROTOCOL lives in @busyclaw/contracts — the package both a plugin author and
-// this client already depend on — and is re-exported here so `@busyclaw/client`'s surface is
+// this client already depend on — and is re-exported here so `busyclaw/client`'s surface is
 // unchanged. It used to be defined here, which forced a plugin shipping its own client half to
 // depend on the client package, and the client already depends (for its tests) on the assembly that
 // depends on the plugins: turbo names that cycle outright. The same split better-auth makes, where

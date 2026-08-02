@@ -1,4 +1,4 @@
-// @busyclaw/client/react — the react binding (docs/plans/claw-client-plan.md, slice 3). The
+// busyclaw/client/react — the react binding (docs/plans/claw-client-plan.md, slice 3). The
 // ENTIRE vanilla runtime is reused as-is: this entry builds the vanilla client, then wraps it in
 // ONE forwarding proxy that additionally answers `use${Capitalize(atomKey)}` for every atom in
 // the runtime registry (`$store.atoms` — plugin `getAtoms` today, core atoms whenever they land)

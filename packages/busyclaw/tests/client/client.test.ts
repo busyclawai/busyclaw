@@ -10,9 +10,9 @@ import type {
 	ClawFetchLike,
 	ClawQueryState,
 	ClawResult,
-} from "../src/index";
-import { createClawClient, createQueryAtom } from "../src/index";
-import { approvalsClient } from "../src/plugins/index";
+} from "../../src/client/index";
+import { createClawClient, createQueryAtom } from "../../src/client/index";
+import { approvalsClient } from "../../src/client/plugins/index";
 
 function envelopeResponse(body: unknown, init?: ResponseInit): Response {
 	return new Response(JSON.stringify(body), {

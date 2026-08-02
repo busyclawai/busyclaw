@@ -1,4 +1,4 @@
-// @busyclaw/client — the vanilla busyclaw client (docs/plans/claw-client-plan.md, slice 2).
+// busyclaw/client — the vanilla busyclaw client (docs/plans/claw-client-plan.md, slice 2).
 // Base api methods are TABLE-driven off the shared contracts name list (no heuristic, no proxy);
 // plugin namespaces ride the recursive function proxy with the one camelCase→kebab convention and
 // the `get*`/`list*` → GET verb rule — the SAME `toKebabCase`/`endpointHttpMethod` pair the server

@@ -13,6 +13,18 @@
 		"./ai": {
 			"types": "./dist/ai.d.ts",
 			"import": "./dist/ai.js"
+		},
+		"./client": {
+			"types": "./dist/client/index.d.ts",
+			"import": "./dist/client/index.js"
+		},
+		"./client/plugins": {
+			"types": "./dist/client/plugins/index.d.ts",
+			"import": "./dist/client/plugins/index.js"
+		},
+		"./client/react": {
+			"types": "./dist/client/react/index.d.ts",
+			"import": "./dist/client/react/index.js"
 		}
 	},
 	"main": "./dist/index.js",
@@ -30,6 +42,7 @@
 		"@busyclaw/authz": "workspace:*",
 		"@busyclaw/contracts": "workspace:*",
 		"@busyclaw/engine-sql": "workspace:*",
+		"@busyclaw/errors": "workspace:*",
 		"@busyclaw/runtime": "workspace:*",
 		"@busyclaw/secrets": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
@@ -37,7 +50,8 @@
 		"@busyclaw/storage-kysely": "workspace:*",
 		"@busyclaw/vendors": "workspace:*",
 		"arktype": "2.2.0",
-		"kysely": "0.29.2"
+		"kysely": "0.29.2",
+		"nanostores": "1.4.0"
 	},
 	"devDependencies": {
 		"@ai-sdk/azure": "4.0.18",
@@ -46,6 +60,19 @@
 		"@busyclaw/policy-cedar": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
 		"@types/node": "26.1.1",
-		"ai": "7.0.22"
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"ai": "7.0.22",
+		"happy-dom": "20.10.6",
+		"react": "19.2.7",
+		"react-dom": "19.2.7"
+	},
+	"peerDependencies": {
+		"react": "^18.0.0 || ^19.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
 	}
 }

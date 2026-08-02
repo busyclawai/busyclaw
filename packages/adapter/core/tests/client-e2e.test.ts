@@ -2,17 +2,22 @@
 // pointed at it through an injected fetch that invokes the handler directly — the full wire
 // (route derivation → ?input=/body conventions → boundary validation → envelope) with zero
 // network. `typeof claw` is the only thing that crosses to the client's type side.
+//
+// Lives HERE rather than beside the client because it is the ADAPTER's wire that it exercises, and
+// because the client is now a subpath of `busyclaw`, which @busyclaw/adapter-core already depends
+// on. The other direction would close a loop: busyclaw would need adapter-core to test its own
+// client, and adapter-core depends on busyclaw.
 
-import { toRequestHandler } from "@busyclaw/adapter-core";
 import { userPrincipal } from "@busyclaw/contracts";
 import { secrets } from "@busyclaw/secrets-plugin";
-// The plugin ships its own client half — the client package no longer knows this plugin exists.
+// The plugin ships its own client half — nothing in the client knows this plugin exists.
 import { secretsClient } from "@busyclaw/secrets-plugin/client";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import type { Claw } from "busyclaw";
 import { createClaw } from "busyclaw";
+import { createClawClient } from "busyclaw/client";
 import { describe, expect, it } from "vitest";
-import { createClawClient } from "../src/index";
+import { toRequestHandler } from "../src/index";
 
 // 32 bytes hex — the shape the secrets() store master key demands.
 const SECRET_STORE_TEST_KEY = "0123456789abcdef".repeat(4);

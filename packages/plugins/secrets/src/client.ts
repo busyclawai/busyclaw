@@ -1,9 +1,9 @@
 // The CLIENT half of `secrets(…, { store })` — shipped by the plugin that owns the server half,
-// not by @busyclaw/client.
+// not by the client.
 //
-// It lived in `@busyclaw/client/plugins`, which meant the client package imported a plugin it has
+// It lived in the client's own `plugins` module, which meant the client imported a plugin it has
 // no business knowing about, and that import survived into the client's published `.d.ts`: a
-// consumer typechecking against `@busyclaw/client` alone could not resolve `@busyclaw/secrets-plugin`.
+// consumer typechecking against the client alone could not resolve `@busyclaw/secrets-plugin`.
 //
 // A plugin ships its own client half. This is exactly how `@better-auth/stripe` is arranged — one
 // package, `.` and `./client` — and it is why better-auth's own client never hears about stripe.

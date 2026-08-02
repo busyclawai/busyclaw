@@ -8,7 +8,7 @@ import { type } from "arktype";
 
 /**
  * Every FLAT base `claw.api` method, the ONE source both route tables derive from: the server
- * (`clawApiRouteList` in `busyclaw`) and the remote client (`@busyclaw/client`) map each name to
+ * (`clawApiRouteList` in `busyclaw`) and the remote client (`busyclaw/client`) map each name to
  * `/<kebab(name)>` + the `get*`/`list*` → GET verb rule. `busyclaw` compile-checks the list against
  * `keyof ClawApi` in both directions, so a drifted name cannot ship.
  */

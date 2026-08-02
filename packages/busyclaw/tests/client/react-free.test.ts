@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("the root entry stays react-free", () => {
-	const srcDir = fileURLToPath(new URL("../src", import.meta.url));
+	const srcDir = fileURLToPath(new URL("../../src/client", import.meta.url));
 
 	// Walks the RELATIVE import graph from an entry module, collecting every import specifier.
 	function collectImportSpecifiers(
@@ -21,7 +21,12 @@ describe("the root entry stays react-free", () => {
 	): void {
 		if (seen.has(file)) return;
 		seen.add(file);
-		const source = readFileSync(file, "utf8");
+		const raw = readFileSync(file, "utf8");
+		// TYPE-only imports are ERASED, so they are not part of the runtime graph this walk is about.
+		// It matters now that the client is a subpath of busyclaw: `types.ts` reads `Claw` from
+		// `../index` — the whole server assembly — and following that would walk the entire package
+		// and answer a different question than "what ships in the client bundle".
+		const source = raw.replace(/^\s*(?:import|export)\s+type\s[^;]*;/gm, "");
 		const references = [
 			...source.matchAll(/from\s+"([^"]+)"/g),
 			...source.matchAll(/import\s+"([^"]+)"/g),
@@ -62,7 +67,7 @@ describe("the root entry stays react-free", () => {
 	it("declares react as an optional peer needed only by the ./react subpath", () => {
 		const manifest = JSON.parse(
 			readFileSync(
-				fileURLToPath(new URL("../package.json", import.meta.url)),
+				fileURLToPath(new URL("../../package.json", import.meta.url)),
 				"utf8",
 			),
 		) as {
@@ -74,9 +79,9 @@ describe("the root entry stays react-free", () => {
 		expect(manifest.peerDependencies?.react).toBe("^18.0.0 || ^19.0.0");
 		expect(manifest.peerDependenciesMeta?.react?.optional).toBe(true);
 		expect(manifest.dependencies?.react).toBeUndefined();
-		expect(manifest.exports?.["./react"]).toEqual({
-			import: "./dist/react/index.js",
-			types: "./dist/react/index.d.ts",
+		expect(manifest.exports?.["./client/react"]).toEqual({
+			import: "./dist/client/react/index.js",
+			types: "./dist/client/react/index.d.ts",
 		});
 	});
 });

@@ -3,7 +3,8 @@
 // that refetches it.
 //
 // A plugin's client half belongs to THAT PLUGIN, not here. `secretsClient()` used to live in this
-// file, which made `@busyclaw/client` import `@busyclaw/secrets-plugin` — an import that survived
+// file, back when the client was its own package, which made it import `@busyclaw/secrets-plugin`
+// — an import that survived
 // into the published .d.ts, so a consumer typechecking against the client alone could not resolve
 // it. It now ships from `@busyclaw/secrets-plugin/client`, the arrangement `@better-auth/stripe`
 // uses and the reason better-auth's own client never hears about its plugins.

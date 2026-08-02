@@ -35,9 +35,6 @@ importers:
       '@busyclaw/adapter-nextjs':
         specifier: workspace:*
         version: link:../../packages/adapter/nextjs
-      '@busyclaw/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../packages/foundation/contracts
@@ -149,6 +146,9 @@ importers:
       '@busyclaw/engine-sql':
         specifier: workspace:*
         version: link:../engines/sql
+      '@busyclaw/errors':
+        specifier: workspace:*
+        version: link:../foundation/errors
       '@busyclaw/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -173,6 +173,9 @@ importers:
       kysely:
         specifier: 0.29.2
         version: 0.29.2
+      nanostores:
+        specifier: 1.4.0
+        version: 1.4.0
     devDependencies:
       '@ai-sdk/azure':
         specifier: 4.0.18
@@ -192,9 +195,24 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: 19.2.3
+        version: 19.2.3(@types/react@19.2.17)
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
+      happy-dom:
+        specifier: 20.10.6
+        version: 20.10.6
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
 
   packages/cli:
     dependencies:
@@ -244,49 +262,6 @@ importers:
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(typescript@6.0.3)
-
-  packages/client:
-    dependencies:
-      '@busyclaw/contracts':
-        specifier: workspace:*
-        version: link:../foundation/contracts
-      '@busyclaw/errors':
-        specifier: workspace:*
-        version: link:../foundation/errors
-      nanostores:
-        specifier: 1.4.0
-        version: 1.4.0
-    devDependencies:
-      '@busyclaw/adapter-core':
-        specifier: workspace:*
-        version: link:../adapter/core
-      '@busyclaw/secrets-plugin':
-        specifier: workspace:*
-        version: link:../plugins/secrets
-      '@busyclaw/storage-core':
-        specifier: workspace:*
-        version: link:../storage/core
-      '@types/node':
-        specifier: 26.1.1
-        version: 26.1.1
-      '@types/react':
-        specifier: 19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: 19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      busyclaw:
-        specifier: workspace:*
-        version: link:../busyclaw
-      happy-dom:
-        specifier: 20.10.6
-        version: 20.10.6
-      react:
-        specifier: 19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: 19.2.7
-        version: 19.2.7(react@19.2.7)
 
   packages/engines/sql:
     dependencies:
