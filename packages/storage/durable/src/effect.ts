@@ -187,6 +187,13 @@ export function createEffectStore(adapter: Adapter): EffectStore {
 				const record: EffectRecord = {
 					id: input.id,
 					status: "started",
+					// Stamped at MINT and immutable after — a later writer cannot re-anchor an effect onto
+					// work it did not do. Only the create path sets these; every other verb here updates
+					// execution state (`status`, the lease, output/error) and never touches them.
+					scope: input.anchors.scope,
+					scopeId: input.anchors.scopeId,
+					clawId: input.anchors.clawId,
+					principal: input.anchors.principal,
 					toolName: input.toolName,
 					inputHash: input.inputHash,
 					compensation: input.compensation,

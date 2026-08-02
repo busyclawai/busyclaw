@@ -936,6 +936,7 @@ export function createClaw<
 		api: mergedApi,
 		engine: apiEngine,
 		approvals: runtime.approvals,
+		effects: effectsStore,
 		clawsStore,
 		runs: engine?.runs,
 		grantStore,

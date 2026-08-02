@@ -32,6 +32,7 @@ import {
 	type ClawRunReadModel,
 	type ClawsStore,
 	configurationError,
+	type EffectStore,
 	ENDPOINTS_METADATA,
 	type EndpointRoute,
 	endpointRoutesOf,
@@ -175,6 +176,9 @@ const CORE_RESOURCE_KINDS = new Set([
 	// exists for, and the more useful answer: reporting a missing database as "denied" sends the
 	// reader hunting for a policy that does not exist.
 	"approval",
+	// Same reason as `approval`: registered only when the claw has an effect store, so a claw
+	// without one reports a CONFIGURATION error rather than a denial.
+	"effect",
 ]);
 
 // `personalScope(principal)` lived here: it returned a resource whose `createdBy` WAS the caller, and
@@ -203,11 +207,13 @@ export function buildResourceRegistry(input: {
 	runs: ClawRunReadModel | undefined;
 	/** Feeds the `approval` loader — see the registration below. */
 	approvals: ApprovalStore | undefined;
+	/** Feeds the `effect` loader — an effect anchors the same way an approval does. */
+	effects: EffectStore | undefined;
 	adapter: Adapter | undefined;
 	plugins: readonly BusyclawPlugin[];
 }): Map<string, ResourceLoader> {
 	const registry = new Map<string, ResourceLoader>();
-	const { approvals, clawsStore, runs } = input;
+	const { approvals, clawsStore, effects, runs } = input;
 
 	if (clawsStore !== undefined) {
 		// claw — the base shared agent resource: its own createdBy/scope/scopeId.
@@ -296,6 +302,37 @@ export function buildResourceRegistry(input: {
 				// A `system:` requester here has no parent at all and is DENIED — the correct answer for
 				// work that belongs to nobody, and a deployment that wants it decidable resolves a
 				// tenant.
+				return record.principal !== undefined
+					? { createdBy: record.principal }
+					: null;
+			});
+		}
+		// effect — the SAME ladder an approval takes, because they are the same kind of thing: something
+		// a run left behind. An effect records what a tool DID (its input hash, its output, its
+		// compensation), and its id is guessable by construction, so an unanchored read was one
+		// authenticated stranger away from another tenant's side effects. R-H01.
+		if (effects !== undefined) {
+			registry.set("effect", async (id) => {
+				const record = await effects.get(id);
+				if (!record) return null;
+				if (record.clawId !== undefined) {
+					const claw = await clawsStore.claws.get(record.clawId);
+					if (!claw) return null;
+					return {
+						createdBy: claw.createdBy,
+						scope: claw.scope,
+						scopeId: claw.scopeId,
+						grantParents: [{ kind: "claw", id: record.clawId }],
+					};
+				}
+				// `namesTenant`, not "is a scope present" — the column is required, and a run that names
+				// no tenant stamps UNSCOPED, which nobody is a member of. Keyed on presence this branch
+				// would fire for every effect and make the one below dead.
+				if (namesTenant(record)) {
+					return { scope: record.scope, scopeId: record.scopeId };
+				}
+				// An ad-hoc run by a real person in a deployment that resolves no tenant: they own what
+				// it did. A `system:` requester has no parent and is DENIED — work belonging to nobody.
 				return record.principal !== undefined
 					? { createdBy: record.principal }
 					: null;
@@ -626,6 +663,8 @@ export function governApi(input: {
 	/** The durable approval store — feeds the `approval` loader. An approval anchors on the CLAW whose
 	 *  run parked it, falling back to the tenant it ran in. */
 	approvals: ApprovalStore | undefined;
+	/** The durable effect store — feeds the `effect` loader, by the same ladder. */
+	effects: EffectStore | undefined;
 	/** The generic ACL store — feeds real grants into the decision (slice 5). `undefined` → grants are
 	 *  `[]` (owner/scope still decide). */
 	grantStore: AccessGrantStore | undefined;
@@ -652,6 +691,7 @@ export function governApi(input: {
 	const registry = buildResourceRegistry({
 		approvals: input.approvals,
 		clawsStore: input.clawsStore,
+		effects: input.effects,
 		runs: input.runs,
 		adapter: input.adapter,
 		plugins: input.plugins,

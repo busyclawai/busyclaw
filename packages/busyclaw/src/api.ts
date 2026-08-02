@@ -1007,12 +1007,11 @@ export const clawApiRoutes = {
 	),
 	// Resumes by approvalId, so it inherits exactly the gap above.
 	continueRun: apiRoute("continueRun", on("manage", "approval", "approvalId")),
-	getEffect: apiRoute(
-		"getEffect",
-		callerOnly(
-			"KNOWN GAP: an effect row carries no claw or run reference, so there is nothing to resolve it against",
-		),
-	),
+	// R-H01. The row carries its anchors now — the claw whose run produced it, the tenant it ran in,
+	// the principal it ran as — so it resolves like an approval and by the same ladder. It used to
+	// resolve against nothing, which made an effect (what a tool DID: input hash, output, compensation)
+	// readable by any authenticated caller who could guess an id that is `run:<runId>:tool:<callId>`.
+	getEffect: apiRoute("getEffect", on("read", "effect", "id")),
 	// Scope-keyed administration. The input NAMES a `(scope, scopeId)` boundary; verified membership
 	// AUTHORIZES it. These were the sharpest instance of the unbound hole: `putPolicySlice` took its
 	// boundary key straight from the request body and got a caller-owned resource back, so any

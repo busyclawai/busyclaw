@@ -1,4 +1,4 @@
-import { userPrincipal } from "@busyclaw/contracts";
+import { UNSCOPED, userPrincipal } from "@busyclaw/contracts";
 import { type Adapter, memoryAdapter } from "@busyclaw/storage-core";
 import { kyselyAdapter } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
@@ -162,6 +162,15 @@ function suite(
 
 suite("memory adapter", () => memoryAdapter());
 
+// Whose work an effect is — stamped at mint by the runtime from the run's own authority, so a store
+// test has to stand in for it. `UNSCOPED` is what a run that names no tenant carries.
+const EFFECT_ANCHORS = {
+	scope: UNSCOPED.scope,
+	scopeId: UNSCOPED.scopeId,
+	clawId: "claw-1",
+	principal: userPrincipal("alice"),
+};
+
 describe("createPiiMappingStore", () => {
 	it("contains rehydration to a container and forgets a subject across containers", async () => {
 		const store = createPiiMappingStore(memoryAdapter());
@@ -233,6 +242,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 			leaseTtlMs: 1_000,
 		});
@@ -242,6 +252,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.500Z",
 			leaseTtlMs: 1_000,
 		});
@@ -256,6 +267,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 			leaseTtlMs: 1_000,
 		});
@@ -265,6 +277,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:02.000Z",
 			leaseTtlMs: 1_000,
 		});
@@ -291,6 +304,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:03.000Z",
 		});
 		expect(replay).toMatchObject({
@@ -305,6 +319,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 			leaseTtlMs: 1_000,
 		});
@@ -314,6 +329,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:02.000Z",
 			reclaimExpired: false,
 		});
@@ -331,6 +347,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 		});
 
@@ -339,6 +356,7 @@ describe("createEffectStore", () => {
 				id: "effect-1",
 				toolName: "send_email",
 				inputHash: "h2",
+				anchors: EFFECT_ANCHORS,
 				now: "2026-01-01T00:00:02.000Z",
 			}),
 		).rejects.toThrow(/different input/);
@@ -350,6 +368,7 @@ describe("createEffectStore", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 		});
 		if (claim.status !== "claimed") throw new Error("expected claim");
@@ -376,8 +395,12 @@ describe("createEffectStore over kysely (sqlite)", () => {
 			dialect: new SqliteDialect({ database: effectSqlite }),
 		});
 		effectSqlite.exec(
+			// HAND-MAINTAINED, like the `approval` one above, and it drifts the same way: a column added
+			// to effectFields and not to this list fails here as "table effect has no column named …"
+			// the first time a test writes it. The access anchors were exactly that.
 			`CREATE TABLE effect (
-					id TEXT PRIMARY KEY, status TEXT, toolName TEXT, inputHash TEXT, output TEXT, error TEXT,
+					id TEXT PRIMARY KEY, status TEXT, principal TEXT, clawId TEXT, scope TEXT, scopeId TEXT,
+					toolName TEXT, inputHash TEXT, output TEXT, error TEXT,
 					compensation TEXT, compensationEffectId TEXT, leaseTokenHash TEXT, leaseExpiresAt TEXT,
 					createdAt TEXT, updatedAt TEXT
 				)`,
@@ -391,6 +414,7 @@ describe("createEffectStore over kysely (sqlite)", () => {
 			id: "effect-1",
 			toolName: "send_email",
 			inputHash: "h1",
+			anchors: EFFECT_ANCHORS,
 			now: "2026-01-01T00:00:00.000Z",
 		});
 		if (claim.status !== "claimed") throw new Error("expected claim");
@@ -400,6 +424,7 @@ describe("createEffectStore over kysely (sqlite)", () => {
 				id: "effect-1",
 				toolName: "send_email",
 				inputHash: "h1",
+				anchors: EFFECT_ANCHORS,
 				now: "2026-01-01T00:00:01.000Z",
 			}),
 		).resolves.toMatchObject({ status: "in_progress" });
@@ -416,6 +441,7 @@ describe("createEffectStore over kysely (sqlite)", () => {
 				id: "effect-1",
 				toolName: "send_email",
 				inputHash: "h1",
+				anchors: EFFECT_ANCHORS,
 				now: "2026-01-01T00:00:03.000Z",
 			}),
 		).resolves.toMatchObject({

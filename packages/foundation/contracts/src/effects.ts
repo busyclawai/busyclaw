@@ -2,6 +2,7 @@ import { type } from "arktype";
 import { jsonObject } from "./common";
 import type { EntityRecord } from "./entity";
 import { entity, field } from "./entity";
+import type { Principal } from "./governance/principal";
 
 const effectStatusValues = [
 	"started",
@@ -33,6 +34,22 @@ export const effectFields = {
 		immutable: true,
 	}),
 	status: field.enum(effectStatusValues, { required: true, index: true }),
+	// ── the access anchors, identical to ApprovalRecord's and decided by the same ladder ──────────
+	// An effect records what a tool DID. Unanchored, `getEffect` had nothing to resolve and was
+	// `callerOnly`: one authenticated stranger away from another tenant's side effects, with an id
+	// that is guessable by construction (`run:<runId>:tool:<toolCallId>`). R-H01.
+	//
+	// Nothing here is new — an approval and an effect are both "something a run left behind", so they
+	// carry the same three anchors rather than inventing a second vocabulary for the same question.
+	/** The principal the run executed as. The fallback anchor, and the only one an ad-hoc run has. */
+	principal: field.principal({ index: true, immutable: true }),
+	/** The claw whose run produced this — the anchor that matters, because whoever may manage the claw
+	 *  may see what it did. Absent for an ad-hoc `generate` that belongs to no claw. */
+	clawId: field.string({ index: true, immutable: true }),
+	/** The TENANT it ran in. Required, and `UNSCOPED` where a deployment resolves none — a nullable
+	 *  boundary is one a reader cannot tell from "we never asked". */
+	scope: field.string({ required: true, index: true, immutable: true }),
+	scopeId: field.string({ required: true, index: true, immutable: true }),
 	toolName: field.string({ required: true, index: true, immutable: true }),
 	inputHash: field.string({ required: true, index: true, immutable: true }),
 	output: field.jsonValue({ pii: "redacted" }),
@@ -59,6 +76,14 @@ export type EffectRecord = EntityRecord<typeof effectFields>;
 /** The storage schema backing durable EffectStore. */
 export const effectSchema = effectStorageEntity.storage;
 
+/** Whose work an effect was — see the anchor block on {@link effectFields}. */
+export type EffectAnchors = {
+	scope: string;
+	scopeId: string;
+	clawId?: string;
+	principal?: Principal;
+};
+
 export type EffectClaim =
 	| {
 			status: "claimed";
@@ -77,6 +102,10 @@ export type EffectStore = {
 		id: string;
 		toolName: string;
 		inputHash: string;
+		/** The access anchors, stamped from the run's own state at mint — never from anything a tool or
+		 *  a model reached. `scope`/`scopeId` are the run's resolved boundary (`UNSCOPED` when it names
+		 *  no tenant); `clawId`/`principal` are absent only where the run genuinely has neither. */
+		anchors: EffectAnchors;
 		compensation?: EffectCompensation;
 		now: string;
 		leaseTtlMs?: number;

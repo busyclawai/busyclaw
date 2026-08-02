@@ -183,6 +183,7 @@ export type { JsonObject, JsonPrimitive, JsonValue } from "./common";
 export { jsonObject, jsonValue } from "./common";
 // ── cross-cutting ports: effects, events, per-tool governance ────────────────
 export type {
+	EffectAnchors,
 	EffectClaim,
 	EffectCompensation,
 	EffectRecord,

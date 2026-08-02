@@ -715,6 +715,10 @@ describe("@busyclaw/runtime", () => {
 					record: {
 						id: input.id,
 						status: "started",
+						// Echoed back from what the runtime stamped, which is the point: the anchors reach
+						// the store from the RUN's own authority, so a stub that invented them would be
+						// asserting its own values rather than the ones under test.
+						...input.anchors,
 						toolName: input.toolName,
 						inputHash: input.inputHash,
 						leaseExpiresAt: "2026-01-01T00:00:01.000Z",

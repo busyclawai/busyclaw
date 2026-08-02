@@ -1,4 +1,5 @@
 import type { EffectStore } from "@busyclaw/contracts";
+import { userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
@@ -6,6 +7,7 @@ import {
 	durableRedactor,
 	emailTool,
 	owned,
+	withPrincipal,
 } from "./fixtures";
 
 describe("createClaw effects", () => {
@@ -134,6 +136,9 @@ describe("createClaw effects", () => {
 					status: "uncertain",
 					leaseExpiresAt: "2026-01-01T00:00:01.000Z",
 					record: {
+						// Echoed back from what the runtime stamped — a stub inventing its own anchors
+						// would assert its values, not the ones under test.
+						...input.anchors,
 						createdAt: input.now,
 						id: input.id,
 						inputHash: input.inputHash,
@@ -188,5 +193,102 @@ describe("createClaw effects", () => {
 		).rejects.toThrow(/unknown and cannot be retried without idempotency/);
 		expect(reclaimExpired).toBe(false);
 		expect(toolRuns).toBe(0);
+	});
+	// R-H01 — an effect row carries the anchors that say whose work it was.
+	//
+	// `getEffect` was `callerOnly` with a stated reason: "an effect row carries no claw or run
+	// reference, so there is nothing to resolve it against". An effect records what a tool DID —
+	// its input hash, its output, its compensation — so an unanchored read is one authenticated
+	// stranger away from another tenant's side effects, and the id is guessable by construction
+	// (`run:<runId>:tool:<toolCallId>`).
+	//
+	// It carries the same anchors an approval does, decided by the same ladder: the claw whose run
+	// produced it, else the tenant it ran in, else the principal it ran as. Nothing new was invented
+	// for effects — an approval and an effect are both "something a run left behind".
+	it("a stranger cannot read another claw's effect", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			tools: {
+				send_email: emailTool({
+					onExecute: (to) => ({ sent: true, recipient: to }),
+				}),
+			},
+		});
+		const waiting = await claw.api.generate({ prompt: "email alice@x.com" });
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await claw.api.grantApproval({ approvalId });
+		await claw.api.continueRun({ approvalId });
+		const id = `approval:${approvalId}:tool:c1`;
+
+		// The owner reads it — the effect is anchored to work they own.
+		expect(await claw.api.getEffect({ id })).toMatchObject({
+			status: "completed",
+		});
+
+		// A stranger with the exact id does not. The id was never the secret.
+		await expect(
+			withPrincipal(claw, userPrincipal("stranger")).api.getEffect({ id }),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+	});
+
+	it("whoever may manage the CLAW may read what it did", async () => {
+		// The claw anchor specifically, which the test above cannot reach: `api.generate` is ad-hoc, so
+		// it mints no claw and its effects fall through to the principal. A RECORDED run has one. Bob
+		// is not the owner and shares no tenant — a grant on the CLAW is the only thing that can reach
+		// the row, so this fails the moment an effect stops carrying `clawId`.
+		const { db, redactor } = durableRedactor();
+		const claw = owned({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			tools: {
+				send_email: emailTool({
+					onExecute: (to) => ({ sent: true, recipient: to }),
+				}),
+			},
+		});
+		const agent = await claw.api.createClaw({
+			id: "claw-1",
+			name: "assistant",
+		});
+		const thread = await claw.api.createThread({
+			id: "thread-1",
+			clawId: agent.id,
+			title: "t",
+		});
+		const waiting = await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "email alice@x.com",
+		});
+		const result = waiting.result;
+		if (result.status !== "waiting_approval" || !result.approvalIds?.[0]) {
+			throw new Error("expected approval wait");
+		}
+		const approvalId = result.approvalIds[0];
+		await claw.api.grantApproval({ approvalId });
+		await claw.api.continueRun({ approvalId });
+		const id = `approval:${approvalId}:tool:c1`;
+
+		const bob = userPrincipal("bob");
+		await expect(
+			withPrincipal(claw, bob).api.getEffect({ id }),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+
+		await claw.api.shareResource({
+			resourceKind: "claw",
+			resourceId: agent.id,
+			principalRef: bob,
+			permission: "read",
+		});
+		expect(await withPrincipal(claw, bob).api.getEffect({ id })).toMatchObject({
+			status: "completed",
+		});
 	});
 });

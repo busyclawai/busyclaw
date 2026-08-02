@@ -61,6 +61,7 @@ function govern(opts: {
 	resolvePrincipalScopes?: (principal: string) => readonly PrincipalScope[];
 	warn?: (message: string) => void;
 	approvals?: Parameters<typeof governApi>[0]["approvals"];
+	effects?: Parameters<typeof governApi>[0]["effects"];
 }): Governed {
 	return governApi({
 		api,
@@ -68,6 +69,7 @@ function govern(opts: {
 		clawsStore: opts.clawsStore,
 		runs: opts.runs,
 		approvals: opts.approvals,
+		effects: opts.effects,
 		grantStore: opts.grantStore,
 		adapter: undefined,
 		plugins: [],

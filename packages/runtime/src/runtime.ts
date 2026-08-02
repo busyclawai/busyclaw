@@ -16,6 +16,7 @@ import type {
 import {
 	type Adapter,
 	APPROVED_BY_CONTEXT_KEY,
+	asPrincipal,
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
@@ -1336,6 +1337,18 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					id: state.currentEffectId,
 					toolName: call.name,
 					inputHash,
+					// Whose work this is, from the run's OWN state — the same authority every gate on this
+					// turn was decided against, never anything the tool or the model reached. Without it
+					// `getEffect` had nothing to resolve and answered any authenticated caller (R-H01).
+					anchors: {
+						...(state.authority?.configScope ?? UNSCOPED),
+						...(state.recording?.clawId !== undefined
+							? { clawId: state.recording.clawId }
+							: {}),
+						...(state.authority?.principal !== undefined
+							? { principal: asPrincipal(state.authority.principal) }
+							: {}),
+					},
 					compensation: effectPolicy?.compensation,
 					now: now(),
 					leaseTtlMs: config.effectLeaseTtlMs,
