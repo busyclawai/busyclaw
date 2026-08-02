@@ -21,17 +21,26 @@ const BOB = { principal: userPrincipal("bob") } as const;
 const DENIED = /BUSYCLAW_AUTHORIZATION_DENIED/;
 
 function makeClaw() {
+	return clawWithDb().claw;
+}
+
+/** The same claw, plus its adapter — a test asserting a row is ABSENT cannot ask the api, because a
+ *  missing row fail-closes at the loader and `getToolCall` denies either way. */
+function clawWithDb() {
 	const { db, redactor } = durableRedactor();
-	return createClaw({
-		database: db,
-		model: textModel("done"),
-		redaction: { redactor },
-	});
+	return {
+		db,
+		claw: createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: { redactor },
+		}),
+	};
 }
 
 /** Alice's claw + thread + one message — the transcript every descendant kind hangs off. */
 async function alicesTranscript() {
-	const claw = makeClaw();
+	const { claw, db } = clawWithDb();
 	const owned = await claw.api.createClaw({ name: "alice's claw" }, ALICE);
 	const thread = await claw.api.createThread({ clawId: owned.id }, ALICE);
 	const message = await claw.api.appendMessage(
@@ -43,7 +52,7 @@ async function alicesTranscript() {
 		},
 		ALICE,
 	);
-	return { claw, owned, thread, message };
+	return { claw, db, owned, thread, message };
 }
 
 describe("cross-principal isolation — Bob knows the id and is still refused", () => {
@@ -263,5 +272,85 @@ describe("cross-principal isolation — Bob knows the id and is still refused", 
 		await expect(
 			claw.api.getCheckpoint({ id: "does-not-exist" }, BOB),
 		).rejects.toThrow(DENIED);
+	});
+});
+
+// R-H02 — an artifact write verifies the whole parent chain, not just the claw it names.
+//
+// Every writer authorized exactly one thing: `on("use", "claw", "clawId")`. So a caller who owns ANY
+// claw could supply their own `clawId` and somebody else's `threadId`, and the row landed referencing
+// the victim's thread — which the victim's own list then returned. The `references` on the column say
+// the thread must EXIST; they never said whose it is.
+//
+// Two layers, because the audit is right that one is not enough: the route now authorizes the
+// DEEPEST parent supplied (a thread implies its claw), and the store refuses a row whose parents
+// disagree — the second is what protects a writer that is not the public api.
+describe("artifact writes cannot cross into another claw's thread (R-H02)", () => {
+	it("Bob cannot hang a tool call off Alice's thread", async () => {
+		const {
+			claw,
+			db,
+			owned: alices,
+			thread: alicesThread,
+		} = await alicesTranscript();
+
+		// Bob owns his own claw — this is not an unauthenticated stranger, it is the ordinary tenant
+		// next door, which is exactly who the single-claw check let through.
+		const bobsClaw = await claw.api.createClaw(
+			{ id: "bobs-claw", name: "bob's" },
+			BOB,
+		);
+
+		await expect(
+			claw.api.createToolCall(
+				{
+					id: "forged-1",
+					clawId: bobsClaw.id,
+					threadId: alicesThread.id,
+					runId: "run-forged",
+					toolCallId: "c1",
+					toolName: "send_email",
+					args: {},
+					status: "proposed",
+				},
+				BOB,
+			),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+
+		// And nothing landed — the absent WRITE is the property, not the thrown error.
+		expect(
+			await db.findOne({
+				model: "tool_call",
+				where: [{ field: "id", value: "forged-1" }],
+			}),
+		).toBeNull();
+		expect(alices.id).toBeDefined();
+	});
+
+	it("refuses a claw/thread pair that disagree, even for a caller who owns both", async () => {
+		// The STORE half. Alice owns two claws; naming one claw and the other's thread is not a
+		// permission failure at all — every id is hers — it is an incoherent row, and a writer that is
+		// not the public api (a plugin, a future internal service) has to be refused it too.
+		const { claw, thread: alicesThread } = await alicesTranscript();
+		const second = await claw.api.createClaw(
+			{ id: "alice-2", name: "second" },
+			ALICE,
+		);
+
+		await expect(
+			claw.api.createToolCall(
+				{
+					id: "incoherent-1",
+					clawId: second.id,
+					threadId: alicesThread.id,
+					runId: "run-x",
+					toolCallId: "c1",
+					toolName: "send_email",
+					args: {},
+					status: "proposed",
+				},
+				ALICE,
+			),
+		).rejects.toThrow(/thread .* does not belong to claw/);
 	});
 });

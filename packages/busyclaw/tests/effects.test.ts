@@ -292,3 +292,74 @@ describe("createClaw effects", () => {
 		});
 	});
 });
+
+// What `approvalAuthority: "approver"` means for the artifacts a resumed run leaves behind.
+//
+// The question this pins: Bob approves an escalation Alice could not perform, the tool then executes
+// under BOB's principal — so does the row land as "Bob acting in Alice's thread", and does the
+// containment check (R-H02) refuse it?
+//
+// It does not refuse it, and the reason is worth stating rather than discovering: the claw and thread
+// on those rows come from the RECORDING, which is Alice's run, not from anything Bob supplied. The
+// pair is coherent — Alice's thread in Alice's claw — so the check has nothing to object to. What
+// changes is the PRINCIPAL, which is the whole point of lending authority.
+describe("an approver's borrowed authority does not move the conversation", () => {
+	it("the effect records BOB as principal and ALICE's claw as the anchor", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			// The escalation posture: the approved action runs as the APPROVER, which is what lets it
+			// do something the requester could not.
+			approvalAuthority: "approver",
+			tools: {
+				send_email: emailTool({
+					onExecute: (to) => ({ sent: true, recipient: to }),
+				}),
+			},
+		});
+		const alice = { principal: userPrincipal("alice") };
+		const bob = { principal: userPrincipal("bob") };
+
+		const agent = await claw.api.createClaw(
+			{ id: "c1", name: "alice's" },
+			alice,
+		);
+		const thread = await claw.api.createThread(
+			{ id: "t1", clawId: agent.id },
+			alice,
+		);
+		const sent = await claw.api.sendMessage(
+			{ clawId: agent.id, threadId: thread.id, message: "email x@y.com" },
+			alice,
+		);
+		if (
+			sent.result.status !== "waiting_approval" ||
+			!sent.result.approvalIds?.[0]
+		) {
+			throw new Error("expected approval wait");
+		}
+		const approvalId = sent.result.approvalIds[0];
+
+		// Alice shares the claw so Bob can reach the approval to decide it at all.
+		await claw.api.shareResource(
+			{
+				resourceKind: "claw",
+				resourceId: agent.id,
+				principalRef: bob.principal,
+				permission: "manage",
+			},
+			alice,
+		);
+		await claw.api.grantApproval({ approvalId }, bob);
+		await claw.api.continueRun({ approvalId }, bob);
+
+		const row = await db.findOne({
+			model: "effect",
+			where: [{ field: "id", value: `approval:${approvalId}:tool:c1` }],
+		});
+		// Bob DID it — borrowed authority is recorded as Bob's, not laundered into Alice's name.
+		expect(row).toMatchObject({ principal: bob.principal, clawId: agent.id });
+	});
+});

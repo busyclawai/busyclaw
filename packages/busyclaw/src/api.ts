@@ -943,7 +943,11 @@ export const clawApiRoutes = {
 		level: "manage",
 		resolve: (input) => ({ kind: input.scope, id: input.scopeId }),
 	}),
-	createToolCall: apiRoute("createToolCall", on("use", "claw", "clawId")),
+	// R-H02. Authorized on the THREAD, not the claw: a thread implies its claw (the loader walks up),
+	// and the row carries BOTH ids, so binding the shallower one let a caller who owned any claw hang a
+	// row off somebody else's thread. The store refuses a mismatched pair too — the gate denies the
+	// caller, the store keeps the row coherent for every other writer.
+	createToolCall: apiRoute("createToolCall", on("use", "thread", "threadId")),
 	getToolCall: apiRoute("getToolCall", on("read", "toolCall", "id")),
 	// Keyed by (runId, provider tool-call id): tool-call ids are unique only WITHIN a run, so the pair is
 	// the natural key and the row it finds carries the claw to authorize against. Anchoring on the `run`
@@ -961,7 +965,10 @@ export const clawApiRoutes = {
 		"updateToolCallStatus",
 		on("use", "toolCall", "id"),
 	),
-	createToolResult: apiRoute("createToolResult", on("use", "claw", "clawId")),
+	createToolResult: apiRoute(
+		"createToolResult",
+		on("use", "thread", "threadId"),
+	),
 	getToolResult: apiRoute("getToolResult", on("read", "toolResult", "id")),
 	listToolResults: apiRoute("listToolResults", {
 		mode: "resource",
@@ -971,7 +978,10 @@ export const clawApiRoutes = {
 			id: `${input.runId}${PROVIDER_TOOL_CALL_SEPARATOR}${input.toolCallId}`,
 		}),
 	}),
-	createCheckpoint: apiRoute("createCheckpoint", on("use", "claw", "clawId")),
+	createCheckpoint: apiRoute(
+		"createCheckpoint",
+		on("use", "thread", "threadId"),
+	),
 	getCheckpoint: apiRoute("getCheckpoint", on("read", "checkpoint", "id")),
 	// Anchors on the run's latest checkpoint row, which carries the claw — again so this works without a
 	// durable engine. No checkpoint yet ⇒ nothing resolves ⇒ deny, which is also "nothing to read".

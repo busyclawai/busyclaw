@@ -139,6 +139,39 @@ export function createClawsStore(
 		return valid;
 	};
 
+	/**
+	 * The thread a row names must belong to the claw it names. R-H02.
+	 *
+	 * `appendMessage` has always done this inside its transaction — the message column even documents it
+	 * ("Must match the thread's own clawId"). Tool calls, tool results and checkpoints carry the same
+	 * pair and never checked it, so a caller who owned ANY claw could hang a row off somebody else's
+	 * thread and the victim's own list returned it. The `references` on the column says the thread
+	 * EXISTS; it never said whose.
+	 *
+	 * At the STORE, not only at the api gate, because the gate is one writer among several: a plugin or
+	 * an internal service reaching this port has to be refused the same incoherent row. The gate's job is
+	 * to deny the caller; this one's is to keep the row coherent for everybody.
+	 */
+	const assertThreadInClaw = async (
+		what: string,
+		input: { clawId: string; threadId: string },
+	): Promise<void> => {
+		const thread = await db.findOne({
+			model: "thread",
+			where: [{ field: "id", value: input.threadId }],
+		});
+		if (!thread) {
+			throw stateError("thread not found", { threadId: input.threadId });
+		}
+		if (thread.clawId !== input.clawId) {
+			throw validationError(
+				`${what} input invalid`,
+				`thread "${input.threadId}" does not belong to claw "${input.clawId}"`,
+				{ clawId: input.clawId, threadClawId: thread.clawId },
+			);
+		}
+	};
+
 	return {
 		claws: {
 			async create(input) {
@@ -337,6 +370,7 @@ export function createClawsStore(
 		toolCalls: {
 			async create(input) {
 				const valid = assertCreateToolCallInput(input);
+				await assertThreadInClaw("create tool call", valid);
 				const ts = now();
 				return db.create({
 					model: "tool_call",
@@ -383,6 +417,7 @@ export function createClawsStore(
 		toolResults: {
 			async create(input) {
 				const valid = assertCreateToolResultInput(input);
+				await assertThreadInClaw("create tool result", valid);
 				return db.create({
 					model: "tool_result",
 					data: {
@@ -419,6 +454,7 @@ export function createClawsStore(
 		checkpoints: {
 			async create(input) {
 				const valid = assertCreateCheckpointInput(input);
+				await assertThreadInClaw("create checkpoint", valid);
 				return db.create({
 					model: "checkpoint",
 					data: {
