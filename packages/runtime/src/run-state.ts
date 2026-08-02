@@ -71,6 +71,12 @@ export function createRunState(): RunState {
 }
 
 /** Throw if the run was aborted — checked at each loop/tool boundary. */
+/** Marks the error `abortIfNeeded` throws, so a caller that wants to say WHY the run stopped can tell
+ *  a deliberate abort from an unrelated failure that happened to land at the same moment. */
+export const ABORTED_DETAIL = "runtimeAborted";
+
 export function abortIfNeeded(signal: RuntimeAbortSignal | undefined): void {
-	if (signal?.aborted) throw stateError("runtime aborted");
+	if (signal?.aborted) {
+		throw stateError("runtime aborted", { [ABORTED_DETAIL]: true });
+	}
 }

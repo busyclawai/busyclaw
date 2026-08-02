@@ -1768,4 +1768,145 @@ describe("an approval lease is kept alive, and lost is stopped", () => {
 		expect(toolStarted).toBe(1);
 		expect(toolFinished).toBe(1);
 	}, 15_000);
+
+	it("stops BEFORE the next step, so no downstream call is made", async () => {
+		// The property the audit actually names: "the duplicated model continuation can produce
+		// different downstream tool IDs and effects". Those are NOT deduped by the ledger, because the
+		// provider mints fresh ids for each continuation — so two runners past the approved call make
+		// two sets of them. Reporting the loss at the end is not enough; the loop has to stop.
+		const db = memoryAdapter();
+		const calls: string[] = [];
+		let step = 0;
+		// Keeps asking for another tool call, forever. Only an abort ends this run.
+		const insistent: V2Model = {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async () => ({
+				content: [
+					{
+						type: "tool-call" as const,
+						toolCallId: `c${++step}`,
+						toolName: "ping",
+						input: "{}",
+					},
+				],
+				finishReason: { unified: "tool-calls" as const, raw: undefined },
+				usage: {
+					inputTokens: {
+						total: 1,
+						noCache: undefined,
+						cacheRead: undefined,
+						cacheWrite: undefined,
+					},
+					outputTokens: { total: 1, text: undefined, reasoning: undefined },
+				},
+				warnings: [],
+			}),
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		};
+		const real = createApprovalStore(db);
+		const approvalStore = { ...real, heartbeat: async () => null };
+		const runtime = createRuntime({
+			model: insistent,
+			database: db,
+			approvalStore,
+			approvalLeaseMs: 900,
+			maxSteps: 20,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema({ type: "object", properties: {} }),
+						execute: async (): Promise<{ ok: boolean }> => {
+							calls.push(`call-${calls.length + 1}`);
+							await new Promise((resolve) => setTimeout(resolve, 400));
+							return { ok: true };
+						},
+					}),
+					{
+						gate: () =>
+							calls.length === 0
+								? { decision: "needs-approval" as const }
+								: { decision: "permit" as const },
+						effect: { idempotency: "none" },
+					},
+				),
+			},
+		});
+		const waiting = await runtime.generate("go");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected an approval wait");
+		}
+		await approvalStore.grant(waiting.approvalIds[0], userPrincipal("alice"));
+		await runtime.continueRun(waiting.approvalIds[0]).catch(() => undefined);
+
+		// The approved call, and nothing after it. Without the abort reaching the loop this runs to
+		// `maxSteps`, minting a downstream effect per step that the winner will mint again.
+		expect(calls).toHaveLength(1);
+	}, 20_000);
+});
+
+// The interaction between the approval lease and the EFFECT ledger, which is not obvious and is the
+// one place fencing can make things worse rather than better.
+//
+// A loses its approval lease while the approved tool is running. The tool finishes — the side effect
+// HAPPENED. If A now refuses to record the effect, B (which reclaimed the approval) finds no ledger
+// entry and runs the tool again. Fencing the continuation is right; fencing the record of work
+// already done is a duplicate side effect wearing a safety check.
+describe("a lost approval lease stops the run without unrecording the work", () => {
+	it("still completes the effect for a tool that already ran", async () => {
+		const db = memoryAdapter();
+		let toolRuns = 0;
+		const real = createApprovalStore(db);
+		const approvalStore = { ...real, heartbeat: async () => null };
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: db,
+			approvalStore,
+			approvalLeaseMs: 900,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				send_email: govern(
+					tool({
+						description: "Send an email.",
+						inputSchema: jsonSchema<{ to: string }>({
+							type: "object",
+							properties: { to: { type: "string" } },
+							required: ["to"],
+						}),
+						execute: async (): Promise<{ sent: boolean }> => {
+							toolRuns += 1;
+							await new Promise((resolve) => setTimeout(resolve, 800));
+							return { sent: true };
+						},
+					}),
+					{ gate: () => ({ decision: "needs-approval" }) },
+				),
+			},
+		});
+		const waiting = await runtime.generate("email alice@personal.com");
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected an approval wait");
+		}
+		const approvalId = waiting.approvalIds[0];
+		await approvalStore.grant(approvalId, userPrincipal("alice"));
+		await runtime.continueRun(approvalId).catch(() => undefined);
+
+		// The email was sent. The ledger has to say so, or the next runner sends it again.
+		expect(toolRuns).toBe(1);
+		expect(
+			(await runtime.effects?.get(`approval:${approvalId}:tool:c1`))?.status,
+		).toBe("completed");
+	}, 15_000);
 });

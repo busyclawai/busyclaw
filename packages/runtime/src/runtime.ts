@@ -17,6 +17,7 @@ import {
 	type Adapter,
 	APPROVED_BY_CONTEXT_KEY,
 	asPrincipal,
+	BusyclawError,
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
@@ -80,7 +81,12 @@ import {
 	type RuntimeRecordingContext,
 	runtimeRecordingContext,
 } from "./events";
-import { abortIfNeeded, createRunState, type RunState } from "./run-state";
+import {
+	ABORTED_DETAIL,
+	abortIfNeeded,
+	createRunState,
+	type RunState,
+} from "./run-state";
 import {
 	NESTED_APPROVAL_UNSUPPORTED,
 	NESTED_EFFECT_UNSUPPORTED,
@@ -1967,18 +1973,21 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		if (!claimed) return null;
 		// The keepalive covers everything this runner does while holding the lease — the approved tool
 		// is REPLAYED below, before the model loop, and that replay is exactly the slow part a fixed
-		// lease could not outlive. Its abort lands on the RUN's own signal, the one `abortIfNeeded`
-		// checks at each tool boundary, rather than on the vendor's: the AI SDK merges what it is
-		// handed into a real `AbortSignal` and cannot take a structural one, and a tool boundary is
-		// where stopping matters because that is where side effects happen.
+		// lease could not outlive.
+		//
+		// Its abort reaches the LOOP, not `state.abortSignal`, and the difference is the whole design.
+		// `state.abortSignal` is checked after a tool returns, immediately before the effect is
+		// recorded — so routing the lease through it made a lost lease throw away the ledger entry for
+		// a side effect that had ALREADY happened, and marked it `failed`. The next runner would then
+		// find a failed effect for work that succeeded. Fencing the CONTINUATION is right; fencing the
+		// record of work already done is a duplicate side effect wearing a safety check.
+		//
+		// `combinedAbortSignal` keeps both halves platform signals where it can, so the composed one
+		// still reaches the model vendor's fetch instead of only tripping a cooperative check.
 		let leaseLost = false;
 		const leaseAbort = createRuntimeAbortController();
 		const callerSignal = options?.abortSignal;
-		const resumeSignal = {
-			get aborted() {
-				return leaseAbort.signal.aborted || callerSignal?.aborted === true;
-			},
-		};
+		const loopSignal = combinedAbortSignal(callerSignal, leaseAbort.signal);
 		const supersededError = () =>
 			stateError("approval execution lost its lease mid-run", {
 				approvalId: id,
@@ -2000,7 +2009,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 
 			const state = createRunState();
 			state.runInstanceId = `approval:${id}`;
-			state.abortSignal = resumeSignal;
+			state.abortSignal = callerSignal;
 			state.runMode = options?.runMode ?? "autonomous";
 			state.callerPrincipal = executingPrincipal;
 			state.authority = authority;
@@ -2088,7 +2097,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			resumeState.approvedBy = record.decidedBy;
 			resumeState.recording = effectiveRecording;
 			resumeState.runId = effectiveRunId;
-			resumeState.abortSignal = resumeSignal;
+			resumeState.abortSignal = callerSignal;
 			// Post-resume steps only — the terminal event's usage is honest about this invocation.
 			const loopResult = await loop.generate({
 				model: selected.model,
@@ -2105,7 +2114,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				state: resumeState,
 				maxSteps,
 				now,
-				abortSignal: options?.abortSignal,
+				abortSignal: loopSignal,
 				deadlineAt: options?.deadlineAt,
 				persistYieldCheckpoint: yieldCheckpointPersister(resumeState),
 				emitEvent: (payload) => emitEvent(emitCtx, payload),
@@ -2164,7 +2173,14 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			// The abort surfaces as a generic "runtime aborted" from whichever boundary saw it first.
 			// Naming the real reason here is the difference between an operator reading "something
 			// stopped" and reading "another runner owns this now, retry after it lands".
-			if (leaseLost) throw supersededError();
+			//
+			// ONLY an abort is relabelled. Keying on `leaseLost` alone swallowed whatever else went
+			// wrong during a run that happened to lose its lease — a gate returning an invalid decision
+			// came back as "lost its lease", which sends the reader to the wrong problem entirely.
+			const aborted =
+				error instanceof BusyclawError &&
+				error.details?.[ABORTED_DETAIL] === true;
+			if (leaseLost && aborted) throw supersededError();
 			throw error;
 		} finally {
 			// Always. A leaked beat would keep renewing the lease of a runner that has gone, which is
