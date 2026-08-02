@@ -107,6 +107,7 @@ describe("channels ↔ busyclaw integration", () => {
 	it("wires both modes into createClaw and exposes the registrations api", async () => {
 		const db = memoryAdapter();
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("done"),
 			redaction: {
@@ -161,6 +162,7 @@ describe("channels ↔ busyclaw integration", () => {
 	it("keeps one principal's registration out of another's reach", async () => {
 		const db = memoryAdapter();
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("done"),
 			redaction: {
@@ -226,6 +228,7 @@ describe("channels ↔ busyclaw integration", () => {
 			},
 		} as typeof db;
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: counting,
 			model: textModel("done"),
 			redaction: {
@@ -269,6 +272,7 @@ describe("channels ↔ busyclaw integration", () => {
 	it("denies a boundary the deployment cannot prove membership of", async () => {
 		const db = memoryAdapter();
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("done"),
 			redaction: {
@@ -303,6 +307,7 @@ describe("channels ↔ busyclaw integration", () => {
 		};
 		const db = memoryAdapter();
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("done"),
 			redaction: {
@@ -412,6 +417,7 @@ describe("channels ↔ busyclaw integration", () => {
 		};
 		const db = memoryAdapter();
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("pong"),
 			redaction: {
@@ -461,6 +467,7 @@ describe("channels ↔ busyclaw integration", () => {
 		// construction succeeds: the app-bot token now resolves lazily (async, through the one-door
 		// reader available only at configure), so a missing token can no longer be caught at startup.
 		const claw = createClaw({
+			cronHandler: { secret: "drain" },
 			database: db,
 			model: textModel("pong"),
 			redaction: {

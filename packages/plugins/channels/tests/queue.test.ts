@@ -9,7 +9,12 @@
 import type { Adapter } from "@busyclaw/contracts";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it, vi } from "vitest";
-import { dispatchWebhook, handleInbound } from "../src/core/dispatch";
+import {
+	dispatchWebhook,
+	drainDeliveries,
+	drainOutbox,
+	handleInbound,
+} from "../src/core/dispatch";
 import {
 	channelDeliveryModels,
 	channelOutboxModels,
@@ -90,8 +95,9 @@ describe("a storage failure is not a duplicate", () => {
 		// A second arrival of the same delivery is a retry, not new work.
 		expect(await admitted(inbox)).toBe(false);
 
-		expect(await outbox.enqueue(key, reply)).toBe(true);
-		expect(await outbox.enqueue(key, reply)).toBe(false);
+		expect(await outbox.enqueue(key, reply)).not.toBeNull();
+		// …and a second reply for the same delivery is refused, so a re-run cannot enqueue one.
+		expect(await outbox.enqueue(key, reply)).toBeNull();
 	});
 });
 
@@ -139,7 +145,7 @@ describe("a delivery that already owes a reply is left to the drain", () => {
 				externalConversationId: "chat-1",
 				text: "the FIRST answer",
 			}),
-		).toBe(true);
+		).not.toBeNull();
 
 		const sent: string[] = [];
 		const relayed: string[] = [];
@@ -213,13 +219,16 @@ describe("the enqueue contract", () => {
 		const outbox: DeliveryOutbox = {
 			enqueue: async () => {
 				calls.push("enqueue");
-				return false;
+				return null;
 			},
+			claimPending: async () => [],
 			markSent: async () => {
 				calls.push("markSent");
+				return true;
 			},
 			markFailed: async () => {
 				calls.push("markFailed");
+				return "pending" as const;
 			},
 			pending: async () => [],
 		};
@@ -845,5 +854,235 @@ describe("a delivery survives the process that received it", () => {
 		expect(new Set(swept.map((row) => row.key.deliveryId))).toEqual(
 			new Set(["never-started", "abandoned"]),
 		);
+	});
+});
+
+// The workers. `drainOutbox` was previously reachable by NOBODY — not exported from the package, not
+// scheduled by either plugin mode, and named in exactly one test — while its own comment said a
+// deployment would call it "on whatever it already runs on a schedule". And it took no claim, so two
+// drains overlapping both sent the same reply: the queue built to make a lost reply impossible
+// produced duplicate ones instead.
+describe("the drains are reachable, and divide their work", () => {
+	const clock = (offsetMs = 0) => ({
+		now: () => new Date(Date.now() + offsetMs).toISOString(),
+	});
+
+	const channelThatRecords = (sent: string[]): Channel => ({
+		provider: "fake",
+		supports: { webhook: true, poll: false },
+		mode: "webhook",
+		verify: () => true,
+		parseInbound: () => [],
+		send: async ({ message }) => {
+			sent.push(message.text);
+		},
+	});
+
+	const resolveTo = (channel: Channel) => () => ({
+		channel,
+		endpoint: {
+			provider: "fake",
+			endpointKey: "acme-bot",
+			mode: "webhook" as const,
+		},
+	});
+
+	it("sends an owed reply exactly once across two concurrent drains", async () => {
+		const adapter = db();
+		const sent: string[] = [];
+		const channel = channelThatRecords(sent);
+
+		// A reply recorded by an attempt that died before sending it.
+		const writer = createDeliveryOutbox(adapter);
+		expect(await writer.enqueue(key, reply)).not.toBeNull();
+
+		// Two drains run at the same moment, both past the writer's lease.
+		const later = clock(5 * 60 * 1000);
+		const [a, b] = await Promise.all([
+			drainOutbox({
+				outbox: createDeliveryOutbox(adapter, later),
+				endpointFor: resolveTo(channel),
+			}),
+			drainOutbox({
+				outbox: createDeliveryOutbox(adapter, later),
+				endpointFor: resolveTo(channel),
+			}),
+		]);
+
+		// One of them sent it. Not both.
+		expect(a.sent + b.sent).toBe(1);
+		expect(sent).toEqual(["the answer"]);
+		expect(await createDeliveryOutbox(adapter).pending()).toEqual([]);
+	});
+
+	it("buries a reply whose endpoint is gone rather than retrying it forever", async () => {
+		const adapter = db();
+		const writer = createDeliveryOutbox(adapter);
+		await writer.enqueue(key, reply);
+
+		let landed = { sent: 0, failed: 0 };
+		for (let attempt = 1; attempt <= 5; attempt += 1) {
+			landed = await drainOutbox({
+				// Each drain runs a minute later than the last, past the backoff.
+				outbox: createDeliveryOutbox(adapter, clock(attempt * 5 * 60 * 1000)),
+				// The registration was revoked; the provider was removed from config.
+				endpointFor: () => undefined,
+				maxAttempts: 3,
+			});
+		}
+
+		expect(landed).toEqual({ sent: 0, failed: 0 });
+		// Dead: off the pending list, and no longer costing an api call per drain.
+		expect(await writer.pending()).toEqual([]);
+	});
+
+	it("runs a delivery its inline attempt never finished", async () => {
+		const adapter = db();
+		const inbox = createDeliveryInbox(adapter);
+		const sent: string[] = [];
+		const channel = channelThatRecords(sent);
+		const relayed: string[] = [];
+
+		// Admitted by a request that then died before it could claim.
+		await admitted(inbox);
+
+		const result = await drainDeliveries({
+			claw: {
+				api: {
+					bindConversation: async () => ({
+						claw: { id: "claw-1" },
+						thread: { id: "thread-1" },
+					}),
+					sendMessage: async (input: { message: string }) => {
+						relayed.push(input.message);
+						return { result: { status: "completed", text: "recovered" } };
+					},
+				},
+			},
+			inbox,
+			outbox: createDeliveryOutbox(adapter),
+			endpointFor: resolveTo(channel),
+		});
+
+		expect(result).toEqual({ processed: 1, failed: 0 });
+		// It ran the STORED message, and the reply went out.
+		expect(relayed).toEqual(["hello"]);
+		expect(sent).toEqual(["recovered"]);
+		// …and it is finished, so the next drain does nothing.
+		expect(await inbox.claimDue({ leaseMs: 1000 })).toEqual([]);
+	});
+
+	it("buries a delivery whose endpoint is gone", async () => {
+		const adapter = db();
+		const inbox = createDeliveryInbox(adapter);
+		await admitted(inbox);
+
+		const result = await drainDeliveries({
+			claw: {
+				api: {
+					bindConversation: async () => ({
+						claw: { id: "claw-1" },
+						thread: { id: "thread-1" },
+					}),
+					sendMessage: async () => ({
+						result: { status: "completed", text: "never" },
+					}),
+				},
+			},
+			inbox,
+			endpointFor: () => undefined,
+			maxAttempts: 1,
+		});
+
+		expect(result).toEqual({ processed: 0, failed: 1 });
+		// Buried on the first attempt at maxAttempts: 1 — not released back for every future drain to
+		// re-resolve and re-fail, and not dropped, which would erase a message somebody sent.
+		//
+		// Asserted from a LATER clock, past any lease this drain might still be holding: "nothing can
+		// claim it right now" is also true of a row simply left leased, so checking only that would pass
+		// whether the row was buried or merely abandoned.
+		const muchLater = createDeliveryInbox(adapter, {
+			now: () => new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+		});
+		expect(await muchLater.claimDue({ leaseMs: 1000 })).toEqual([]);
+		expect(await muchLater.claim(key, 1000)).toBeNull();
+	});
+
+	// One bad row must not stop the drain: the rest of the queue is other people's messages.
+	it("keeps draining past a delivery that throws", async () => {
+		const adapter = db();
+		const inbox = createDeliveryInbox(adapter);
+		const channel = channelThatRecords([]);
+
+		await inbox.admit(
+			{ provider: "fake", endpointKey: "acme-bot", deliveryId: "poison" },
+			{
+				payload: { externalConversationId: "chat-1", text: "poison" },
+				clawId: "claw-1",
+				threadId: "thread-1",
+			},
+		);
+		await inbox.admit(
+			{ provider: "fake", endpointKey: "acme-bot", deliveryId: "fine" },
+			{
+				payload: { externalConversationId: "chat-1", text: "fine" },
+				clawId: "claw-1",
+				threadId: "thread-1",
+			},
+		);
+
+		const result = await drainDeliveries({
+			claw: {
+				api: {
+					bindConversation: async () => ({
+						claw: { id: "claw-1" },
+						thread: { id: "thread-1" },
+					}),
+					sendMessage: async (input: { message: string }) => {
+						if (input.message === "poison") throw new Error("boom");
+						return { result: { status: "completed", text: "ok" } };
+					},
+				},
+			},
+			inbox,
+			endpointFor: resolveTo(channel),
+		});
+
+		expect(result).toEqual({ processed: 1, failed: 1 });
+	});
+});
+
+// The outbound fence, on its own. A drain that lost its lease mid-send must not mark the row
+// delivered: the attempt that now owns it is the one whose send counts, and marking over the top
+// would retire a reply that the current owner has not actually delivered.
+describe("a displaced outbox sender cannot mark it delivered", () => {
+	it("refuses markSent and markFailed from a lease that was re-taken", async () => {
+		const adapter = db();
+		const writer = createDeliveryOutbox(adapter);
+		const first = await writer.enqueue(key, reply);
+		if (!first) throw new Error("expected the enqueue to claim the row");
+
+		// The writer's lease lapses and a drain takes over.
+		const later = createDeliveryOutbox(adapter, {
+			now: () => new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+		});
+		const [taken] = await later.claimPending({ leaseMs: 60_000 });
+		if (!taken) throw new Error("expected the drain to take the reply");
+		expect(taken.leaseId).not.toBe(first.leaseId);
+
+		// The displaced writer comes back. Neither transition is its to make.
+		expect(await later.markSent(key, first.leaseId)).toBe(false);
+		expect(
+			await later.markFailed({
+				key,
+				leaseId: first.leaseId,
+				error: "the displaced attempt's error",
+				backoffMs: 1000,
+				maxAttempts: 5,
+			}),
+		).toBe("lost");
+
+		// …and the row is still owed, still the drain's to finish.
+		expect(await later.markSent(key, taken.leaseId)).toBe(true);
 	});
 });

@@ -15,7 +15,13 @@ import {
 	ENDPOINT_SEGMENT,
 	type EndpointContext,
 } from "../core/contracts";
-import { dispatchWebhook, pollEndpoint } from "../core/dispatch";
+import {
+	dispatchWebhook,
+	drainDeliveries,
+	drainOutbox,
+	pollEndpoint,
+	type ResolvedEndpoint,
+} from "../core/dispatch";
 import {
 	channelDeliveryModels,
 	channelOutboxModels,
@@ -72,13 +78,20 @@ type RegistrationsEnabled<Options> = Options extends {
 // The mode-specific return types (narrower than the wide ChannelsPlugin — they drive createClaw's folds):
 //   app-bot       → today's plugin (cron derived from the providers' poll flags), no api, no DB gate;
 //   registrations → the registrations api (required $Api, so InferPluginApi picks it up), $HasCron
-//                   "no-cron" (registrations never poll), $RequiresDatabase true (RequireDatabaseForPlugins).
+//                   "has-cron" (the queues need a scheduled drain — registrations still never POLL,
+//                   the cron is recovery), $RequiresDatabase true (RequireDatabaseForPlugins).
 type AppBotChannelsPlugin<HasCron extends BusyclawCronFlag> = BusyclawPlugin<
 	HasCron,
 	readonly string[]
 >;
+// Registrations contribute a cron task (the queues' drain), so `$HasCron` is "has-cron" and
+// createClaw's RequireCronHandler demands a cronHandler at COMPILE time. That is the point rather
+// than a side effect: an admitted delivery whose inline attempt died, and a reply whose send never
+// completed, are recoverable only by something that runs later. A registrations deployment with no
+// scheduled drain has a durable queue that never drains — which is exactly the shape of guarantee
+// this whole finding was about, one that quietly depends on configuration nobody was asked for.
 type RegistrationsChannelsPlugin = BusyclawPlugin<
-	"no-cron",
+	"has-cron",
 	readonly string[],
 	ChannelsApi
 > & {
@@ -424,14 +437,60 @@ function buildAppBotPlugin(
 			},
 		};
 
+		// An app bot resolves from code: the key IS the bot's name, so there is no row to look up.
+		const endpointFor = async (key: {
+			provider: string;
+			endpointKey: string;
+		}): Promise<ResolvedEndpoint | undefined> => {
+			const channel = byKey.get(`${key.provider}:${key.endpointKey}`);
+			if (!channel) return undefined;
+			return { channel, endpoint: await contextFor(channel) };
+		};
+
+		// The queues' recovery half. Both directions in ONE task: they fail together (a dead process
+		// leaves an unfinished turn AND an unsent reply), and a deployment running only one of them
+		// would recover half of an interrupted delivery.
+		const drainTask = {
+			id: "channels:drain",
+			handler: async ({ claw, limit }: { claw: unknown; limit?: number }) => {
+				if (!inbox || !outbox) return { status: "idle" as const };
+				const inbound = await drainDeliveries({
+					claw: requireClaw(claw),
+					inbox,
+					outbox,
+					endpointFor,
+					...(limit !== undefined ? { limit } : {}),
+				});
+				const outbound = await drainOutbox({
+					outbox,
+					endpointFor,
+					...(limit !== undefined ? { limit } : {}),
+				});
+				const processed = inbound.processed + outbound.sent;
+				return {
+					processed,
+					status: processed > 0 ? ("processed" as const) : ("idle" as const),
+					data: { inbound, outbound },
+				};
+			},
+		};
+
 		return {
 			routes: hasWebhook ? webhookRoutes : [],
-			cron: pollTargets.length > 0 ? [pollTask] : [],
+			// The drain runs wherever there is a database to drain — a no-database app bot has no queue,
+			// so scheduling one would be a task that can only ever report idle.
+			cron: [
+				...(pollTargets.length > 0 ? [pollTask] : []),
+				...(context.adapter ? [drainTask] : []),
+			],
 		};
 	};
 
 	return {
 		id: options.id ?? "busyclaw.channels",
+		// A poll target contributes the poll cron; the queues contribute the drain. The drain only exists
+		// when there is a database, which is not knowable here — so this stays keyed on polling, and an
+		// app bot whose only cron is the drain falls to the runtime cron check rather than the compile one.
 		$HasCron: pollTargets.length > 0 ? "has-cron" : "no-cron",
 		// The endpoint state PLUS the delivery inbox — the claim needs a table wherever a webhook lands.
 		schema: {

@@ -299,6 +299,10 @@ export type DeliveryKey = {
 
 export type DeliveryInboxOptions = { now?: () => string };
 
+/** How long the writer of a reply holds it before a drain may take over — long enough to cover the
+ *  send it is about to make, short enough that a crash mid-send is recoverable within a drain or two. */
+const DEFAULT_OUTBOX_LEASE_MS = 60 * 1000;
+
 /** A fresh lease id — the same 16 random bytes the approval lease mints, for the same purpose. */
 const newLeaseId = (): string => bytesToHex(randomBytes(16));
 
@@ -573,7 +577,7 @@ export function createDeliveryInbox(
 // succeeded and the mark did not — which is the right side to fail on: a repeated message is visible
 // and recoverable, a lost one is neither.
 
-export const channelOutboxStatusValues = ["pending", "sent"] as const;
+export const channelOutboxStatusValues = ["pending", "sent", "dead"] as const;
 export type ChannelOutboxStatus = (typeof channelOutboxStatusValues)[number];
 
 export const channelOutboxFields = {
@@ -591,6 +595,7 @@ export const channelOutboxFields = {
 	status: field.enum(channelOutboxStatusValues, {
 		required: true,
 		index: true,
+		doc: "`pending` is owed, `sent` is delivered, `dead` has failed past its cap. A `pending` row under a live lease is being sent right now; under a lapsed one, by somebody who died mid-send.",
 	}),
 	externalConversationId: field.string({ required: true, immutable: true }),
 	/** The reply text. Already redacted — it is the runtime's own output, tokenized on the way out. */
@@ -601,6 +606,18 @@ export const channelOutboxFields = {
 	 *  silently retried forever. */
 	attempts: field.number({ required: true }),
 	lastError: field.string({ pii: "redacted" }),
+	/**
+	 * WHICH attempt is sending this reply — the same fence the inbound side carries, for a sharper
+	 * reason: the drain had none at all, so two drains both read the row as pending and both sent it.
+	 * The queue that existed to make a lost reply impossible produced duplicate ones instead.
+	 */
+	leaseId: field.string({
+		doc: "Identifies the attempt sending this reply. Only the current lease may mark it sent or failed, so two drains cannot both deliver it.",
+	}),
+	leaseExpiresAt: field.string({ index: true }),
+	/** When a failed send becomes eligible again. Absent ⇒ now. Without it every drain re-sent every
+	 *  failing row immediately, so a provider outage turned into a tight retry loop against it. */
+	nextAttemptAt: field.string({ index: true }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
@@ -624,15 +641,48 @@ export type OutboundRecord = {
 	replyContext?: JsonValue;
 };
 
+/** A reply the drain took responsibility for, with the proof it holds it. */
+export type ClaimedReply = OutboundRecord &
+	DeliveryKey & { leaseId: string; attempts: number };
+
 export type DeliveryOutbox = {
-	/** Record a reply as pending BEFORE it is sent. Returns false when this delivery already has one —
-	 *  a re-run cannot enqueue a second. */
-	enqueue: (key: DeliveryKey, reply: OutboundRecord) => Promise<boolean>;
-	/** Mark it delivered. */
-	markSent: (key: DeliveryKey) => Promise<void>;
-	/** Record a failed attempt, leaving it pending for the next drain. */
-	markFailed: (key: DeliveryKey, error: string) => Promise<void>;
-	/** Every reply still owed, oldest first. */
+	/**
+	 * Record a reply as pending BEFORE it is sent, and TAKE it in the same step.
+	 *
+	 * A claim ⇒ newly recorded and yours to send. `null` ⇒ this delivery already has a reply, so a
+	 * re-run cannot enqueue a second and must not send one either.
+	 *
+	 * The claim comes back with the row because the writer is always its first sender. Without it there
+	 * was a window where a concurrent drain could pick up the row this call had just written and send it
+	 * too — the queue built to stop a reply being lost producing a duplicate instead.
+	 */
+	enqueue: (
+		key: DeliveryKey,
+		reply: OutboundRecord,
+	) => Promise<{ leaseId: string } | null>;
+	/** Take whatever replies are owed and due — the drain's entry point. Fenced, so two drains running
+	 *  at once divide the work rather than duplicating it. */
+	claimPending: (input: {
+		leaseMs: number;
+		limit?: number;
+	}) => Promise<ClaimedReply[]>;
+	/** Mark it delivered. `false` ⇒ the lease was re-taken; this attempt does not get to say it sent. */
+	markSent: (key: DeliveryKey, leaseId: string) => Promise<boolean>;
+	/**
+	 * Record a failed send, back it off, and bury it past the cap.
+	 *
+	 * A reply that cannot be delivered — a deleted chat, a revoked bot — used to be retried by every
+	 * drain forever. Now it becomes `dead`: still on the record, no longer costing an api call a minute.
+	 */
+	markFailed: (input: {
+		key: DeliveryKey;
+		leaseId: string;
+		error: string;
+		backoffMs: number;
+		maxAttempts: number;
+	}) => Promise<"pending" | "dead" | "lost">;
+	/** Every reply still owed, oldest first — a READ, for tests and operators. The drain uses
+	 *  `claimPending`; reading this and acting on it is the race the lease exists to close. */
 	pending: (
 		limit?: number,
 	) => Promise<(OutboundRecord & DeliveryKey & { attempts: number })[]>;
@@ -647,13 +697,17 @@ export function createDeliveryOutbox(
 	const db = entityView(adapter, {
 		channel_outbox: { fields: channelOutboxFields },
 	});
-	const rowWhere = (key: DeliveryKey) => [
+	const leaseUntil = (leaseMs: number) =>
+		new Date(Date.parse(now()) + leaseMs).toISOString();
+	const rowWhere = (key: DeliveryKey, leaseId: string) => [
 		{ field: "id" as const, value: deliveryRowId(key) },
+		{ field: "leaseId" as const, value: leaseId, connector: "AND" as const },
 	];
 
 	return {
 		async enqueue(key, reply) {
 			const stamp = now();
+			const leaseId = newLeaseId();
 			try {
 				await db.create({
 					model: "channel_outbox",
@@ -667,43 +721,116 @@ export function createDeliveryOutbox(
 							? { replyContext: reply.replyContext }
 							: {}),
 						attempts: 0,
+						// Written HELD. The writer is always this reply's first sender, and a row that
+						// existed unheld — even briefly — is a row a concurrent drain could pick up and
+						// send alongside the caller about to send it.
+						leaseId,
+						leaseExpiresAt: leaseUntil(DEFAULT_OUTBOX_LEASE_MS),
 						createdAt: stamp,
 						updatedAt: stamp,
 					},
 				});
-				return true;
+				return { leaseId };
 			} catch (error) {
 				// A storage failure is NOT a duplicate. Reporting it as one told the caller "this delivery
 				// already owes a reply", so the caller skipped recording the answer it was holding and the
 				// reply was lost with nothing left to recover it from.
 				if (!isConflict(error)) throw error;
 				// One reply per delivery — the same key already owes or has sent one.
-				return false;
+				return null;
 			}
 		},
 
-		async markSent(key) {
-			await db.update({
+		async claimPending({ leaseMs, limit }) {
+			const candidates = await db.findMany({
 				model: "channel_outbox",
-				where: rowWhere(key),
-				update: { status: "sent", updatedAt: now() },
+				where: [{ field: "status", value: "pending" }],
+				sortBy: { field: "createdAt", direction: "asc" },
+				// Read wider than the limit: a candidate may be held or still backing off, and those are
+				// filtered below rather than by the query.
+				...(limit !== undefined ? { limit: limit * 4 } : {}),
 			});
+			const taken: ClaimedReply[] = [];
+			for (const row of candidates) {
+				if (limit !== undefined && taken.length >= limit) break;
+				// Somebody is sending it right now, or it is not due yet. Neither is this drain's work.
+				if (row.leaseExpiresAt != null && row.leaseExpiresAt >= now()) continue;
+				if (row.nextAttemptAt != null && row.nextAttemptAt > now()) continue;
+				const leaseId = newLeaseId();
+				// The where pins what the read saw, so two drains racing the same row cannot both take it:
+				// the loser matches nothing and moves on to the next.
+				const held = await db.update({
+					model: "channel_outbox",
+					where: [
+						{ field: "id", value: row.id },
+						{ field: "status", value: "pending", connector: "AND" },
+						...leaseFence(row.leaseId, row.leaseExpiresAt),
+					],
+					update: {
+						leaseId,
+						leaseExpiresAt: leaseUntil(leaseMs),
+						updatedAt: now(),
+					},
+				});
+				if (held === null) continue;
+				taken.push({
+					provider: row.provider,
+					endpointKey: row.endpointKey,
+					deliveryId: row.deliveryId,
+					externalConversationId: row.externalConversationId,
+					text: row.text,
+					...(row.replyContext !== undefined
+						? { replyContext: row.replyContext }
+						: {}),
+					attempts: row.attempts,
+					leaseId,
+				});
+			}
+			return taken;
 		},
 
-		async markFailed(key, error) {
-			const existing = await db.findOne({
+		async markSent(key, leaseId) {
+			const marked = await db.update({
 				model: "channel_outbox",
-				where: rowWhere(key),
-			});
-			await db.update({
-				model: "channel_outbox",
-				where: rowWhere(key),
+				where: rowWhere(key, leaseId),
 				update: {
-					attempts: (existing?.attempts ?? 0) + 1,
-					lastError: error,
+					status: "sent",
+					leaseExpiresAt: null,
+					nextAttemptAt: null,
 					updatedAt: now(),
 				},
 			});
+			return marked !== null;
+		},
+
+		async markFailed({ key, leaseId, error, backoffMs, maxAttempts }) {
+			const held = await db.findOne({
+				model: "channel_outbox",
+				where: rowWhere(key, leaseId),
+			});
+			// Displaced: the row is somebody else's send now, and this failure is not a fact about it.
+			// Recording it would spend one of THEIR retries on OUR error — the same read-then-increment
+			// race the counter had when two drains could both read `attempts` and both write the same +1.
+			if (held === null) return "lost";
+			const attempts = held.attempts + 1;
+			const buried = attempts >= maxAttempts;
+			const landed = await db.update({
+				model: "channel_outbox",
+				where: rowWhere(key, leaseId),
+				update: {
+					status: buried ? "dead" : "pending",
+					attempts,
+					lastError: error,
+					// Released, so the next drain can see it as owed rather than as somebody's live send.
+					leaseExpiresAt: null,
+					nextAttemptAt: buried
+						? null
+						: new Date(Date.parse(now()) + backoffMs).toISOString(),
+					updatedAt: now(),
+				},
+			});
+			if (landed === null) return "lost";
+			return buried ? "dead" : "pending";
 		},
 
 		async pending(limit) {

@@ -1,6 +1,7 @@
 // Type tests (vitest typecheck mode). Prove that channels() derives its cron requirement at compile
-// time — app-bot mode from the providers' poll flags, and registrations mode never (webhook-only, so it
-// contributes no cron). A passing run means each @ts-expect-error errored.
+// time — app-bot mode from the providers' poll flags, and registrations mode always (the delivery
+// queues need a scheduled drain, even though registrations never poll). A passing run means every
+// expect-error directive below actually errored.
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { createClaw, type RuntimeConfig } from "busyclaw";
 import { describe, test } from "vitest";
@@ -54,15 +55,40 @@ describe("channels cron-handler requirement", () => {
 	});
 });
 
-describe("channels registrations need no cron", () => {
-	test("registrations are webhook-only — no cronHandler required (a database is)", () => {
+// Registrations are still WEBHOOK-ONLY — they never poll. What they now contribute is the queues'
+// drain: an admitted delivery whose inline attempt died, and a reply whose send never completed, are
+// recoverable only by something that runs later. A registrations deployment with no scheduled drain
+// has a durable queue that never drains, which is the same class of quietly-configuration-dependent
+// guarantee the durability work existed to remove — so it is a compile error, not a runbook note.
+describe("channels registrations require a cron drain", () => {
+	test("registrations require cronHandler, statically", () => {
+		// @ts-expect-error — the delivery queues contribute a drain, so cronHandler is required
 		createClaw({
 			database: memoryAdapter(),
 			model,
 			plugins: [channels([telegram()], { registrations: { enabled: true } })],
 		});
-		// an app bot alongside a BYO registration set still needs no cronHandler
+		// with a cronHandler it type-checks
 		createClaw({
+			cronHandler: { secret: "s" },
+			database: memoryAdapter(),
+			model,
+			plugins: [channels([telegram()], { registrations: { enabled: true } })],
+		});
+	});
+
+	test("an app bot alongside a BYO registration set inherits the requirement", () => {
+		// @ts-expect-error — the registration set's drain requires it even though the app bot is webhook-only
+		createClaw({
+			database: memoryAdapter(),
+			model,
+			plugins: [
+				channels([telegram()]),
+				channels([telegram()], { registrations: { enabled: true } }),
+			],
+		});
+		createClaw({
+			cronHandler: { secret: "s" },
 			database: memoryAdapter(),
 			model,
 			plugins: [

@@ -24,7 +24,12 @@ import {
 	ENDPOINT_SEGMENT,
 	type EndpointContext,
 } from "../core/contracts";
-import { dispatchWebhook } from "../core/dispatch";
+import {
+	dispatchWebhook,
+	drainDeliveries,
+	drainOutbox,
+	type ResolvedEndpoint,
+} from "../core/dispatch";
 import { endpointId } from "../core/id";
 import {
 	channelDeliveryModels,
@@ -133,6 +138,10 @@ export function assertUniqueProviders(channels: readonly Channel[]): void {
 // so hosts hand this one URL (plus a per-registration secret_token) to setWebhook.
 const WEBHOOK_PATH = "/channels/:provider/registrations/webhook";
 
+/** The namespace registrations bind under, so their conversation bindings never collide with an app
+ *  bot of the same name. Also what a stored delivery key is stripped of to find its row again. */
+const BINDING_PREFIX = "registrations/";
+
 // Boundary input for the by-id read — the row id, the base api's idInput shape.
 const registrationIdInput = type({ id: "string" }).configure({
 	busyclaw: {
@@ -225,7 +234,7 @@ export function buildRegistrationsPlugin(
 	// registration registered as "sales" never share rows (and a registration can never satisfy a
 	// provider's code-key comparison, so it can never be served with the app bot's credentials).
 	const bindingKey = (row: ChannelRegistrationRecord): string =>
-		`registrations/${row.endpointKey}`;
+		`${BINDING_PREFIX}${row.endpointKey}`;
 
 	// A registration's normalized endpoint view. Registrations are webhook-only, so `mode` is the
 	// constant "webhook" (the stored column is gone); credentials and bind scope come from the row.
@@ -421,8 +430,58 @@ export function buildRegistrationsPlugin(
 			},
 		};
 
+		// Resolve a stored row back to the transport and endpoint it belongs to. Registrations bind under
+		// a namespaced key, so the stored `registrations/<name>` is stripped back to the row's own key.
+		const endpointFor = async (key: {
+			provider: string;
+			endpointKey: string;
+		}): Promise<ResolvedEndpoint | undefined> => {
+			const channel = byProvider.get(key.provider);
+			if (!channel) return undefined;
+			const bare = key.endpointKey.startsWith(BINDING_PREFIX)
+				? key.endpointKey.slice(BINDING_PREFIX.length)
+				: key.endpointKey;
+			const row = await requireStore().getByKey({
+				provider: key.provider,
+				endpointKey: bare,
+			});
+			// Revoked reads the same as absent — a delivery to a bot somebody took away is not runnable,
+			// and the drain buries it rather than retrying it forever.
+			if (row?.status !== "active") return undefined;
+			return { channel, endpoint: contextFor(row) };
+		};
+
+		// The queues' recovery half, as scheduled work. Deliberately ONE task covering both directions:
+		// they fail together (a dead process leaves an unfinished turn AND an unsent reply) and a
+		// deployment that ran only one of them would recover half of an interrupted delivery.
+		const drainTask = {
+			id: "channels:registrations:drain",
+			handler: async ({ claw, limit }: { claw: unknown; limit?: number }) => {
+				if (!inbox || !outbox) return { status: "idle" as const };
+				const inbound = await drainDeliveries({
+					claw: requireClaw(claw),
+					inbox,
+					outbox,
+					endpointFor,
+					...(limit !== undefined ? { limit } : {}),
+				});
+				const outbound = await drainOutbox({
+					outbox,
+					endpointFor,
+					...(limit !== undefined ? { limit } : {}),
+				});
+				const processed = inbound.processed + outbound.sent;
+				return {
+					processed,
+					status: processed > 0 ? ("processed" as const) : ("idle" as const),
+					data: { inbound, outbound },
+				};
+			},
+		};
+
 		return {
 			routes: [webhookRoute],
+			cron: [drainTask],
 			// The management api is a declared endpoints() namespace nested under the `channels` key —
 			// the adapter mounts it at /channels/registrations/<method> (register/revoke POST by the name
 			// rule, get/get-by-key/list GET), while `claw.api.channels.registrations.*` stays these
@@ -495,7 +554,9 @@ export function buildRegistrationsPlugin(
 
 	return {
 		id: options.id ?? "busyclaw.channels.registrations",
-		$HasCron: "no-cron",
+		// The queues need a scheduled drain: an admitted delivery whose inline attempt died, and a reply
+		// whose send never completed, are both recoverable only by something that runs later.
+		$HasCron: "has-cron",
 		$RequiresDatabase: true,
 		schema: {
 			...channelRegistrationsModels,

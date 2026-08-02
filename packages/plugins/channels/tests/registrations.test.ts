@@ -571,19 +571,24 @@ describe("channels() registrations mode", () => {
 		]);
 	});
 
-	it("mounts one shared registrations webhook route (no key in path) and no cron", () => {
+	it("mounts one shared registrations webhook route (no key in path) and a drain cron", () => {
 		const base = channels([fakeChannel()], {
 			registrations: { enabled: true },
 		});
 		// The static markers ride the plugin object; the webhook route is the RUNTIME half (configure).
-		expect(base.$HasCron).toBe("no-cron");
+		// Registrations never POLL — but they do contribute the delivery queues' drain, and a durable
+		// queue nothing drains is the guarantee-by-configuration this whole design removes.
+		expect(base.$HasCron).toBe("has-cron");
 		expect(base.$RequiresDatabase).toBe(true);
 		const runtime = configured(base);
 		expect(runtime.routes?.map((route) => route.path)).toEqual([
 			"/channels/:provider/registrations/webhook",
 		]);
-		// Registrations never poll — the runtime half contributes no cron.
-		expect(runtime.cron ?? []).toEqual([]);
+		// Registrations never poll, so there is no poll task — but the queues' drain is scheduled work,
+		// and it is the only thing that finishes a delivery whose inline attempt died.
+		expect(runtime.cron?.map((task) => task.id)).toEqual([
+			"channels:registrations:drain",
+		]);
 	});
 
 	it("declares no app-bot token secret in registrations mode — tokens live in the rows", () => {
@@ -963,14 +968,25 @@ describe("a reply is durable before it is sent", () => {
 			{ deliveryId: "u-1", text: "echo:u-1", attempts: 1 },
 		]);
 
+		// A failed send BACKS OFF: the drain that runs a second later must not hammer a provider that
+		// just refused it. So the recovery is the drain that runs LATER, which is what the schedule is.
+		const later = createDeliveryOutbox(adapter, {
+			now: () => new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+		});
+
 		// The recovery: whatever the deployment runs on a schedule finishes what the crash left owed.
 		const result = await drainOutbox({
-			outbox,
-			channels: new Map([["fake", channel]]),
+			outbox: later,
+			// The resolver now hands back the transport WITH the endpoint: the drain has to know which
+			// channel to send through, and looking it up from a separate map meant two sources that could
+			// disagree about which provider a stored row belonged to.
 			endpointFor: () => ({
-				provider: "fake",
-				endpointKey: "registrations/acme-bot",
-				mode: "webhook" as const,
+				channel,
+				endpoint: {
+					provider: "fake",
+					endpointKey: "registrations/acme-bot",
+					mode: "webhook" as const,
+				},
 			}),
 		});
 		expect(result).toEqual({ sent: 1, failed: 0 });

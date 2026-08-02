@@ -131,18 +131,29 @@ async function deliverReply(input: {
 	// re-run this sent the text THIS attempt produced while `markSent` marked the STORED one delivered:
 	// one message recorded and never sent, another sent and never recorded. A delivery that already
 	// owes a reply belongs to the drain, which sends what was recorded.
-	if (!(await input.outbox.enqueue(key, reply))) return;
+	//
+	// The enqueue also HANDS BACK the lease, because the writer is always this reply's first sender.
+	// Without holding one, a drain running concurrently could take the row this call just wrote and
+	// send it alongside us.
+	const held = await input.outbox.enqueue(key, reply);
+	if (held === null) return;
 	try {
 		await channel.send({ endpoint, message: reply });
 	} catch (error) {
-		// Left PENDING on purpose — the drain owns the retry, and a send that failed here is exactly
-		// what the outbox exists to carry.
-		await input.outbox.markFailed(key, errorMessage(error));
+		// Left PENDING on purpose, with a backoff — the drain owns the retry, and a send that failed
+		// here is exactly what the outbox exists to carry.
+		await input.outbox.markFailed({
+			key,
+			leaseId: held.leaseId,
+			error: errorMessage(error),
+			backoffMs: OUTBOX_BACKOFF_MS,
+			maxAttempts: MAX_OUTBOX_ATTEMPTS,
+		});
 		throw error;
 	}
 	// A crash between the send and this mark re-sends later: a duplicate message is visible and
 	// recoverable, a lost one is neither, so that is the side to fail on.
-	await input.outbox.markSent(key);
+	await input.outbox.markSent(key, held.leaseId);
 }
 
 /**
@@ -208,6 +219,11 @@ const MAX_DELIVERY_ATTEMPTS = 5;
 
 /** How long a failed delivery waits before it is eligible again. */
 const DELIVERY_BACKOFF_MS = 60 * 1000;
+
+/** The same two bounds for the outbound half — a reply that cannot be delivered is buried rather
+ *  than retried by every drain forever. */
+const MAX_OUTBOX_ATTEMPTS = 5;
+const OUTBOX_BACKOFF_MS = 60 * 1000;
 
 /**
  * Tokenize plugin-held data — the plugin's own `redact` door, threaded from configure.
@@ -582,39 +598,138 @@ export async function pollEndpoint(input: {
 	}
 }
 
+/** Where a stored delivery or reply belongs: the transport, and the endpoint context to use with it. */
+export type ResolvedEndpoint = { channel: Channel; endpoint: EndpointContext };
+
+/** Resolve the endpoint a stored row belongs to. `undefined` ⇒ it cannot be resolved right now. */
+export type EndpointResolver = (
+	key: DeliveryKey,
+) => Promise<ResolvedEndpoint | undefined> | ResolvedEndpoint | undefined;
+
 /**
- * Finish the replies a crash left owed — the recovery half of the outbox.
+ * Run the deliveries nobody is running — the recovery half of the inbound queue.
+ *
+ * The inline attempt on the request path covers the common case, and this covers every way that
+ * attempt can fail to finish: the process died mid-turn, the model was down, the row was admitted by
+ * a request that never got to claim it. Without this a delivery could be perfectly stored and never
+ * run, which is a quieter failure than losing it and just as final.
+ *
+ * Both due shapes are swept — pending work past its backoff, and processing rows whose lease has
+ * lapsed — and each runs through the SAME `runDelivery` the live path uses, because a recovery path
+ * that does not share the live path's code is a recovery path nobody exercises.
+ */
+export async function drainDeliveries(input: {
+	claw: ClawLike;
+	inbox: DeliveryInbox;
+	outbox?: DeliveryOutbox;
+	endpointFor: EndpointResolver;
+	limit?: number;
+	leaseMs?: number;
+	backoffMs?: number;
+	maxAttempts?: number;
+}): Promise<{ processed: number; failed: number }> {
+	const leaseMs = input.leaseMs ?? DELIVERY_LEASE_MS;
+	const maxAttempts = input.maxAttempts ?? MAX_DELIVERY_ATTEMPTS;
+	const backoffMs = input.backoffMs ?? DELIVERY_BACKOFF_MS;
+	const due = await input.inbox.claimDue({
+		leaseMs,
+		...(input.limit !== undefined ? { limit: input.limit } : {}),
+	});
+	let processed = 0;
+	let failed = 0;
+	for (const claimed of due) {
+		const resolved = await input.endpointFor(claimed.key);
+		if (resolved === undefined) {
+			// A revoked registration, a provider no longer configured: this delivery cannot be run, now
+			// or later. Recorded as a failed attempt rather than released, so it backs off and is
+			// eventually buried — releasing it would hand the same unrunnable row to every future drain,
+			// forever, and dropping it would erase a message somebody sent.
+			await input.inbox.fail({
+				key: claimed.key,
+				leaseId: claimed.leaseId,
+				error: `no endpoint for ${claimed.key.provider}/${claimed.key.endpointKey}`,
+				backoffMs,
+				maxAttempts,
+			});
+			failed += 1;
+			continue;
+		}
+		try {
+			const ran = await runDelivery({
+				claw: input.claw,
+				channel: resolved.channel,
+				endpoint: resolved.endpoint,
+				inbox: input.inbox,
+				key: claimed.key,
+				leaseId: claimed.leaseId,
+				work: claimed.work,
+				leaseMs,
+				backoffMs,
+				maxAttempts,
+				...(input.outbox !== undefined ? { outbox: input.outbox } : {}),
+			});
+			if (ran) processed += 1;
+			else failed += 1;
+		} catch {
+			// `runDelivery` has already recorded the attempt and set the backoff; it rethrows so a live
+			// request surfaces the error. A drain must not stop on one bad row — the rest of the queue is
+			// other people's messages.
+			failed += 1;
+		}
+	}
+	return { processed, failed };
+}
+
+/**
+ * Finish the replies a crash left owed — the recovery half of the outbound queue.
  *
  * A reply is written before it is sent and marked after, so anything still `pending` is a send that
  * either never happened or never got acknowledged. Both are re-sent: a duplicate message is visible
  * and recoverable, a lost one is neither.
  *
- * Called by whatever the deployment already runs on a schedule. Deliberately not wired to a cron here —
- * the app-bot mode has one and registrations mode does not, and a drain that only ran where a poll
- * happened to exist would be a guarantee that quietly depends on configuration.
+ * Now CLAIMED rather than merely read. The old shape listed pending rows and sent them, so two drains
+ * overlapping — or one drain overlapping the request that had just enqueued — both sent the same
+ * reply. The queue built to make a lost reply impossible produced duplicate ones instead.
  */
 export async function drainOutbox(input: {
 	outbox: DeliveryOutbox;
-	/** The transports to send through, by provider. */
-	channels: ReadonlyMap<string, Channel>;
-	/** Resolve the endpoint a pending reply belongs to; absent ⇒ that row is skipped, not dropped. */
-	endpointFor: (
-		key: DeliveryKey,
-	) => Promise<EndpointContext | undefined> | EndpointContext | undefined;
+	endpointFor: EndpointResolver;
 	limit?: number;
+	leaseMs?: number;
+	backoffMs?: number;
+	maxAttempts?: number;
 }): Promise<{ sent: number; failed: number }> {
-	const owed = await input.outbox.pending(input.limit);
+	const owed = await input.outbox.claimPending({
+		leaseMs: input.leaseMs ?? DELIVERY_LEASE_MS,
+		...(input.limit !== undefined ? { limit: input.limit } : {}),
+	});
 	let sent = 0;
 	let failed = 0;
 	for (const row of owed) {
-		const channel = input.channels.get(row.provider);
-		const endpoint = await input.endpointFor(row);
-		// A provider that is no longer configured, or an endpoint that has been revoked: leave the row
-		// alone. Dropping it would erase the evidence that somebody is still owed an answer.
-		if (!channel || !endpoint) continue;
+		const key = {
+			provider: row.provider,
+			endpointKey: row.endpointKey,
+			deliveryId: row.deliveryId,
+		};
+		const resolved = await input.endpointFor(key);
+		if (resolved === undefined) {
+			// A provider that is no longer configured, or an endpoint that has been revoked. Recorded as
+			// a failure so it backs off and is eventually buried, rather than left for every future drain
+			// to re-resolve and re-fail. Dropping it would erase the evidence that somebody is still owed
+			// an answer.
+			await input.outbox.markFailed({
+				key,
+				leaseId: row.leaseId,
+				error: `no endpoint for ${row.provider}/${row.endpointKey}`,
+				backoffMs: input.backoffMs ?? OUTBOX_BACKOFF_MS,
+				maxAttempts: input.maxAttempts ?? MAX_OUTBOX_ATTEMPTS,
+			});
+			failed += 1;
+			continue;
+		}
 		try {
-			await channel.send({
-				endpoint,
+			await resolved.channel.send({
+				endpoint: resolved.endpoint,
 				message: {
 					externalConversationId: row.externalConversationId,
 					text: row.text,
@@ -623,13 +738,17 @@ export async function drainOutbox(input: {
 						: {}),
 				},
 			});
-			await input.outbox.markSent(row);
-			sent += 1;
+			// Only the lease that sent it may say so.
+			if (await input.outbox.markSent(key, row.leaseId)) sent += 1;
+			else failed += 1;
 		} catch (error) {
-			await input.outbox.markFailed(
-				row,
-				error instanceof Error ? error.message : String(error),
-			);
+			await input.outbox.markFailed({
+				key,
+				leaseId: row.leaseId,
+				error: errorMessage(error),
+				backoffMs: input.backoffMs ?? OUTBOX_BACKOFF_MS,
+				maxAttempts: input.maxAttempts ?? MAX_OUTBOX_ATTEMPTS,
+			});
 			failed += 1;
 		}
 	}

@@ -39,7 +39,29 @@ export {
 export {
 	type ChannelDispatchResult,
 	dispatchWebhook,
+	// The queues' recovery half. Both plugin modes schedule these as a cron task, so a host does not
+	// have to — they are exported because a deployment with its own scheduler (a worker dyno, a queue
+	// runner, a platform cron that does not POST /cron) needs to be able to call them directly.
+	//
+	// `drainOutbox` in particular was previously reachable by nobody: not exported, not scheduled, and
+	// named in exactly one test. The comment above it said a deployment would call it "on whatever it
+	// already runs on a schedule", which no deployment could.
+	drainDeliveries,
+	drainOutbox,
+	type EndpointResolver,
 	handleInbound,
 	pollEndpoint,
+	type ResolvedEndpoint,
+	runDelivery,
 } from "./core/dispatch";
 export { endpointId } from "./core/id";
+export type {
+	ClaimedDelivery,
+	ClaimedReply,
+	DeliveryClaim,
+	DeliveryInbox,
+	DeliveryKey,
+	DeliveryOutbox,
+	DeliveryWork,
+	OutboundRecord,
+} from "./core/inbox";

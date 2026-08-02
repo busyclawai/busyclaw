@@ -20,8 +20,12 @@ describe("createClaw channels registrations database requirement", () => {
 		});
 	});
 
-	test("registrations enabled WITH a database type-checks", () => {
+	// A database is necessary but no longer sufficient: registrations also contribute the queues'
+	// drain, so the cron fold applies too. Both requirements are exercised here so a change to either
+	// one shows up as a failure in the test that owns it, rather than as a surprise in the other.
+	test("registrations enabled WITH a database and a cron handler type-checks", () => {
 		createClaw({
+			cronHandler: { secret: "s" },
 			model,
 			database: memoryAdapter(),
 			plugins: [channels([telegram()], { registrations: { enabled: true } })],
