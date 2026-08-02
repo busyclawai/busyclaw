@@ -186,6 +186,7 @@ function webhookRequest(input: {
 describe("createChannelRegistrationsStore", () => {
 	it("registers with a key-derived id, rotates in place, and revokes softly", async () => {
 		const store = createChannelRegistrationsStore(db(), { now });
+		// `register` answers `null` when the key is taken — create-only since R-H09.
 		const first = await store.register({
 			provider: "telegram",
 			endpointKey: "acme-bot",
@@ -195,6 +196,7 @@ describe("createChannelRegistrationsStore", () => {
 			scope: "organization",
 			scopeId: "org-acme",
 		});
+		if (!first) throw new Error("expected the create to win");
 		expect(first).toMatchObject({
 			id: endpointId({ provider: "telegram", endpointKey: "acme-bot" }),
 			status: "active",
@@ -204,15 +206,27 @@ describe("createChannelRegistrationsStore", () => {
 			scopeId: "org-acme",
 		});
 
-		// re-registration is the trust grant: rotate credentials + routing secret, stay one row — but the
+		// Rotation is the trust grant: credentials + routing secret change, one row stays — but the
 		// registrant is immutable, so a manager rotating the token does not become the owner.
-		const rotated = await store.register({
-			provider: "telegram",
-			endpointKey: "acme-bot",
-			secret: "token-2",
-			webhookSecret: "hook-2",
-			createdBy: MALLORY,
-		});
+		//
+		// Through `rotate`, not `register`. `register` is create-only now (R-H09): it used to take over
+		// an existing row for whoever asked, which is a management operation the api layer had not
+		// authorized. The behaviour did not go away, it moved to a verb you have to mean.
+		const key = { provider: "telegram", endpointKey: "acme-bot" };
+		expect(
+			await store.register({
+				...key,
+				secret: "token-2",
+				webhookSecret: "hook-2",
+				createdBy: MALLORY,
+			}),
+		).toBeNull();
+		const rotated = await store.rotate(
+			key,
+			{ secret: "token-2", webhookSecret: "hook-2" },
+			first.updatedAt,
+		);
+		if (!rotated) throw new Error("expected the rotation to apply");
 		expect(rotated.id).toBe(first.id);
 		expect(rotated.secret).toBe("token-2");
 		expect(rotated.webhookSecret).toBe("hook-2");
@@ -223,16 +237,16 @@ describe("createChannelRegistrationsStore", () => {
 			provider: "telegram",
 			endpointKey: "acme-bot",
 		});
-		expect(revoked?.status).toBe("disabled");
+		if (!revoked) throw new Error("expected the revoke to apply");
+		expect(revoked.status).toBe("disabled");
 
-		// registering again re-activates
-		const restored = await store.register({
-			provider: "telegram",
-			endpointKey: "acme-bot",
-			secret: "token-3",
-			webhookSecret: "hook-3",
-			createdBy: ALICE,
-		});
+		// rotating again re-activates
+		const restored = await store.rotate(
+			{ provider: "telegram", endpointKey: "acme-bot" },
+			{ secret: "token-3", webhookSecret: "hook-3", status: "active" },
+			revoked.updatedAt,
+		);
+		if (!restored) throw new Error("expected the re-activation to apply");
 		expect(restored.status).toBe("active");
 	});
 
@@ -769,6 +783,7 @@ describe("registrations management is owned, bounded, and credential-free", () =
 			scope: "organization",
 			scopeId: "org-acme",
 		});
+		if (!row) throw new Error("expected the create to win");
 		const load = kind.load({ adapter });
 		await expect(load(row.id)).resolves.toEqual({
 			createdBy: ALICE,
@@ -982,5 +997,106 @@ describe("a reply is durable before it is sent", () => {
 			request: webhookRequest({ body: "u-1", secret: "hook-1" }),
 		});
 		expect(await createDeliveryOutbox(adapter).pending()).toEqual([]);
+	});
+});
+
+// R-H09 — registering is create-only, and taking over an existing row is a `manage` decision.
+//
+// The endpoint enforced `manage` only when its own read FOUND a row. The store then read again and
+// patched whatever it found — with the second caller's token, secret, scope and bind defaults — and
+// the create's catch path did the same on a lost race. So a caller who arrives when the row does not
+// exist yet, or who loses the create by microseconds, rewrites somebody else's registration without
+// ever being asked for `manage`. The natural key is `(provider, endpointKey)` and the endpointKey is
+// caller-chosen, so the race is not hypothetical: it is what happens when two tenants pick the same
+// obvious name, and it is trivially forced by anyone who wants it.
+describe("registering cannot take over an existing row unasked (R-H09)", () => {
+	it("refuses to rotate a row the caller may not manage", async () => {
+		const plugin = registrationsPlugin([fakeChannel()]);
+		const api = registrationsApi(plugin);
+		// Alice's bot exists.
+		await api.register(
+			{
+				provider: "fake",
+				endpointKey: "acme-bot",
+				webhookSecret: "alice-hook",
+			},
+			fakeAuthz(ALICE),
+		);
+
+		// Bob re-registers the same natural key. He is not the registrant and holds no grant, so the
+		// only honest answer is a denial — not a silent rotation onto his token.
+		const bob = fakeAuthz(MALLORY, (level) => level !== "manage");
+		await expect(
+			api.register(
+				{
+					provider: "fake",
+					endpointKey: "acme-bot",
+					webhookSecret: "bob-hook",
+				},
+				bob,
+			),
+		).rejects.toThrow(/app-authz denied/);
+
+		// And Alice's row is untouched, so her traffic still routes to her. Asserted through the
+		// resolver rather than the view: the view omits both secrets by design.
+		// That the row is UNCHANGED is asserted one test down, against the store — the view omits both
+		// secrets by design, and the secret is the whole point, being the inbound routing key.
+		// Asserting it here would mean reaching for something the api deliberately does not return.
+	});
+
+	it("the store REFUSES to rotate — it creates, or it reports the key is taken", async () => {
+		// The store-level contract, which is what actually closes the hole. The endpoint's read can
+		// always be stale — the row may appear between the check and the write — so the fix cannot be
+		// "read more carefully". It has to be that the write itself will not take over a row, leaving
+		// the api layer the only place a takeover can be decided.
+		const store = createChannelRegistrationsStore(db(), { now });
+		const lookup = { provider: "fake", endpointKey: "acme-bot" };
+		const mine = await store.register({
+			...lookup,
+			webhookSecret: "alice-hook",
+			createdBy: ALICE,
+		});
+		expect(mine).not.toBeNull();
+
+		// Second register on the same natural key: null, and NOT a silent rotation.
+		expect(
+			await store.register({
+				...lookup,
+				webhookSecret: "mallory-hook",
+				createdBy: MALLORY,
+			}),
+		).toBeNull();
+		expect((await store.getByKey(lookup))?.webhookSecret).toBe("alice-hook");
+	});
+
+	it("rotate is a compare-and-set against the row that was authorized", async () => {
+		// `manage` is decided against a row that can change before the write lands. Passing the
+		// `updatedAt` the decision was made on is what makes the rotation refuse a row that moved.
+		// An ADVANCING clock: the shared fixed `now` makes every `updatedAt` identical, so a stale
+		// version is indistinguishable from a current one and the CAS has nothing to compare.
+		let tick = 0;
+		const store = createChannelRegistrationsStore(db(), {
+			now: () => `2026-01-01T00:00:0${tick++}.000Z`,
+		});
+		const lookup = { provider: "fake", endpointKey: "acme-bot" };
+		const created = await store.register({
+			...lookup,
+			webhookSecret: "alice-hook",
+			createdBy: ALICE,
+		});
+		if (!created) throw new Error("expected the create to win");
+
+		expect(
+			await store.rotate(
+				lookup,
+				{ webhookSecret: "rotated" },
+				created.updatedAt,
+			),
+		).not.toBeNull();
+		// Stale version — the row is no longer the one that was authorized.
+		expect(
+			await store.rotate(lookup, { webhookSecret: "later" }, created.updatedAt),
+		).toBeNull();
+		expect((await store.getByKey(lookup))?.webhookSecret).toBe("rotated");
 	});
 });

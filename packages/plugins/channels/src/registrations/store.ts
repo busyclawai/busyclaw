@@ -4,6 +4,7 @@ import {
 	type EntityRecord,
 	type EntitySchemaInput,
 	errorMessage,
+	isConflict,
 	validationError,
 } from "@busyclaw/contracts";
 import {
@@ -89,13 +90,35 @@ export function toChannelRegistrationView(
 
 export type ChannelRegistrationsStore = {
 	/**
-	 * Register (or re-register) a bot — the sso `registerSSOProvider` analog. Idempotent on the
-	 * (provider, endpointKey) natural key: re-registering rotates credentials/defaults in place and
-	 * re-activates a revoked registration (registration is the trust grant).
+	 * CREATE a bot registration — the sso `registerSSOProvider` analog. Create-ONLY: `null` means the
+	 * (provider, endpointKey) natural key is already taken.
+	 *
+	 * It used to rotate an existing row in place, and that is the whole of R-H09. The endpoint asked
+	 * for `manage` only when its OWN read found a row; the store then read again and patched whatever
+	 * it found — with the second caller's token, secret, scope and bind defaults — and the create's
+	 * catch path did the same on a lost race. A caller arriving before the row existed, or losing the
+	 * create by microseconds, rewrote somebody else's registration having been asked for nothing. The
+	 * key is caller-chosen, so two tenants picking the same obvious name is enough.
+	 *
+	 * Taking over an existing row is a management operation on it, so the decision belongs where the
+	 * decisions are: `null` sends the caller back to the api layer to load the winner, authorize
+	 * `manage` against THAT row, and rotate it through {@link rotate}.
 	 */
 	register: (
 		input: CreateChannelRegistrationInput,
-	) => Promise<ChannelRegistrationRecord>;
+	) => Promise<ChannelRegistrationRecord | null>;
+	/**
+	 * Rotate an EXISTING registration's credentials and bind defaults, and re-activate it.
+	 *
+	 * `expectedUpdatedAt` makes it a compare-and-set: the row must still be the one the caller
+	 * authorized against. Without it, `manage` is decided against a row that can change before the
+	 * write lands — the same time-of-check gap one layer down.
+	 */
+	rotate: (
+		lookup: ChannelRegistrationLookup,
+		patch: Record<string, unknown>,
+		expectedUpdatedAt: string,
+	) => Promise<ChannelRegistrationRecord | null>;
 	get: (id: string) => Promise<ChannelRegistrationRecord | null>;
 	getByKey: (
 		input: ChannelRegistrationLookup,
@@ -225,6 +248,7 @@ export function createChannelRegistrationsStore(
 	const patchByKey = async (
 		lookup: ChannelRegistrationLookup,
 		patch: Record<string, unknown>,
+		expectedUpdatedAt?: string,
 	): Promise<ChannelRegistrationRecord | null> => {
 		const valid = updateChannelRegistrationInput(patch);
 		if (valid instanceof type.errors) {
@@ -236,7 +260,19 @@ export function createChannelRegistrationsStore(
 		return guarded(() =>
 			db.update({
 				model: "channel_registration",
-				where: [{ field: "id", value: endpointId(lookup) }],
+				where: [
+					{ field: "id", value: endpointId(lookup) },
+					// The CAS half: the row must still be the one the caller was authorized against.
+					...(expectedUpdatedAt !== undefined
+						? [
+								{
+									field: "updatedAt" as const,
+									value: expectedUpdatedAt,
+									connector: "AND" as const,
+								},
+							]
+						: []),
+				],
 				update: { ...valid, updatedAt: now() },
 			}),
 		);
@@ -259,12 +295,9 @@ export function createChannelRegistrationsStore(
 					{ provider, endpointKey },
 				);
 			}
-			// Re-registration is the trust grant: rotate credentials/defaults and re-activate.
-			const existing = await this.getByKey(lookup);
-			if (existing) {
-				const updated = await patchByKey(lookup, { ...rest, status: "active" });
-				if (updated) return updated;
-			}
+			// Create-only. An existing row is somebody's, and rotating it is a decision the api layer
+			// makes after authorizing `manage` — not something this port does because the key matched.
+			if (await this.getByKey(lookup)) return null;
 			const ts = now();
 			try {
 				return await guarded(() =>
@@ -284,12 +317,16 @@ export function createChannelRegistrationsStore(
 					}),
 				);
 			} catch (err) {
-				// create raced another register onto the same natural key (id is its hash) — fall through
-				// to patching the winner's row.
-				const raced = await patchByKey(lookup, { ...rest, status: "active" });
-				if (raced) return raced;
+				// Lost the create to a concurrent register on the same natural key (the id is its hash).
+				// The winner's row is theirs; this reports the conflict rather than patching it, which
+				// is exactly what the catch used to do without asking anyone.
+				if (isConflict(err) || (await this.getByKey(lookup))) return null;
 				throw err;
 			}
+		},
+
+		async rotate(lookup, patch, expectedUpdatedAt) {
+			return patchByKey(lookup, patch, expectedUpdatedAt);
 		},
 
 		get(id) {

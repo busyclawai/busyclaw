@@ -10,6 +10,7 @@ import {
 	bindConversationThreadInput,
 	type ClawApiCaller,
 	configurationError,
+	conflictError,
 	endpoints,
 	route,
 	validationError,
@@ -322,28 +323,50 @@ export function buildRegistrationsPlugin(
 					REGISTRATION_AUTHORITY,
 				);
 			}
-			// Re-registration rotates an EXISTING row's credentials and bind defaults and re-activates it.
-			// That is a management operation on someone's bot, not a create: without this check the
-			// natural key is a hijack surface — re-register (provider, endpointKey) with your own token
-			// and the tenant's traffic starts flowing to you.
-			const existing = await requireStore().getByKey({
+			// CREATE first, and let the store answer whether the key was free. Reading first and
+			// deciding on what the read saw is the R-H09 gap itself: the row can appear between the
+			// check and the write, and the old code then rotated it having enforced nothing.
+			const lookup = {
 				provider: input.provider,
 				endpointKey: input.endpointKey,
+			};
+			const created = await requireStore().register({
+				...registration,
+				// Stamped, never read from the body: a forged `createdBy` loses to runtime proof.
+				createdBy: ctx.principal,
 			});
-			if (existing) {
-				await ctx.authz.enforce(
-					"manage",
-					{ kind: CHANNEL_REGISTRATION_KIND, id: existing.id },
-					REGISTRATION_AUTHORITY,
+			if (created) return toChannelRegistrationView(created);
+
+			// The key is taken. Rotating somebody's credentials and bind defaults is a management
+			// operation on THEIR row, so it is decided against the row that actually exists — not the
+			// one this caller happened to observe, and not by the store because the key matched.
+			const winner = await requireStore().getByKey(lookup);
+			if (!winner) {
+				throw conflictError("channel registration conflicted then vanished", {
+					...lookup,
+				});
+			}
+			await ctx.authz.enforce(
+				"manage",
+				{ kind: CHANNEL_REGISTRATION_KIND, id: winner.id },
+				REGISTRATION_AUTHORITY,
+			);
+			// `createdBy` is immutable and drops out: whoever MANAGES the row may rotate it, which does
+			// not make them its registrant. `updatedAt` is the compare-and-set — the row must still be
+			// the one just authorized.
+			const { provider: _p, endpointKey: _e, ...rest } = registration;
+			const rotated = await requireStore().rotate(
+				lookup,
+				{ ...rest, status: "active" },
+				winner.updatedAt,
+			);
+			if (!rotated) {
+				throw conflictError(
+					"channel registration changed while it was being authorized",
+					{ ...lookup, reason: "re-read it and try again" },
 				);
 			}
-			return toChannelRegistrationView(
-				await requireStore().register({
-					...registration,
-					// Stamped, never read from the body: a forged `createdBy` loses to runtime proof.
-					createdBy: ctx.principal,
-				}),
-			);
+			return toChannelRegistrationView(rotated);
 		};
 
 		const webhookRoute: BusyclawRoute = {
