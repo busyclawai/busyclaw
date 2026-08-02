@@ -3,7 +3,12 @@
 // EndpointContext, and supplies a persist sink for state events; the engine owns the
 // verify → parse → bind → relay → reply round-trip and never touches storage.
 
-import { errorMessage, SYSTEM_ANONYMOUS } from "@busyclaw/contracts";
+import type { JsonObject, JsonValue } from "@busyclaw/contracts";
+import {
+	errorMessage,
+	SYSTEM_ANONYMOUS,
+	stateError,
+} from "@busyclaw/contracts";
 import type { ClawLike } from "./claw";
 import type {
 	Channel,
@@ -12,7 +17,12 @@ import type {
 	InboundRequest,
 	PersistEndpointEvent,
 } from "./contracts";
-import type { DeliveryInbox, DeliveryKey, DeliveryOutbox } from "./inbox";
+import type {
+	DeliveryInbox,
+	DeliveryKey,
+	DeliveryOutbox,
+	DeliveryWork,
+} from "./inbox";
 
 export type ChannelDispatchResult = {
 	status: number;
@@ -81,26 +91,53 @@ export async function handleInbound(input: {
 		await channel.send({ endpoint, message: reply });
 		return;
 	}
-	// DURABLE BEFORE SENT. De-duplicating the inbound half created a new way to lose a reply: the turn
-	// runs, the process dies before `send`, and the delivery is already claimed — so the provider's
-	// retry correctly declines to re-run it and the answer is simply gone. Writing the reply first
-	// means a crash anywhere after this leaves a row `drainOutbox` will finish.
-	//
-	// The answer MATTERS. It was discarded, and the send below ran regardless — so on a recovery re-run
-	// (the first attempt recorded a reply and died before confirming it) this sent the text THIS run
-	// produced while `markSent` marked the STORED one delivered. Two different messages, one recorded
-	// and never sent, the other sent and never recorded: both halves of "one reply per delivery" broken
-	// at once. A delivery that already owes a reply belongs to the drain, which sends what was recorded.
+	await deliverReply({
+		channel,
+		endpoint,
+		key,
+		reply,
+		outbox: input.outbox,
+	});
+}
+
+/**
+ * Put the reply where it survives, then send it.
+ *
+ * DURABLE BEFORE SENT. De-duplicating the inbound half created a new way to lose a reply: the turn
+ * runs, the process dies before `send`, and the delivery is already claimed — so a retry correctly
+ * declines to re-run it and the answer is simply gone. Writing the reply first means a crash anywhere
+ * after this leaves a row the drain will finish.
+ *
+ * Shared by the inline path and the worker so a recovered delivery's reply is recorded exactly the
+ * same way as a live one's.
+ */
+async function deliverReply(input: {
+	channel: Channel;
+	endpoint: EndpointContext;
+	key: DeliveryKey;
+	reply: {
+		externalConversationId: string;
+		text: string;
+		replyContext?: JsonValue;
+	};
+	outbox?: DeliveryOutbox;
+}): Promise<void> {
+	const { channel, endpoint, key, reply } = input;
+	if (input.outbox === undefined) {
+		await channel.send({ endpoint, message: reply });
+		return;
+	}
+	// The enqueue's answer MATTERS. It was discarded and the send ran regardless — so on a recovery
+	// re-run this sent the text THIS attempt produced while `markSent` marked the STORED one delivered:
+	// one message recorded and never sent, another sent and never recorded. A delivery that already
+	// owes a reply belongs to the drain, which sends what was recorded.
 	if (!(await input.outbox.enqueue(key, reply))) return;
 	try {
 		await channel.send({ endpoint, message: reply });
 	} catch (error) {
 		// Left PENDING on purpose — the drain owns the retry, and a send that failed here is exactly
 		// what the outbox exists to carry.
-		await input.outbox.markFailed(
-			key,
-			error instanceof Error ? error.message : String(error),
-		);
+		await input.outbox.markFailed(key, errorMessage(error));
 		throw error;
 	}
 	// A crash between the send and this mark re-sends later: a duplicate message is visible and
@@ -122,6 +159,10 @@ export async function dispatchWebhook(input: {
 	 *  replays the turn exactly as it did before. */
 	inbox?: DeliveryInbox;
 	outbox?: DeliveryOutbox;
+	/** The plugin's tokenize door, so an admitted payload is stored redacted into the claw's container
+	 *  rather than raw. Absent ⇒ stored as it arrived, which is what a claw with no redactor does with
+	 *  its transcript too. */
+	redact?: RedactValue;
 }): Promise<ChannelDispatchResult> {
 	const { claw, channel, endpoint, request } = input;
 	// Authentication is NOT optional here. `if (channel.verify)` read as "verify when the channel
@@ -162,6 +203,236 @@ export async function dispatchWebhook(input: {
  */
 const DELIVERY_LEASE_MS = 15 * 60 * 1000;
 
+/** How many times one delivery is attempted before it is buried rather than retried forever. */
+const MAX_DELIVERY_ATTEMPTS = 5;
+
+/** How long a failed delivery waits before it is eligible again. */
+const DELIVERY_BACKOFF_MS = 60 * 1000;
+
+/**
+ * Tokenize plugin-held data — the plugin's own `redact` door, threaded from configure.
+ *
+ * Optional because a claw assembled without a redactor has none; the assembly supplies the identity
+ * function in that case, so this is `undefined` only on paths that never had a plugin context at all.
+ */
+export type RedactValue = (
+	value: unknown,
+	opts?: { clawId?: string },
+) => Promise<unknown>;
+
+/**
+ * Admit one inbound message as durable work, and say whether this call is the one that admitted it.
+ *
+ * This is the write the whole finding turns on. The delivery row used to be created ALREADY
+ * `processing`, by the same request that was running the turn, and it carried no copy of the message —
+ * so a turn that died left a lease over something nobody had stored, the provider had already been
+ * answered 200 and would not send it again, and no worker could recover a message it had never been
+ * told about.
+ *
+ * Everything here is cheap and deterministic: resolve where the conversation lands, tokenize the
+ * message, write the row. The expensive, failure-prone part — the model turn — happens after, against
+ * a row that survives the process running it.
+ */
+async function admitDelivery(input: {
+	claw: ClawLike;
+	endpoint: EndpointContext;
+	message: InboundMessage;
+	key: DeliveryKey;
+	inbox: DeliveryInbox;
+	redact?: RedactValue;
+}): Promise<boolean> {
+	const { claw, endpoint, message } = input;
+	// Already finished, already queued, already dead: whatever it is, it is not new work, and resolving
+	// where it would have landed costs a governed api call to learn nothing. The insert below is still
+	// what decides — this only avoids paying for the answer twice.
+	if (await input.inbox.known(input.key)) return false;
+	// The dispatch acts for a stranger (no authenticated principal) — the app-authz caller is
+	// `system:anonymous`, the same principal a fresh binding stamps as the claw's `createdBy`, so the
+	// owner rule permits relaying into that conversation's own claw.
+	const binding = await claw.api.bindConversation(
+		{
+			provider: endpoint.provider,
+			endpointKey: endpoint.endpointKey,
+			externalConversationId: message.externalConversationId,
+			externalActorId: message.externalActorId,
+			claw: endpoint.claw,
+			thread: {
+				...endpoint.thread,
+				title: endpoint.thread?.title ?? message.conversationTitle,
+			},
+		},
+		{ principal: SYSTEM_ANONYMOUS },
+	);
+	// Into the CLAW's container, not the plugin's. A token minted in the plugin container is INERT when
+	// the runtime rehydrates in the claw's — it would reach the model as a raw placeholder, silently,
+	// with nothing thrown. Same container the transcript uses, so the same value wears the same token.
+	const payload = await tokenize(
+		normalizeForStorage(message),
+		binding.claw.id,
+		input.redact,
+	);
+	return input.inbox.admit(input.key, {
+		payload,
+		clawId: binding.claw.id,
+		threadId: binding.thread.id,
+	});
+}
+
+/** The message as it is stored: every field the run and the reply need, and nothing else. */
+function normalizeForStorage(message: InboundMessage): JsonObject {
+	return {
+		externalConversationId: message.externalConversationId,
+		text: message.text,
+		...(message.externalActorId !== undefined
+			? { externalActorId: message.externalActorId }
+			: {}),
+		...(message.replyContext !== undefined
+			? { replyContext: message.replyContext }
+			: {}),
+	};
+}
+
+/** Redact through the plugin door, refusing anything that did not come back as a stored payload. */
+async function tokenize(
+	payload: JsonObject,
+	clawId: string,
+	redact?: RedactValue,
+): Promise<JsonObject> {
+	if (redact === undefined) return payload;
+	const tokenized = await redact(payload, { clawId });
+	// The redactor walks a value and hands back the same shape. If it did not, storing the result would
+	// put something unreadable where the worker expects a message — loud here beats a row that claims
+	// to be work and cannot be run.
+	if (
+		typeof tokenized !== "object" ||
+		tokenized === null ||
+		Array.isArray(tokenized)
+	) {
+		throw stateError("channel delivery payload could not be tokenized", {
+			reason: "the redactor returned something other than the payload object",
+		});
+	}
+	return tokenized as JsonObject;
+}
+
+/** What the reply half needs back out of a stored payload. */
+function replyTargetOf(work: DeliveryWork): {
+	externalConversationId: string;
+	text: string;
+	replyContext?: JsonValue;
+} | null {
+	const payload = work.payload;
+	const conversation = payload.externalConversationId;
+	const text = payload.text;
+	if (typeof conversation !== "string" || typeof text !== "string") return null;
+	return {
+		externalConversationId: conversation,
+		text,
+		...(payload.replyContext !== undefined
+			? { replyContext: payload.replyContext }
+			: {}),
+	};
+}
+
+/**
+ * Run one admitted delivery under a lease this caller already holds: the turn, the reply, and the
+ * transition that ends it.
+ *
+ * Separated from admission so the SAME code runs the work whether it was reached inline from the
+ * request that admitted it or swept up later by the worker. A recovery path that does not share the
+ * live path's code is a recovery path nobody exercises.
+ */
+export async function runDelivery(input: {
+	claw: ClawLike;
+	channel: Channel;
+	endpoint: EndpointContext;
+	inbox: DeliveryInbox;
+	outbox?: DeliveryOutbox;
+	key: DeliveryKey;
+	leaseId: string;
+	work: DeliveryWork;
+	leaseMs?: number;
+	backoffMs?: number;
+	maxAttempts?: number;
+}): Promise<boolean> {
+	const { claw, channel, endpoint, inbox, key, leaseId, work } = input;
+	const leaseMs = input.leaseMs ?? DELIVERY_LEASE_MS;
+	// The lease is EXTENDED while the turn runs, not merely set once at the start. A turn that
+	// legitimately outran a fixed window — a long tool chain, a slow model — was indistinguishable
+	// from a dead one, so a recovery took over work that was never stuck and ran it a second time.
+	const stopHeartbeat = startLeaseHeartbeat({ inbox, key, leaseId, leaseMs });
+	try {
+		const text = await runTurn({ claw, work });
+		const target = replyTargetOf(work);
+		if (text !== null && target !== null) {
+			await deliverReply({
+				channel,
+				endpoint,
+				key,
+				reply: {
+					externalConversationId: target.externalConversationId,
+					text,
+					...(target.replyContext !== undefined
+						? { replyContext: target.replyContext }
+						: {}),
+				},
+				...(input.outbox !== undefined ? { outbox: input.outbox } : {}),
+			});
+		}
+	} catch (error) {
+		// The row goes BACK to the queue rather than being abandoned mid-flight. Left `processing`, it
+		// would wait out a full lease before anything could touch it again; dropped, the message would
+		// be lost exactly as it was before any of this existed.
+		const landed = await inbox.fail({
+			key,
+			leaseId,
+			error: errorMessage(error),
+			backoffMs: input.backoffMs ?? DELIVERY_BACKOFF_MS,
+			maxAttempts: input.maxAttempts ?? MAX_DELIVERY_ATTEMPTS,
+		});
+		// A displaced attempt's failure says nothing about the attempt that now owns the row, so it is
+		// not reported as this delivery's failure either.
+		if (landed === "lost") return false;
+		throw error;
+	} finally {
+		stopHeartbeat();
+	}
+	// FENCED. A completion from a lease that is no longer current is refused, so a runner displaced by
+	// a recovery cannot mark the delivery finished over the top of the attempt now running it.
+	//
+	// There is nothing to cancel when that happens: `sendMessage` takes no abort signal, so a displaced
+	// turn runs to its end. The damage is bounded to wasted work rather than a duplicate message — its
+	// reply meets the outbox's one-reply-per-delivery rule and is not sent.
+	return await inbox.complete(key, leaseId);
+}
+
+/** The model turn itself, over the stored payload. Null ⇒ nothing to reply with. */
+async function runTurn(input: {
+	claw: ClawLike;
+	work: DeliveryWork;
+}): Promise<string | null> {
+	const target = replyTargetOf(input.work);
+	// A stored payload that is not a message is not runnable. Thrown rather than skipped: it means the
+	// row was written by something that did not agree with this code about what a delivery is.
+	if (target === null) {
+		throw stateError("stored channel delivery is not a message", {
+			reason: "the payload carries no externalConversationId/text pair",
+		});
+	}
+	const sent = await input.claw.api.sendMessage(
+		{
+			clawId: input.work.clawId,
+			threadId: input.work.threadId,
+			// Tokenized on the way in and rehydrated by the runtime at the model boundary — the same
+			// round-trip a resumed run makes over its stored transcript.
+			message: target.text,
+		},
+		{ principal: SYSTEM_ANONYMOUS },
+	);
+	if (sent.result.status !== "completed" || !sent.result.text) return null;
+	return sent.result.text;
+}
+
 /**
  * Relay one inbound message AT MOST ONCE, and say whether this call is the one that ran it.
  *
@@ -170,7 +441,7 @@ const DELIVERY_LEASE_MS = 15 * 60 * 1000;
  * fresh turn: another model charge, another set of tool calls, another reply, under a new run id.
  *
  * A message with no `deliveryId` cannot be de-duplicated, and no inbox means nowhere to record the
- * claim. Both relay as before rather than refusing — the alternative is a channel that silently stops
+ * work. Both relay as before rather than refusing — the alternative is a channel that silently stops
  * delivering — but they are the deployments where the replay remains possible, and that is the honest
  * shape of it rather than a guarantee that quietly does not hold.
  */
@@ -181,19 +452,18 @@ async function relayOnce(input: {
 	message: InboundMessage;
 	inbox?: DeliveryInbox;
 	outbox?: DeliveryOutbox;
+	redact?: RedactValue;
 }): Promise<boolean> {
 	const { claw, channel, endpoint, message, inbox, outbox } = input;
 	const deliveryId = message.deliveryId;
-	const relay = () =>
-		handleInbound({
+	if (inbox === undefined || deliveryId === undefined) {
+		await handleInbound({
 			claw,
 			channel,
 			endpoint,
 			message,
 			...(outbox !== undefined ? { outbox } : {}),
 		});
-	if (inbox === undefined || deliveryId === undefined) {
-		await relay();
 		return true;
 	}
 	const key = {
@@ -201,32 +471,34 @@ async function relayOnce(input: {
 		endpointKey: endpoint.endpointKey,
 		deliveryId,
 	};
-	// Claimed BEFORE the turn: a claim taken afterwards would be recording history, and the second
-	// arrival is already halfway through its own run by then.
+	// ADMITTED BEFORE THE TURN, and before the provider is told anything. A row written afterwards
+	// would be recording history, and the whole point is to have something to recover from when the
+	// history never gets written.
+	const admitted = await admitDelivery({
+		claw,
+		endpoint,
+		message,
+		key,
+		inbox,
+		...(input.redact !== undefined ? { redact: input.redact } : {}),
+	});
+	// Already known — a retry, or a poll re-reading what it read last time. The row owns finishing it.
+	if (!admitted) return false;
+	// The first attempt happens HERE rather than being left to the next drain, so the reply is as fast
+	// as it ever was. What changed is that failing no longer loses the message: the row is already
+	// durable, and the worker finishes what this attempt does not.
 	const claimed = await inbox.claim(key, DELIVERY_LEASE_MS);
 	if (claimed === null) return false;
-	// The lease is EXTENDED while the turn runs, not merely set once at the start. A turn that
-	// legitimately outran a fixed window — a long tool chain, a slow model — was indistinguishable
-	// from a dead one, so a recovery took over work that was never stuck and ran it a second time.
-	const stopHeartbeat = startLeaseHeartbeat({
+	return await runDelivery({
+		claw,
+		channel,
+		endpoint,
 		inbox,
 		key,
 		leaseId: claimed.leaseId,
-		leaseMs: DELIVERY_LEASE_MS,
+		work: claimed.work,
+		...(outbox !== undefined ? { outbox } : {}),
 	});
-	try {
-		await relay();
-	} finally {
-		stopHeartbeat();
-	}
-	// FENCED. A completion from a lease that is no longer current is refused, so a runner displaced by
-	// a recovery cannot mark the delivery finished over the top of the attempt now running it.
-	//
-	// There is nothing to cancel when that happens: `sendMessage` takes no abort signal, so a displaced
-	// turn runs to its end. The damage is bounded to wasted work rather than a duplicate message — its
-	// reply meets the outbox's one-reply-per-delivery rule and is not sent. Reported as NOT processed,
-	// because the attempt that owns the delivery is the one entitled to say it handled it.
-	return await inbox.complete(key, claimed.leaseId);
 }
 
 /**
@@ -283,6 +555,7 @@ export async function pollEndpoint(input: {
 	limit?: number;
 	inbox?: DeliveryInbox;
 	outbox?: DeliveryOutbox;
+	redact?: RedactValue;
 }): Promise<{ processed: number }> {
 	const { claw, channel, endpoint } = input;
 	if (!channel.poll) return { processed: 0 };

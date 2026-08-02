@@ -375,6 +375,7 @@ function buildAppBotPlugin(
 					persist: persistFor(channel),
 					...(inbox !== undefined ? { inbox } : {}),
 					...(outbox !== undefined ? { outbox } : {}),
+					...(context.redact !== undefined ? { redact: context.redact } : {}),
 				});
 				return { status: result.status, body: result.body };
 			};
@@ -412,6 +413,7 @@ function buildAppBotPlugin(
 						persist: persistFor(channel),
 						...(inbox !== undefined ? { inbox } : {}),
 						...(outbox !== undefined ? { outbox } : {}),
+						...(context.redact !== undefined ? { redact: context.redact } : {}),
 					});
 					processed += result.processed;
 				}

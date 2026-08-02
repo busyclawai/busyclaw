@@ -410,6 +410,7 @@ export function buildRegistrationsPlugin(
 					// Registrations require a database, so the claim always has somewhere to live.
 					...(inbox !== undefined ? { inbox } : {}),
 					...(outbox !== undefined ? { outbox } : {}),
+					...(context.redact !== undefined ? { redact: context.redact } : {}),
 					persist: (event) =>
 						requireStore().record(
 							{ provider: row.provider, endpointKey: row.endpointKey },

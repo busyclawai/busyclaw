@@ -14,7 +14,7 @@
 // they must outlive the provider's retry window — pruning them is a deployment's own housekeeping and
 // is left to the host rather than guessed at here.
 
-import type { Adapter, JsonValue } from "@busyclaw/contracts";
+import type { Adapter, JsonObject, JsonValue } from "@busyclaw/contracts";
 import {
 	BusyclawError,
 	type EntityField,
@@ -51,7 +51,23 @@ function isConflict(error: unknown): boolean {
 	);
 }
 
-export const channelDeliveryStatusValues = ["processing", "completed"] as const;
+// The lifecycle of one inbound delivery, as a state machine rather than a marker.
+//
+// `pending` is the state that did not exist, and its absence is what lost messages. The row was
+// created ALREADY `processing`, by the request that was also running the turn — so the row recorded
+// that somebody was working, never that there was work TO DO. When that somebody died, nothing was
+// left describing the message: the payload had never been stored, the provider had been answered 200,
+// and the lease simply lapsed with no one to hand it to.
+//
+// Admitted work now lands `pending` and is claimed separately. The two questions are different — "is
+// this delivery known?" (dedupe) and "is somebody running it right now?" (the lease) — and collapsing
+// them into one insert is what made an unclaimed message unrepresentable.
+export const channelDeliveryStatusValues = [
+	"pending",
+	"processing",
+	"completed",
+	"dead",
+] as const;
 export type ChannelDeliveryStatus =
 	(typeof channelDeliveryStatusValues)[number];
 
@@ -71,7 +87,7 @@ export const channelDeliveryFields = {
 	status: field.enum(channelDeliveryStatusValues, {
 		required: true,
 		index: true,
-		doc: "`processing` while the turn runs, `completed` once it has. A `processing` row whose lease has lapsed is a turn that died mid-flight and may be retried; a `completed` one is never re-run.",
+		doc: "`pending` is admitted work nobody is running; `processing` is a live attempt under a lease; `completed` is answered and never re-run; `dead` has failed past its attempt cap and waits for a human. A `processing` row whose lease has lapsed is a turn that died mid-flight and is re-claimable.",
 	}),
 	/** When a `processing` claim goes stale. A turn that died mid-flight would otherwise hold its
 	 *  delivery forever, and the provider's retry — the one thing that could recover it — would be
@@ -91,6 +107,38 @@ export const channelDeliveryFields = {
 	leaseId: field.string({
 		doc: "Identifies the attempt holding this delivery. Completion and heartbeat are accepted only from the lease that is current, so a runner whose lease lapsed and was re-taken cannot finish over its successor.",
 	}),
+	/**
+	 * The normalized message itself — the reason this row is a work item and not a receipt.
+	 *
+	 * The claim used to store WHO was handling the delivery and nothing about WHAT it was. So a turn
+	 * that died took the only copy with it: the provider had already been answered 200 and would not
+	 * send it again, and no worker could recover something it had never been told. Persisting this
+	 * before acknowledging is what makes the 200 honest.
+	 *
+	 * TOKENIZED, not raw. It is written through the plugin's `redact` door into the CLAW's container —
+	 * the same container the transcript uses — so the worker's `sendMessage` rehydrates it at the model
+	 * boundary exactly as a resumed run does, and durable state never holds the original. A deployment
+	 * with no detector configured gets the identity function and stores what it always would have.
+	 */
+	payload: field.jsonObject({
+		pii: "redacted",
+		immutable: true,
+		doc: "The normalized inbound message, tokenized into the claw's container. Immutable: what was admitted is what runs.",
+	}),
+	/** WHERE the work lands, resolved at ingress. Binding is a cheap, deterministic lookup-or-create, so
+	 *  it happens on the acknowledged path and the worker inherits a fully-resolved unit of work rather
+	 *  than re-deriving one from an endpoint that may since have been revoked. */
+	clawId: field.string({ index: true, immutable: true }),
+	threadId: field.string({ immutable: true }),
+	/** How many attempts this delivery has cost. A row that keeps failing becomes visible and eventually
+	 *  terminal, instead of being retried forever by every drain that passes. */
+	attempts: field.number({ required: true }),
+	/** When this work becomes eligible again — the backoff. Absent ⇒ eligible now. Indexed because it is
+	 *  half of the worker's due-query, and a queue whose due-query cannot use an index is a queue that
+	 *  gets slower exactly as it gets busier. */
+	nextAttemptAt: field.string({ index: true }),
+	/** Why the last attempt failed. Redacted: a provider error can quote the message that caused it. */
+	lastError: field.string({ pii: "redacted" }),
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true }),
 } as const;
@@ -140,21 +188,71 @@ export function deliveryRowId(key: {
 }
 
 /** The proof that an attempt holds a delivery — carried back into every later transition on it. */
-export type DeliveryClaim = { leaseId: string };
+export type DeliveryClaim = { leaseId: string; work: DeliveryWork };
+
+/** One unit of admitted work: the message, and where it was already resolved to land. */
+export type DeliveryWork = {
+	/** The normalized message as stored — tokenized, and rehydrated by the runtime at the model
+	 *  boundary, so a worker passes it straight to `sendMessage` without re-identifying anything. */
+	payload: JsonObject;
+	clawId: string;
+	threadId: string;
+	/** How many attempts have already been spent on it, this one included. */
+	attempts: number;
+};
+
+/** A delivery the worker found waiting — the claim, plus which endpoint it belongs to. */
+export type ClaimedDelivery = DeliveryClaim & { key: DeliveryKey };
 
 /** What a dispatch asks of the inbox. Absent entirely when the claw has no database — the same
  *  deployment shape that has no registration rows either. */
 export type DeliveryInbox = {
 	/**
+	 * Record this delivery as work TO DO, before anyone is told it was received.
+	 *
+	 * `true` ⇒ newly admitted and yours to attempt. `false` ⇒ already known, so this is a retry of
+	 * something already admitted and the row (not this request) owns finishing it.
+	 *
+	 * This is the write that makes a 200 honest. The row used to be created already `processing` by the
+	 * same request that ran the turn, carrying no payload — so a crash mid-turn left a lease over a
+	 * message nobody had stored, the provider stopped retrying, and there was nothing to recover from.
+	 */
+	admit: (
+		key: DeliveryKey,
+		work: Omit<DeliveryWork, "attempts">,
+	) => Promise<boolean>;
+	/**
+	 * Has this delivery already been admitted?
+	 *
+	 * A cheap primary-key read used ONLY to skip work, never to decide it: `admit`'s insert still
+	 * arbitrates, so a row appearing between this read and that write loses there rather than here.
+	 *
+	 * It exists because admission has to resolve where the message lands BEFORE it can store it, and
+	 * that resolution is a governed api call that creates rows. Without this read, a webhook reachable
+	 * by strangers by design ran a full bind and authz decision for every retry of a delivery it had
+	 * already finished — which is a cheap amplification for anyone willing to POST the same body twice.
+	 */
+	known: (key: DeliveryKey) => Promise<boolean>;
+	/**
 	 * Take this delivery, or report that somebody already has.
 	 *
 	 * A claim ⇒ it is yours to process, and the `leaseId` is the proof to present at every later step.
-	 * `null` ⇒ it is already completed, or being processed right now under a live lease, and this
-	 * attempt must not run the turn again. A `processing` row whose lease has LAPSED is re-takeable
-	 * exactly once more: that is a turn which died mid-flight, and a retry is the only thing that can
-	 * recover it.
+	 * `null` ⇒ it is completed, dead, not yet due under its backoff, or being processed right now under
+	 * a live lease. A `processing` row whose lease has LAPSED is re-takeable: that is a turn which died
+	 * mid-flight, and re-claiming it is the only thing that can recover it.
 	 */
 	claim: (key: DeliveryKey, leaseMs: number) => Promise<DeliveryClaim | null>;
+	/**
+	 * Take whatever work is due — the worker's entry point.
+	 *
+	 * `pending` rows past their backoff, and `processing` rows whose lease has lapsed, oldest first.
+	 * This is what makes the queue recoverable rather than merely durable: without it a row admitted by
+	 * a request that then died would sit `pending` forever, correctly stored and never run.
+	 */
+	claimDue: (input: {
+		leaseMs: number;
+		limit?: number;
+	}) => Promise<ClaimedDelivery[]>;
 	/**
 	 * Say "still here", or learn that the lease is gone.
 	 *
@@ -176,6 +274,21 @@ export type DeliveryInbox = {
 	 * that keeps a later retry from looking new, so removing it would reopen the hole it closed.
 	 */
 	complete: (key: DeliveryKey, leaseId: string) => Promise<boolean>;
+	/**
+	 * Record a failed attempt and hand the row back to the queue — or bury it.
+	 *
+	 * Returns the state it landed in. Past `maxAttempts` the row goes `dead` rather than `pending`: a
+	 * message that fails every time is a message that will fail again, and retrying it forever spends
+	 * a model call per drain on work that cannot succeed while burying the fact that it never did.
+	 * Fenced like the rest — a displaced attempt cannot record a failure against its successor.
+	 */
+	fail: (input: {
+		key: DeliveryKey;
+		leaseId: string;
+		error: string;
+		backoffMs: number;
+		maxAttempts: number;
+	}) => Promise<"pending" | "dead" | "lost">;
 };
 
 export type DeliveryKey = {
@@ -224,62 +337,88 @@ export function createDeliveryInbox(
 		new Date(Date.parse(now()) + leaseMs).toISOString();
 
 	return {
-		async claim(key, leaseMs) {
-			const id = deliveryRowId(key);
+		async admit(key, work) {
 			const stamp = now();
-			const leaseId = newLeaseId();
 			try {
-				// The INSERT is the claim. Two processes racing the same delivery both try it and the
-				// database picks one — no read-then-write window for both to pass through.
+				// The INSERT is the admission. Two arrivals of the same delivery both try it and the
+				// database picks one — no read-then-write window for both to pass through. The row lands
+				// `pending`: known, stored, and nobody's yet.
 				await db.create({
 					model: "channel_delivery",
 					data: {
 						...key,
-						id,
-						status: "processing",
-						leaseId,
-						leaseExpiresAt: leaseUntil(leaseMs),
+						id: deliveryRowId(key),
+						status: "pending",
+						payload: work.payload,
+						clawId: work.clawId,
+						threadId: work.threadId,
+						attempts: 0,
 						createdAt: stamp,
 						updatedAt: stamp,
 					},
 				});
-				return { leaseId };
+				return true;
 			} catch (error) {
-				// ONLY a duplicate means somebody has it. Every other failure means this claim was never
-				// recorded, and answering "somebody else has it" would hand the delivery to a holder that
-				// does not exist.
+				// ONLY a duplicate means it is already known. Every other failure means nothing was
+				// stored, and reporting "already admitted" would acknowledge a message to the provider
+				// that no row describes.
 				if (!isConflict(error)) throw error;
-				// Somebody has it. Completed ⇒ never again. Processing under a live lease ⇒ not now.
-				// Processing under a LAPSED one ⇒ the holder died, and this retry may take over.
-				const existing = await db.findOne({
-					model: "channel_delivery",
-					where: [{ field: "id", value: id }],
-				});
-				if (!existing || existing.status === "completed") return null;
-				if (
-					existing.leaseExpiresAt != null &&
-					existing.leaseExpiresAt >= now()
-				) {
-					return null;
-				}
-				// The where pins the lease we READ, so two recoveries cannot both take it — and the row
-				// leaves this call carrying a NEW lease id, which is what makes the displaced holder's
-				// later `complete` match nothing.
-				const taken = await db.update({
-					model: "channel_delivery",
-					where: [
-						{ field: "id", value: id },
-						{ field: "status", value: "processing", connector: "AND" },
-						...leaseFence(existing.leaseId, existing.leaseExpiresAt),
-					],
-					update: {
-						leaseId,
-						leaseExpiresAt: leaseUntil(leaseMs),
-						updatedAt: now(),
+				return false;
+			}
+		},
+
+		async known(key) {
+			const row = await db.findOne({
+				model: "channel_delivery",
+				where: [{ field: "id", value: deliveryRowId(key) }],
+			});
+			return row !== null;
+		},
+
+		async claim(key, leaseMs) {
+			const existing = await db.findOne({
+				model: "channel_delivery",
+				where: [{ field: "id", value: deliveryRowId(key) }],
+			});
+			return existing === null ? null : takeRow(existing, leaseMs);
+		},
+
+		async claimDue({ leaseMs, limit }) {
+			// Two shapes are due, and they are due for opposite reasons: work nobody has started
+			// (`pending`, past its backoff) and work somebody started and abandoned (`processing` under a
+			// lapsed lease). A queue that reads only the first never recovers a crash; one that reads only
+			// the second never starts anything.
+			const candidates = await db.findMany({
+				model: "channel_delivery",
+				where: [
+					{
+						field: "status",
+						operator: "in",
+						value: ["pending", "processing"],
+					},
+				],
+				sortBy: { field: "createdAt", direction: "asc" },
+				// Read wider than the limit: a candidate may be a live lease or still backing off, and
+				// those are filtered below rather than by the query.
+				...(limit !== undefined ? { limit: limit * 4 } : {}),
+			});
+			const taken: ClaimedDelivery[] = [];
+			for (const row of candidates) {
+				if (limit !== undefined && taken.length >= limit) break;
+				const claim = await takeRow(row, leaseMs);
+				// Lost the race, still leased, or not yet due — somebody else's problem, or not yet
+				// anybody's. Either way this worker moves on rather than waiting on it.
+				if (claim === null) continue;
+				taken.push({
+					...claim,
+					key: {
+						provider: row.provider,
+						endpointKey: row.endpointKey,
+						deliveryId: row.deliveryId,
 					},
 				});
-				return taken === null ? null : { leaseId };
 			}
+			return taken;
 		},
 
 		async heartbeat(key, leaseId, leaseMs) {
@@ -312,7 +451,114 @@ export function createDeliveryInbox(
 			});
 			return finished !== null;
 		},
+
+		async fail({ key, leaseId, error, backoffMs, maxAttempts }) {
+			const id = deliveryRowId(key);
+			const held = await db.findOne({
+				model: "channel_delivery",
+				where: [
+					{ field: "id", value: id },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+			});
+			// Displaced mid-turn: the successor owns the row, and this attempt's failure is not a fact
+			// about their attempt. Recording it would spend one of THEIR retries on OUR error.
+			if (held === null) return "lost";
+			const attempts = held.attempts + 1;
+			const buried = attempts >= maxAttempts;
+			const landed = await db.update({
+				model: "channel_delivery",
+				where: [
+					{ field: "id", value: id },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: {
+					status: buried ? "dead" : "pending",
+					attempts,
+					lastError: error,
+					// Cleared so the row reads as unheld — a `pending` row carrying a live lease would be
+					// skipped by the very query meant to pick it up again.
+					leaseExpiresAt: null,
+					nextAttemptAt: buried
+						? null
+						: new Date(Date.parse(now()) + backoffMs).toISOString(),
+					updatedAt: now(),
+				},
+			});
+			// It was ours a moment ago and is not now — treat that as displacement, not as a failure
+			// recorded, so a caller never reports a retry it did not actually schedule.
+			if (landed === null) return "lost";
+			return buried ? "dead" : "pending";
+		},
 	};
+
+	/**
+	 * Move one row into `processing` under a fresh lease, or decline it.
+	 *
+	 * Shared by the by-key claim and the worker's due-sweep so both decide eligibility the same way.
+	 * The update's where pins what the read saw, so two takers racing the same row cannot both
+	 * transition: the loser matches nothing and gets the same answer a live lease would have given it.
+	 */
+	async function takeRow(
+		row: {
+			id: string;
+			status: string;
+			leaseId?: string | null;
+			leaseExpiresAt?: string | null;
+			nextAttemptAt?: string | null;
+			payload?: JsonObject | null;
+			clawId?: string | null;
+			threadId?: string | null;
+			attempts: number;
+		},
+		leaseMs: number,
+	): Promise<DeliveryClaim | null> {
+		// Answered, or buried. Neither is work.
+		if (row.status === "completed" || row.status === "dead") return null;
+		if (row.status === "processing") {
+			// Somebody is running it. Only a LAPSED lease may be re-taken, and that is the whole
+			// recovery story: an attempt that died between claiming and finishing left a lease nobody
+			// will ever clear.
+			if (row.leaseExpiresAt == null || row.leaseExpiresAt >= now())
+				return null;
+		} else if (row.nextAttemptAt != null && row.nextAttemptAt > now()) {
+			// Backing off. Due later, not now — and a worker that ignored this would spend every drain
+			// re-running the attempt that just failed.
+			return null;
+		}
+		// A row admitted before the payload column existed cannot be run from storage: there is nothing
+		// to run. Left alone rather than claimed and failed, so an upgrade does not bury history.
+		if (row.payload == null || row.clawId == null || row.threadId == null) {
+			return null;
+		}
+		const leaseId = newLeaseId();
+		const taken = await db.update({
+			model: "channel_delivery",
+			where: [
+				{ field: "id", value: row.id },
+				{ field: "status", value: row.status, connector: "AND" },
+				...(row.status === "processing"
+					? leaseFence(row.leaseId, row.leaseExpiresAt)
+					: []),
+			],
+			update: {
+				status: "processing",
+				leaseId,
+				leaseExpiresAt: leaseUntil(leaseMs),
+				updatedAt: now(),
+			},
+		});
+		if (taken === null) return null;
+		return {
+			leaseId,
+			work: {
+				payload: row.payload,
+				clawId: row.clawId,
+				threadId: row.threadId,
+				attempts: row.attempts,
+			},
+		};
+	}
 }
 
 // ── the outbox ───────────────────────────────────────────────────────────────────────────────────
