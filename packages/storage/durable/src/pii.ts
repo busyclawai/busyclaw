@@ -177,19 +177,13 @@ export function createPiiMappingStore(
 			// deployment-wide DSR answer and the only one this verb used to give.
 			const subjectRows = await db.findMany({
 				model: "pii_subject",
-				where: [
-					{ field: "subjectId", value: subjectId },
-					...(container
-						? ([
-								{ field: "scope", value: container.scope, connector: "AND" },
-								{
-									field: "scopeId",
-									value: container.scopeId,
-									connector: "AND",
-								},
-							] as const)
-						: []),
-				],
+				where: container
+					? [
+							{ field: "subjectId", value: subjectId },
+							{ field: "scope", value: container.scope, connector: "AND" },
+							{ field: "scopeId", value: container.scopeId, connector: "AND" },
+						]
+					: [{ field: "subjectId", value: subjectId }],
 			});
 			const seen = new Set<string>();
 			let erased = 0;
