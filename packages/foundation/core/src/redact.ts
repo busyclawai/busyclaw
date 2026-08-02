@@ -279,47 +279,42 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			);
 		},
 		deleteForSubject(subjectId, container) {
-			const all = subjectToKeys.get(subjectId);
-			// `container` BOUNDS which of this subject's rows are in scope. Omitted ⇒ all of them, the
-			// deployment-wide DSR sweep this verb used to be the only form of.
-			const keys =
-				all === undefined
-					? undefined
-					: container === undefined
-						? [...all]
-						: [...all].filter((key) => {
-								const mapping = byKey.get(key);
-								return (
-									mapping !== undefined &&
-									mapping.scope === container.scope &&
-									mapping.scopeId === container.scopeId
-								);
-							});
-			// The mark goes down for every container actually erased from — which is now at most the
-			// one named. A tombstone for a container the request never touched would report a standing
-			// erasure that did not happen.
-			const marks = erasedContainers.get(subjectId) ?? new Set<string>();
-			for (const key of keys ?? []) {
+			// `container` BOUNDS which of this subject's rows are in scope; omitted means all of them,
+			// the deployment-wide DSR sweep this verb used to be the only form of. A subject with no
+			// rows and a subject with no MATCHING rows do the same thing here, so both are the empty
+			// set rather than a case every line below has to re-handle.
+			const all = subjectToKeys.get(subjectId) ?? new Set<string>();
+			const inScope = (key: string): boolean => {
 				const mapping = byKey.get(key);
-				if (mapping) {
-					marks.add(erasureKey(mapping));
-				}
+				if (mapping === undefined) return false;
+				return (
+					container === undefined ||
+					(mapping.scope === container.scope &&
+						mapping.scopeId === container.scopeId)
+				);
+			};
+			const keys = [...all].filter(inScope);
+
+			// The mark goes down for every container actually erased from — at most the one named. A
+			// tombstone for a container the request never touched would report a standing erasure that
+			// did not happen.
+			const marks = erasedContainers.get(subjectId) ?? new Set<string>();
+			for (const key of keys) {
+				const mapping = byKey.get(key);
+				if (mapping) marks.add(erasureKey(mapping));
 			}
 			if (marks.size > 0) erasedContainers.set(subjectId, marks);
-			if (keys === undefined) return 0;
+
 			let erased = 0;
 			for (const key of keys) {
 				if (byKey.delete(key)) erased += 1;
 			}
-			// The value is gone — drop it from every other subject's index too.
+			// The value is gone — drop it from every other subject's index too, and from this one's.
+			// A bounded sweep leaves this subject's OTHER containers in place.
 			for (const set of subjectToKeys.values()) {
 				for (const key of keys) set.delete(key);
 			}
-			// Only the erased keys leave this subject's index; a bounded sweep leaves the rest.
-			if (all !== undefined) {
-				for (const key of keys) all.delete(key);
-				if (all.size === 0) subjectToKeys.delete(subjectId);
-			}
+			if (all.size === 0) subjectToKeys.delete(subjectId);
 			return erased;
 		},
 	};
