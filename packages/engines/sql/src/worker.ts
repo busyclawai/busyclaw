@@ -12,6 +12,7 @@
 
 import {
 	errorMessage,
+	isReservedScope,
 	type Principal,
 	safeFailureMessage,
 	stateError,
@@ -157,6 +158,7 @@ async function runTask(
 	runtime: Runtime,
 	claim: ClaimedTask,
 	control: RunControlPort,
+	onBoundary: (boundary: { scope: string; scopeId: string }) => void,
 	abortSignal?: RuntimeAbortSignal,
 	deadlineAt?: string,
 	principal?: Principal,
@@ -178,6 +180,10 @@ async function runTask(
 		// The engine, not the ingress, binds this — the intent outlives whichever process received it,
 		// so every slice including a resumed one has to be able to see it.
 		control,
+		// Captured here, written by the caller once the slice ends. The runtime resolves the boundary
+		// mid-run and has no store to write it with; the worker has the store and no idea what the
+		// boundary is until the runtime says so.
+		onAuthorityResolved: onBoundary,
 	};
 	const withCaller = runtimeRunOptionsWithCaller(options, principal);
 	if (claim.task.kind === RUNTIME_RUN_TASK) {
@@ -520,10 +526,18 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 				// by the worker. A run with none executes with none, and the floor refuses it — which is
 				// the correct answer for a task nobody can be shown to have asked for.
 				const run = await store.getRun(claim.task.runId);
+				// The boundary this slice resolves, recorded once the slice ends. A run started by a
+				// system principal on behalf of a tenant is otherwise owned by nobody a tenant admin
+				// can name — the PEP isolates by the run's own principal, and that principal is the
+				// system.
+				let boundary: { scope: string; scopeId: string } | undefined;
 				const runtimeTask = runTask(
 					runtime,
 					claim,
 					controlPort,
+					(resolved) => {
+						boundary = resolved;
+					},
 					heartbeat.abortSignal,
 					deadlineAt,
 					run?.principal,
@@ -547,6 +561,20 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 							reason: heartbeat.lostReason(),
 						}).message,
 					};
+				}
+
+				// Written before any of the terminal branches below, so a run is attributable as soon as
+				// its first slice ends however that slice ended — a parked or failed run is exactly the
+				// one a tenant admin most needs to find.
+				// A RESERVED scope is not written. `UNSCOPED` is the boundary core mints for the ABSENCE
+				// of one, and recording it would turn "this run belongs to nothing" into a value that
+				// looks exactly like a boundary every other unscoped run in the deployment also shares.
+				// An absent column says the same thing and cannot be mistaken for a tenant.
+				if (boundary && !isReservedScope(boundary.scope)) {
+					await store.updateRun(claim.task.runId, {
+						scope: boundary.scope,
+						scopeId: boundary.scopeId,
+					});
 				}
 
 				if (execution.outcome === "skipped") {

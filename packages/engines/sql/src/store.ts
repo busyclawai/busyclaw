@@ -61,6 +61,9 @@ export const RunRecord = ark({
 	status: RunStatus,
 	input: JsonRecord,
 	"principal?": OptionalString,
+	// The tenancy anchor, absent until a slice has resolved one.
+	"scope?": OptionalString,
+	"scopeId?": OptionalString,
 	// The control latch. Absent on every row written before it existed, and on every run nobody has
 	// asked anything of — which is almost all of them.
 	"controlRequestedAt?": OptionalString,

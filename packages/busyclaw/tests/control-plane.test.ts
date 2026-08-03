@@ -1601,3 +1601,61 @@ describe("run control plane — interrupt never reaches a tool", () => {
 		expect(prompts[1]).toContain("mid-tool arrival");
 	}, 15_000);
 });
+
+describe("run control plane — the run's tenancy boundary", () => {
+	// Until now every run resolved `scope: "personal", scopeId: <its own principal>`, which makes the
+	// scope branch of the ACL unfirable — the scope id IS the owner. So a run started by a `system:`
+	// principal on behalf of a tenant was owned by nobody a tenant admin could name: not listable,
+	// not stoppable, not attributable to the boundary it actually executed in.
+	it("records the boundary the run resolved, and only that tenant's members can reach it", async () => {
+		const { adapter, migrate, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+
+		// A host that resolves a TENANT from the run's context, which is the shape the anchor exists
+		// for — the api cannot know this at `startRun`, because this resolver has not run yet.
+		const claw = owned({
+			cronHandler: false,
+			database: adapter,
+			engine: sqlEngine({ store, workerId: "worker-1" }),
+			model: multiStepModel(0),
+			redaction: {
+				redactor: createStoredRedactor({
+					detector: emailDetector,
+					mappings: createPiiMappingStore(adapter),
+				}),
+			},
+			configScope: () => ({ scope: "team", scopeId: "team-eng" }),
+		} as Parameters<typeof owned>[0]);
+		await migrate(claw.$tables as SchemaDeclaration);
+
+		const run = await claw.api.startRun({ prompt: "go" });
+		// NOTHING is recorded yet. At `startRun` the api has an authenticated principal and has not
+		// run the host's resolver, so any value written here would be its guess at a tenant — and a
+		// guessed anchor manufactures false agreements as confidently as true ones.
+		expect((await store.getRun(run.id))?.scope).toBeUndefined();
+
+		const ticked = await claw.$context.engine?.work?.();
+		expect((ticked as { status?: string } | undefined)?.status).toBe(
+			"completed",
+		);
+
+		// After a slice has actually resolved one, it is on the row.
+		const executed = await store.getRun(run.id);
+		expect(executed).toMatchObject({ scope: "team", scopeId: "team-eng" });
+	});
+
+	// `UNSCOPED` is what core mints for the ABSENCE of a boundary, and its own module says a resolver
+	// returning a reserved scope "would turn 'belongs to nothing' into 'shared with everyone'". A
+	// deployment with no resolver resolves exactly that, so recording it verbatim would have put
+	// every unscoped run in the deployment into one shared bucket that any grant on it could reach.
+	it("never records the unscoped sentinel as if it were a tenant", async () => {
+		const h = await harness({ toolSteps: 0 });
+		const run = await h.engine.startRun({ prompt: "go" });
+		expect((await h.engine.work()).status).toBe("completed");
+
+		const executed = await h.store.getRun(run.id);
+		expect(executed?.scope).toBeUndefined();
+		expect(executed?.scopeId).toBeUndefined();
+	});
+});

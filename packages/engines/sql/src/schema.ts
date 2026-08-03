@@ -36,6 +36,15 @@ export const runFields = {
 	input: field.jsonObject({ required: true, immutable: true }),
 	principal: field.principal({ index: true, immutable: true }),
 
+	// ── THE TENANCY ANCHOR. Written by the WORKER from the authority the runtime actually resolved,
+	//    never by the api at `startRun` — at that point the host's configScope resolver has not run,
+	//    so any value would be the api's GUESS at a tenant. A guessed anchor is worse than none: it
+	//    manufactures false agreements and false disagreements with equal confidence. Absent until a
+	//    run has executed at least one slice, and absent forever on a single-tenant deployment that
+	//    resolves no scope at all.
+	scope: field.string({ index: true, input: false }),
+	scopeId: field.string({ index: true, input: false }),
+
 	// ── THE CONTROL LATCH. The PRESENCE of controlRequestedAt is the intent; `status === "running"
 	//    && controlRequestedAt !== undefined` IS the "stopping" state, derived, so runStatusValues
 	//    needs no new member. controlIntent may only be RAISED (suspend < stop < abort); the other

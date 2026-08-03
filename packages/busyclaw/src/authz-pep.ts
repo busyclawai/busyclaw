@@ -383,7 +383,29 @@ export function buildResourceRegistry(input: {
 			if (!run) return null;
 			const principal = run.principal;
 			if (principal === undefined || principal.trim() === "") return null;
-			return { createdBy: principal, scope: "personal", scopeId: principal };
+			// The DURABLE boundary when the run has one — the tenant its authority actually resolved
+			// to, recorded by the worker after the first slice. Without it every run resolves
+			// `scope: "personal", scopeId: <the principal>`, which makes the scope branch unfirable
+			// (the scope id IS the owner) and leaves a run started by a `system:` principal on behalf
+			// of a tenant owned by nobody a tenant admin can name.
+			//
+			// `createdBy` stays the run's own principal either way: the owner rule is unchanged, and
+			// this only ADDS the boundary path. A run with no recorded boundary keeps exactly the
+			// isolation it had.
+			// A RESERVED scope is refused here too, not only at the write. `UNSCOPED` is what core mints
+			// for the absence of a boundary, so treating it as one would put every unscoped run in the
+			// deployment into a single shared bucket — "belongs to nothing" becoming "shared with
+			// everyone", which is the exact failure `isReservedScope` exists to name. Defence at both
+			// ends because a row written by an older build, or by hand, must not be able to widen an
+			// ACL by looking like a tenant.
+			const recorded =
+				run.scope !== undefined &&
+				run.scopeId !== undefined &&
+				!isReservedScope(run.scope);
+			const boundary = recorded
+				? { scope: run.scope as string, scopeId: run.scopeId as string }
+				: { scope: "personal", scopeId: principal };
+			return { createdBy: principal, ...boundary };
 		});
 	}
 

@@ -124,6 +124,16 @@ export type EngineRunRecord = {
 	status: string;
 	input: JsonObject;
 	principal?: Principal;
+	/**
+	 * The boundary this run's authority actually resolved to, recorded by the engine after the run's
+	 * first slice. Absent before that, and absent forever on a deployment that resolves no scope.
+	 *
+	 * Backed by real columns — unlike `team`, which lived here for months with nothing behind it and
+	 * read as a fact to everyone who typed against this. The review rule that replaced it holds: a
+	 * new field on this type requires a `runFields` column in the same commit, or it does not land.
+	 */
+	scope?: string;
+	scopeId?: string;
 	createdAt: string;
 	updatedAt: string;
 };

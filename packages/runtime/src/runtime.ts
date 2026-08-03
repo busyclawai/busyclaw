@@ -246,6 +246,14 @@ export type RuntimeRunOptions = {
 	 * option schema, exactly like `deadlineAt` and `runId`.
 	 */
 	control?: RunControlPort;
+	/**
+	 * Reports the boundary this slice actually resolved, so the engine can record it on the run row.
+	 *
+	 * Server-side only, and deliberately a CALLBACK rather than a field on `RuntimeResult`: it fires
+	 * whether or not the slice reaches a terminal result, and widening a four-variant union validated
+	 * at three boundaries for one consumer would be the worse trade.
+	 */
+	onAuthorityResolved?: (boundary: { scope: string; scopeId: string }) => void;
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
 	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
 	 *  key, forge-proof). Seeded as `busyclaw__principal` by the trusted context assembly. */
@@ -1806,12 +1814,24 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		callerPrincipal: Principal | undefined,
 		recording: RuntimeRecordingContext | undefined,
 		runId: string | undefined,
+		onAuthorityResolved?: (boundary: { scope: string; scopeId: string }) => void,
 	): Promise<{ authority: RunAuthority; ctx: Record<string, unknown> }> => {
 		const { authority, ctx } = await resolveRunAuthority({
 			ctx: stripReserved(ctxInput ?? {}),
 			callerPrincipal,
 			resolveContext,
 		});
+		// Reported from INSIDE the resolver, not from its call sites. There are three of them —
+		// generate/stream, the approval resume, the checkpoint resume — and a RESUMED slice never
+		// passes through the first. Binding this at the call sites would therefore write the anchor
+		// on a run's first slice and silently stop writing it on exactly the slices this control
+		// plane exists to make possible, and a fourth entry point would forget it entirely.
+		if (onAuthorityResolved && authority.configScope) {
+			onAuthorityResolved({
+				scope: authority.configScope.scope,
+				scopeId: authority.configScope.scopeId,
+			});
+		}
 		return {
 			authority,
 			ctx: stampRedactionContainer(ctx, recording, runId),
@@ -1857,6 +1877,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			state.callerPrincipal,
 			recording,
 			state.runId,
+			options?.onAuthorityResolved,
 		);
 		state.authority = authority;
 		const { runTools, projection } = await resolveRunTools(resolvedCtx);
@@ -2080,6 +2101,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			executingPrincipal,
 			effectiveRecording,
 			effectiveRunId,
+			options?.onAuthorityResolved,
 		);
 		// TENANCY DRIFT. `scope`/`scopeId` are immutable columns on the record — the boundary the parked
 		// run was executing in. A resume resolves a FRESH context from the caller's `ctx`, and nothing
@@ -2376,6 +2398,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			callerPrincipal,
 			recording,
 			runId,
+			options?.onAuthorityResolved,
 		);
 		// The same tenancy check the approval resume makes, against the boundary the yielding run
 		// recorded on its checkpoint. A yield is a run continuing after a deadline, not a new run —
