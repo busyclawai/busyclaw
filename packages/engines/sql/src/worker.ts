@@ -178,6 +178,39 @@ async function runTask(
 	const withCaller = runtimeRunOptionsWithCaller(options, principal);
 	if (claim.task.kind === RUNTIME_RUN_TASK) {
 		const payload = runtimeRunPayload(claim.task.payload);
+		// A FIRST-SLICE task that is being claimed for the SECOND time is not a first slice. Its
+		// payload carries only a prompt, so `generate` would seed the transcript from that prompt and
+		// start at step 0 — re-running every step the earlier attempt already paid for, re-executing
+		// its tool calls, and orphaning the checkpoint it wrote on the way down. That is why this task
+		// kind is single-attempt today, and closing it is the prerequisite for it ever not being.
+		//
+		// Resolved by RUN id rather than from the run row's `resumeCheckpointId`: the column is written
+		// by a later transaction than the checkpoint row, so a crash in between leaves the transcript
+		// on disk with nothing pointing at it — exactly the case this is here to recover.
+		const pending = await runtime.checkpoints?.latestPendingForRun(
+			claim.task.runId,
+		);
+		if (pending) {
+			const resumed = await runtime.resumeRun(
+				pending.id,
+				payload.ctx,
+				withCaller,
+			);
+			// Lost the claim to a live attempt, or it was retired between the read and here. Either
+			// way this task has nothing to do and must not fall through to `generate`, which would
+			// restart the run.
+			if (!resumed) {
+				return {
+					outcome: "skipped",
+					reason: "run checkpoint is already claimed or spent",
+				};
+			}
+			return {
+				outcome: "ran",
+				result: workerRuntimeResult(resumed),
+				ctx: payload.ctx,
+			};
+		}
 		return {
 			outcome: "ran",
 			result: runtimeResult(

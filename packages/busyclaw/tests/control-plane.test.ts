@@ -428,3 +428,67 @@ describe("run control plane — proceed", () => {
 		).rejects.toThrow("no such record");
 	});
 });
+
+describe("run control plane — a re-claimed first slice", () => {
+	// THE ORDERING CONSTRAINT, made executable. `runtime.run` carries only a prompt, so a second
+	// claim used to seed the transcript from that prompt and start at step 0 — re-running every step
+	// the first attempt paid for, re-executing its tool calls, and orphaning the checkpoint it wrote.
+	// That is why the kind is single-attempt today; raising the counter before fixing it destroys
+	// work silently, which is the worst way to lose it.
+	it("continues from its checkpoint instead of re-running the whole run", async () => {
+		let clock = 0;
+		const h = harness({
+			toolSteps: 3,
+			now: () => iso(clock),
+			onTool: () => {
+				clock += 100_000; // burns past the soft deadline, so slice one parks
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		// Slice one runs a step and yields a checkpoint.
+		const first = await h.engine.work({ deadlineAt: iso(50_000) });
+		expect(first.status).toBe("yielded");
+		if (first.status !== "yielded") throw new Error("expected a yield");
+		expect(h.toolRuns()).toBe(1);
+
+		// Now simulate the crash this exists for: the yield's self-enqueued continuation never
+		// survived, and the ORIGINAL first-slice task is what comes back around. Re-admitting it by
+		// hand is the same thing a lease lapse produces once the retry counter is allowed to rise.
+		const resumeTasks = await h.db.findMany({
+			model: "runtime_task",
+			where: [
+				{ field: "runId", value: run.id },
+				{ field: "kind", value: "runtime.resumeRun", connector: "AND" },
+			],
+		});
+		for (const row of resumeTasks) {
+			const taskId = (row as { id?: unknown }).id;
+			if (typeof taskId !== "string") continue;
+			await h.db.update({
+				model: "runtime_task",
+				where: [{ field: "id", value: taskId }],
+				update: { status: "dead" },
+			});
+		}
+		await h.store.enqueueTask({
+			runId: run.id,
+			kind: "runtime.run",
+			payload: { prompt: "go" },
+		});
+
+		const second = await h.engine.work({ deadlineAt: iso(clock + 50_000) });
+		if (second.status === "failed") {
+			throw new Error(`tick failed: ${second.reason}`);
+		}
+
+		// THE assertion, and it is about the FIRST checkpoint rather than a step count. A slice that
+		// continues CONSUMES the checkpoint it resumed from; a slice that re-prompts never touches it,
+		// leaving a pending row on disk that nothing will ever read again — the orphan.
+		expect(second.status).toBe("yielded");
+		expect((await h.runtime.checkpoints?.get(first.checkpointId))?.status).toBe(
+			"consumed",
+		);
+		expect(h.toolRuns()).toBe(2);
+	});
+});

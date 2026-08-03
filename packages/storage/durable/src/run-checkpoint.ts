@@ -106,6 +106,23 @@ export function createRunCheckpointStore(
 			});
 		},
 
+		async latestPendingForRun(runId) {
+			// `pending` only: a `claimed` row belongs to a live attempt (or one whose lease has not
+			// lapsed yet), and handing it out here would be a second slice resuming the same transcript
+			// behind the first one's back. Newest first, because a run that parked more than once is
+			// continued from where it actually got to.
+			const rows = await db.findMany({
+				model: MODEL,
+				where: [
+					{ field: "runId", value: runId },
+					{ field: "status", value: "pending", connector: "AND" },
+				],
+				sortBy: { field: "createdAt", direction: "desc" },
+				limit: 1,
+			});
+			return rows[0] ?? null;
+		},
+
 		async claim(id, claimOptions = {}) {
 			// Two ordered CASes, never a read-then-write. Each `update` returns the row it changed or
 			// null when its predicate matched nothing, so exactly one concurrent caller can win either

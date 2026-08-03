@@ -89,6 +89,19 @@ export type RunCheckpointStore = {
 	/** Read a checkpoint without claiming it. */
 	get: (id: string) => Promise<RunCheckpointRecord | null>;
 	/**
+	 * The run's newest still-unconsumed checkpoint, or null.
+	 *
+	 * The AUTHORITATIVE way to find a run's resume state. A run row may also carry a
+	 * `resumeCheckpointId`, but that is a fast path a crash can eat: the checkpoint row is written
+	 * first and the column by a later transaction, so the window between them leaves a run whose
+	 * transcript is on disk and whose pointer to it is not. Resolving by run id closes that window,
+	 * and is also what lets a retried first-slice task discover it has work to continue rather than
+	 * starting the run over.
+	 */
+	latestPendingForRun: (
+		runId: string,
+	) => Promise<RunCheckpointRecord | null>;
+	/**
 	 * Atomically take the row for one attempt (race-safe): `pending` → `claimed`, or a `claimed`
 	 * row whose lease has EXPIRED → re-claimed by the new attempt. Returns null when the row is
 	 * absent, already `consumed`, or held by a live lease — none of which is this caller's failure.
