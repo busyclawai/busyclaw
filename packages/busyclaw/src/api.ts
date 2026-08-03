@@ -1834,12 +1834,23 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				},
 			});
 		},
-		continueEngineRun: (args, caller?: ClawApiCaller) => {
+		continueEngineRun: async (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
+			// R-M10. The engine can only CONTINUE the original run if it is told which one that is, and
+			// the answer is not the caller's to supply — it is recorded on the approval that parked it.
+			// Read here rather than trusted from `args.run.id`, which would let a caller point a
+			// continuation at somebody else's run; the PEP has already required `manage` on THIS
+			// approval, so its own `runId` is the one identity this call is entitled to resume.
+			const parked = await context.runtime.approvals?.get(args.approvalId);
+			// The runtime records it on the approval's metadata when it parks (runtime.ts sets
+			// `metadata.runId` from the run state), so this is the parked run's own identity — not a
+			// guess and not a value the caller could have chosen.
+			const parkedRunId = parked?.metadata?.runId;
 			return requireEngine(context.engine).continueRun({
 				...args,
 				run: {
 					...args.run,
+					...(typeof parkedRunId === "string" ? { id: parkedRunId } : {}),
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
 				},
 			});

@@ -81,13 +81,34 @@ function createSqlEngineHandle(input: {
 			continueInput: EngineContinueRunInput,
 		): Promise<EngineRunHandle> {
 			const run = await input.config.store.transaction(async (store) => {
-				const run = await store.createRun({
-					...continueInput.run,
-					input: {
-						approvalId: continueInput.approvalId,
-						ctx: continueInput.ctx ?? {},
-					},
-				});
+				// R-M10. A continuation used to CREATE a run, unconditionally. So a resumed run got a
+				// second engine row while the runtime restored the original `runId` from the checkpoint —
+				// two identities for one logical run, and every question asked of it ("what did run X
+				// do?", "is run X still going?") answerable two ways depending on which id you held.
+				// Recovery was the worst of it: the row that recorded the park and the row that recorded
+				// the resume were not the same row, so neither told the whole story.
+				//
+				// Given the original's id, the original is CONTINUED — the task is enqueued against it
+				// and it goes back to `queued`. Idempotent by construction: a continuation delivered
+				// twice finds the run the first one left and adds work to it rather than forking a third
+				// identity. Without an id there is nothing to continue and a run is created, which is the
+				// old behaviour for callers that never had one.
+				const wanted = continueInput.run?.id;
+				const existing = wanted ? await store.getRun(wanted) : null;
+				const run =
+					existing ??
+					(await store.createRun({
+						...continueInput.run,
+						input: {
+							approvalId: continueInput.approvalId,
+							ctx: continueInput.ctx ?? {},
+						},
+					}));
+				if (existing) {
+					// Back to queued: the worker picks it up again, and a run left `running` by the park
+					// would otherwise look like work already in flight.
+					await store.updateRun(existing.id, { status: "queued" });
+				}
 				await store.enqueueTask({
 					kind: RUNTIME_CONTINUE_RUN_TASK,
 					payload: {

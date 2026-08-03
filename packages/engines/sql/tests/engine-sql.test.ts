@@ -811,3 +811,60 @@ describe("@busyclaw/engine-sql", () => {
 		);
 	});
 });
+
+// R-M10. A continuation used to CREATE a run, unconditionally — so a resumed run got a SECOND engine
+// row while the runtime restored the original `runId` from the checkpoint. Two identities for one
+// logical run: "what did run X do?" had two answers depending on which id you held, and the row that
+// recorded the park was not the row that recorded the resume, so neither told the whole story.
+describe("a continuation continues the run that parked (R-M10)", () => {
+	const engineOver = (store: ReturnType<typeof createSqlEngineStore>) =>
+		sqlEngine({ store }).create(
+			engineRuntime({
+				generate: async () => ({ status: "completed", text: "ok", steps: 1 }),
+				continueRun: async () => null,
+			}),
+		).engine;
+
+	it("enqueues against the ORIGINAL run rather than forking a second identity", async () => {
+		const store = createSqlEngineStore(memoryAdapter());
+		const engine = engineOver(store);
+
+		const parked = await store.createRun({ input: { prompt: "hello" } });
+		const handle = await engine.continueRun({
+			approvalId: "appr-1",
+			run: { id: parked.id },
+		});
+
+		// SAME id — not a new row beside it.
+		expect(handle.id).toBe(parked.id);
+		// …and it is queued again, so a worker picks it up rather than seeing work already in flight.
+		expect((await store.getRun(parked.id))?.status).toBe("queued");
+	});
+
+	// Delivered twice, it finds what the first left and adds work to it — it does not fork a third.
+	it("is idempotent in run identity across a repeated continuation", async () => {
+		const store = createSqlEngineStore(memoryAdapter());
+		const engine = engineOver(store);
+		const parked = await store.createRun({ input: { prompt: "hello" } });
+
+		const first = await engine.continueRun({
+			approvalId: "appr-1",
+			run: { id: parked.id },
+		});
+		const second = await engine.continueRun({
+			approvalId: "appr-1",
+			run: { id: parked.id },
+		});
+		expect(first.id).toBe(parked.id);
+		expect(second.id).toBe(parked.id);
+	});
+
+	// A caller with no parked run to name still gets one created — the old behaviour, unchanged.
+	it("creates a run when there is no original to continue", async () => {
+		const store = createSqlEngineStore(memoryAdapter());
+		const handle = await engineOver(store).continueRun({
+			approvalId: "appr-1",
+		});
+		expect(await store.getRun(handle.id)).not.toBeNull();
+	});
+});
