@@ -184,6 +184,19 @@ export type SqlEngineStore = {
 		id: string,
 		patch: EntityUpdateInput<typeof runFields>,
 	) => Promise<RunRecord | null>;
+	/**
+	 * `updateRun`, but only when the run is currently in one of `from` — a compare-and-swap, so it
+	 * returns the row it changed or `null` when the run had moved on. Every write that could land on
+	 * a run somebody else already finished belongs here rather than on `updateRun`: an unconditional
+	 * status write is how a terminal run gets resurrected by a claim that was already too late.
+	 */
+	updateRunIfStatus: (
+		id: string,
+		input: {
+			from: readonly RunStatus[];
+			patch: EntityUpdateInput<typeof runFields>;
+		},
+	) => Promise<RunRecord | null>;
 	enqueueTask: (input: EnqueueTaskInput) => Promise<RuntimeTask>;
 	getTask: (id: string) => Promise<RuntimeTask | null>;
 	claimDueTask: (input: ClaimTaskInput) => Promise<ClaimedTask | null>;
@@ -217,6 +230,10 @@ export type SqlEngineStore = {
 	) => Promise<IdempotencyRecord | null>;
 	saveIdempotency: (input: SaveIdempotencyInput) => Promise<IdempotencyRecord>;
 };
+
+/** A run in one of these still has work ahead of it; anything else is finished and must not be
+ *  written back into flight by a claim that lost its race. */
+const NON_TERMINAL_RUN_STATUSES = ["queued", "running", "waiting"] as const;
 
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
@@ -370,6 +387,25 @@ export function createSqlEngineStore(
 			});
 		},
 
+		async updateRunIfStatus(id, input) {
+			// `in` over the allowed statuses, so the whole guard is one predicate and one round trip.
+			// The adapter contract is that `update` returns the row or null when nothing matched, which
+			// is what makes this a CAS rather than a read-then-write.
+			return db.update({
+				model: "run",
+				where: [
+					{ field: "id", value: id },
+					{
+						field: "status",
+						value: [...input.from],
+						operator: "in",
+						connector: "AND",
+					},
+				],
+				update: { ...input.patch, updatedAt: now() },
+			});
+		},
+
 		async enqueueTask(input) {
 			const ts = now();
 			return db.create({
@@ -458,7 +494,41 @@ export function createSqlEngineStore(
 					});
 					continue;
 				}
-				await store.updateRun(updated.runId, { status: "running" });
+				// CONDITIONAL. A claim can arrive after the run it belongs to has already reached a
+				// terminal status — a duplicate task, a late deadline arm, a stop that landed between
+				// this claim's task CAS and here. Writing `running` unconditionally resurrected it:
+				// `completed` became `running` and stayed there, contradicting the run's own event
+				// stream, and a cancelled run silently went back to work.
+				const started = await store.updateRunIfStatus(updated.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: { status: "running" },
+				});
+				if (!started) {
+					// The run is finished and this task has nothing to do. Retire it and release the
+					// lease rather than handing a worker a slice against a corpse.
+					await db.update({
+						model: "runtime_task",
+						where: [
+							{ field: "id", value: updated.id },
+							{ field: "status", value: "leased", connector: "AND" },
+							{ field: "leaseId", value: leaseId, connector: "AND" },
+						],
+						update: {
+							status: "dead",
+							lastError:
+								"run reached a terminal status before this task was claimed",
+							leaseId: null,
+							workerId: null,
+							leasedUntil: null,
+							updatedAt: ts,
+						},
+					});
+					await db.delete({
+						model: "lease",
+						where: [{ field: "id", value: leaseId }],
+					});
+					continue;
+				}
 				return { task: updated, leaseId, leaseToken, expiresAt };
 			}
 			return null;

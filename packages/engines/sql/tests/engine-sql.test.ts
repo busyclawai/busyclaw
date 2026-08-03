@@ -816,14 +816,58 @@ describe("@busyclaw/engine-sql", () => {
 		expect((await store.getTask(task.id))?.status).toBe("completed");
 		expect((await store.getTask(task.id))?.lastError).toBeUndefined();
 
-		// KNOWN RESIDUE, pinned deliberately so the fix has something to change. The skip branch writes
-		// nothing to the run, but `claimDueTask` already did: it ends with an UNCONDITIONAL
-		// `updateRun(runId, { status: "running" })` (store.ts:461) that does not look at the run at all.
-		// So a task that turns out to have no work still leaves the run `running`. Closing that needs
-		// the conditional `updateRunIfStatus` in docs/plans/run-control-plane.md slice 1 — at which
-		// point this expectation becomes `waiting`/whatever the real owner left, and should be updated
-		// in the same commit.
+		// The claim moved a non-terminal run to `running`, which is correct and stays. What it no longer
+		// does is move a TERMINAL one — see "a claim never resurrects a run that already finished".
 		expect((await store.getRun(run.id))?.status).toBe("running");
+	});
+
+	// `claimDueTask` used to end with an UNCONDITIONAL `updateRun(runId, "running")` that never looked
+	// at the run. A task claimed after its run had finished — a duplicate, a late arm, a stop that
+	// landed mid-claim — wrote `completed` back to `running` and left it there, contradicting the run's
+	// own event stream. Worse for cancellation: a cancelled run silently went back to work.
+	it("a claim never resurrects a run that already finished", async () => {
+		const store = createSqlEngineStore(memoryAdapter(), {
+			now: () => "2026-01-01T00:00:00.000Z",
+		});
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+		});
+		// The run finishes while this task is still sitting pending.
+		await store.updateRun(run.id, { status: "completed" });
+
+		expect(await store.claimDueTask({ workerId: "worker-1" })).toBeNull();
+		// The run keeps the status it earned…
+		expect((await store.getRun(run.id))?.status).toBe("completed");
+		// …and the task is retired rather than left to be re-claimed forever.
+		expect((await store.getTask(task.id))?.status).toBe("dead");
+	});
+
+	it("updateRunIfStatus is a CAS — it returns null and writes nothing when the run moved on", async () => {
+		const store = createSqlEngineStore(memoryAdapter(), {
+			now: () => "2026-01-01T00:00:00.000Z",
+		});
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		await store.updateRun(run.id, { status: "cancelled" });
+
+		expect(
+			await store.updateRunIfStatus(run.id, {
+				from: ["queued", "running", "waiting"],
+				patch: { status: "running" },
+			}),
+		).toBeNull();
+		expect((await store.getRun(run.id))?.status).toBe("cancelled");
+
+		// …and it DOES write when the run is still in one of `from`.
+		await store.updateRun(run.id, { status: "queued" });
+		expect(
+			await store.updateRunIfStatus(run.id, {
+				from: ["queued", "running", "waiting"],
+				patch: { status: "running" },
+			}),
+		).toMatchObject({ status: "running" });
 	});
 });
 
