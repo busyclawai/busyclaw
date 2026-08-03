@@ -1,4 +1,14 @@
 export {
+	createSecretCipher,
+	parseSecretStoreKey,
+	SECRET_STORE_KEY_NAME,
+	type SecretBinding,
+	type SecretCipher,
+	type SecretKeyring,
+	secretKeyId,
+	secretKeyring,
+} from "@busyclaw/secrets";
+export {
 	createSecretsManagementApi,
 	type DeleteSecretInput,
 	deleteSecretInput,
@@ -10,16 +20,6 @@ export {
 	type StoredSecretView,
 	setSecretInput,
 } from "./api";
-export {
-	createSecretCipher,
-	parseSecretStoreKey,
-	SECRET_STORE_KEY_NAME,
-	type SecretBinding,
-	type SecretCipher,
-	type SecretKeyring,
-	secretKeyId,
-	secretKeyring,
-} from "./crypto";
 export {
 	SECRET_STORE_PROVIDER_NAME,
 	type SecretStoreOptions,

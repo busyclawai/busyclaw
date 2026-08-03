@@ -8,11 +8,11 @@ import {
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
+import type { SecretCipher } from "@busyclaw/secrets";
 import { type EntityWhere, entityView } from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
-import type { SecretCipher } from "./crypto";
 import {
 	setStoredSecretInput,
 	type setStoredSecretInputOptions,

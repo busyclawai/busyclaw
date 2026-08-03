@@ -180,3 +180,20 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 
 	return { get, has, require: requireSecret, with: withCtx };
 }
+
+// The at-rest cipher. R-M07: it lived in @busyclaw/secrets-plugin, where the only packages that could
+// reach it were ones allowed to depend on a plugin — which the storage layer, the channels plugin and
+// the SQL engine are not. It is the SAME keyring, key ids, AAD binding and TTL-cached resolution; only
+// its address changed, so every consumer that needs to stop storing a credential in the clear can now
+// use the one that already exists instead of writing a second.
+export {
+	createSecretCipher,
+	parseSecretStoreKey,
+	SECRET_STORE_KEY_NAME,
+	type SecretBinding,
+	type SecretCipher,
+	type SecretCipherOptions,
+	type SecretKeyring,
+	secretKeyId,
+	secretKeyring,
+} from "./crypto";

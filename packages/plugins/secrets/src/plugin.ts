@@ -9,7 +9,6 @@ import {
 	type Secrets,
 	stateError,
 } from "@busyclaw/contracts";
-import { createSecretsManagementApi, type SecretsPluginApi } from "./api";
 import {
 	createSecretCipher,
 	parseSecretStoreKey,
@@ -17,7 +16,8 @@ import {
 	type SecretCipher,
 	type SecretKeyring,
 	secretKeyring,
-} from "./crypto";
+} from "@busyclaw/secrets";
+import { createSecretsManagementApi, type SecretsPluginApi } from "./api";
 import { storedSecretModels } from "./schema";
 import {
 	createStoredSecretsStore,

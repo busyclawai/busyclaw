@@ -359,6 +359,12 @@ importers:
       '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@noble/ciphers':
+        specifier: 2.2.0
+        version: 2.2.0
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
 
   packages/foundation/vendors:
     dependencies:
