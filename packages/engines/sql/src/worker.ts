@@ -425,14 +425,33 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
 	// upstream of it.
 	const controlPort: RunControlPort = {
-		poll: async (runId) => {
+		poll: async (runId, seenSeq) => {
+			// ONE primary-key read per step, and that is the steady-state cost of the whole control
+			// plane. The message table is touched only when the watermark moved — which is why every
+			// control write bumps it in the same transaction.
 			const run = await store.getRun(runId);
-			if (run?.controlRequestedAt === undefined) return undefined;
-			// The LADDER collapses to what the loop can act on. `abort` is not a different park — it is
-			// a stop that additionally tears down the in-flight provider call, which is a separate
-			// mechanism and a later slice; until it exists an abort still parks like a stop rather than
-			// being silently ignored.
-			return run.controlIntent === "suspend" ? "suspended" : "stopped";
+			if (!run) return { seq: seenSeq };
+			const seq = run.controlSeq ?? 0;
+			// The LADDER collapses to what the loop can act on. `abort` is not a different park — it
+			// tears down the in-flight call as well, which the heartbeat does; here it parks like a
+			// stop rather than being silently ignored.
+			const park =
+				run.controlRequestedAt !== undefined
+					? run.controlIntent === "suspend"
+						? ("suspended" as const)
+						: ("stopped" as const)
+					: undefined;
+			if (seq === seenSeq) return { seq, ...(park ? { park } : {}) };
+			const drained = await store.drainMessages({
+				toRunId: runId,
+				afterSeq: seenSeq,
+				step: 0,
+			});
+			return {
+				seq,
+				...(park ? { park } : {}),
+				...(drained.length ? { deliver: drained.map((row) => row.body) } : {}),
+			};
 		},
 	};
 	return {

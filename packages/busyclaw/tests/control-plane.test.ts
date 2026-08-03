@@ -14,7 +14,10 @@ import { durableRedactor, owned } from "./fixtures";
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /** Tool-calls `toolSteps` times, then answers with text — a run with more than one step to stop in. */
-function multiStepModel(toolSteps: number): RuntimeModel {
+function multiStepModel(
+	toolSteps: number,
+	onCall?: (prompt: unknown) => void,
+): RuntimeModel {
 	let call = 0;
 	const usage = {
 		inputTokens: {
@@ -30,7 +33,8 @@ function multiStepModel(toolSteps: number): RuntimeModel {
 		provider: "mock",
 		modelId: "mock",
 		supportedUrls: {},
-		doGenerate: async () => {
+		doGenerate: async (options: { prompt?: unknown }) => {
+			onCall?.(options.prompt);
 			if (call++ < toolSteps) {
 				return {
 					content: [
@@ -64,14 +68,26 @@ function harness(input: {
 	toolSteps: number;
 	onTool?: (n: number) => Promise<void> | void;
 	now?: () => string;
+	/** Every model call's prompt, so a test can assert WHEN a message became visible. */
+	onModelCall?: (prompt: unknown) => void;
+	/** Counts reads of the inbox table — the watermark exists so this stays at zero when quiet. */
+	onInboxRead?: () => void;
 }) {
 	// A database-backed runtime requires a durable redactor — the transcript a checkpoint persists
 	// must already be placeholder-clean, so there has to be something that tokenized it.
-	const { db, redactor } = durableRedactor();
+	const { db: rawDb, redactor } = durableRedactor();
+	// Wrapped so a test can count what the hot path actually touches.
+	const db: typeof rawDb = {
+		...rawDb,
+		findMany: async (args) => {
+			if (args.model === "run_message") input.onInboxRead?.();
+			return rawDb.findMany(args);
+		},
+	};
 	const store = createSqlEngineStore(db, input.now ? { now: input.now } : {});
 	let toolRuns = 0;
 	const runtime = createRuntime({
-		model: multiStepModel(input.toolSteps),
+		model: multiStepModel(input.toolSteps, input.onModelCall),
 		database: db,
 		redactor,
 		// Same reason as the task lease below: a tool that advances the fake clock past the default
@@ -886,5 +902,113 @@ describe("run control plane — the inbox: admit", () => {
 		expect(admitted.every((result) => result.admitted)).toBe(true);
 		const seqs = admitted.map((result) => result.seq).sort((a, b) => a - b);
 		expect(new Set(seqs).size).toBe(6); // no two messages share a place in the order
+	});
+});
+
+describe("run control plane — the inbox: delivery", () => {
+	it("delivers a next_step message into the run's very next model call", async () => {
+		const seen: string[] = [];
+		const h = harness({
+			toolSteps: 2,
+			onTool: async (n) => {
+				if (n === 1) {
+					await h.engine.deliverMessage({
+						toRunId: runId,
+						body: { text: "stop what you are doing and say hello" },
+						mode: "next_step",
+						sender: userPrincipal("operator"),
+						idempotencyKey: "k1",
+					});
+				}
+			},
+			onModelCall: (messages) => {
+				seen.push(JSON.stringify(messages));
+			},
+		});
+		let runId = "";
+		const run = await h.engine.startRun({ prompt: "go" });
+		runId = run.id;
+
+		expect((await h.engine.work()).status).toBe("completed");
+
+		// The message was admitted DURING step 0's tool call, so it must appear in the step 1 prompt —
+		// the next model call after the control point that found it. Not later, and not never.
+		expect(seen[0]).not.toContain("say hello");
+		expect(seen[1]).toContain("say hello");
+
+		const rows = await h.db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect(rows).toHaveLength(1);
+		expect((rows[0] as { status?: string }).status).toBe("delivered");
+	});
+
+	it("delivers a message admitted BEFORE the run was ever claimed", async () => {
+		const seen: string[] = [];
+		const h = harness({
+			toolSteps: 0,
+			onModelCall: (messages) => {
+				seen.push(JSON.stringify(messages));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		// Queued, never claimed. The watermark starts below zero precisely so the first control point
+		// still looks — otherwise a message admitted in this window is never found.
+		await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "read me first" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+
+		expect((await h.engine.work()).status).toBe("completed");
+		expect(seen[0]).toContain("read me first");
+	});
+
+	it("never delivers an at_turn_end message into THIS run", async () => {
+		const seen: string[] = [];
+		const h = harness({
+			toolSteps: 0,
+			onModelCall: (messages) => {
+				seen.push(JSON.stringify(messages));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "for the next run" },
+			mode: "at_turn_end",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+
+		expect((await h.engine.work()).status).toBe("completed");
+		expect(seen.join("")).not.toContain("for the next run");
+		// It is still SITTING there, pending — wake fuel for whoever starts the next run, not a
+		// message that was silently dropped.
+		const rows = await h.db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect((rows[0] as { status?: string }).status).toBe("pending");
+	});
+
+	// The whole point of the watermark: the message table is touched only when the counter moved, so
+	// a quiet inbox costs one primary-key read of the run row per step and nothing else.
+	it("never reads the inbox when the watermark has not moved", async () => {
+		let inboxReads = 0;
+		const h = harness({
+			toolSteps: 2,
+			onInboxRead: () => {
+				inboxReads++;
+			},
+		});
+		await h.engine.startRun({ prompt: "go" });
+		await h.engine.work();
+		// The FIRST control point always looks (the watermark starts below zero, so a message admitted
+		// while the run was queued is found). After that, nothing moved, so nothing is queried.
+		expect(inboxReads).toBe(1);
 	});
 });

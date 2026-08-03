@@ -15,6 +15,7 @@ import type {
 import { modelMiddleware } from "./model-middleware";
 import { abortIfNeeded, type RunState } from "./run-state";
 import type {
+	RunControlVerdict,
 	RunParkReason,
 	RuntimeAbortSignal,
 	RuntimeModel,
@@ -80,7 +81,7 @@ export type AiSdkLoopInput = {
 	 * site changing again. Absent — an ad-hoc `generate` with no database — is one branch and zero
 	 * reads, and behaviour is byte-identical to a loop that never had it.
 	 */
-	controlPoint?: (step: number) => Promise<RunParkReason | undefined>;
+	controlPoint?: (seenSeq: number) => Promise<RunControlVerdict>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
 	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
 	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
@@ -355,6 +356,9 @@ export async function runAiSdkLoop(
 	let runUsage: RuntimeModelUsage | undefined;
 
 	const startStep = input.startStep ?? 0;
+	// Starts BELOW zero so the first control point always looks: a message admitted while the run was
+	// still queued has to be found, and `controlSeq` is 0 on a run nobody has written to yet.
+	let seenControlSeq = -1;
 
 	// Park the run HERE: every tool result of the previous step is already in `messages` and no call
 	// is pending, so the transcript is a legal resume point by construction. The transcript is also
@@ -399,9 +403,15 @@ export async function runAiSdkLoop(
 	for (let step = startStep; step < input.maxSteps; step++) {
 		abortIfNeeded(input.abortSignal);
 
-		// THE CONTROL POINT — one await, and only when a control seam was supplied.
-		const requested = await input.controlPoint?.(step);
-		if (requested) return parkHere(step, requested);
+		// THE CONTROL POINT — one await, and only when a control seam was supplied. Messages first,
+		// then the park: a suspend that arrives together with a message should carry that message into
+		// the checkpoint, so the resumed run sees it rather than finding it again on the far side.
+		if (input.controlPoint) {
+			const verdict = await input.controlPoint(seenControlSeq);
+			seenControlSeq = verdict.seq;
+			if (verdict.deliver?.length) messages.push(...verdict.deliver);
+			if (verdict.park) return parkHere(step, verdict.park);
+		}
 
 		// The deadline arm lives here too, so there is one park site rather than two. It requires
 		// PROGRESS: without `step > startStep` a run resumed at its deadline parks again immediately at

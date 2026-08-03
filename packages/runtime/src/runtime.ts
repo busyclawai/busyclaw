@@ -193,8 +193,27 @@ export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
  * no business knowing where intents are stored or what else they could say — it learns only the park
  * reason, and the engine owns everything behind that.
  */
+/** What one look outward found. `seq` is the run's control watermark as of this read — the loop
+ *  hands it back next time so the port can skip the message query entirely when nothing moved. */
+export type RunControlVerdict = {
+	seq: number;
+	park?: RunParkReason;
+	/** Already-tokenized message bodies, in the run's own order. */
+	deliver?: ModelMessage[];
+};
+
+/** What the ENGINE answers. Deliberately not `ModelMessage`: the engine stores bodies and knows
+ *  nothing about how a model is addressed, and teaching it would drag the AI SDK into a package
+ *  whose whole job is rows. The runtime shapes them on the way through. */
 export type RunControlPort = {
-	poll: (runId: string) => Promise<RunParkReason | undefined>;
+	poll: (
+		runId: string,
+		seenSeq: number,
+	) => Promise<{
+		seq: number;
+		park?: RunParkReason;
+		deliver?: readonly Record<string, unknown>[];
+	}>;
 };
 
 export type RuntimeRunOptions = {
@@ -1163,12 +1182,27 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		}
 	};
 
+	// A stored message body as the model sees it. It arrives ALREADY tokenized — the door redacted it
+	// into the receiving run's container — so this shapes it and never touches its content.
+	const asInboxMessage = (body: Record<string, unknown>): ModelMessage => ({
+		role: "user",
+		content: typeof body.text === "string" ? body.text : JSON.stringify(body),
+	});
+
 	// Binds the control port to a run's identity, so the loop asks "should I stop?" without ever
 	// holding a run id it could ask about somebody ELSE's run.
 	const controlPointFor =
 		(control: RunControlPort, runId: string) =>
-		async (): Promise<RunParkReason | undefined> =>
-			control.poll(runId);
+		async (seenSeq: number): Promise<RunControlVerdict> => {
+			const verdict = await control.poll(runId, seenSeq);
+			return {
+				seq: verdict.seq,
+				...(verdict.park ? { park: verdict.park } : {}),
+				...(verdict.deliver?.length
+					? { deliver: verdict.deliver.map(asInboxMessage) }
+					: {}),
+			};
+		};
 
 	// Binds the checkpoint store to a run's identity so the loop can park a yield without knowing
 	// where checkpoints live. Undefined when no database is configured — the loop then cannot yield.

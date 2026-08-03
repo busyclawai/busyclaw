@@ -241,6 +241,14 @@ export type SqlEngineStore = {
 	 *  a withheld task cannot be picked up later by a host that never saw the intent. Returns how
 	 *  many were withheld. */
 	deadLetterPendingTasks: (runId: string, reason: string) => Promise<number>;
+	/** Take every undelivered message for a run past `afterSeq`, in the run's own order, and mark it
+	 *  delivered at `step`. Exactly one reader — the run itself, already fenced by the engine lease on
+	 *  its own task — so there is no claim and no lease on the row. */
+	drainMessages: (input: {
+		toRunId: string;
+		afterSeq: number;
+		step: number;
+	}) => Promise<readonly { seq: number; body: JsonObject }[]>;
 	/** Admit a message to a run's inbox. Mints `seq` and decides the bounce in ONE conditional write
 	 *  against the run row — see the implementation for why those cannot be two. */
 	admitMessage: (input: {
@@ -733,6 +741,43 @@ export function createSqlEngineStore(
 				where: [{ field: "id", value: lease.id }],
 			});
 			return row;
+		},
+
+		async drainMessages({ toRunId, afterSeq, step }) {
+			const rows = await db.findMany({
+				model: "run_message",
+				where: [
+					{ field: "toRunId", value: toRunId },
+					{ field: "status", value: "pending", connector: "AND" },
+					{ field: "seq", value: afterSeq, operator: "gt", connector: "AND" },
+					// `at_turn_end` is wake fuel for the NEXT run on this conversation and never enters
+					// this one. `interrupt` drains here too until it has teeth of its own — degrading to
+					// "arrives at the next step" is honest; silently never arriving is not.
+					{
+						field: "mode",
+						value: ["next_step", "interrupt"],
+						operator: "in",
+						connector: "AND",
+					},
+				],
+				sortBy: { field: "seq", direction: "asc" },
+			});
+			const ts = now();
+			const drained: { seq: number; body: JsonObject }[] = [];
+			for (const row of rows) {
+				// Pinned on `pending`: a second reader cannot exist by construction, but a retry of THIS
+				// slice can, and marking an already-delivered row again would move its step.
+				const taken = await db.update({
+					model: "run_message",
+					where: [
+						{ field: "id", value: row.id },
+						{ field: "status", value: "pending", connector: "AND" },
+					],
+					update: { status: "delivered", deliveredAtStep: step, updatedAt: ts },
+				});
+				if (taken) drained.push({ seq: row.seq, body: row.body });
+			}
+			return drained;
 		},
 
 		async admitMessage(input) {
