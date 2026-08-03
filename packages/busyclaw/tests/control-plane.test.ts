@@ -596,3 +596,84 @@ describe("run control plane — stop", () => {
 		);
 	});
 });
+
+describe("run control plane — abort", () => {
+	/** A model that never resolves until its own AbortSignal fires — the only way to prove an abort
+	 *  reached the PROVIDER rather than merely being noticed by the loop one step later. */
+	function hangingModel(onAbort: () => void): RuntimeModel {
+		return {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async (options: { abortSignal?: AbortSignal }) =>
+				new Promise((_resolve, reject) => {
+					const signal = options.abortSignal;
+					if (!signal) throw new Error("no abort signal reached the model");
+					signal.addEventListener("abort", () => {
+						onAbort();
+						reject(new Error("aborted"));
+					});
+				}),
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		} as RuntimeModel;
+	}
+
+	// Bounded explicitly. Without the heartbeat's latch read this test does not fail an assertion, it
+	// HANGS — the model never resolves and nothing ever fires the signal. A hang reads as a broken
+	// runner rather than a broken mechanism, so the timeout is what turns the negative case into a
+	// report somebody can act on.
+	it("tears down an in-flight model call and records the run cancelled, not failed", async () => {
+		const { db, redactor } = durableRedactor();
+		const store = createSqlEngineStore(db);
+		let providerSawAbort = false;
+		const runtime = createRuntime({
+			model: hangingModel(() => {
+				providerSawAbort = true;
+			}),
+			database: db,
+			redactor,
+		});
+		// A short lease so the heartbeat — which is what observes the latch — ticks promptly.
+		const { engine } = sqlEngine({
+			store,
+			workerId: "worker-1",
+			leaseTtlMs: 600,
+		}).create(runtime);
+
+		const run = await engine.startRun({ prompt: "go" });
+		// Latched BEFORE the claim, so the very first heartbeat of the slice sees it. The run is
+		// `queued`, so this settles synchronously — which is not what we want to test, so drive the
+		// run to `running` first by claiming it, then latch.
+		const tick = engine.work();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		await engine.controlRun({
+			runId: run.id,
+			intent: "abort",
+			requestedBy: userPrincipal("operator"),
+		});
+
+		const result = await tick;
+		// THE assertion that matters: the provider's own signal fired. A cooperative stop would have
+		// left this false and simply never returned.
+		expect(providerSawAbort).toBe(true);
+		expect(result.status).toBe("cancelled");
+
+		const aborted = await store.getRun(run.id);
+		expect(aborted?.status).toBe("cancelled"); // NOT failed
+		const events = (await store.events(run.id)).filter(
+			(event) => event.type === "run.cancelled",
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0]?.payload).toMatchObject({
+			reason: "aborted",
+			requestedBy: userPrincipal("operator"),
+		});
+		// A genuine failure still reads as one — the two paths do not collapse.
+		expect(
+			(await store.events(run.id)).some((event) => event.type === "run.failed"),
+		).toBe(false);
+	}, 15_000);
+});

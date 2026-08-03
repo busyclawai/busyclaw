@@ -27,8 +27,8 @@ import {
 	runtimeRunOptionsWithCaller,
 } from "@busyclaw/runtime";
 import { type } from "arktype";
-import { NON_TERMINAL_RUN_STATUSES } from "./store";
 import type { ClaimedTask, RuntimeTask, SqlEngineStore } from "./store";
+import { NON_TERMINAL_RUN_STATUSES } from "./store";
 
 export const RUNTIME_RUN_TASK = "runtime.run";
 export const RUNTIME_CONTINUE_RUN_TASK = "runtime.continueRun";
@@ -77,6 +77,9 @@ export type WorkerTickResult =
 	/** Parked on an external intent. Unlike `yielded`, NO continuation task was enqueued — the run
 	 *  waits until somebody asks it to proceed. */
 	| { status: "parked"; task: RuntimeTask; checkpointId: string }
+	/** Torn down mid-step by an abort. Distinct from `parked` because there is NO checkpoint: the
+	 *  step was cancelled in flight, so there is no resumable point to have written. */
+	| { status: "cancelled"; task: RuntimeTask }
 	| { status: "completed"; task: RuntimeTask }
 	/** The task had nothing left to do — its resume state is already claimed or spent. The task is
 	 *  retired and the RUN is left exactly as it was. Not a failure: nobody's work was lost. */
@@ -300,11 +303,26 @@ type WorkerAbortController = {
 	abort: () => void;
 };
 
+/** Warned once per process, not once per task — a host without AbortController would otherwise
+ *  emit this on every claim, which is how a real warning becomes noise nobody reads. */
+let warnedMissingAbortController = false;
+
 function createWorkerAbortController(): WorkerAbortController {
 	const Controller = (
 		globalThis as { AbortController?: new () => WorkerAbortController }
 	).AbortController;
 	if (Controller) return new Controller();
+	// LOUD, because `abort` silently means something weaker here. `combinedAbortSignal` only reaches
+	// the provider's `fetch` when both halves are real platform signals, so on a host without one an
+	// abort degrades to the cooperative check at the next loop or tool boundary — it stops the run,
+	// but it does not tear down the request already in flight. A stop mode that quietly means
+	// something else is the worst failure this design can have.
+	if (!warnedMissingAbortController) {
+		warnedMissingAbortController = true;
+		console.warn(
+			"busyclaw engine: globalThis.AbortController is absent — `abort` degrades to a cooperative stop and will NOT cancel an in-flight provider request",
+		);
+	}
 	const signal = { aborted: false };
 	return {
 		signal,
@@ -320,6 +338,10 @@ type HeartbeatHandle = {
 	lost: Promise<string>;
 	isLost: () => boolean;
 	lostReason: () => string | undefined;
+	/** The abort was ASKED FOR, not a lease that lapsed. Decides whether the terminal status this
+	 *  slice writes is `cancelled` or `failed`, which is the whole difference between "somebody
+	 *  stopped it" and "it broke". */
+	abortedByIntent: () => boolean;
 };
 
 function startHeartbeat(
@@ -345,6 +367,19 @@ function startHeartbeat(
 		abortController.abort();
 		resolveLost(reason);
 	};
+	// ABORT rides this timer rather than getting one of its own. The heartbeat already round-trips
+	// the database every `max(250, ttl/2)` ms and already owns the AbortController, so observing the
+	// latch here costs one narrow read on a timer that exists — and it is the ONLY place that can
+	// reach an in-flight provider call, because a step can be minutes long and the loop's control
+	// point does not run again until that step returns.
+	let intentAborted = false;
+	const markAborted = (): void => {
+		if (intentAborted || lostReason !== undefined) return;
+		intentAborted = true;
+		// Deliberately NOT resolving `lost`: this is not a lease failure, and letting it travel as one
+		// would report a deliberate cancellation as a vanished host.
+		abortController.abort();
+	};
 	const timer = timers.setInterval(() => {
 		void store
 			.heartbeatLease({
@@ -352,8 +387,13 @@ function startHeartbeat(
 				leaseToken: claim.leaseToken,
 				leaseTtlMs,
 			})
-			.then((lease) => {
-				if (!lease) markLost("task lease heartbeat failed");
+			.then(async (lease) => {
+				if (!lease) {
+					markLost("task lease heartbeat failed");
+					return;
+				}
+				const run = await store.getRun(claim.task.runId);
+				if (run?.controlIntent === "abort") markAborted();
 			})
 			.catch((err) => {
 				markLost(errorMessage(err));
@@ -371,6 +411,7 @@ function startHeartbeat(
 		isLost: () => lostReason !== undefined,
 		lost,
 		lostReason: () => lostReason,
+		abortedByIntent: () => intentAborted,
 		stop,
 	};
 }
@@ -708,6 +749,63 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 					});
 				}
 			} catch (err) {
+				// AN ABORT IS NOT A FAILURE, and this is the only place that can tell the difference.
+				// Firing the heartbeat's controller fires `state.abortSignal`, so the loop unwinds
+				// through the ordinary abort path and arrives here as an exception — indistinguishable
+				// from a real one unless the latch that caused it is read back. Without this branch a
+				// deliberate cancellation is recorded as `failed`, with the operator who asked for it
+				// nowhere in the record.
+				if (heartbeat.abortedByIntent()) {
+					heartbeat.stop();
+					const requestedBy = (await store.getRun(claim.task.runId))
+						?.controlRequestedBy;
+					return store.transaction(async (tx) => {
+						const task = await tx.completeTask({
+							taskId: claim.task.id,
+							leaseToken: claim.leaseToken,
+							output: { aborted: true },
+						});
+						if (!task)
+							return {
+								status: "failed",
+								task: null,
+								reason: stateError("lease lost before abort transition", {
+									taskId: claim.task.id,
+								}).message,
+							};
+						const settled = await tx.updateRunIfStatus(task.runId, {
+							from: NON_TERMINAL_RUN_STATUSES,
+							patch: {
+								status: "cancelled",
+								controlRequestedAt: null,
+								controlIntent: null,
+								controlRequestedBy: null,
+								controlReason: null,
+							},
+						});
+						if (!settled) {
+							const current = await tx.getRun(task.runId);
+							return {
+								status: "skipped",
+								task,
+								reason: `run already ${current?.status ?? "terminal"}`,
+							};
+						}
+						await tx.appendEvent({
+							runId: task.runId,
+							type: "run.cancelled",
+							payload: {
+								taskId: task.id,
+								reason: "aborted",
+								...(requestedBy ? { requestedBy } : {}),
+							},
+						});
+						// NO checkpoint: an abort tears down mid-step, so there is no resumable point to
+						// record. That is the cost the caller accepted by escalating past `stop`, which
+						// parks cleanly and keeps its transcript.
+						return { status: "cancelled", task };
+					});
+				}
 				// M-08. This reason is PERSISTED — onto the task row and into a `task.failed` event
 				// someone else will read — so an unauthored exception must not travel in it. The raw
 				// failure goes to the operator's console instead, joined by the id the row carries.
