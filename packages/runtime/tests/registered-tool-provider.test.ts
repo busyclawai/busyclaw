@@ -715,3 +715,30 @@ describe("the placement digest covers what selects the scheme (R-M02)", () => {
 		expect(upper).toBe(lower);
 	});
 });
+
+// R-M01. Args were checked only for being an OBJECT, so any field the model invented travelled
+// straight into the request body — while the POLICY saw a projection filtered to the tool's declared
+// fields. Cedar decided about one object, the wire carried another, and the difference was exactly
+// the part nobody had authorized.
+describe("undeclared arguments never reach the wire (R-M01)", () => {
+	const declaring = () =>
+		row({ inputSchema: { type: "object", properties: { petId: {} } } });
+
+	it("refuses an argument the tool's input schema does not declare", async () => {
+		const provider = createRegisteredToolProvider({
+			secrets: anySecret("tok"),
+			lookup: publicLookup,
+		});
+		const tools = provider([declaring()], {
+			scope: "organization",
+			scopeId: "org-a",
+		});
+		await expect(
+			exec(tools, "petstore.getPet", { petId: 7, smuggled: "into the body" }),
+		).rejects.toThrow(/undeclared arguments/);
+	});
+
+	// The positive case — declared args reaching the wire — is the suite's own end-to-end test above
+	// ("petstore.getPet" against the captured fetch); repeating it here with a live fetch only buys a
+	// timeout.
+});

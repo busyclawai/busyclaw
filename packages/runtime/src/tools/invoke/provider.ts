@@ -89,6 +89,40 @@ export type RegisteredToolProvider = (
 const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Refuse an argument the tool never declared.
+ *
+ * The row's `inputSchema` is the flattened parameters-plus-body shape the extractor derived, and it is
+ * the SAME shape the policy projection filters against — so checking against it here is what makes
+ * "policy and wire consume the identical object" true rather than hopeful.
+ *
+ * Shallow on purpose: this closes the gap the finding names (undeclared TOP-LEVEL fields reaching the
+ * body unauthorized). Deep per-property type checking against the JSON Schema is a further step and a
+ * dependency decision — arktype does not consume bare JSON Schema — so it is not smuggled in here.
+ */
+function assertDeclaredArgs(
+	address: string,
+	inputSchema: unknown,
+	args: Record<string, unknown>,
+): void {
+	const properties =
+		inputSchema !== null &&
+		typeof inputSchema === "object" &&
+		"properties" in inputSchema
+			? (inputSchema as { properties?: unknown }).properties
+			: undefined;
+	// A schema declaring no properties says nothing about what is allowed, and inventing a
+	// closed-world reading of it would refuse every call to a tool whose spec simply omitted them.
+	if (properties === null || typeof properties !== "object") return;
+	const declared = new Set(Object.keys(properties));
+	const undeclared = Object.keys(args).filter((key) => !declared.has(key));
+	if (undeclared.length === 0) return;
+	throw validationError(
+		`registered tool "${address}" received undeclared arguments`,
+		`not in this tool's input schema: ${undeclared.join(", ")}`,
+	);
+}
+
 export function createRegisteredToolProvider(
 	options: RegisteredToolProviderOptions,
 ): RegisteredToolProvider {
@@ -124,6 +158,15 @@ export function createRegisteredToolProvider(
 					);
 				}
 
+				// R-M01. The args were checked only for being an OBJECT, so any field the model invented
+				// travelled straight into the request body — while the POLICY saw a projection filtered
+				// to the tool's declared fields. Two different objects: Cedar decided about one, the
+				// wire carried the other, and the difference was exactly the part nobody authorized.
+				//
+				// Refused rather than dropped. Silently discarding an undeclared field would make the
+				// two agree by throwing away what the model asked for, which is a different call than
+				// the one it made — and a model cannot correct a mistake it is never told about.
+				assertDeclaredArgs(row.address, row.inputSchema, validArgs);
 				const plan = planHttpRequest(binding, validArgs);
 				// DESTINATION FIRST, then the credential. Both checks below used to run after the secret
 				// was already on the plan, which got the order exactly backwards: the thing being
