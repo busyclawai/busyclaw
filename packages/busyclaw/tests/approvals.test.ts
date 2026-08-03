@@ -111,6 +111,66 @@ describe("createClaw approvals", () => {
 		expect(auditSupervision(approved)).toBe("approved");
 	});
 
+	// R-M09. The DECISION itself was never recorded. The approval row carried `decidedBy` and could be
+	// written again, the audit log carried the action that ran afterwards, and nothing carried the
+	// judgement that released it — so "who approved this, and did they approve or refuse" was
+	// answerable only by trusting mutable state, which is the one thing an audit log exists not to do.
+	it("records the approval DECISION itself, granted and denied", async () => {
+		const { db, redactor } = durableRedactor();
+		const audit = createMemoryAudit();
+		const claw = owned({
+			database: db,
+			model: approvalToolModel(),
+			redaction: { redactor },
+			audit,
+			tools: emailNeedsApproval(),
+		});
+
+		const waiting = await claw.api.generate({
+			prompt: "email alice@personal.com",
+		});
+		if (waiting.status !== "waiting_approval" || !waiting.approvalIds?.[0]) {
+			throw new Error("expected approval wait");
+		}
+		await claw.api.grantApproval({ approvalId: waiting.approvalIds[0] });
+
+		const granted = audit.entries().find((e) => e.name === "approval.granted");
+		if (!granted) throw new Error("expected a decision entry");
+		expect(granted.boundary).toBe("governance");
+		expect(granted.status).toBe("ok");
+		// Actor and resource: WHO decided, and WHAT they decided about.
+		expect(granted.decidedBy).toBe(userPrincipal("actor-1"));
+		expect(granted.principal).toBe(userPrincipal("actor-1"));
+		expect(granted.payload).toMatchObject({ toolName: "send_email" });
+
+		// A refusal is evidence too, and carries the reason. Fresh claw — the fixture parks once.
+		const second = durableRedactor();
+		const denyAudit = createMemoryAudit();
+		const denyClaw = owned({
+			database: second.db,
+			model: approvalToolModel(),
+			redaction: { redactor: second.redactor },
+			audit: denyAudit,
+			tools: emailNeedsApproval(),
+		});
+		const parked = await denyClaw.api.generate({
+			prompt: "email bob@personal.com",
+		});
+		if (parked.status !== "waiting_approval" || !parked.approvalIds?.[0]) {
+			throw new Error("expected a second approval wait");
+		}
+		await denyClaw.api.denyApproval({
+			approvalId: parked.approvalIds[0],
+			reason: "not this one",
+		});
+		const denied = denyAudit
+			.entries()
+			.find((e) => e.name === "approval.denied");
+		if (!denied) throw new Error("expected a denial entry");
+		expect(denied.status).toBe("denied");
+		expect(denied.reason).toBe("not this one");
+	});
+
 	it("only a human may decide an approval — the user-principal floor (seam 3)", async () => {
 		const { db, redactor } = durableRedactor();
 		const claw = owned({

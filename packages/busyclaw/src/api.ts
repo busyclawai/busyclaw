@@ -62,6 +62,7 @@ import {
 	createToolCallInput,
 	createToolResultInput,
 	endpointHttpMethod,
+	errorMessage,
 	jsonObject,
 	parsePrincipal,
 	RESERVED_CONTEXT_PREFIX,
@@ -1358,15 +1359,58 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	};
 	// The privacy lifecycle is ACCOUNTABLE: every re-identifying read and every erasure lands in
 	// the same hash-chained audit log as tool/model calls. Payloads carry identifiers only.
+	/**
+	 * Record a human's governance decision — actor, resource, outcome.
+	 *
+	 * `status` carries the outcome so a reader does not have to parse the name, and `decidedBy` is the
+	 * approver read back off the STORED record rather than off the caller: the store decided who won
+	 * the transition, and the log should say what the store did, not what this call intended.
+	 */
+	const auditDecision = async (
+		name: "approval.granted" | "approval.denied",
+		record: {
+			id: string;
+			toolName: string;
+			decidedBy?: string;
+			clawId?: string;
+		},
+		reason?: string,
+	): Promise<void> => {
+		await context.runtime.audit?.append({
+			ts: new Date().toISOString(),
+			boundary: "governance",
+			name,
+			status: name === "approval.granted" ? "ok" : "denied",
+			...(record.decidedBy !== undefined
+				? { principal: record.decidedBy, decidedBy: record.decidedBy }
+				: {}),
+			...(record.clawId !== undefined ? { clawId: record.clawId } : {}),
+			...(reason !== undefined ? { reason } : {}),
+			payload: { approvalId: record.id, toolName: record.toolName },
+		});
+	};
+
+	/**
+	 * Record a privacy event.
+	 *
+	 * R-M09. This was ACTORLESS and success-only: no `principal`, and no way to write a failure. A
+	 * re-identifying read is the single most accountable thing this api does, and the log said what was
+	 * revealed without saying who revealed it — so the entry answered a compliance question only if you
+	 * already knew the answer. A refused or failed erasure wrote nothing at all, which is the entry a
+	 * regulator most wants: "it was asked for and it did not happen."
+	 */
 	const auditPrivacy = async (
 		name: "pii.reidentification" | "pii.erasure",
 		payload: JsonObject,
+		options?: { by?: Principal; status?: "ok" | "error"; reason?: string },
 	): Promise<void> => {
 		await context.runtime.audit?.append({
 			ts: new Date().toISOString(),
 			boundary: "privacy",
 			name,
-			status: "ok",
+			status: options?.status ?? "ok",
+			...(options?.by !== undefined ? { principal: options.by } : {}),
+			...(options?.reason !== undefined ? { reason: options.reason } : {}),
 			payload,
 		});
 	};
@@ -1471,7 +1515,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return store().messages.append({ ...args, content });
 		},
 		getMessage: ({ id }) => store().messages.get(id),
-		async listMessages(args) {
+		async listMessages(args, caller?: ClawApiCaller) {
 			const rows = await store().messages.listForThread(args);
 			// Read-side ONLY: the original view re-identifies the RETURNED copies; the rows at
 			// rest stay tokens. No redaction configured → nothing was ever mapped → as stored.
@@ -1490,11 +1534,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					),
 				})),
 			);
-			await auditPrivacy("pii.reidentification", {
-				...container,
-				threadId: args.threadId,
-				messages: rows.length,
-			});
+			await auditPrivacy(
+				"pii.reidentification",
+				{ ...container, threadId: args.threadId, messages: rows.length },
+				caller?.principal ? { by: caller.principal } : {},
+			);
 			return revealed;
 		},
 
@@ -1515,12 +1559,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// Same read-side rule as listMessages: only the RETURNED copy is re-identified.
 			const container = { scope: "claw", scopeId: args.clawId };
 			const revealed = await requireRedaction().original(response, container);
-			await auditPrivacy("pii.reidentification", {
-				...container,
-				threadId: args.threadId,
-				runId,
-				messages: 1,
-			});
+			await auditPrivacy(
+				"pii.reidentification",
+				{ ...container, threadId: args.threadId, runId, messages: 1 },
+				caller?.principal ? { by: caller.principal } : {},
+			);
 			return revealed;
 		},
 
@@ -1541,15 +1584,36 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return { ...stream, userMessage };
 		},
 
-		async forgetSubject({ subjectId, scope, scopeId }) {
-			const erased = await requireRedaction().forgetSubject(subjectId, {
-				scope,
-				scopeId,
-			});
+		async forgetSubject({ subjectId, scope, scopeId }, caller?: ClawApiCaller) {
+			// A FAILED erasure is the entry a regulator most wants — "it was asked for and it did not
+			// happen" — and it used to write nothing at all, because only the success path reached the
+			// log. Recorded either way now, and the failure is still raised.
+			let erased: number;
+			try {
+				erased = await requireRedaction().forgetSubject(subjectId, {
+					scope,
+					scopeId,
+				});
+			} catch (error) {
+				await auditPrivacy(
+					"pii.erasure",
+					{ subjectId, scope, scopeId, erased: 0 },
+					{
+						status: "error",
+						reason: errorMessage(error),
+						...(caller?.principal ? { by: caller.principal } : {}),
+					},
+				);
+				throw error;
+			}
 			// The count rides into the audit too. "Erasure requested and nothing was found" is the
 			// answer a regulator asks for, and it is indistinguishable from a completed shred unless
 			// somebody wrote the number down at the moment it was true.
-			await auditPrivacy("pii.erasure", { subjectId, scope, scopeId, erased });
+			await auditPrivacy(
+				"pii.erasure",
+				{ subjectId, scope, scopeId, erased },
+				caller?.principal ? { by: caller.principal } : {},
+			);
 			return { erased };
 		},
 
@@ -1652,15 +1716,32 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// `decidedBy` is stamped from the authenticated caller `{ principal }`, never a caller-supplied `by`
 		// (docs/plans/stamped-fields.md, #6) — a forged approver identity is impossible. The runtime store's
 		// grant/deny write it as the decision stamp.
-		grantApproval: ({ approvalId }, caller?: ClawApiCaller) =>
-			context.runtime.approvals?.grant(approvalId, userApprover(caller)) ??
-			Promise.resolve(null),
-		denyApproval: ({ approvalId, reason }, caller?: ClawApiCaller) =>
-			context.runtime.approvals?.deny(
-				approvalId,
-				userApprover(caller),
-				reason,
-			) ?? Promise.resolve(null),
+		// R-M09. The DECISION is the evidence, and it was the one thing not recorded: the approval row
+		// carried `decidedBy` and could be written again, the audit log carried the action that ran
+		// afterwards, and nothing carried the judgement that released it. So "who approved this, and
+		// did they approve or refuse" was answerable only by trusting mutable state.
+		//
+		// Recorded AFTER the transition and only when it happened — a null means the approval was not
+		// pending, and logging a decision nobody made would be worse than logging none.
+		grantApproval: async ({ approvalId }, caller?: ClawApiCaller) => {
+			const record =
+				(await context.runtime.approvals?.grant(
+					approvalId,
+					userApprover(caller),
+				)) ?? null;
+			if (record) await auditDecision("approval.granted", record);
+			return record;
+		},
+		denyApproval: async ({ approvalId, reason }, caller?: ClawApiCaller) => {
+			const record =
+				(await context.runtime.approvals?.deny(
+					approvalId,
+					userApprover(caller),
+					reason,
+				)) ?? null;
+			if (record) await auditDecision("approval.denied", record, reason);
+			return record;
+		},
 		getApproval: ({ id }) =>
 			context.runtime.approvals?.get(id) ?? Promise.resolve(null),
 		// A LISTING has no id for the gate to resolve, so the filtering happens here: every row is put

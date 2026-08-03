@@ -11,11 +11,18 @@ const OptionalRunMode = type("'interactive' | 'autonomous' | undefined");
 
 const AuditInputShape = {
 	ts: "string",
-	/** Which boundary produced this record — one log covers all three: governed tool calls,
-	 *  model egress, and the privacy lifecycle (re-identifying reads, per-subject erasure). */
-	boundary: "'tool' | 'model' | 'privacy'",
-	/** The tool name, "model" for an LLM call, or the privacy event name
-	 *  ("pii.reidentification" | "pii.erasure"). */
+	/** Which boundary produced this record — one log covers them all: governed tool calls, model
+	 *  egress, the privacy lifecycle (re-identifying reads, per-subject erasure), and governance
+	 *  decisions a human made.
+	 *
+	 *  R-M09. `governance` was missing, and with it the only record that an approval was ever DECIDED.
+	 *  The approval row carried `decidedBy` and could be updated again; the audit log carried the
+	 *  action that ran AFTERWARDS but nothing about the judgement that released it. "Who approved this,
+	 *  when, and did they approve or refuse" was answerable only by trusting mutable state — which is
+	 *  the one thing an audit log exists not to do. */
+	boundary: "'tool' | 'model' | 'privacy' | 'governance'",
+	/** The tool name, "model" for an LLM call, the privacy event name ("pii.reidentification" |
+	 *  "pii.erasure"), or the governance decision ("approval.granted" | "approval.denied"). */
 	name: "string",
 	status: "'ok' | 'denied' | 'needs-approval' | 'error'",
 	"gateId?": OptionalString,
