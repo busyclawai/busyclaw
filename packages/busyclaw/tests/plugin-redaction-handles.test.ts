@@ -164,6 +164,66 @@ describe("plugin redaction handles", () => {
 		expect(raw).toBe("reach alice@personal.com");
 	});
 
+	// R-M03. The direct write paths took no subject at all, so every mapping they minted was linked to
+	// nobody and `forgetSubject` swept for rows that were never written — answering "erased 0", which
+	// is indistinguishable from a completed shred. The host supplies the lineage because only the host
+	// knows: busyclaw cannot infer whose data a value is, and the two parties who could claim to
+	// (the caller, the model) are exactly the two that must not.
+	it("links a direct write's mappings to the subject the host named", async () => {
+		const db = memoryAdapter();
+		const claw = owned({
+			database: db,
+			model: textModel("done"),
+			redaction: { detectors: [emailDetector], indexKey: "test-key" },
+		});
+		await claw.api.createClaw({ id: "c1", name: "c1" });
+		const thread = await claw.api.createThread({ clawId: "c1" });
+
+		await claw.api.appendMessage({
+			clawId: "c1",
+			threadId: thread.id,
+			role: "user",
+			content: "reach alice@personal.com",
+			subjectIds: ["cust_42"],
+		});
+
+		// The erasure the host will later be asked for actually reaches it.
+		const erased = await claw.api.forgetSubject({
+			subjectId: "cust_42",
+			scope: "claw",
+			scopeId: "c1",
+		});
+		expect(erased.erased).toBeGreaterThan(0);
+	});
+
+	it("leaves a write with no named subject unreachable — the case the boot warning is about", async () => {
+		const db = memoryAdapter();
+		const claw = owned({
+			database: db,
+			model: textModel("done"),
+			redaction: { detectors: [emailDetector], indexKey: "test-key" },
+		});
+		await claw.api.createClaw({ id: "c1", name: "c1" });
+		const thread = await claw.api.createThread({ clawId: "c1" });
+
+		await claw.api.appendMessage({
+			clawId: "c1",
+			threadId: thread.id,
+			role: "user",
+			content: "reach bob@personal.com",
+		});
+
+		// Nothing said whose data it was, so nothing can find it. Asserted rather than left implied:
+		// this is the gap `subjectIds` exists to close, and it should fail loudly if it ever silently
+		// starts working by accident.
+		const erased = await claw.api.forgetSubject({
+			subjectId: "cust_42",
+			scope: "claw",
+			scopeId: "c1",
+		});
+		expect(erased.erased).toBe(0);
+	});
+
 	// R-M08. Under MIXED posture, shredding mappings erases the strict containers and reaches NOTHING
 	// in the raw ones — they hold unredacted values with no mapping to delete. `forgetSubject` still
 	// returned a count and called it done, so a deployment could answer a DSR truthfully-looking while

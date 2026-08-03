@@ -195,6 +195,9 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly redaction?: ClawRedactionHandle;
 };
 
+/** The lineage a direct write carries beside its row — see `appendMessage`. */
+export type WithSubjectLineage = { subjectIds?: readonly string[] };
+
 export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	bindConversation: (
 		input: BindConversationInput,
@@ -217,7 +220,13 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	listThreads: (input: { clawId: string }) => Promise<ThreadRecord[]>;
 	archiveThread: (input: { id: string }) => Promise<ThreadRecord | null>;
 
-	appendMessage: (input: AppendMessageInput) => Promise<MessageRecord>;
+	/** `subjectIds` is LINEAGE, not a column (R-M03): it tells the PII mappings minted while tokenizing
+	 *  this content whose data it is, so a later `forgetSubject` can reach them. Host-supplied, because
+	 *  busyclaw cannot infer it and neither the caller's identity nor the model's claim is trustworthy
+	 *  for it. Omitted ⇒ the mappings are linked to nobody and erasure cannot find them. */
+	appendMessage: (
+		input: AppendMessageInput & WithSubjectLineage,
+	) => Promise<MessageRecord>;
 	getMessage: (input: { id: string }) => Promise<MessageRecord | null>;
 	listMessages: (input: {
 		threadId: string;
@@ -252,7 +261,9 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		scopeId: string;
 	}) => Promise<{ erased: number }>;
 
-	createToolCall: (input: CreateToolCallInput) => Promise<ToolCallRecord>;
+	createToolCall: (
+		input: CreateToolCallInput & WithSubjectLineage,
+	) => Promise<ToolCallRecord>;
 	getToolCall: (input: { id: string }) => Promise<ToolCallRecord | null>;
 	getToolCallByProviderId: (input: {
 		runId: string;
@@ -263,7 +274,9 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		patch: ToolCallStatusPatch;
 	}) => Promise<ToolCallRecord | null>;
 
-	createToolResult: (input: CreateToolResultInput) => Promise<ToolResultRecord>;
+	createToolResult: (
+		input: CreateToolResultInput & WithSubjectLineage,
+	) => Promise<ToolResultRecord>;
 	getToolResult: (input: { id: string }) => Promise<ToolResultRecord | null>;
 	listToolResults: (input: {
 		runId: string;
@@ -777,9 +790,33 @@ const deletePolicySliceInput = ark({
 	}),
 	id: "string",
 });
+/**
+ * R-M03. WHOSE personal data this write is about — the erasure key every mapping minted while
+ * tokenizing it is linked to, so a later `forgetSubject` can find them.
+ *
+ * On the BOUNDARY, not the entity: it is lineage, not a column. The message row does not record who
+ * the message was about; the PII mappings do, and this is what tells them.
+ *
+ * The host supplies it because only the host knows. busyclaw cannot infer whose data a value is from
+ * the value, and the two parties who could claim to know are exactly the two that must not: a caller
+ * can misname a subject, and the model can invent one. A support agent writing about a customer is
+ * the case that decides it — deriving lineage from the authenticated principal would link the row to
+ * the AGENT, and the customer's erasure request would find nothing.
+ *
+ * Optional, because a deployment that owes nobody erasure should not be made to invent an id — but a
+ * write without one mints mappings that erasure cannot reach, which is what the boot warning says.
+ */
+const subjectLineageInput = {
+	"subjectIds?": ark("string[] | undefined").configure({
+		busyclaw: {
+			doc: "Data subjects this content is about — the erasure keys its PII mappings are linked to. Host-supplied: busyclaw cannot infer whose data a value is, and neither the caller's identity nor the model's claim is trustworthy for it.",
+		},
+	}),
+} as const;
+
 export const clawApiInputSchemas = {
 	bindConversation: bindConversationInput,
-	appendMessage: appendMessageInput,
+	appendMessage: appendMessageInput.and(subjectLineageInput),
 	archiveClaw: idInput,
 	archiveThread: idInput,
 	continueEngineRun: continueEngineRunInput,
@@ -787,8 +824,8 @@ export const clawApiInputSchemas = {
 	createCheckpoint: createCheckpointInput,
 	createClaw: createClawInput,
 	createThread: createThreadInput,
-	createToolCall: createToolCallInput,
-	createToolResult: createToolResultInput,
+	createToolCall: createToolCallInput.and(subjectLineageInput),
+	createToolResult: createToolResultInput.and(subjectLineageInput),
 	deletePolicySlice: deletePolicySliceInput,
 	denyApproval: denyApprovalInput,
 	forgetSubject: forgetSubjectInput,
@@ -1344,10 +1381,21 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		return { runId, userMessage, runOptions };
 	};
 
-	const redactArtifact = async <T>(value: T, clawId: string): Promise<T> =>
+	const redactArtifact = async <T>(
+		value: T,
+		clawId: string,
+		subjectIds?: readonly string[],
+	): Promise<T> =>
 		value === undefined || context.redaction === undefined
 			? value
-			: context.redaction.redact(value, { scope: "claw", scopeId: clawId });
+			: context.redaction.redact(value, {
+					scope: "claw",
+					scopeId: clawId,
+					// R-M03: the lineage the host supplied rides into the mapping, so erasure can find it.
+					// Without it the mapping is minted linked to nobody and `forgetSubject` sweeps for rows
+					// that were never written.
+					...(subjectIds !== undefined ? { subjectIds: [...subjectIds] } : {}),
+				});
 	const registry = () => requireRegistry(context.registry);
 	const requireRedaction = () => {
 		if (!context.redaction) {
@@ -1506,13 +1554,16 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		async appendMessage(args) {
 			// The api's own write-side ingress: content persists tokenized (posture-aware; a
 			// per-claw raw row passes through). Already-tokenized text is a no-op.
-			const content = context.redaction
-				? await context.redaction.redact(args.content, {
-						scope: "claw",
-						scopeId: args.clawId,
-					})
-				: args.content;
-			return store().messages.append({ ...args, content });
+			//
+			// R-M03: `subjectIds` is lineage, not a column — it tells the mappings whose data this is
+			// and does not travel to the message row.
+			const { subjectIds, ...row } = args;
+			const content = await redactArtifact(
+				args.content,
+				args.clawId,
+				subjectIds,
+			);
+			return store().messages.append({ ...row, content });
 		},
 		getMessage: ({ id }) => store().messages.get(id),
 		async listMessages(args, caller?: ClawApiCaller) {
@@ -1628,8 +1679,9 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// Posture-aware through the one handle, so a per-claw `raw` row still passes through, and
 		// already-tokenized text is a no-op — the runtime's own writes cost a walk and change nothing.
 		async createToolCall(args) {
-			const redacted = await redactArtifact(args.args, args.clawId);
-			return store().toolCalls.create({ ...args, args: redacted });
+			const { subjectIds, ...row } = args;
+			const redacted = await redactArtifact(args.args, args.clawId, subjectIds);
+			return store().toolCalls.create({ ...row, args: redacted });
 		},
 		getToolCall: ({ id }) => store().toolCalls.get(id),
 		getToolCallByProviderId: (args) => store().toolCalls.getByToolCallId(args),
@@ -1639,11 +1691,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		async createToolResult(args) {
 			// `output` and `error` are separate columns and a result carries one or the other; both are
 			// walked so neither can be the unredacted way in.
+			const { subjectIds, ...row } = args;
 			const [output, error] = await Promise.all([
-				redactArtifact(args.output, args.clawId),
-				redactArtifact(args.error, args.clawId),
+				redactArtifact(args.output, args.clawId, subjectIds),
+				redactArtifact(args.error, args.clawId, subjectIds),
 			]);
-			return store().toolResults.create({ ...args, output, error });
+			return store().toolResults.create({ ...row, output, error });
 		},
 		getToolResult: ({ id }) => store().toolResults.get(id),
 		listToolResults: (args) => store().toolResults.listForToolCall(args),
