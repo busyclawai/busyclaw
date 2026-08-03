@@ -16,6 +16,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import { readRequestBody } from "@busyclaw/core";
+import type { SecretCipher } from "@busyclaw/secrets";
 import { type } from "arktype";
 import type { ChannelsPlugin, ChannelsPluginOptions } from "../channels/plugin";
 import { requireClaw } from "../core/claw";
@@ -50,6 +51,8 @@ import {
 	type ChannelRegistrationsStore,
 	type ChannelRegistrationView,
 	createChannelRegistrationsStore,
+	openRegistrationSecret,
+	optionalCipher,
 	type RegisterChannelRegistrationInput,
 	toChannelRegistrationView,
 } from "./store";
@@ -243,14 +246,17 @@ export function buildRegistrationsPlugin(
 	// proved the two correspond (the row was FOUND by that digest), so handing the presented value to
 	// `verify` is not trusting the caller: it is giving the channel back the thing already matched.
 	// Absent on the drain path, which sends and never verifies.
-	const contextFor = (
+	const contextFor = async (
 		row: ChannelRegistrationRecord,
+		cipher: SecretCipher,
 		presentedSecret?: string,
-	): EndpointContext => ({
+	): Promise<EndpointContext> => ({
 		provider: row.provider,
 		endpointKey: bindingKey(row),
 		mode: "webhook",
-		secret: row.secret,
+		// R-M07: the column holds a sealed token; this is the one place it is opened, and the plaintext
+		// lives only for the outbound call it is about to make.
+		secret: await openRegistrationSecret(row, cipher),
 		webhookSecret: presentedSecret ?? row.webhookSecret,
 		claw: clawDefaults(row),
 		thread: threadDefaults(row),
@@ -262,8 +268,20 @@ export function buildRegistrationsPlugin(
 	const configure = (
 		context: BusyclawPluginConfigureContext,
 	): BusyclawPluginRuntime<ChannelRegistrationsPluginApi> | undefined => {
+		// R-M07. One cipher over the deployment's master key; each ciphertext is bound to its own
+		// (scope, scopeId, name), so a token sealed for one registration cannot be opened as another's
+		// — which is what makes ONE key safe across every consumer of this cipher.
+		//
+		// OPTIONAL, unlike the secret store's. That store exists to hold secrets, so refusing to run
+		// without a key is the whole point of it. Registering a bot is not that: a host enabling
+		// channels has not asked to run a key-management story, and failing every registration on a
+		// key nobody told them to set would take working deployments down to protect a column. So a
+		// key seals when one is configured, and its absence is a warning rather than an outage.
+		// No warn seam on the plugin configure context, so the absence is documented on the option and
+		// on `optionalCipher` rather than announced. Worth a warn if one is ever threaded through.
+		const cipher = optionalCipher(context.secrets);
 		const store = context.adapter
-			? createChannelRegistrationsStore(context.adapter, { now })
+			? createChannelRegistrationsStore(context.adapter, { now, cipher })
 			: undefined;
 		// One delivery is relayed once: a provider retry finds the claim already taken. Registrations
 		// require a database, so this is always present here.
@@ -422,7 +440,7 @@ export function buildRegistrationsPlugin(
 				const result = await dispatchWebhook({
 					claw: requireClaw(claw),
 					channel,
-					endpoint: contextFor(row, secret),
+					endpoint: await contextFor(row, cipher, secret),
 					request: inbound,
 					// Registrations require a database, so the claim always has somewhere to live.
 					...(inbox !== undefined ? { inbox } : {}),
@@ -456,7 +474,7 @@ export function buildRegistrationsPlugin(
 			// Revoked reads the same as absent — a delivery to a bot somebody took away is not runnable,
 			// and the drain buries it rather than retrying it forever.
 			if (row?.status !== "active") return undefined;
-			return { channel, endpoint: contextFor(row) };
+			return { channel, endpoint: await contextFor(row, cipher) };
 		};
 
 		// The queues' recovery half, as scheduled work. Deliberately ONE task covering both directions:

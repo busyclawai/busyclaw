@@ -35,6 +35,7 @@
 // no prefix, and guessing which key to try is the ambiguity the id exists to remove. Rows written
 // before either fail to open and must be re-entered.
 
+import type { Secrets } from "@busyclaw/contracts";
 import { configurationError, errorMessage } from "@busyclaw/contracts";
 import { gcm } from "@noble/ciphers/aes.js";
 import {
@@ -284,4 +285,43 @@ export function createSecretCipher(
 			}
 		},
 	};
+}
+
+/**
+ * Build a cipher over the deployment's master key, read through the one-door reader.
+ *
+ * The keyring resolution lived inside the secrets plugin, where it was the only consumer. R-M07 gave
+ * it three more — the channel bot token, PII mapping originals, SQL-engine prompts — and each writing
+ * its own copy of "read the env var, split on commas, parse the hex" is three chances to disagree
+ * about what a keyring is.
+ *
+ * ONE key for all of them, which is safe here rather than merely convenient: every ciphertext is
+ * bound to its own `(scope, scopeId, name)` as AAD, so a sealed bot token cannot be opened as a PII
+ * original even under the same key — the tag will not verify. What a separate key per consumer would
+ * buy is rotating one without the others, which nothing has asked for and which is a change of `name`
+ * away if it ever does.
+ *
+ * Lazy and cached by {@link createSecretCipher}: a deployment that never seals anything never reads
+ * the key, so this costs nothing where it is not used.
+ */
+export function cipherFromSecrets(
+	reader: Secrets,
+	options: SecretCipherOptions = {},
+): SecretCipher {
+	return createSecretCipher(async () => {
+		// `require` fails loud naming the key rather than returning null — a deployment that stores
+		// credentials and cannot find its key must not start writing them in the clear.
+		const material = await reader.require(SECRET_STORE_KEY_NAME, {
+			kind: "token",
+		});
+		// Comma-separated, so one env var carries a whole keyring: first seals, all open. A single key
+		// is a list of one, so nothing changes for a deployment that has not rotated yet.
+		return secretKeyring(
+			material.value
+				.split(",")
+				.map((part: string) => part.trim())
+				.filter((part: string) => part.length > 0)
+				.map(parseSecretStoreKey),
+		);
+	}, options);
 }

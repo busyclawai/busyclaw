@@ -42,12 +42,12 @@
 	"dependencies": {
 		"@busyclaw/contracts": "workspace:*",
 		"@busyclaw/core": "workspace:*",
+		"@busyclaw/secrets": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"
 	},
 	"devDependencies": {
-		"@busyclaw/secrets": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
 		"@busyclaw/storage-durable": "workspace:*",
 		"ai": "7.0.22",

@@ -1,3 +1,4 @@
+import type { Secrets } from "@busyclaw/contracts";
 import {
 	type Adapter,
 	configurationError,
@@ -7,6 +8,12 @@ import {
 	isConflict,
 	validationError,
 } from "@busyclaw/contracts";
+import {
+	cipherFromSecrets,
+	SECRET_STORE_KEY_NAME,
+	type SecretBinding,
+	type SecretCipher,
+} from "@busyclaw/secrets";
 import {
 	type EntityWhere,
 	type EntityWhereClause,
@@ -169,6 +176,15 @@ export type ChannelRegistrationsStore = {
 export type ChannelRegistrationsStoreOptions = {
 	/** Time source for deterministic tests and host-controlled timestamps. */
 	now?: () => string;
+	/**
+	 * The at-rest cipher for the BOT TOKEN (R-M07). Absent ⇒ stored as it arrives, which is what a
+	 * deployment with no master key configured gets — and what every deployment used to get.
+	 *
+	 * The token is the credential that acts AS the bot: whoever holds it sends as that bot, reads its
+	 * conversations, and does not need this system at all to do it. It sat in a column readable by
+	 * anything with database access.
+	 */
+	cipher?: SecretCipher;
 };
 
 // ── Enabled-but-not-migrated safety net (the secret-alias.ts precedent) ──────────────────────────
@@ -253,6 +269,86 @@ function listWhere(filter: ChannelRegistrationListFilter): RegistrationWhere[] {
 }
 
 /** The registration registry — user-registered bots persisted through the entity-validating adapter. */
+/**
+ * The AAD a registration's bot token is sealed under — its own boundary and its own key.
+ *
+ * Row-specific on purpose: a ciphertext lifted from one registration's row into another's will not
+ * open, because the tag is bound to the (scope, scopeId, name) it was sealed for. That is what makes
+ * ONE deployment key safe across every consumer of this cipher — a sealed bot token cannot be opened
+ * as a PII original or another tenant's token even under the same key.
+ */
+function tokenBinding(row: {
+	scope: string;
+	scopeId: string;
+	provider: string;
+	endpointKey: string;
+}): SecretBinding {
+	return {
+		scope: row.scope,
+		scopeId: row.scopeId,
+		name: `channel:${row.provider}:${row.endpointKey}`,
+	};
+}
+
+/**
+ * Open a stored bot token for use.
+ *
+ * The single decrypt point: the plaintext exists for the length of one outbound call and is never
+ * returned by an ordinary read (`ChannelRegistrationView` omits it entirely). Absent cipher, or a row
+ * written before sealing existed, passes through — which is what a deployment with no master key gets
+ * and what every deployment had until now.
+ */
+export async function openRegistrationSecret(
+	row: ChannelRegistrationRecord,
+	cipher?: SecretCipher,
+): Promise<string | undefined> {
+	if (row.secret === undefined) return undefined;
+	if (!cipher) return row.secret;
+	try {
+		return await cipher.open(row.secret, tokenBinding(row));
+	} catch {
+		// A row sealed before the cipher was configured, or written by an older build: the value is
+		// what it is. Returned as-is rather than failing the send, because refusing here would take a
+		// working bot offline over a migration nobody was told to run.
+		return row.secret;
+	}
+}
+
+/**
+ * A cipher that seals when the deployment has a master key and passes through when it does not.
+ *
+ * The key is read LAZILY (the underlying cipher caches it), so this costs nothing until the first
+ * token is stored — and once it has answered "no key" it stays answered, rather than probing the
+ * resolver on every write.
+ *
+ * Warned once, not silently: a deployment storing bot tokens in the clear should know it is, and a
+ * deployment that never stores one should not be nagged about a key it does not need.
+ */
+export function optionalCipher(
+	secrets: Secrets,
+	warn?: (message: string) => void,
+): SecretCipher {
+	const real = cipherFromSecrets(secrets);
+	let available: boolean | undefined;
+	const usable = async (): Promise<boolean> => {
+		if (available !== undefined) return available;
+		const key = await secrets.get(SECRET_STORE_KEY_NAME).catch(() => null);
+		available = key !== null && key !== undefined;
+		if (!available) {
+			warn?.(
+				`no ${SECRET_STORE_KEY_NAME}: channel bot tokens are stored unencrypted — set it to seal them at rest`,
+			);
+		}
+		return available;
+	};
+	return {
+		seal: async (plaintext, binding) =>
+			(await usable()) ? real.seal(plaintext, binding) : plaintext,
+		open: async (sealed, binding) =>
+			(await usable()) ? real.open(sealed, binding) : sealed,
+	};
+}
+
 export function createChannelRegistrationsStore(
 	// The entity-validating adapter the assembly hands through the configure context; entityView
 	// opens the typed lens for this plugin's own model (fails loud if the model was never declared).
@@ -319,6 +415,15 @@ export function createChannelRegistrationsStore(
 			// makes after authorizing `manage` — not something this port does because the key matched.
 			if (await this.getByKey(lookup)) return null;
 			const ts = now();
+			const scope = valid.scope ?? "personal";
+			const scopeId = valid.scopeId ?? createdBy;
+			const sealedSecret =
+				options.cipher && valid.secret !== undefined
+					? await options.cipher.seal(
+							valid.secret,
+							tokenBinding({ scope, scopeId, provider, endpointKey }),
+						)
+					: undefined;
 			try {
 				return await guarded(() =>
 					db.create({
@@ -328,6 +433,9 @@ export function createChannelRegistrationsStore(
 							// R-M07: the ROUTING KEY is stored digested, never verbatim. Written here rather
 							// than by the caller so no write path can forget it.
 							webhookSecret: webhookSecretDigest(valid.webhookSecret),
+							// …and the BOT TOKEN sealed. Same rule, different mechanism: this one is read
+							// BACK to call the provider, so it is encrypted rather than hashed.
+							...(sealedSecret !== undefined ? { secret: sealedSecret } : {}),
 							// Personal until registered into a boundary — the same default a claw takes, and
 							// the reason an omitted boundary can never widen who reaches the row.
 							scope: valid.scope ?? "personal",
@@ -352,12 +460,25 @@ export function createChannelRegistrationsStore(
 			// R-M07: a rotation carries a NEW routing key, and it is digested on the way in for the same
 			// reason the create digests — the column never holds the verbatim credential, whichever write
 			// path put it there.
-			const secret = patch.webhookSecret;
+			const routingKey = patch.webhookSecret;
+			const token = patch.secret;
+			// The row's OWN boundary is the AAD, so a rotation has to read it rather than trust the
+			// patch — a patch that moved the boundary and resealed under the new one would let a token
+			// be relocated into another tenant and still open.
+			const current = await this.getByKey(lookup);
+			const sealed =
+				options.cipher && typeof token === "string" && current
+					? await options.cipher.seal(token, tokenBinding(current))
+					: undefined;
 			return patchByKey(
 				lookup,
-				typeof secret === "string"
-					? { ...patch, webhookSecret: webhookSecretDigest(secret) }
-					: patch,
+				{
+					...patch,
+					...(typeof routingKey === "string"
+						? { webhookSecret: webhookSecretDigest(routingKey) }
+						: {}),
+					...(sealed !== undefined ? { secret: sealed } : {}),
+				},
 				expectedUpdatedAt,
 			);
 		},

@@ -390,6 +390,9 @@ importers:
       '@busyclaw/core':
         specifier: workspace:*
         version: link:../../foundation/core
+      '@busyclaw/secrets':
+        specifier: workspace:*
+        version: link:../../foundation/secrets
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
@@ -400,9 +403,6 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
-      '@busyclaw/secrets':
-        specifier: workspace:*
-        version: link:../../foundation/secrets
       '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../secrets

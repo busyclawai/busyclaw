@@ -187,6 +187,7 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 // its address changed, so every consumer that needs to stop storing a credential in the clear can now
 // use the one that already exists instead of writing a second.
 export {
+	cipherFromSecrets,
 	createSecretCipher,
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,

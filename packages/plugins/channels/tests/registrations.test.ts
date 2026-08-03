@@ -7,7 +7,7 @@ import {
 	type RouteLevel,
 	userPrincipal,
 } from "@busyclaw/contracts";
-import { buildSecrets } from "@busyclaw/secrets";
+import { buildSecrets, env } from "@busyclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { drainOutbox } from "../src/core/dispatch";
@@ -28,6 +28,8 @@ import {
 } from "../src/registrations/schema";
 import {
 	createChannelRegistrationsStore,
+	openRegistrationSecret,
+	optionalCipher,
 	webhookSecretDigest,
 } from "../src/registrations/store";
 
@@ -1221,5 +1223,79 @@ describe("the inbound routing key is not stored verbatim (R-M07)", () => {
 		});
 		// The old key no longer routes.
 		await expect(store.getBySecret("fake", "first")).resolves.toBeNull();
+	});
+});
+
+// R-M07. The BOT TOKEN is the credential that acts AS the bot: whoever holds it sends as that bot,
+// reads its conversations, and does not need this system at all to do it. It sat in a column readable
+// by anything with database access. Unlike the routing key it is read BACK to call the provider, so
+// it is encrypted rather than hashed.
+describe("the bot token is sealed at rest (R-M07)", () => {
+	const KEY = "11".repeat(32);
+	const withKey = () =>
+		buildSecrets([env({ vars: { BUSYCLAW_SECRET_STORE_KEY: KEY } })]);
+
+	it("stores a sealed token and opens it only for use", async () => {
+		const adapter = db();
+		const cipher = optionalCipher(withKey());
+		const store = createChannelRegistrationsStore(adapter, { now, cipher });
+
+		const created = await store.register({
+			provider: "fake",
+			endpointKey: "acme-bot",
+			webhookSecret: "hook",
+			secret: "bot-token-xyz",
+			createdBy: userPrincipal("alice"),
+		});
+		if (!created) throw new Error("expected the registration to be created");
+
+		// Nothing in the row is the token.
+		expect(created.secret).not.toBe("bot-token-xyz");
+		expect(created.secret).toMatch(/^k1\./);
+
+		// …and the one place it is opened gets the real thing back.
+		await expect(openRegistrationSecret(created, cipher)).resolves.toBe(
+			"bot-token-xyz",
+		);
+	});
+
+	// The AAD binds each ciphertext to its own (scope, scopeId, name), which is what makes ONE
+	// deployment key safe across every consumer: a token lifted into another registration's row does
+	// not open there.
+	it("refuses to open a token relocated into another registration", async () => {
+		const adapter = db();
+		const cipher = optionalCipher(withKey());
+		const store = createChannelRegistrationsStore(adapter, { now, cipher });
+		const mine = await store.register({
+			provider: "fake",
+			endpointKey: "acme-bot",
+			webhookSecret: "hook-a",
+			secret: "bot-token-xyz",
+			createdBy: userPrincipal("alice"),
+		});
+		if (!mine) throw new Error("expected the registration to be created");
+
+		// The same ciphertext, presented as another registration's row.
+		const stolen = { ...mine, endpointKey: "other-bot" };
+		await expect(openRegistrationSecret(stolen, cipher)).resolves.not.toBe(
+			"bot-token-xyz",
+		);
+	});
+
+	// A deployment with no master key keeps working — registering a bot is not a request to run a
+	// key-management story, and failing every registration on a key nobody was told to set would take
+	// working deployments down to protect a column.
+	it("passes the token through when no master key is configured", async () => {
+		const adapter = db();
+		const cipher = optionalCipher(buildSecrets([]));
+		const store = createChannelRegistrationsStore(adapter, { now, cipher });
+		const created = await store.register({
+			provider: "fake",
+			endpointKey: "acme-bot",
+			webhookSecret: "hook",
+			secret: "bot-token-xyz",
+			createdBy: userPrincipal("alice"),
+		});
+		expect(created?.secret).toBe("bot-token-xyz");
 	});
 });
