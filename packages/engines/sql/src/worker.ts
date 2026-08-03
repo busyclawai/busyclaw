@@ -32,6 +32,10 @@ export const RUNTIME_RUN_TASK = "runtime.run";
 export const RUNTIME_CONTINUE_RUN_TASK = "runtime.continueRun";
 export const RUNTIME_RESUME_RUN_TASK = "runtime.resumeRun";
 
+/** Attempts allowed for a resume task — see the enqueue site for why only this kind gets more
+ *  than one. Small on purpose: this covers a crashed host, not a failing run. */
+const RESUME_MAX_ATTEMPTS = 3;
+
 export const RuntimeRunTaskPayload = type({
 	prompt: "string",
 	"ctx?": type.Record("string", "unknown"),
@@ -69,6 +73,9 @@ export type WorkerTickResult =
 	| { status: "waiting_approval"; task: RuntimeTask; approvalIds: string[] }
 	| { status: "yielded"; task: RuntimeTask; checkpointId: string }
 	| { status: "completed"; task: RuntimeTask }
+	/** The task had nothing left to do — its resume state is already claimed or spent. The task is
+	 *  retired and the RUN is left exactly as it was. Not a failure: nobody's work was lost. */
+	| { status: "skipped"; task: RuntimeTask; reason: string }
 	| { status: "failed"; task: RuntimeTask | null; reason: string };
 
 const WorkerRuntimeResult = RuntimeResultSchema;
@@ -126,11 +133,17 @@ function workerRuntimeResult(result: unknown): WorkerRuntimeResult {
 	return valid;
 }
 
-type TaskExecution = {
-	result: WorkerRuntimeResult;
-	/** The task's parsed ctx — carried forward onto any continuation this slice enqueues. */
-	ctx: Record<string, unknown> | undefined;
-};
+type TaskExecution =
+	| {
+			outcome: "ran";
+			result: WorkerRuntimeResult;
+			/** The task's parsed ctx — carried forward onto any continuation this slice enqueues. */
+			ctx: Record<string, unknown> | undefined;
+	  }
+	/** Nothing to run: the resume state this task names is already claimed by a live attempt or has
+	 *  been retired by one. Distinct from a failure, and the distinction is load-bearing — treating
+	 *  it as one is what used to kill a healthy run. */
+	| { outcome: "skipped"; reason: string };
 
 async function runTask(
 	runtime: Runtime,
@@ -158,6 +171,7 @@ async function runTask(
 	if (claim.task.kind === RUNTIME_RUN_TASK) {
 		const payload = runtimeRunPayload(claim.task.payload);
 		return {
+			outcome: "ran",
 			result: runtimeResult(
 				await runtime.generate(payload.prompt, payload.ctx, withCaller),
 				"runtime.generate result",
@@ -173,8 +187,20 @@ async function runTask(
 			payload.ctx,
 			withCaller,
 		);
-		if (!rawResumeResult) throw stateError("run checkpoint is not consumable");
-		return { result: workerRuntimeResult(rawResumeResult), ctx: payload.ctx };
+		// A null here means the checkpoint is held by a live attempt or already retired by one — the
+		// expected outcome of a duplicate task, not a fault of this run. It used to throw, which routed
+		// to failClaim and (with maxAttempts 1) marked a perfectly healthy run `failed`.
+		if (!rawResumeResult) {
+			return {
+				outcome: "skipped",
+				reason: "run checkpoint is already claimed or spent",
+			};
+		}
+		return {
+			outcome: "ran",
+			result: workerRuntimeResult(rawResumeResult),
+			ctx: payload.ctx,
+		};
 	}
 
 	const payload = runtimeContinueRunPayload(claim.task.payload);
@@ -183,8 +209,18 @@ async function runTask(
 		payload.ctx,
 		withCaller,
 	);
-	if (!rawApprovalResult) throw stateError("approval is not consumable");
-	return { result: workerRuntimeResult(rawApprovalResult), ctx: payload.ctx };
+	// Same reasoning as the resume above: a second continuation for one approval finds it spent.
+	if (!rawApprovalResult) {
+		return {
+			outcome: "skipped",
+			reason: "approval is already claimed or spent",
+		};
+	}
+	return {
+		outcome: "ran",
+		result: workerRuntimeResult(rawApprovalResult),
+		ctx: payload.ctx,
+	};
 }
 
 async function failClaim(
@@ -358,7 +394,6 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 						});
 					}),
 				]);
-				const result = execution.result;
 				if (heartbeat.isLost()) {
 					return {
 						status: "failed",
@@ -369,6 +404,35 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 						}).message,
 					};
 				}
+
+				if (execution.outcome === "skipped") {
+					// Retire the task, touch NOTHING on the run. Whoever holds the resume state owns the
+					// run's status; a duplicate task must not narrate an outcome it did not produce.
+					const reason = execution.reason;
+					return store.transaction(async (tx) => {
+						const task = await tx.completeTask({
+							taskId: claim.task.id,
+							leaseToken: claim.leaseToken,
+							output: { skipped: reason },
+						});
+						if (!task)
+							return {
+								status: "failed",
+								task: null,
+								reason: stateError("lease lost before skip transition", {
+									taskId: claim.task.id,
+								}).message,
+							};
+						await tx.appendEvent({
+							runId: task.runId,
+							type: "task.skipped",
+							payload: { taskId: task.id, reason },
+						});
+						return { status: "skipped", task, reason };
+					});
+				}
+
+				const result = execution.result;
 
 				if (result.status === "yielded") {
 					// Self-continuation: park is already durable (the runtime persisted the checkpoint);
@@ -407,6 +471,12 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 								checkpointId,
 								...(ctx !== undefined ? { ctx } : {}),
 							},
+							// Retryable, unlike `runtime.run`. A resume task names its work by checkpoint id
+							// and that work is now RE-CLAIMABLE after a crash, so a second attempt continues
+							// the same transcript. (`runtime.run` carries only a prompt and would re-run the
+							// whole run from step 0, which is why its single attempt stays.) Without this the
+							// checkpoint's lease could lapse with no task left alive to take it.
+							maxAttempts: RESUME_MAX_ATTEMPTS,
 						});
 						return { status: "yielded", task, checkpointId };
 					});

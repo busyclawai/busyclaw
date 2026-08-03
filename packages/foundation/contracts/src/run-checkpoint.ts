@@ -1,15 +1,21 @@
 // Run checkpoints — the durable resume substrate for yielded runs. A yield is the engine-flipped
-// sibling of an approval wait: the run parks its resume state here and a continuation loads it
-// exactly once via `consume`. Operational runtime state, not compliance evidence — human approvals
-// keep their own record (see governance/approval.ts and docs/plans/yield-continuation-plan.md).
+// sibling of an approval wait: the run parks its resume state here and a continuation takes it
+// exactly once, via `claim` for the duration of an attempt and `complete` once that attempt has
+// returned. Operational runtime state, not compliance evidence — human approvals keep their own
+// record (see governance/approval.ts and docs/plans/yield-continuation-plan.md).
 
 import { type } from "arktype";
 import type { EntityInput, EntityRecord } from "./entity";
 import { entity, field } from "./entity";
 
-const runCheckpointStatusValues = ["pending", "consumed"] as const;
+const runCheckpointStatusValues = ["pending", "claimed", "consumed"] as const;
 
-export const runCheckpointStatus = type("'pending' | 'consumed'");
+// DERIVED, never hand-written. A second literal union here drifts from the values array the moment
+// one of them gains a member — the array feeds `field.enum` (so the column accepts the new value)
+// while the exported validator keeps rejecting it, and the two disagree silently at a boundary.
+export const runCheckpointStatus = type.enumerated(
+	...runCheckpointStatusValues,
+);
 export type RunCheckpointStatus = (typeof runCheckpointStatusValues)[number];
 
 export const runCheckpointFields = {
@@ -31,8 +37,13 @@ export const runCheckpointFields = {
 		immutable: true,
 	}),
 	createdAt: field.string({ required: true, immutable: true }),
-	// Stamped by the store's consume transition, never caller-provided.
+	// Stamped by the store's claim/complete transitions, never caller-provided.
 	consumedAt: field.string({ input: false }),
+	// The claim's proof and its expiry. A checkpoint is `claimed` for the duration of one resume
+	// attempt; if that attempt dies, the lease lapses and the row becomes re-claimable instead of
+	// being stranded `consumed` with nobody running it.
+	leaseId: field.string({ input: false }),
+	leaseExpiresAt: field.string({ index: true, input: false }),
 } as const;
 
 export const runCheckpointEntity = entity(
@@ -43,30 +54,56 @@ export const runCheckpointRecord = runCheckpointEntity.record;
 export type RunCheckpointRecord = EntityRecord<typeof runCheckpointFields>;
 
 export const newRunCheckpoint = runCheckpointEntity.schema({
-	omit: ["status", "consumedAt"],
+	omit: ["status", "consumedAt", "leaseId", "leaseExpiresAt"],
 	optional: ["id"],
 });
 export type NewRunCheckpoint = EntityInput<
 	typeof runCheckpointFields,
-	"status" | "consumedAt",
+	"status" | "consumedAt" | "leaseId" | "leaseExpiresAt",
 	"id"
 >;
 
 /** The storage schema backing the RunCheckpointStore. */
 export const runCheckpointSchema = runCheckpointEntity.storage;
 
+/** The proof that one resume attempt holds a checkpoint, carried into `complete`. */
+export type RunCheckpointClaim = {
+	record: RunCheckpointRecord;
+	leaseId: string;
+};
+
 /**
- * Durable home for yield checkpoints. The single-use guarantee is `consume`: under concurrent
- * continuations of the same checkpoint, exactly one caller gets the record, the rest get null.
+ * Durable home for yield checkpoints. Single-use is enforced across TWO transitions, not one:
+ * `claim` takes the row for the duration of an attempt, `complete` retires it once the resumed
+ * slice has actually returned.
+ *
+ * The single-transition version (`consume`: pending → consumed, before running anything) was a
+ * live kill. A process that died after the flip left every retry unable to take the row, so the
+ * task dead-lettered and the RUN was marked `failed` — while its complete, resumable transcript sat
+ * on disk in a row nothing outside a test ever reads. Leasing the claim makes a crashed attempt
+ * recoverable and keeps exactly-once: two live callers cannot both hold the row.
  */
 export type RunCheckpointStore = {
 	/** Persist a pending checkpoint. Returns the stored record (with its assigned `id`). */
 	create: (input: NewRunCheckpoint) => Promise<RunCheckpointRecord>;
-	/** Read a checkpoint without consuming it. */
+	/** Read a checkpoint without claiming it. */
 	get: (id: string) => Promise<RunCheckpointRecord | null>;
 	/**
-	 * Atomically take the single-use PENDING record by id (race-safe). Returns null if it's absent
-	 * or already consumed. This is what makes a continuation run exactly once.
+	 * Atomically take the row for one attempt (race-safe): `pending` → `claimed`, or a `claimed`
+	 * row whose lease has EXPIRED → re-claimed by the new attempt. Returns null when the row is
+	 * absent, already `consumed`, or held by a live lease — none of which is this caller's failure.
 	 */
-	consume: (id: string) => Promise<RunCheckpointRecord | null>;
+	claim: (
+		id: string,
+		options?: { leaseMs?: number },
+	) => Promise<RunCheckpointClaim | null>;
+	/**
+	 * Retire a claimed row: `claimed` → `consumed`, pinned on the claim's `leaseId` so an attempt
+	 * whose lease lapsed and was re-claimed by someone else cannot retire the winner's work.
+	 * Returns null when this claim no longer owns the row.
+	 */
+	complete: (
+		id: string,
+		leaseId: string,
+	) => Promise<RunCheckpointRecord | null>;
 };

@@ -2196,9 +2196,13 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	): Promise<RuntimeResult | null> => {
 		abortIfNeeded(options?.abortSignal);
 		if (!runCheckpointStore) return null;
-		// consume-once: under concurrent continuations exactly one caller proceeds.
-		const record = await runCheckpointStore.consume(checkpointId);
-		if (!record) return null;
+		// CLAIM, not consume. Under concurrent continuations exactly one caller proceeds — but the row
+		// is only retired once this slice has actually returned, below. Consuming up front meant a
+		// process that died mid-resume left the checkpoint permanently untakeable, so every retry threw
+		// and the run was marked `failed` with its transcript intact and unreachable.
+		const claim = await runCheckpointStore.claim(checkpointId);
+		if (!claim) return null;
+		const record = claim.record;
 		const checkpoint = parseRuntimeYieldMetadata(record.metadata);
 		const recording =
 			options?.[RUNTIME_RECORDING_OPTION] ?? checkpoint.recording;
@@ -2263,6 +2267,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		if (valid instanceof ark.errors) {
 			throw validationError("runtime.resumeRun result invalid", valid.summary);
 		}
+		// The slice returned, so this checkpoint is spent — whatever the outcome. A `yielded` result
+		// has already persisted its OWN successor checkpoint; retiring this one is what stops the pair
+		// from both being resumable. A THROW deliberately skips this: the row stays `claimed`, its
+		// lease lapses, and the retry re-claims it rather than finding a dead end.
+		await runCheckpointStore.complete(checkpointId, claim.leaseId);
 		await emitRunOutcome(emitCtx, valid, runUsage);
 		return valid;
 	};

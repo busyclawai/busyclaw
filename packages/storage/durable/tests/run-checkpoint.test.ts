@@ -35,31 +35,89 @@ function suite(
 			expect(read?.metadata).toEqual(base.metadata); // parsed back from JSON, not a string
 		});
 
-		it("consume is single-use and stamps consumedAt", async () => {
+		it("claim → complete is single-use and stamps consumedAt", async () => {
 			const store = createRunCheckpointStore(makeAdapter(), {
 				now: () => "2026-01-01T00:05:00Z",
 			});
 			const rec = await store.create(base);
-			const consumed = await store.consume(rec.id);
-			expect(consumed?.metadata).toEqual(base.metadata); // the envelope to resume from
-			expect(await store.consume(rec.id)).toBeNull(); // single-use
+			const claim = await store.claim(rec.id);
+			expect(claim?.record.metadata).toEqual(base.metadata); // the envelope to resume from
+			expect((await store.get(rec.id))?.status).toBe("claimed");
+
+			if (!claim) throw new Error("claim failed");
+			const done = await store.complete(rec.id, claim.leaseId);
+			expect(done?.status).toBe("consumed");
 			const read = await store.get(rec.id);
 			expect(read?.status).toBe("consumed"); // row retained for observability
 			expect(read?.consumedAt).toBe("2026-01-01T00:05:00Z");
+			expect(await store.claim(rec.id)).toBeNull(); // spent, and stays spent
 		});
 
-		it("consume of an unknown id returns null", async () => {
+		it("claim of an unknown id returns null", async () => {
 			const store = createRunCheckpointStore(makeAdapter());
-			expect(await store.consume("missing")).toBeNull();
+			expect(await store.claim("missing")).toBeNull();
 		});
 
-		it("consume is race-safe — concurrent continuations, exactly one winner", async () => {
+		it("claim is race-safe — concurrent continuations, exactly one winner", async () => {
 			const store = createRunCheckpointStore(makeAdapter());
 			const rec = await store.create(base);
 			const results = await Promise.all(
-				Array.from({ length: 5 }, () => store.consume(rec.id)),
+				Array.from({ length: 5 }, () => store.claim(rec.id)),
 			);
 			expect(results.filter((r) => r !== null)).toHaveLength(1);
+		});
+
+		it("a LIVE claim locks the row — a second attempt gets null", async () => {
+			const store = createRunCheckpointStore(makeAdapter(), {
+				now: () => "2026-01-01T00:00:00Z",
+				claimLeaseMs: 60_000,
+			});
+			const rec = await store.create(base);
+			expect(await store.claim(rec.id)).not.toBeNull();
+			// Still inside the lease: exactly-once must hold even though the row is not `consumed`.
+			expect(await store.claim(rec.id)).toBeNull();
+		});
+
+		// THE REGRESSION. Before claim/complete, `consume` flipped the row terminal BEFORE the resume
+		// ran, so an attempt that died left the checkpoint permanently untakeable — every retry got
+		// null, the task dead-lettered, and the engine marked a healthy run `failed` while its complete
+		// transcript sat in this row. A lapsed claim must be recoverable or that kill comes back.
+		it("a claim whose lease has LAPSED is re-claimable, with the envelope intact", async () => {
+			let clock = "2026-01-01T00:00:00Z";
+			const store = createRunCheckpointStore(makeAdapter(), {
+				now: () => clock,
+				claimLeaseMs: 60_000,
+			});
+			const rec = await store.create(base);
+			const first = await store.claim(rec.id);
+			expect(first).not.toBeNull();
+
+			// …the process holding it dies here, having written nothing.
+			clock = "2026-01-01T00:02:00Z"; // past the 60s lease
+
+			const second = await store.claim(rec.id);
+			expect(second).not.toBeNull();
+			expect(second?.record.metadata).toEqual(base.metadata);
+			expect(second?.leaseId).not.toBe(first?.leaseId);
+		});
+
+		it("complete is pinned to the claim — a lapsed attempt cannot retire the winner's row", async () => {
+			let clock = "2026-01-01T00:00:00Z";
+			const store = createRunCheckpointStore(makeAdapter(), {
+				now: () => clock,
+				claimLeaseMs: 60_000,
+			});
+			const rec = await store.create(base);
+			const stale = await store.claim(rec.id);
+			clock = "2026-01-01T00:02:00Z";
+			const winner = await store.claim(rec.id);
+			if (!stale || !winner) throw new Error("claim failed");
+
+			// The stale attempt comes back from the dead and tries to finish. It must not.
+			expect(await store.complete(rec.id, stale.leaseId)).toBeNull();
+			expect((await store.get(rec.id))?.status).toBe("claimed");
+			expect(await store.complete(rec.id, winner.leaseId)).not.toBeNull();
+			expect((await store.get(rec.id))?.status).toBe("consumed");
 		});
 
 		it("rejects malformed stored checkpoint rows", async () => {
@@ -95,7 +153,8 @@ suite(
 		// (`metadata` holds JSON).
 		sqlite.exec(
 			`CREATE TABLE run_checkpoint (
-						id TEXT PRIMARY KEY, status TEXT, runId TEXT, metadata TEXT, createdAt TEXT, consumedAt TEXT
+						id TEXT PRIMARY KEY, status TEXT, runId TEXT, metadata TEXT, createdAt TEXT,
+						consumedAt TEXT, leaseId TEXT, leaseExpiresAt TEXT
 					)`,
 		);
 		return kyselyAdapter(db);

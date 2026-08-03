@@ -780,7 +780,11 @@ describe("@busyclaw/engine-sql", () => {
 		});
 	});
 
-	it("worker fails a continuation whose checkpoint is not consumable", async () => {
+	// Was: "worker fails a continuation whose checkpoint is not consumable" — which asserted the kill.
+	// A null from resumeRun means the checkpoint is held by a live attempt or already retired by one.
+	// Neither is THIS run's failure, and treating it as one dead-lettered the task and rewrote a
+	// healthy run as `failed`. The task is retired; the run is left for whoever actually owns it.
+	it("worker SKIPS a resume whose checkpoint is claimed or spent, leaving the run alone", async () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
 		});
@@ -804,11 +808,22 @@ describe("@busyclaw/engine-sql", () => {
 
 		const result = await worker.tick();
 
-		expect(result.status).toBe("failed");
-		expect(await store.getRun(run.id)).toMatchObject({ status: "failed" });
-		expect((await store.getTask(task.id))?.lastError).toContain(
-			"run checkpoint is not consumable",
-		);
+		expect(result.status).toBe("skipped");
+		// THE DECISIVE ASSERTION: the run is not condemned. This is what shipped as `failed`, on a run
+		// whose transcript was intact and whose only crime was being named by a duplicate task.
+		expect((await store.getRun(run.id))?.status).not.toBe("failed");
+		// The task itself is retired rather than left to be re-claimed forever.
+		expect((await store.getTask(task.id))?.status).toBe("completed");
+		expect((await store.getTask(task.id))?.lastError).toBeUndefined();
+
+		// KNOWN RESIDUE, pinned deliberately so the fix has something to change. The skip branch writes
+		// nothing to the run, but `claimDueTask` already did: it ends with an UNCONDITIONAL
+		// `updateRun(runId, { status: "running" })` (store.ts:461) that does not look at the run at all.
+		// So a task that turns out to have no work still leaves the run `running`. Closing that needs
+		// the conditional `updateRunIfStatus` in docs/plans/run-control-plane.md slice 1 — at which
+		// point this expectation becomes `waiting`/whatever the real owner left, and should be updated
+		// in the same commit.
+		expect((await store.getRun(run.id))?.status).toBe("running");
 	});
 });
 
@@ -842,8 +857,13 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 	});
 
 	// Delivered twice, it finds what the first left and adds work to it — it does not fork a third.
-	it("is idempotent in run identity across a repeated continuation", async () => {
-		const store = createSqlEngineStore(memoryAdapter());
+	// It must also not schedule the work TWICE: the task id is derived from (runId, kind, approvalId)
+	// so the second insert loses at the database. Before that, each call minted its own id; the first
+	// task consumed the approval, the second found it spent, threw, dead-lettered under maxAttempts 1,
+	// and rewrote a correctly-resumed run as `failed`. Two clicks on one approve button.
+	it("is idempotent in run identity AND schedules exactly one slice", async () => {
+		const inner = memoryAdapter();
+		const store = createSqlEngineStore(inner);
 		const engine = engineOver(store);
 		const parked = await store.createRun({ input: { prompt: "hello" } });
 
@@ -857,6 +877,45 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		});
 		expect(first.id).toBe(parked.id);
 		expect(second.id).toBe(parked.id);
+
+		const tasks = await inner.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: parked.id }],
+		});
+		expect(tasks).toHaveLength(1);
+	});
+
+	// A different approval on the same run is different work and gets its own task — the derived id
+	// must dedupe the repeat, not collapse two genuine continuations into one.
+	it("a second APPROVAL on the same run schedules its own slice", async () => {
+		const inner = memoryAdapter();
+		const store = createSqlEngineStore(inner);
+		const engine = engineOver(store);
+		const parked = await store.createRun({ input: { prompt: "hello" } });
+
+		await engine.continueRun({ approvalId: "appr-1", run: { id: parked.id } });
+		await engine.continueRun({ approvalId: "appr-2", run: { id: parked.id } });
+
+		const tasks = await inner.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: parked.id }],
+		});
+		expect(tasks).toHaveLength(2);
+	});
+
+	// Resetting a finished run to `queued` resurrects it, and the slice that follows can only fail —
+	// so a stale continuation could turn `completed` into `failed`. Refuse loudly instead.
+	it("refuses to continue a run that is already terminal", async () => {
+		const store = createSqlEngineStore(memoryAdapter());
+		const engine = engineOver(store);
+		const done = await store.createRun({ input: { prompt: "hello" } });
+		await store.updateRun(done.id, { status: "completed" });
+
+		await expect(
+			engine.continueRun({ approvalId: "appr-1", run: { id: done.id } }),
+		).rejects.toThrow("already terminal");
+		// …and the run keeps the status it earned.
+		expect((await store.getRun(done.id))?.status).toBe("completed");
 	});
 
 	// A caller with no parked run to name still gets one created — the old behaviour, unchanged.

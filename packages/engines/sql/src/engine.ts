@@ -7,8 +7,14 @@ import type {
 	EngineRunHandle,
 	EngineStartRunInput,
 } from "@busyclaw/contracts";
-import { drainWork as drainEngineWork } from "@busyclaw/contracts";
+import {
+	drainWork as drainEngineWork,
+	isConflict,
+	stateError,
+} from "@busyclaw/contracts";
 import type { Runtime } from "@busyclaw/runtime";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { addMs, type SqlEngineStore } from "./store";
 import type {
 	SqlEngineWorkerConfig,
@@ -20,6 +26,30 @@ import {
 	RUNTIME_CONTINUE_RUN_TASK,
 	RUNTIME_RUN_TASK,
 } from "./worker";
+
+/** A run in one of these has nothing left to continue; a continuation against it is a mistake. */
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+	"completed",
+	"failed",
+	"cancelled",
+]);
+
+/**
+ * The task id for continuing `runId` on `approvalId`. Derived, so the insert itself is the
+ * admission — the same construction `deliveryRowId` uses in the channels inbox, NUL-joined for the
+ * same reason: `runId` and `approvalId` are opaque ids from different stores and must not be able
+ * to collide by concatenation. Written as the escape rather than a literal NUL byte, because a
+ * source file carrying a raw NUL is binary to git.
+ */
+function continueTaskId(runId: string, approvalId: string): string {
+	return bytesToHex(
+		sha256(
+			utf8ToBytes(
+				`${runId}\u0000${RUNTIME_CONTINUE_RUN_TASK}\u0000${approvalId}`,
+			),
+		),
+	);
+}
 
 export type SqlEngineConfig = {
 	store: SqlEngineStore;
@@ -95,6 +125,16 @@ function createSqlEngineHandle(input: {
 				// old behaviour for callers that never had one.
 				const wanted = continueInput.run?.id;
 				const existing = wanted ? await store.getRun(wanted) : null;
+				// A TERMINAL run is not continuable. Resetting one to `queued` — which this did
+				// unconditionally — resurrects a finished run, and the second task then finds the approval
+				// already spent, fails, dead-letters, and rewrites `completed` as `failed`. Two clicks on
+				// one approve button were enough.
+				if (existing && TERMINAL_RUN_STATUSES.has(existing.status)) {
+					throw stateError("run is already terminal and cannot be continued", {
+						runId: existing.id,
+						status: existing.status,
+					});
+				}
 				const run =
 					existing ??
 					(await store.createRun({
@@ -109,14 +149,25 @@ function createSqlEngineHandle(input: {
 					// would otherwise look like work already in flight.
 					await store.updateRun(existing.id, { status: "queued" });
 				}
-				await store.enqueueTask({
-					kind: RUNTIME_CONTINUE_RUN_TASK,
-					payload: {
-						approvalId: continueInput.approvalId,
-						...(continueInput.ctx ? { ctx: continueInput.ctx } : {}),
-					},
-					runId: run.id,
-				});
+				// The INSERT is the admission. Two continuations of one approval derive the same task id
+				// and the second loses at the database, so one approval can only ever schedule one slice.
+				// Without it each call minted `newId()` and the loser of the approval race was a task that
+				// could only fail — taking its run's status with it.
+				try {
+					await store.enqueueTask({
+						id: continueTaskId(run.id, continueInput.approvalId),
+						kind: RUNTIME_CONTINUE_RUN_TASK,
+						payload: {
+							approvalId: continueInput.approvalId,
+							...(continueInput.ctx ? { ctx: continueInput.ctx } : {}),
+						},
+						runId: run.id,
+					});
+				} catch (error) {
+					// Already admitted by an earlier call — the run is scheduled, which is what the caller
+					// wanted. Any other failure is real and must not be swallowed.
+					if (!isConflict(error)) throw error;
+				}
 				return run;
 			});
 			return { id: run.id };
