@@ -569,48 +569,72 @@ export function createSqlEngineStore(
 			});
 			let count = 0;
 			for (const candidate of leaseRows) {
-				const lease = await db.consumeOne({
-					model: "lease",
-					where: [
-						{ field: "id", value: candidate.id },
-						{
-							field: "expiresAt",
-							value: ts,
-							operator: "lte",
-							connector: "AND",
+				// R-M10. The lease used to be CONSUMED first — deleted — and the task transitioned after.
+				// A process dying between those two left the task `leased` with a `leaseId` pointing at a
+				// row that no longer existed: no lease left to expire, and the claim query only looks at
+				// `pending`, so the task was stranded forever. Recovery state destroyed before the
+				// successor state was durable, which is the whole shape of the finding.
+				//
+				// Reversed: the task transition goes first, under a compare-and-set on the lease it
+				// names, and the lease row is dropped after. Dying in the middle now leaves a task that
+				// is `pending` (claimable again) beside a stale lease row the next sweep collects —
+				// recoverable litter instead of a permanent orphan.
+				//
+				// The CAS is what makes two concurrent reapers safe without consuming first: whichever
+				// updates the task sets `leaseId: null`, so the other's `leaseId = <id>` predicate matches
+				// nothing and it does no work. Deleting an already-deleted lease is a no-op either way.
+				const reap = async (tx: typeof db): Promise<boolean> => {
+					const task = await tx.findOne({
+						model: "runtime_task",
+						where: [{ field: "id", value: candidate.taskId }],
+					});
+					if (!task) {
+						// The task is gone; the lease is litter. Drop it so the sweep does not re-read it.
+						await tx.delete({
+							model: "lease",
+							where: [{ field: "id", value: candidate.id }],
+						});
+						return false;
+					}
+					const status: TaskStatus =
+						task.attempt >= task.maxAttempts ? "dead" : "pending";
+					const updated = await tx.update({
+						model: "runtime_task",
+						where: [
+							{ field: "id", value: candidate.taskId },
+							{ field: "status", value: "leased", connector: "AND" },
+							{ field: "leaseId", value: candidate.id, connector: "AND" },
+						],
+						update: {
+							status,
+							lastError: "lease expired",
+							dueAt:
+								status === "pending"
+									? addMs(ts, task.retryDelayMs)
+									: task.dueAt,
+							leaseId: null,
+							workerId: null,
+							leasedUntil: null,
+							updatedAt: ts,
 						},
-					],
-				});
-				if (!lease) continue;
-				const task = await db.findOne({
-					model: "runtime_task",
-					where: [{ field: "id", value: lease.taskId }],
-				});
-				if (!task) continue;
-				const status: TaskStatus =
-					task.attempt >= task.maxAttempts ? "dead" : "pending";
-				const updated = await db.update({
-					model: "runtime_task",
-					where: [
-						{ field: "id", value: lease.taskId },
-						{ field: "status", value: "leased", connector: "AND" },
-						{ field: "leaseId", value: lease.id, connector: "AND" },
-					],
-					update: {
-						status,
-						lastError: "lease expired",
-						dueAt:
-							status === "pending" ? addMs(ts, task.retryDelayMs) : task.dueAt,
-						leaseId: null,
-						workerId: null,
-						leasedUntil: null,
-						updatedAt: ts,
-					},
-				});
-				if (updated && status === "dead") {
-					await store.updateRun(task.runId, { status: "failed" });
-				}
-				count++;
+					});
+					// Lost to another reaper, or the lease was renewed between the read and here. Either
+					// way this one is not ours to retire, and the lease row is left for its real owner.
+					if (!updated) return false;
+					await tx.delete({
+						model: "lease",
+						where: [{ field: "id", value: candidate.id }],
+					});
+					if (status === "dead") {
+						await store.updateRun(task.runId, { status: "failed" });
+					}
+					return true;
+				};
+				// Atomic where the adapter can be; ordered-and-recoverable where it cannot.
+				const reaped = db.transaction
+					? await db.transaction(reap)
+					: await reap(db);
+				if (reaped) count++;
 			}
 			return count;
 		},

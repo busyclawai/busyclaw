@@ -868,3 +868,75 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		expect(await store.getRun(handle.id)).not.toBeNull();
 	});
 });
+
+// R-M10. The reaper CONSUMED the lease first — deleted it — and transitioned the task after. A
+// process dying between those two left the task `leased` with a `leaseId` pointing at a row that no
+// longer existed: no lease left to expire, and the claim query only looks at `pending`, so the task
+// was stranded forever. Recovery state destroyed before the successor state was durable.
+describe("the lease reaper does not destroy recovery state first (R-M10)", () => {
+	const expiredLease = async (
+		store: ReturnType<typeof createSqlEngineStore>,
+		maxAttempts = 1,
+	) => {
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		await store.enqueueTask({
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+			runId: run.id,
+			maxAttempts,
+		});
+		// Claimed with a lease that has already lapsed by the time it is swept.
+		const claimed = await store.claimDueTask({
+			workerId: "w1",
+			leaseTtlMs: -1,
+		});
+		if (!claimed) throw new Error("expected a claim");
+		return claimed;
+	};
+
+	it("returns the task to the queue when it reaps, and drops the lease after", async () => {
+		const inner = memoryAdapter();
+		const store = createSqlEngineStore(inner);
+		// maxAttempts 2, so an expired first attempt is retryable rather than terminal.
+		const claimed = await expiredLease(store, 2);
+
+		expect(await store.reapExpiredLeases()).toBe(1);
+
+		// Back in the queue — `pending`, no lease, and due again after its retry delay. That is what a
+		// stranded task never became: it stayed `leased` pointing at a row that no longer existed, and
+		// the claim query only ever looks at `pending`.
+		const task = (await inner.findOne({
+			model: "runtime_task",
+			where: [{ field: "id", value: claimed.task.id }],
+		})) as { status: string; leaseId: string | null } | null;
+		expect(task?.status).toBe("pending");
+		expect(task?.leaseId).toBeNull();
+		// …and the lease row went AFTER the transition, not before it.
+		const leases = await inner.findMany({ model: "lease", where: [] });
+		expect(leases.map((row) => (row as { id: string }).id)).not.toContain(
+			claimed.leaseId,
+		);
+	});
+
+	// The CAS is what keeps two reapers from both retiring one lease — and what keeps a reaper from
+	// retiring a lease whose task has already moved on. Consuming the lease first meant the loser had
+	// already destroyed the evidence before discovering it had lost.
+	it("does no work when the task no longer names the lease it is reaping", async () => {
+		const inner = memoryAdapter();
+		const store = createSqlEngineStore(inner);
+		const claimed = await expiredLease(store, 2);
+
+		// Somebody else got there first: the task no longer points at this lease.
+		await inner.update({
+			model: "runtime_task",
+			where: [{ field: "id", value: claimed.task.id }],
+			update: { status: "pending", leaseId: null },
+		});
+
+		expect(await store.reapExpiredLeases()).toBe(0);
+		// …and the LEASE SURVIVES. This is the property, not the count: consuming it first meant a
+		// reaper that lost the race had already destroyed the evidence before discovering it had lost.
+		const leases = await inner.findMany({ model: "lease", where: [] });
+		expect(leases).toHaveLength(1);
+	});
+});
