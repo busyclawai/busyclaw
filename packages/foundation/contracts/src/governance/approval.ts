@@ -204,9 +204,17 @@ export type ApprovalStore = {
 		leaseId: string,
 		leaseMs: number,
 	) => Promise<ApprovalRecord | null>;
-	/** List approvals, optionally filtered — the human-review queue reads `{ status: "pending" }`. */
+	/**
+	 * List approvals, optionally filtered — the human-review queue reads `{ status: "pending" }`.
+	 *
+	 * `limit` is a CEILING, not a page size, and the implementation applies its own maximum when the
+	 * caller names none. R-M12: this returned every matching row, so on a busy tenant the cost of one
+	 * request was set by how many approvals already existed rather than by anything the caller sent.
+	 * Cursor pagination is a separate, larger change; this is the bound that stops the unbounded case.
+	 */
 	list: (filter?: {
 		status?: ApprovalStatus;
 		principal?: Principal;
+		limit?: number;
 	}) => Promise<ApprovalRecord[]>;
 };

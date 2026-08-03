@@ -26,6 +26,9 @@ export type ApprovalStoreOptions = {
 const MODEL = "approval";
 const newId = (): string => bytesToHex(randomBytes(16));
 
+/** The most approvals one `list` will ever return. A ceiling, not a page size — see the port doc. */
+const MAX_APPROVAL_PAGE = 500;
+
 type ApprovalWhere = EntityWhere<typeof approvalFields>;
 
 function validateNewApproval(input: unknown): NewApproval {
@@ -188,7 +191,15 @@ export function createApprovalStore(
 					value: filter.principal,
 					connector: "AND",
 				});
-			return db.findMany({ model: MODEL, where });
+			// R-M12. Bounded ALWAYS, whether or not the caller named a limit: an unbounded read here
+			// serializes every matching approval into memory and then onto the wire, so one request on a
+			// busy tenant costs whatever that tenant's history happens to weigh. A caller asking for more
+			// than the ceiling gets the ceiling rather than an error — the page is a page either way.
+			return db.findMany({
+				model: MODEL,
+				where,
+				limit: Math.min(filter?.limit ?? MAX_APPROVAL_PAGE, MAX_APPROVAL_PAGE),
+			});
 		},
 	};
 }

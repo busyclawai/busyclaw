@@ -78,19 +78,33 @@ function envelopeOf(text: string): ClawResponseEnvelope | undefined {
 
 async function readResult(response: Response): Promise<ClawResult<unknown>> {
 	const envelope = envelopeOf(await response.text());
-	if (!response.ok || envelope?.ok === false) {
-		const error: ClawClientError = {
+	const fail = (message: string, code?: string): ClawResult<unknown> => ({
+		data: null,
+		error: {
 			status: response.status,
-			message:
-				envelope?.error?.message ??
-				`busyclaw request failed with status ${response.status}`,
-			...(envelope?.error?.code !== undefined
-				? { code: envelope.error.code }
-				: {}),
-		};
-		return { data: null, error };
+			message,
+			...(code !== undefined ? { code } : {}),
+		},
+	});
+	// R-M14. A body that is not an envelope is not an answer — on ANY status. It used to be treated as
+	// one on 2xx: every envelope field was optional, so any JSON object (a proxy's health blob, a
+	// rewritten route's index page, a gateway that swallowed the call and answered 200) validated,
+	// reported `ok` as undefined, and reached the caller as a data-less SUCCESS. Callers then rendered
+	// "no results" for a request that never reached the server.
+	if (envelope === undefined) {
+		return fail(
+			response.ok
+				? "busyclaw response was not a valid envelope"
+				: `busyclaw request failed with status ${response.status}`,
+		);
 	}
-	return { data: envelope?.data, error: null };
+	if (!envelope.ok) return fail(envelope.error.message, envelope.error.code);
+	// A well-formed success envelope under a non-2xx is still a failure — the status is the transport's
+	// answer and it outranks the body's claim about itself.
+	if (!response.ok) {
+		return fail(`busyclaw request failed with status ${response.status}`);
+	}
+	return { data: envelope.data, error: null };
 }
 
 export function createTransport(options: ClawClientOptions): Transport {

@@ -463,3 +463,62 @@ describe("fail-loud construction (deviations from better-auth's silent merges)",
 		expect(() => client.$store.notify("$missing")).toThrow(/signal/);
 	});
 });
+
+// R-M14, client side. Two halves: a body that is not an envelope must not resolve as success, and a
+// LOST SESSION must clear what the client is still showing.
+describe("R-M14 — protocol validation and session loss", () => {
+	const clientWith = (body: string, status = 200) =>
+		createClawClient({
+			baseUrl: "/api/busyclaw",
+			fetch: async () =>
+				new Response(body, {
+					status,
+					headers: { "content-type": "application/json" },
+				}),
+		});
+
+	it("reports a non-envelope 200 as an error, not as undefined data", async () => {
+		const result = await clientWith(JSON.stringify({ healthy: true })).getClaw({
+			id: "c1",
+		});
+		expect(result.data).toBeNull();
+		expect(result.error?.message).toMatch(/not a valid envelope/);
+	});
+
+	it("still reads a well-formed success", async () => {
+		const result = await clientWith(
+			JSON.stringify({ ok: true, data: { id: "c1" } }),
+		).getClaw({ id: "c1" });
+		expect(result.error).toBeNull();
+		expect(result.data).toMatchObject({ id: "c1" });
+	});
+
+	// The atom's own "clear on 401, keep on 403" branch is covered above ("keeps stale data on non-401
+	// errors and clears it on 401") — and until now it was UNREACHABLE over the wire, because the
+	// server answered 403 for a missing caller too. This pins the half that was missing: the two
+	// arrive as different statuses, so the branch can fire.
+	it("surfaces a lost session and a forbidden call as different statuses", async () => {
+		let status = 200;
+		let body = JSON.stringify({ ok: true, data: { id: "c1" } });
+		const client = createClawClient({
+			baseUrl: "/api/busyclaw",
+			fetch: async () =>
+				new Response(body, {
+					status,
+					headers: { "content-type": "application/json" },
+				}),
+		});
+
+		const first = await client.getClaw({ id: "c1" });
+		expect(first.data).toMatchObject({ id: "c1" });
+
+		status = 403;
+		body = JSON.stringify({ ok: false, error: { message: "denied" } });
+		const forbidden = await client.getClaw({ id: "c1" });
+		expect(forbidden.error?.status).toBe(403);
+
+		status = 401;
+		const gone = await client.getClaw({ id: "c1" });
+		expect(gone.error?.status).toBe(401);
+	});
+});

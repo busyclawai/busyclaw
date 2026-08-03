@@ -107,8 +107,46 @@ type CronTaskResult = BusyclawCronResult & { id: string };
  * `no-store` by DEFAULT, overridable through `init.headers`, because the only response here that is
  * not per-caller is the OpenAPI document, which says so for itself.
  */
+/**
+ * How large a single response body may be before the door refuses to send it.
+ *
+ * R-M12. Request ingress was bounded and egress was not, which is the asymmetry that matters: the
+ * body here is assembled from whatever a list returned, and several lists had no ceiling at all. One
+ * `listMessages` over a long thread, or `listApprovals` on a busy tenant, serialized the whole result
+ * set into memory and wrote it out — so the cost of a request was set by how much data the caller
+ * already had, not by anything the caller sent.
+ *
+ * Generous, because it is a backstop and not a pagination policy: it exists so an unbounded result
+ * fails loudly and locally instead of becoming an out-of-memory or a very large transfer.
+ */
+const MAX_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
+
 function json(data: unknown, init?: ResponseInit): Response {
-	return new Response(JSON.stringify(data), {
+	const body = JSON.stringify(data);
+	// Refused as a LIMIT, not a 500: the same value will be too big next time however well-formed it
+	// is, and a caller can act on that by asking for less.
+	if (body !== undefined && body.length > MAX_RESPONSE_BODY_BYTES) {
+		// Built inline rather than through the error responder, which routes back through this function.
+		const refusal = {
+			error: {
+				message: errorMessage(
+					limitError(`response exceeds ${MAX_RESPONSE_BODY_BYTES} bytes`, {
+						limit: MAX_RESPONSE_BODY_BYTES,
+					}),
+				),
+				code: "BUSYCLAW_LIMIT_EXCEEDED",
+			},
+			ok: false,
+		};
+		return new Response(JSON.stringify(refusal), {
+			status: 413,
+			headers: {
+				"content-type": "application/json; charset=utf-8",
+				"cache-control": "no-store",
+			},
+		});
+	}
+	return new Response(body, {
 		...init,
 		headers: {
 			"content-type": "application/json; charset=utf-8",
@@ -125,7 +163,13 @@ function statusForError(error: unknown): number {
 		// An app-authz denial (the principal floor / owner∪scope∪grant PEP throws this) is a Forbidden —
 		// NOT a masked 500. Without this a fail-closed governed call reads as a server error on the wire
 		// (tripping error alarms / client retries) instead of the deliberate deny it is.
-		if (error.code === "BUSYCLAW_AUTHORIZATION_DENIED") return 403;
+		//
+		// R-M14. Except when there was no caller at all: that is 401, because it is the one denial the
+		// client can DO something about. Collapsed into 403, a lost session was indistinguishable from a
+		// permission the caller never had, so a client had no signal to clear what it was still showing.
+		if (error.code === "BUSYCLAW_AUTHORIZATION_DENIED") {
+			return error.details?.unauthenticated === true ? 401 : 403;
+		}
 		// A refused budget is Payload Too Large, not a masked 400 — the distinction is actionable:
 		// 400 invites the caller to fix the value and send it again, 413 tells them the same value
 		// will be refused again however well-formed it is.
@@ -639,13 +683,21 @@ function parseEnvelope(text: string): ClawResponseEnvelope | undefined {
 
 async function readClientResponse(response: Response): Promise<unknown> {
 	const envelope = parseEnvelope(await response.text());
-	if (!response.ok || envelope?.ok === false) {
+	// R-M14. Same rule the browser client follows: a body that is not an envelope is not an answer, on
+	// any status. Returning `envelope?.data` for one meant a 200 carrying somebody else's JSON (a proxy
+	// page, a rewritten route) resolved as a successful `undefined`.
+	if (envelope === undefined) {
 		throw new Error(
-			envelope?.error?.message ??
-				`busyclaw request failed with status ${response.status}`,
+			response.ok
+				? "busyclaw response was not a valid envelope"
+				: `busyclaw request failed with status ${response.status}`,
 		);
 	}
-	return envelope?.data;
+	if (!envelope.ok) throw new Error(envelope.error.message);
+	if (!response.ok) {
+		throw new Error(`busyclaw request failed with status ${response.status}`);
+	}
+	return envelope.data;
 }
 
 async function callApiRoute(input: {

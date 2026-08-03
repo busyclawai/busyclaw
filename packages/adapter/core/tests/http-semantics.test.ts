@@ -7,7 +7,7 @@
 
 import type { Claw } from "busyclaw";
 import { describe, expect, it } from "vitest";
-import { toRequestHandler } from "../src/index";
+import { createClawClient, toRequestHandler } from "../src/index";
 
 const base = "https://app.test/api/busyclaw";
 
@@ -208,5 +208,86 @@ describe("M-17 — two patterns must not match one URL", () => {
 				],
 			}),
 		).not.toThrow();
+	});
+});
+
+// R-M14. Every envelope field used to be optional, so ANY JSON object validated as one. A 2xx
+// carrying somebody else's JSON — a proxy's health blob, a rewritten route's index page, a gateway
+// that swallowed the call and answered 200 — reported `ok` as undefined and resolved as a data-less
+// SUCCESS. Callers rendered "no results" for a request that never reached the server.
+//
+// This client THROWS on failure (the browser client returns `{ data, error }`; both now apply the
+// same rule).
+describe("R-M14 — a body that is not an envelope is not an answer", () => {
+	const clientFor = (body: string, status = 200) =>
+		createClawClient({
+			baseUrl: base,
+			fetch: async () =>
+				new Response(body, {
+					status,
+					headers: { "content-type": "application/json" },
+				}),
+		});
+
+	it("refuses a 200 whose body is not an envelope", async () => {
+		await expect(
+			clientFor(JSON.stringify({ healthy: true })).getClaw({ id: "c1" }),
+		).rejects.toThrow(/not a valid envelope/);
+	});
+
+	it("refuses a 200 carrying an HTML error page", async () => {
+		await expect(
+			clientFor("<!doctype html><h1>502</h1>").getClaw({ id: "c1" }),
+		).rejects.toThrow(/not a valid envelope/);
+	});
+
+	it("still reads a well-formed success", async () => {
+		await expect(
+			clientFor(JSON.stringify({ ok: true, data: { id: "c1" } })).getClaw({
+				id: "c1",
+			}),
+		).resolves.toMatchObject({ id: "c1" });
+	});
+
+	// A well-formed success envelope under a non-2xx is still a failure: the status is the transport's
+	// answer and it outranks the body's claim about itself.
+	it("refuses a success envelope served under an error status", async () => {
+		await expect(
+			clientFor(JSON.stringify({ ok: true, data: { id: "c1" } }), 500).getClaw({
+				id: "c1",
+			}),
+		).rejects.toThrow(/status 500/);
+	});
+});
+
+// R-M12. Request ingress was bounded and egress was not — the asymmetry that matters, because the
+// response body is assembled from whatever a list returned and several lists had no ceiling. One
+// request's cost was set by how much data the caller already had, not by anything they sent.
+describe("R-M12 — the response has a ceiling too", () => {
+	it("refuses to send a body past the cap, as a limit rather than a fault", async () => {
+		// A claw whose api hands back more than the door will write.
+		const huge = {
+			api: {
+				getClaw: async () => ({ id: "c1", blob: "x".repeat(9 * 1024 * 1024) }),
+			},
+		} as unknown as Claw;
+
+		const response = await toRequestHandler(huge)(
+			new Request(`${base}/get-claw?id=c1`),
+		);
+		// 413, not 500: the same value will be refused again however well-formed it is, and the caller
+		// can act on that by asking for less.
+		expect(response.status).toBe(413);
+		await expect(response.json()).resolves.toMatchObject({
+			error: { code: "BUSYCLAW_LIMIT_EXCEEDED" },
+			ok: false,
+		});
+	});
+
+	it("leaves an ordinary response alone", async () => {
+		const response = await toRequestHandler(echoClaw())(
+			new Request(`${base}/get-claw?id=c1`),
+		);
+		expect(response.status).toBe(200);
 	});
 });

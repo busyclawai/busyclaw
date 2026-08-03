@@ -64,11 +64,19 @@ export type ClawApiMethodName = (typeof CLAW_API_METHOD_NAMES)[number];
  * The HTTP envelope every busyclaw adapter response carries: success/error around the claw api
  * result. One schema — the server builds it and the client PARSES it (never casting untrusted
  * network JSON). `error.code` is the stable {@link BusyclawErrorCode} when the failure carried one.
+ *
+ * DISCRIMINATED on `ok`, and both arms require it. R-M14: every field used to be optional, so `{}` —
+ * or any JSON object a proxy, a rewritten route, or a misconfigured gateway happened to return with a
+ * 2xx — validated as an envelope, reported `ok` as undefined, and reached the caller as a SUCCESS
+ * carrying `undefined` data. A response that is not one of these two shapes is not an envelope, and
+ * saying so is the whole point of parsing instead of casting.
  */
 export const clawResponseEnvelope = type({
-	"ok?": "boolean",
+	ok: "true",
 	"data?": "unknown",
-	"error?": { message: "string", "code?": "string" },
+}).or({
+	ok: "false",
+	error: { message: "string", "code?": "string" },
 });
 export type ClawResponseEnvelope = typeof clawResponseEnvelope.infer;
 

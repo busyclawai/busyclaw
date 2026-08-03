@@ -669,11 +669,15 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 
 		// Mounted with NO resolveCaller — an unauthenticated request carries no principal (identity never
 		// rides the body: stamped-fields), so the principal floor DENIES before the method's body runs. This
-		// is the audit-#1 scenario inverted: the once-open surface now fail-closes with a proper 403, not
-		// a masked 500. The deny is structural — `governApi` only calls the method on a `permit`, so no
-		// claw row can be created here.
+		// is the audit-#1 scenario inverted: the once-open surface now fail-closes rather than masking a
+		// 500. The deny is structural — `governApi` only calls the method on a `permit`, so no claw row
+		// can be created here.
+		//
+		// 401, not 403 (R-M14): there was no caller at all, which is the one denial a client can act on.
+		// Collapsed into 403 it was indistinguishable from "authenticated but not permitted", so a client
+		// had no signal that its session was gone and kept showing what it had already fetched.
 		const denied = await createClawRequest(toRequestHandler(claw));
-		expect(denied.status).toBe(403);
+		expect(denied.status).toBe(401);
 		await expect(denied.json()).resolves.toMatchObject({
 			error: { code: "BUSYCLAW_AUTHORIZATION_DENIED" },
 			ok: false,
@@ -683,7 +687,7 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 		const unauthorized = await createClawRequest(
 			toRequestHandler(claw, { resolveCaller: () => undefined }),
 		);
-		expect(unauthorized.status).toBe(403);
+		expect(unauthorized.status).toBe(401);
 
 		// Mounted WITH a resolveCaller that yields the verified principal — the same request is now
 		// authorized, and the owner is stamped FROM the caller (never the body). resolveCaller is the
@@ -724,9 +728,10 @@ describe("plugin endpoint routes (declared endpoints() namespaces)", () => {
 				}),
 			);
 
-		// No caller → the principal floor denies the plugin endpoint (403); the secretStore never runs.
+		// No caller → the principal floor denies the plugin endpoint (401, R-M14: no caller at all is
+		// unauthenticated, not forbidden); the secretStore never runs.
 		const denied = await setSecret(toRequestHandler(claw));
-		expect(denied.status).toBe(403);
+		expect(denied.status).toBe(401);
 		await expect(denied.json()).resolves.toMatchObject({
 			error: { code: "BUSYCLAW_AUTHORIZATION_DENIED" },
 			ok: false,

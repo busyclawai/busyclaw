@@ -827,7 +827,11 @@ export function governApi(input: {
 		if (principal === undefined || principal.trim() === "") {
 			throw authorizationError(
 				`app-authz denied ${method}: requires a caller principal (principal floor)`,
-				{ method, decision: "deny" },
+				// R-M14. "Nobody is calling" and "this caller may not" are different facts and the caller
+				// can act on only one of them: re-authenticate. Both used to leave here identical, so both
+				// arrived on the wire as 403, so a client could not tell a lost session from a permission
+				// it never had — and kept showing whatever it had already fetched.
+				{ method, decision: "deny", unauthenticated: true },
 			);
 		}
 		return principal;
