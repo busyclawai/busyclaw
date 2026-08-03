@@ -166,6 +166,8 @@ async function harness(input: {
 	onModelCall?: (prompt: unknown) => void;
 	/** Counts reads of the inbox table — the watermark exists so this stays at zero when quiet. */
 	onInboxRead?: () => void;
+	/** Short leases make the heartbeat — the only thing awake during a model call — tick promptly. */
+	leaseTtlMs?: number;
 }) {
 	const { adapter, close } = await sqliteDb(RUN_TABLES);
 	openDatabases.push(close);
@@ -211,7 +213,7 @@ async function harness(input: {
 	const { engine } = sqlEngine({
 		store,
 		workerId: "worker-1",
-		leaseTtlMs: 600_000,
+		leaseTtlMs: input.leaseTtlMs ?? 600_000,
 	}).create(runtime);
 	return { db, store, engine, runtime, toolRuns: () => toolRuns };
 }
@@ -1547,4 +1549,55 @@ describe("run control plane — a crashed host, end to end", () => {
 		// from step 0 and the count would be the same either way — so assert the CHECKPOINT moved on.
 		expect((await h.store.getRun(run.id))?.status).not.toBe("failed");
 	});
+});
+
+describe("run control plane — interrupt never reaches a tool", () => {
+	// THE SAFETY PROPERTY the per-step controller exists for, and one I asserted in a commit message
+	// before asserting it here. The interrupt handle is armed around `callModel()` and nowhere else,
+	// so a message that lands while a TOOL is running cannot tear through it — an aborted effect
+	// records work that may have succeeded as failed, which is `abort`'s documented cost and not
+	// something a message should be able to cause. It waits for the next control point instead.
+	it("lets a tool finish, then delivers at the next control point", async () => {
+		const prompts: string[] = [];
+		let toolFinished = false;
+		let runId = "";
+		const h = await harness({
+			toolSteps: 1,
+			leaseTtlMs: 600,
+			onModelCall: (prompt) => {
+				prompts.push(JSON.stringify(prompt));
+			},
+			onTool: async () => {
+				await h.engine.deliverMessage({
+					toRunId: runId,
+					body: { text: "mid-tool arrival" },
+					mode: "interrupt",
+					sender: userPrincipal("operator"),
+					idempotencyKey: "k1",
+				});
+				// Long enough for the heartbeat to tick and fire the interrupt hook while this tool is
+				// still executing — which is exactly the window being tested.
+				await new Promise((resolve) => setTimeout(resolve, 400));
+				toolFinished = true;
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		runId = run.id;
+
+		const result = await h.engine.work();
+		if (result.status === "failed") {
+			throw new Error(`tick failed: ${result.reason}`);
+		}
+
+		// The tool ran to completion. An interrupt that reached it would have unwound the loop from
+		// inside `execute` and this would still be false.
+		expect(toolFinished).toBe(true);
+		expect(result.status).toBe("completed");
+		expect(h.toolRuns()).toBe(1); // and it was not re-run either
+
+		// …and the message was not lost: it arrives at the control point after the tool, which is the
+		// `next_step` behaviour an interrupt degrades to when it cannot cancel anything.
+		expect(prompts[0]).not.toContain("mid-tool arrival");
+		expect(prompts[1]).toContain("mid-tool arrival");
+	}, 15_000);
 });
