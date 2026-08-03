@@ -35,15 +35,23 @@ export type CredentialBinding = {
  * `openIdConnect` carry only a type, which is all the invoker reads from them.
  */
 export function placementDigest(binding: OpenApiBinding): string {
-	const lines = Object.entries(binding.authSchemes ?? {})
+	const schemes = Object.entries(binding.authSchemes ?? {})
 		.map(([name, def]) => {
 			if (def.type === "apiKey") {
-				return `${name}\tapiKey\t${def.in}\t${def.name}`;
+				// Lowercased: Fetch folds header case, so these are ONE destination.
+				return `${name}\tapiKey\t${def.in}\t${def.name.toLowerCase()}`;
 			}
 			if (def.type === "http") return `${name}\thttp\t${def.scheme}`;
 			return `${name}\t${def.type}`;
 		})
 		.sort();
+	// ORDER-SENSITIVE across alternatives (the invoker takes the first it can satisfy, so reordering
+	// selects differently), order-INSENSITIVE within one (an AND-group is a set, and its spelling
+	// order is not a fact about it).
+	const requirements = (binding.security ?? []).map((requirement) =>
+		Object.keys(requirement).sort().join("+"),
+	);
+	const lines = [...schemes, `requires\t${requirements.join(",")}`];
 	return bytesToHex(sha256(utf8ToBytes(lines.join("\n"))));
 }
 

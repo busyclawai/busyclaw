@@ -8,7 +8,10 @@ import { buildSecrets } from "@busyclaw/secrets";
 import { type } from "arktype";
 import { describe, expect, it } from "vitest";
 import { modelToolProjection, toolExecutor } from "../src/tools";
-import { credentialBindingOf } from "../src/tools/credential-binding";
+import {
+	credentialBindingOf,
+	placementDigest,
+} from "../src/tools/credential-binding";
 import { type EgressLookup, pinnedLookup } from "../src/tools/invoke/egress";
 import {
 	createRegisteredToolProvider,
@@ -652,5 +655,63 @@ describe("registered tool — a failed request does not carry the key", () => {
 		expect(serialized).not.toContain("SUPERSECRET");
 		expect(serialized).toContain("api.example");
 		expect(serialized).toContain("redacted");
+	});
+});
+
+// R-M02. The placement digest covered the scheme DICTIONARY and not the REQUIREMENTS that select from
+// it, so a spec edit could leave every definition untouched and still change which scheme an operation
+// authenticates with — the credential then lands at a placement the row never pinned, past a check
+// that saw no change.
+describe("the placement digest covers what selects the scheme (R-M02)", () => {
+	const withSchemes = (
+		security: Record<string, string[]>[],
+		apiKeyHeader = "X-Api-Key",
+	) => {
+		const binding = openApiBinding({
+			method: "get",
+			path: "/x",
+			server: "https://api.test",
+			parameters: [],
+			security,
+			authSchemes: {
+				primary: { type: "apiKey", in: "header", name: apiKeyHeader },
+				fallback: { type: "http", scheme: "bearer" },
+			},
+		} as never);
+		if (binding instanceof type.errors) throw new Error(binding.summary);
+		return binding;
+	};
+
+	it("changes when the requirement ORDER changes — the invoker takes the first it can satisfy", () => {
+		const first = placementDigest(
+			withSchemes([{ primary: [] }, { fallback: [] }]),
+		);
+		const swapped = placementDigest(
+			withSchemes([{ fallback: [] }, { primary: [] }]),
+		);
+		expect(first).not.toBe(swapped);
+	});
+
+	it("changes when a requirement is added, with every definition untouched", () => {
+		const one = placementDigest(withSchemes([{ primary: [] }]));
+		const two = placementDigest(
+			withSchemes([{ primary: [] }, { fallback: [] }]),
+		);
+		expect(one).not.toBe(two);
+	});
+
+	// An AND-group is a set: its spelling order is not a fact about it.
+	it("is stable across the spelling order WITHIN one alternative", () => {
+		const a = placementDigest(withSchemes([{ primary: [], fallback: [] }]));
+		const b = placementDigest(withSchemes([{ fallback: [], primary: [] }]));
+		expect(a).toBe(b);
+	});
+
+	// Fetch folds header case, so these are ONE destination — hashing them apart would report a
+	// relocation that did not happen while proving nothing about one that did.
+	it("is stable across header CASE, which the transport folds anyway", () => {
+		const upper = placementDigest(withSchemes([{ primary: [] }], "X-Api-Key"));
+		const lower = placementDigest(withSchemes([{ primary: [] }], "x-api-key"));
+		expect(upper).toBe(lower);
 	});
 });
