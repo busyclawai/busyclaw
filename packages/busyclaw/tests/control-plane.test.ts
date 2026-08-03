@@ -773,3 +773,118 @@ describe("run control plane — a stop while awaiting approval", () => {
 		).toBe(true);
 	});
 });
+
+describe("run control plane — the inbox: admit", () => {
+	it("admits a message, mints a per-run seq, and is exactly-once", async () => {
+		const h = harness({ toolSteps: 1 });
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		const first = await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "hello" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+		expect(first).toMatchObject({ admitted: true, seq: 1 });
+
+		// A REDELIVERY. The id is derived from (run, sender, key), so the duplicate loses at the
+		// database rather than appearing twice in somebody's context window.
+		const repeat = await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "hello" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+		expect(repeat.admitted).toBe(false);
+		expect(repeat.id).toBe(first.id);
+
+		// A genuinely different message is different work and gets its own row and its own place in
+		// the run's order.
+		const second = await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "again" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k2",
+		});
+		expect(second.admitted).toBe(true);
+		expect(second.seq).toBeGreaterThan(first.seq);
+
+		const rows = await h.db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect(rows).toHaveLength(2);
+	});
+
+	// The obvious shape — read the run, check it is not terminal, then insert — loses the race with a
+	// terminal transition committing elsewhere. The admit already has to touch the run row to mint
+	// `seq`, so that conditional write IS the guard and there is no window between them.
+	it("bounces a message to a terminal run instead of queueing against a corpse", async () => {
+		const h = harness({ toolSteps: 0 });
+		const run = await h.engine.startRun({ prompt: "go" });
+		expect((await h.engine.work()).status).toBe("completed");
+
+		const bounced = await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "too late" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+		expect(bounced).toMatchObject({ admitted: false, bounced: "completed" });
+
+		// Nothing was written. A message queued against a finished run is a message nobody will ever
+		// read, and it would sit there looking like pending work.
+		const rows = await h.db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect(rows).toHaveLength(0);
+	});
+
+	it("bounces a cancelled run too, not just a completed one", async () => {
+		const h = harness({ toolSteps: 1 });
+		const run = await h.engine.startRun({ prompt: "go" });
+		await h.engine.controlRun({
+			runId: run.id,
+			intent: "stop",
+			requestedBy: userPrincipal("operator"),
+		});
+		expect((await h.store.getRun(run.id))?.status).toBe("cancelled");
+
+		expect(
+			await h.engine.deliverMessage({
+				toRunId: run.id,
+				body: { text: "hi" },
+				mode: "next_step",
+				sender: userPrincipal("operator"),
+				idempotencyKey: "k1",
+			}),
+		).toMatchObject({ admitted: false, bounced: "cancelled" });
+	});
+
+	// The seq mint is a CAS-retry, because the Adapter port takes literal values only — there is no
+	// `col = col + 1`, so a read-modify-write loses bumps the moment two admits overlap.
+	it("mints a distinct seq for every message under concurrent admits", async () => {
+		const h = harness({ toolSteps: 1 });
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		const admitted = await Promise.all(
+			Array.from({ length: 6 }, (_unused, i) =>
+				h.engine.deliverMessage({
+					toRunId: run.id,
+					body: { text: `m${i}` },
+					mode: "next_step",
+					sender: userPrincipal("operator"),
+					idempotencyKey: `k${i}`,
+				}),
+			),
+		);
+		expect(admitted.every((result) => result.admitted)).toBe(true);
+		const seqs = admitted.map((result) => result.seq).sort((a, b) => a - b);
+		expect(new Set(seqs).size).toBe(6); // no two messages share a place in the order
+	});
+});

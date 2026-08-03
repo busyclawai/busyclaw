@@ -25,6 +25,7 @@ import type {
 	EffectStore,
 	EndpointHttpMethod,
 	EngineControlRunResult,
+	EngineDeliverMessageResult,
 	EngineProceed,
 	EngineRunEvent,
 	EngineRunHandle,
@@ -38,6 +39,7 @@ import type {
 	RouteAuthz,
 	RouteLevel,
 	RunControlIntent,
+	RunMessageMode,
 	ScopeRef,
 	SecretDeclaration,
 	Secrets,
@@ -400,6 +402,14 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		proceed: EngineProceed;
 		ctx?: JsonObject;
 	}) => Promise<EngineRunHandle>;
+	/** Put a message in a run's inbox. `use`, not `manage`: this INFORMS a run, it does not make it
+	 *  act — the run decides what to do with it at its next control point. */
+	deliverMessage: (input: {
+		toRunId: string;
+		body: JsonObject;
+		mode: RunMessageMode;
+		idempotencyKey: string;
+	}) => Promise<EngineDeliverMessageResult>;
 	/** Ask a run in flight to stop. `use`, not `manage`: this strictly REDUCES what the run may do,
 	 *  and the requester is stamped from the caller — never read from the body. */
 	controlRun: (input: {
@@ -681,6 +691,28 @@ const proceedRunInput = ark({
 		}),
 	"ctx?": jsonObjectOrUndefined,
 });
+const deliverMessageInput = ark({
+	toRunId: ark("string").configure({
+		busyclaw: {
+			doc: "The run to deliver into. Addressed by RUN, never by thread — which run owns a conversation is the router's question, and two consumers answer it differently.",
+		},
+	}),
+	body: jsonObject.configure({
+		busyclaw: {
+			doc: "The message. Tokenized at admit into the RECEIVING run's container; the drain never re-redacts.",
+		},
+	}),
+	mode: ark("'at_turn_end' | 'next_step' | 'interrupt'").configure({
+		busyclaw: {
+			doc: "WHEN it enters the run's context: `next_step` at the run's next control point; `at_turn_end` never in this run (wake fuel for the next one); `interrupt` cancels the current model call.",
+		},
+	}),
+	idempotencyKey: ark("string").configure({
+		busyclaw: {
+			doc: "Makes admission exactly-once. The row id is derived from it, so a redelivery loses the insert rather than appearing twice in a context window.",
+		},
+	}),
+});
 const controlRunInput = ark({
 	runId: ark("string").configure({
 		busyclaw: { doc: "The durable engine run to control." },
@@ -867,6 +899,7 @@ export const clawApiInputSchemas = {
 	archiveClaw: idInput,
 	archiveThread: idInput,
 	controlRun: controlRunInput,
+	deliverMessage: deliverMessageInput,
 	proceedRun: proceedRunInput,
 	continueRun: continueRunInput,
 	createCheckpoint: createCheckpointInput,
@@ -1140,6 +1173,9 @@ export const clawApiRoutes = {
 	// USE, not manage: stopping a run reduces its authority, so the permissive level is the safer one
 	// — and `manage` on a run is the level that RESUMES work, which is the opposite direction.
 	controlRun: apiRoute("controlRun", on("use", "run", "runId")),
+	// USE: delivering informs a run, it does not resume durable work. `manage` is the level that
+	// makes a run act again, which is `proceedRun`.
+	deliverMessage: apiRoute("deliverMessage", on("use", "run", "toRunId")),
 	getRun: apiRoute("getRun", on("read", "run", "id")),
 	listRunEvents: apiRoute("listRunEvents", on("read", "run", "runId")),
 	// The generic share/unshare api — the target kind AND id both come from the INPUT, so any registered
@@ -1950,6 +1986,28 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// `requestedBy` on the input at all, so "who stopped my run" cannot be answered wrongly — qm's
 		// sharpest hole is that its stop signal carries no principal, and its Slack path calls the
 		// internal client with no viewer, so anyone in the thread can kill anyone's run.
+		// The body is tokenized into the RECEIVING run's container before it is stored. An engine run's
+		// container is `("run", runId)`, derivable without the run having started — which is what makes
+		// it safe to admit a message to a run that has not been claimed yet.
+		deliverMessage: async (args, caller?: ClawApiCaller) => {
+			// An engine run's container is `("run", runId)` — derivable WITHOUT the run having started,
+			// which is what makes it safe to admit a message to a run nobody has claimed yet. A
+			// deployment with no redaction configured stores the body as it arrived, which is the same
+			// posture every other write here has.
+			const container = { scope: "run", scopeId: args.toRunId };
+			const body = context.redaction
+				? await context.redaction.redact(args.body, container)
+				: args.body;
+			return requireEngine(context.engine).deliverMessage({
+				toRunId: args.toRunId,
+				body,
+				mode: args.mode,
+				sender: caller?.principal ?? SYSTEM_ANONYMOUS,
+				idempotencyKey: args.idempotencyKey,
+				containerScope: container.scope,
+				containerScopeId: container.scopeId,
+			});
+		},
 		controlRun: async (args, caller?: ClawApiCaller) =>
 			requireEngine(context.engine).controlRun({
 				runId: args.runId,

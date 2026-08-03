@@ -30,6 +30,7 @@ import {
 	policySliceFields,
 	registeredToolFields,
 	runCheckpointFields,
+	runMessageFields,
 	specRegistrationEntity,
 	specRegistrationFields,
 	threadFields,
@@ -112,6 +113,9 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	// The erasure tombstone — durable proof of what was shredded, and from where.
 	pii_erasure: piiErasureFields,
 	run_checkpoint: runCheckpointFields,
+	// The run inbox. CORE, not the engine's: the drain lives inside the runtime loop, and two
+	// plugin-owned mailboxes would mean two drains at one site.
+	run_message: runMessageFields,
 	// The tool registry is PRODUCT (rows), not a plugin — siblings of approvals/run_checkpoint.
 	spec_registration: specRegistrationFields,
 	registered_tool: registeredToolFields,

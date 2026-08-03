@@ -9,6 +9,7 @@ import { configurationError } from "@busyclaw/errors";
 import type { JsonObject } from "./common";
 import type { BusyclawCronFlag, BusyclawPlugin } from "./governance/plugin";
 import type { Principal } from "./governance/principal";
+import type { RunMessageMode } from "./run-message";
 
 export type EngineRunHandle = {
 	id: string;
@@ -94,6 +95,28 @@ export type EngineControlRunResult = {
 	reason?: string;
 };
 
+export type EngineDeliverMessageInput = {
+	toRunId: string;
+	/** The message body, ALREADY tokenized into the receiving run's container by the door. */
+	body: JsonObject;
+	mode: RunMessageMode;
+	sender: Principal;
+	/** Makes the admission idempotent: the row id is derived from it, so a redelivered message loses
+	 *  the insert instead of appearing twice in somebody's context window. */
+	idempotencyKey: string;
+	containerScope?: string;
+	containerScopeId?: string;
+};
+
+export type EngineDeliverMessageResult = {
+	id: string;
+	seq: number;
+	/** False when the row was already there (a redelivery) or the run was terminal (a bounce). */
+	admitted: boolean;
+	/** Present only on a bounce — the terminal status that refused it. */
+	bounced?: string;
+};
+
 export type EngineWorkResult = unknown;
 
 export type EngineRunRecord = {
@@ -133,6 +156,17 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	 * answer to "stop this run", and one nobody would notice until they needed it.
 	 */
 	controlRun: (input: EngineControlRunInput) => Promise<EngineControlRunResult>;
+	/**
+	 * Admit a message into a run's inbox. Admission only — nothing is delivered here; the receiving
+	 * run drains it at its next control point.
+	 *
+	 * A message to a TERMINAL run bounces rather than queueing against a corpse, and the bounce is
+	 * decided by the same write that admits: a read-then-insert loses the race with a terminal
+	 * transition committing in another process, and both adapters run the driver's default isolation.
+	 */
+	deliverMessage: (
+		input: EngineDeliverMessageInput,
+	) => Promise<EngineDeliverMessageResult>;
 	/** Engines with an explicit worker lifecycle expose this; managed engines may omit it. */
 	work?: () => Promise<WorkResult>;
 };

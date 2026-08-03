@@ -65,6 +65,10 @@ function fakeWorkflowEngine(
 						events.push(`control:${input.runId}:${input.intent}`);
 						return { accepted: true, settled: true };
 					},
+					deliverMessage: async (input) => {
+						events.push(`deliver:${input.toRunId}:${input.mode}`);
+						return { id: "message-1", seq: 1, admitted: true };
+					},
 					work: async () => {
 						const job = queue.shift();
 						if (!job) return null;
@@ -144,6 +148,7 @@ describe("createClaw engine", () => {
 
 		expect(Object.keys(claw.$context.engine ?? {}).sort()).toEqual([
 			"controlRun",
+			"deliverMessage",
 			"kind",
 			"proceedRun",
 			"startRun",
@@ -166,6 +171,7 @@ describe("createClaw engine", () => {
 			"createToolCall",
 			"createToolResult",
 			"deletePolicySlice",
+			"deliverMessage",
 			"denyApproval",
 			"forgetSubject",
 			"generate",

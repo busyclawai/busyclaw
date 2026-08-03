@@ -18,6 +18,7 @@ export const CLAW_API_METHOD_NAMES = [
 	"archiveThread",
 	"bindConversation",
 	"controlRun",
+	"deliverMessage",
 	"proceedRun",
 	"continueRun",
 	"createCheckpoint",

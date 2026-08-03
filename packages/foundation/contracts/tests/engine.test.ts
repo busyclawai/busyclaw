@@ -74,6 +74,11 @@ function exampleEngine(): ClawEngineFactory<RuntimeLike, ExampleHandle> {
 					return { id: input.runId };
 				},
 				controlRun: async () => ({ accepted: true, settled: true }),
+				deliverMessage: async () => ({
+					id: "message-1",
+					seq: 1,
+					admitted: true,
+				}),
 				work: async () => ({ processed: 1, status: "drained" }),
 			},
 			runs,
@@ -129,6 +134,9 @@ describe("engine-core contract", () => {
 			// required to say so out loud rather than be absent.
 			controlRun: async () => {
 				throw unsupportedOperationError("managed engine cannot park a run");
+			},
+			deliverMessage: async () => {
+				throw unsupportedOperationError("managed engine has no inbox");
 			},
 			startRun: async () => ({ id: "run-1" }),
 		};

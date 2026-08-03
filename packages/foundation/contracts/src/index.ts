@@ -221,6 +221,8 @@ export type {
 	DrainWorkStatus,
 	EngineControlRunInput,
 	EngineControlRunResult,
+	EngineDeliverMessageInput,
+	EngineDeliverMessageResult,
 	EngineProceed,
 	EngineProceedRunInput,
 	EngineRunEvent,
@@ -469,6 +471,22 @@ export {
 	runCheckpointSchema,
 	runCheckpointStatus,
 } from "./run-checkpoint";
+// ── the run inbox: durable messages addressed to a run in flight ─────────────────────────────
+export type {
+	NewRunMessage,
+	RunMessageMode,
+	RunMessageRecord,
+	RunMessageStatus,
+} from "./run-message";
+export {
+	newRunMessage,
+	runMessageEntity,
+	runMessageFields,
+	runMessageMode,
+	runMessageRecord,
+	runMessageSchema,
+	runMessageStatus,
+} from "./run-message";
 // ── the opaque access boundary every scope-keyed core row carries ──
 export type { ScopeRef } from "./scope";
 export {

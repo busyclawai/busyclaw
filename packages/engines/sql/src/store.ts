@@ -12,13 +12,15 @@
  * produced here is operational state, not compliance audit; compliance evidence stays in @busyclaw/core.
  */
 
-import type { Adapter, JsonObject } from "@busyclaw/contracts";
+import type { Adapter, JsonObject, RunMessageMode } from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	configurationError,
 	errorMessage,
+	isConflict,
 	jsonObject as jsonObjectSchema,
 	type Principal,
+	runMessageFields,
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
@@ -239,6 +241,20 @@ export type SqlEngineStore = {
 	 *  a withheld task cannot be picked up later by a host that never saw the intent. Returns how
 	 *  many were withheld. */
 	deadLetterPendingTasks: (runId: string, reason: string) => Promise<number>;
+	/** Admit a message to a run's inbox. Mints `seq` and decides the bounce in ONE conditional write
+	 *  against the run row — see the implementation for why those cannot be two. */
+	admitMessage: (input: {
+		id: string;
+		toRunId: string;
+		body: JsonObject;
+		mode: RunMessageMode;
+		sender: Principal;
+		containerScope?: string;
+		containerScopeId?: string;
+	}) => Promise<
+		| { admitted: true; id: string; seq: number }
+		| { admitted: false; id: string; seq: number; bounced?: string }
+	>;
 	reapExpiredLeases: () => Promise<number>;
 	/** Append a `run_event` EXECUTION-STATE row (every worker emit lands here) — not the
 	 *  operational stream; observability is the runtime `EventSink`. See schema.ts. */
@@ -257,12 +273,20 @@ export type SqlEngineStore = {
 
 /** A run in one of these still has work ahead of it; anything else is finished and must not be
  *  written back into flight by a claim that lost its race. */
-export const NON_TERMINAL_RUN_STATUSES = ["queued", "running", "waiting"] as const;
+export const NON_TERMINAL_RUN_STATUSES = [
+	"queued",
+	"running",
+	"waiting",
+] as const;
 
 /** How many times a task may be CLAIMED before it is abandoned, however it lost each claim. The
  *  backstop against a flapping host, deliberately not a config knob: it bounds crash loops, and a
  *  deployment that wants more retries wants a higher `maxAttempts`, which is a different question. */
 const MAX_CLAIMS = 8;
+
+/** CAS-retry bound for minting a message `seq`. Contention here is two admits racing on one run,
+ *  which is rare and short-lived; a bound that is hit means something else is wrong. */
+const MAX_SEQ_ATTEMPTS = 8;
 
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
@@ -357,6 +381,10 @@ export function createSqlEngineStore(
 		run_event: { fields: runEventFields, modelName: eventModel },
 		lease: { fields: leaseFields, modelName: leaseModel },
 		idempotency_key: { fields: idempotencyFields, modelName: idempotencyModel },
+		// CORE-owned (it joins CORE_MODELS, not sqlEngineSchema), but read and written from here: the
+		// admit transaction has to touch the `run` row and the message in one place, and this is the
+		// only store that holds both.
+		run_message: { fields: runMessageFields },
 	});
 
 	async function validateLease(
@@ -389,6 +417,10 @@ export function createSqlEngineStore(
 				data: {
 					id: input.id ?? newId(),
 					status: "queued",
+					// Present from birth, so the inbox's compare-and-swap has something to pin. An ABSENT
+					// column is not zero: `eq null` does not match `undefined`, so a CAS on `0` would
+					// match nothing and spin.
+					controlSeq: 0,
 					input: asJsonRecord(input.input ?? {}, "run input"),
 					principal:
 						input.principal === undefined
@@ -701,6 +733,105 @@ export function createSqlEngineStore(
 				where: [{ field: "id", value: lease.id }],
 			});
 			return row;
+		},
+
+		async admitMessage(input) {
+			// THE BOUNCE AND THE SEQ ARE THE SAME WRITE. The obvious shape — read the run, check it is
+			// not terminal, then insert — loses the race against a terminal transition committing in
+			// another process, and both SQL adapters run the driver's default isolation, so nothing
+			// prevents that interleave. The admit already has to touch the run row to mint `seq` under
+			// `controlSeq`, so that conditional write IS the guard: a null return means the run went
+			// terminal, and there is nothing to queue against a corpse.
+			//
+			// CAS-retry, not `col = col + 1`: the Adapter port takes literal values only, so a
+			// read-modify-write would lose bumps whenever two messages are admitted at once.
+			for (let attempt = 0; attempt < MAX_SEQ_ATTEMPTS; attempt++) {
+				const run = await store.getRun(input.toRunId);
+				if (!run) {
+					throw stateError("no such run to deliver to", {
+						toRunId: input.toRunId,
+					});
+				}
+				// ABSENT IS NOT ZERO, and no predicate can say "absent": `eq null` compares against
+				// `undefined` and is false, so a CAS pinned on `0` matches a legacy row not at all and
+				// the retry loop spins to exhaustion. `createRun` writes 0 from birth; a row that
+				// predates the column is normalized to 0 first and re-read, which two concurrent
+				// admits can both do harmlessly because setting 0 twice is the same as setting it once.
+				const stored = run.controlSeq;
+				if (stored === undefined) {
+					await db.update({
+						model: "run",
+						where: [{ field: "id", value: input.toRunId }],
+						update: { controlSeq: 0 },
+					});
+					continue;
+				}
+				const current = stored;
+				const seq = current + 1;
+				const moved = await db.update({
+					model: "run",
+					where: [
+						{ field: "id", value: input.toRunId },
+						{ field: "controlSeq", value: stored, connector: "AND" },
+						{
+							field: "status",
+							value: [...NON_TERMINAL_RUN_STATUSES],
+							operator: "in",
+							connector: "AND",
+						},
+					],
+					update: { controlSeq: seq, updatedAt: now() },
+				});
+				if (!moved) {
+					// Either the counter moved under us (retry) or the run finished (bounce). Only a
+					// re-read can tell the two apart, and only the second is terminal.
+					const after = await store.getRun(input.toRunId);
+					const stillLive = (
+						NON_TERMINAL_RUN_STATUSES as readonly string[]
+					).includes(after?.status ?? "");
+					if (after && !stillLive) {
+						return {
+							admitted: false,
+							id: input.id,
+							seq: 0,
+							bounced: after.status,
+						};
+					}
+					continue;
+				}
+				const ts = now();
+				try {
+					await db.create({
+						model: "run_message",
+						data: {
+							id: input.id,
+							toRunId: input.toRunId,
+							mode: input.mode,
+							body: input.body,
+							...(input.containerScope !== undefined
+								? { containerScope: input.containerScope }
+								: {}),
+							...(input.containerScopeId !== undefined
+								? { containerScopeId: input.containerScopeId }
+								: {}),
+							sender: input.sender,
+							seq,
+							status: "pending",
+							createdAt: ts,
+							updatedAt: ts,
+						},
+					});
+				} catch (error) {
+					// A REDELIVERY. The row is already there, which is the whole point of deriving the id
+					// — rows are retained after delivery precisely so a repeat still looks known.
+					if (!isConflict(error)) throw error;
+					return { admitted: false, id: input.id, seq };
+				}
+				return { admitted: true, id: input.id, seq };
+			}
+			throw stateError("could not mint a message sequence under contention", {
+				toRunId: input.toRunId,
+			});
 		},
 
 		async deadLetterPendingTasks(runId, reason) {

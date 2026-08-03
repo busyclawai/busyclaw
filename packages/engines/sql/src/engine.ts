@@ -5,6 +5,8 @@ import type {
 	ClawEngineInstance,
 	EngineControlRunInput,
 	EngineControlRunResult,
+	EngineDeliverMessageInput,
+	EngineDeliverMessageResult,
 	EngineProceedRunInput,
 	EngineRunHandle,
 	EngineStartRunInput,
@@ -66,6 +68,22 @@ function proceedTaskId(
 ): string {
 	return bytesToHex(
 		sha256(utf8ToBytes(`${runId}\u0000${taskKind}\u0000${recordId}`)),
+	);
+}
+
+/**
+ * The row id for a message. Derived so the INSERT is the admission — the same construction the
+ * channels inbox uses, NUL-joined for the same reason: three opaque ids from different sources must
+ * not be able to collide by concatenation. Written as the escape rather than a literal NUL byte,
+ * because a source file carrying a raw NUL is binary to git.
+ */
+function messageRowId(
+	toRunId: string,
+	sender: string,
+	idempotencyKey: string,
+): string {
+	return bytesToHex(
+		sha256(utf8ToBytes(`${toRunId}\u0000${sender}\u0000${idempotencyKey}`)),
 	);
 }
 
@@ -307,6 +325,35 @@ function createSqlEngineHandle(input: {
 				});
 				return { accepted: true, settled: false };
 			});
+		},
+		async deliverMessage(
+			messageInput: EngineDeliverMessageInput,
+		): Promise<EngineDeliverMessageResult> {
+			const admitted = await input.config.store.admitMessage({
+				id: messageRowId(
+					messageInput.toRunId,
+					messageInput.sender,
+					messageInput.idempotencyKey,
+				),
+				toRunId: messageInput.toRunId,
+				body: messageInput.body,
+				mode: messageInput.mode,
+				sender: messageInput.sender,
+				...(messageInput.containerScope !== undefined
+					? { containerScope: messageInput.containerScope }
+					: {}),
+				...(messageInput.containerScopeId !== undefined
+					? { containerScopeId: messageInput.containerScopeId }
+					: {}),
+			});
+			return admitted.admitted
+				? { id: admitted.id, seq: admitted.seq, admitted: true }
+				: {
+						id: admitted.id,
+						seq: admitted.seq,
+						admitted: false,
+						...(admitted.bounced ? { bounced: admitted.bounced } : {}),
+					};
 		},
 		work: (options?: WorkerTickOptions) => worker.tick(options),
 	};
