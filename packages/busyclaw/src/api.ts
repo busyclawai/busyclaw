@@ -24,8 +24,8 @@ import type {
 	CreateToolResultInput,
 	EffectStore,
 	EndpointHttpMethod,
-	EngineContinueRunInput,
 	EngineControlRunResult,
+	EngineProceed,
 	EngineRunEvent,
 	EngineRunHandle,
 	EngineRunRecord,
@@ -392,9 +392,14 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	}) => Promise<void>;
 
 	startRun: (input: EngineStartRunInput) => Promise<EngineRunHandle>;
-	continueEngineRun: (
-		input: EngineContinueRunInput,
-	) => Promise<EngineRunHandle>;
+	/** Advance a parked run. `manage` on the RUN, because this is the verb that makes it act again —
+	 *  `use` is for verbs that reduce or inform. The caller names both the run and the record; the
+	 *  handler refuses if the record does not belong to that run. */
+	proceedRun: (input: {
+		runId: string;
+		proceed: EngineProceed;
+		ctx?: JsonObject;
+	}) => Promise<EngineRunHandle>;
 	/** Ask a run in flight to stop. `use`, not `manage`: this strictly REDUCES what the run may do,
 	 *  and the requester is stamped from the caller — never read from the body. */
 	controlRun: (input: {
@@ -658,6 +663,24 @@ const continueEngineRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"run?": engineRunMetadataOrUndefined,
 });
+const proceedRunInput = ark({
+	runId: ark("string").configure({
+		busyclaw: {
+			doc: "The run to advance. Authorized against THIS id, then verified against the named record's own runId — a disagreement is refused, never resolved in either direction.",
+		},
+	}),
+	proceed: ark({
+		kind: "'approval'",
+		approvalId: "string",
+	})
+		.or({ kind: "'checkpoint'", checkpointId: "string" })
+		.configure({
+			busyclaw: {
+				doc: "WHAT advances the run: a granted approval, or the checkpoint a suspended run parked on. Each names a durable record that knows its own runId.",
+			},
+		}),
+	"ctx?": jsonObjectOrUndefined,
+});
 const controlRunInput = ark({
 	runId: ark("string").configure({
 		busyclaw: { doc: "The durable engine run to control." },
@@ -843,8 +866,8 @@ export const clawApiInputSchemas = {
 	appendMessage: appendMessageInput.and(subjectLineageInput),
 	archiveClaw: idInput,
 	archiveThread: idInput,
-	continueEngineRun: continueEngineRunInput,
 	controlRun: controlRunInput,
+	proceedRun: proceedRunInput,
 	continueRun: continueRunInput,
 	createCheckpoint: createCheckpointInput,
 	createClaw: createClawInput,
@@ -1102,10 +1125,18 @@ export const clawApiRoutes = {
 		"startRun",
 		callerOnly("mints the caller's own run; there is no prior row to resolve"),
 	),
-	continueEngineRun: apiRoute(
-		"continueEngineRun",
-		on("manage", "approval", "approvalId"),
-	),
+	// MANAGE on the run: this resumes durable work executing under the run's own principal, which is
+	// the opposite direction from `controlRun`. The approval tag ADDITIONALLY keeps the manage-on-
+	// approval floor it has always had, layered in the handler — strictly tighter than before, which
+	// required manage on the approval and nothing at all on the run.
+	proceedRun: apiRoute("proceedRun", {
+		mode: "resource",
+		level: "manage",
+		resolve: (input) =>
+			input.proceed.kind === "approval"
+				? { kind: "approval", id: input.proceed.approvalId }
+				: { kind: "run", id: input.runId },
+	}),
 	// USE, not manage: stopping a run reduces its authority, so the permissive level is the safer one
 	// — and `manage` on a run is the level that RESUMES work, which is the opposite direction.
 	controlRun: apiRoute("controlRun", on("use", "run", "runId")),
@@ -1926,25 +1957,41 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				requestedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 				...(args.reason !== undefined ? { reason: args.reason } : {}),
 			}),
-		continueEngineRun: async (args, caller?: ClawApiCaller) => {
+		proceedRun: async (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
-			// R-M10. The engine can only CONTINUE the original run if it is told which one that is, and
-			// the answer is not the caller's to supply — it is recorded on the approval that parked it.
-			// Read here rather than trusted from `args.run.id`, which would let a caller point a
-			// continuation at somebody else's run; the PEP has already required `manage` on THIS
-			// approval, so its own `runId` is the one identity this call is entitled to resume.
-			const parked = await context.runtime.approvals?.get(args.approvalId);
-			// The runtime records it on the approval's metadata when it parks (runtime.ts sets
-			// `metadata.runId` from the run state), so this is the parked run's own identity — not a
-			// guess and not a value the caller could have chosen.
-			const parkedRunId = parked?.metadata?.runId;
-			return requireEngine(context.engine).continueRun({
-				...args,
-				run: {
-					...args.run,
-					...(typeof parkedRunId === "string" ? { id: parkedRunId } : {}),
-					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
-				},
+			// R-M10, generalized to every tag. The record that parked the run knows which run that is,
+			// and the engine VERIFIES the caller's `runId` against it rather than trusting either side.
+			// Taking only the record's id would leave the PEP nothing to authorize against; taking only
+			// the caller's would let a continuation be pointed at somebody else's run. Taking both and
+			// REFUSING on disagreement is what makes it safe: the PEP has already required `manage` on
+			// the record's own anchor (see the route — the approval tag anchors on the approval, the
+			// checkpoint tag on the run), so the remaining question is whether the two agree.
+			const recordRunId =
+				args.proceed.kind === "approval"
+					? (await context.runtime.approvals?.get(args.proceed.approvalId))
+							?.metadata?.runId
+					: (await context.runtime.checkpoints?.get(args.proceed.checkpointId))
+							?.runId;
+			// FAIL CLOSED on both shapes of wrong. A record that names a different run is the fork
+			// R-M10 fixed. A record that cannot be found at all is not "nothing to verify" — it is a
+			// resume with no resume state, and admitting it schedules a slice whose only outcome is to
+			// discover there was nothing there.
+			if (recordRunId === undefined) {
+				throw stateError("no such record to proceed from", {
+					runId: args.runId,
+					proceed: args.proceed.kind,
+				});
+			}
+			if (recordRunId !== args.runId) {
+				throw stateError("the record named does not belong to the run named", {
+					runId: args.runId,
+					recordRunId,
+				});
+			}
+			return requireEngine(context.engine).proceedRun({
+				runId: args.runId,
+				proceed: args.proceed,
+				...(args.ctx ? { ctx: args.ctx } : {}),
 			});
 		},
 		getRun: ({ id }) => requireRuns(context.runs).get(id),

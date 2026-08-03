@@ -25,10 +25,31 @@ export type EngineStartRunInput = {
 	run?: EngineRunMetadata;
 };
 
-export type EngineContinueRunInput = {
-	approvalId: string;
+/**
+ * WHAT advances a parked run. Every variant names a DURABLE RECORD that knows its own run id, and
+ * that is the load-bearing property: it lets `runId` be an input the engine VERIFIES rather than one
+ * it trusts. A disagreement between the two is refused, never resolved in either direction — R-M10
+ * taught that a continuation which picks its own run identity forks the run.
+ *
+ * A tagged union rather than sibling verbs. `ClawEngineHandle` is a structural type with an already
+ * optional member, so a verb an engine forgets is a missing property discovered at call time; a
+ * missing tag in an exhaustive switch is a compile error. And the admit body is identical for all of
+ * them — verify, refuse terminal, insert, flip, event — so separate verbs would mean separate copies
+ * of the R-M10 reasoning and separate chances to reintroduce the fork.
+ *
+ * A `message` tag joins in the slice that adds the mailbox. It is deliberately NOT declared ahead of
+ * its task kind: a tag the engine cannot enact is a promise the type system would enforce on callers
+ * and the engine would break at runtime.
+ */
+export type EngineProceed =
+	| { kind: "approval"; approvalId: string }
+	| { kind: "checkpoint"; checkpointId: string };
+
+export type EngineProceedRunInput = {
+	/** The run the CALLER says this advances. Verified against the record's own id, never trusted. */
+	runId: string;
+	proceed: EngineProceed;
 	ctx?: JsonObject;
-	run?: EngineRunMetadata;
 };
 
 /**
@@ -100,7 +121,11 @@ export type ClawRunReadModel = {
 export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	kind: string;
 	startRun: (input: EngineStartRunInput) => Promise<EngineRunHandle>;
-	continueRun: (input: EngineContinueRunInput) => Promise<EngineRunHandle>;
+	/**
+	 * Advance an EXISTING parked run. Admits one durable work item and returns; nothing executes
+	 * here. Idempotent per (runId, proceed) — a duplicate loses the insert and gets the same handle.
+	 */
+	proceedRun: (input: EngineProceedRunInput) => Promise<EngineRunHandle>;
 	/**
 	 * Record an external intent against a run in flight. REQUIRED, deliberately not optional: an
 	 * engine that cannot park must throw `unsupportedOperationError` and say so. Optional would mean

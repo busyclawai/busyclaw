@@ -9,7 +9,7 @@ import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import { createRuntime, type RuntimeModel } from "@busyclaw/runtime";
 import { jsonSchema, tool } from "ai";
 import { describe, expect, it } from "vitest";
-import { durableRedactor } from "./fixtures";
+import { durableRedactor, owned } from "./fixtures";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -299,5 +299,132 @@ describe("run control plane — suspend", () => {
 		expect(h.toolRuns()).toBe(2);
 		if (second?.status !== "yielded") throw new Error("expected a yield");
 		expect(second.checkpointId).not.toBe(first.checkpointId);
+	});
+});
+
+describe("run control plane — proceed", () => {
+	// THE PAYOFF OF SLICE 1. A suspended run is only genuinely suspended if it can be brought back,
+	// and until this verb existed nothing outside the engine worker could bring one back at all.
+	it("resumes a suspended run from its checkpoint, finishing the work it had left", async () => {
+		let suspendFrom: (() => Promise<void>) | undefined;
+		const h = harness({
+			toolSteps: 2,
+			onTool: async (n) => {
+				if (n === 1) await suspendFrom?.();
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		suspendFrom = async () => {
+			await h.engine.controlRun({
+				runId: run.id,
+				intent: "suspend",
+				requestedBy: userPrincipal("operator"),
+			});
+		};
+
+		expect((await h.engine.work()).status).toBe("parked");
+		const parked = await h.store.getRun(run.id);
+		if (parked?.resumeCheckpointId === undefined) {
+			throw new Error("expected a resume checkpoint");
+		}
+		expect(h.toolRuns()).toBe(1);
+
+		// Back through the front door, naming the run and the record that parked it.
+		const handle = await h.engine.proceedRun({
+			runId: run.id,
+			proceed: {
+				kind: "checkpoint",
+				checkpointId: parked.resumeCheckpointId,
+			},
+		});
+		expect(handle.id).toBe(run.id); // the SAME run, not a second identity beside it
+		const resumedRun = await h.store.getRun(run.id);
+		expect(resumedRun?.status).toBe("queued");
+		// The wait is over, so the reason for it is gone too — a stale `suspended` here would tell
+		// every later reader the run is still parked.
+		expect(resumedRun?.waitReason).toBeUndefined();
+
+		expect((await h.engine.work()).status).toBe("completed");
+		expect((await h.store.getRun(run.id))?.status).toBe("completed");
+		// It CONTINUED rather than restarting: the first tool call is not paid for twice.
+		expect(h.toolRuns()).toBe(2);
+	});
+
+	it("admits one slice however many times it is asked", async () => {
+		const h = harness({ toolSteps: 1 });
+		const run = await h.engine.startRun({ prompt: "go" });
+		await h.store.updateRun(run.id, { status: "waiting" });
+
+		const first = await h.engine.proceedRun({
+			runId: run.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
+		});
+		const second = await h.engine.proceedRun({
+			runId: run.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
+		});
+		expect(first).toEqual(second);
+
+		// The insert IS the admission, so the duplicate lost at the database rather than becoming a
+		// second task that could only fail and take the run's status down with it.
+		const continuations = await h.db.findMany({
+			model: "runtime_task",
+			where: [
+				{ field: "runId", value: run.id },
+				{ field: "kind", value: "runtime.continueRun", connector: "AND" },
+			],
+		});
+		expect(continuations).toHaveLength(1);
+	});
+
+	// The record↔run verification lives at the DOOR, because the door is the only layer that can read
+	// a checkpoint's own runId — the engine sees an opaque id and would schedule it happily.
+	it("refuses a record that belongs to a different run", async () => {
+		const { db, redactor } = durableRedactor();
+		const store = createSqlEngineStore(db);
+		const claw = owned({
+			cronHandler: false,
+			database: db,
+			engine: sqlEngine({ store, workerId: "worker-1" }),
+			model: multiStepModel(0),
+			redaction: { redactor },
+		});
+
+		const mine = await claw.api.startRun({ prompt: "mine" });
+		const theirs = await claw.api.startRun({ prompt: "theirs" });
+
+		// A checkpoint carrying THEIR run id. Minted directly: how it came to exist is not what this
+		// asserts, only whose it is.
+		const theirCheckpoint = await claw.$context.runtime.checkpoints?.create({
+			runId: theirs.id,
+			metadata: {
+				version: "runtime.ai-sdk.yield.v1",
+				nextStep: 1,
+				messages: [{ role: "user", content: "theirs" }],
+			},
+			createdAt: new Date().toISOString(),
+		});
+		expect(theirCheckpoint).toBeDefined();
+
+		// A caller who legitimately manages BOTH runs still cannot graft one run's resume state onto
+		// another. Authorization is not the question here; identity is.
+		await expect(
+			claw.api.proceedRun({
+				runId: mine.id,
+				proceed: {
+					kind: "checkpoint",
+					checkpointId: theirCheckpoint?.id ?? "none",
+				},
+			}),
+		).rejects.toThrow("does not belong to the run");
+
+		// …and a record that does not exist at all is refused too, rather than admitting a slice whose
+		// only possible outcome is discovering there was nothing to resume.
+		await expect(
+			claw.api.proceedRun({
+				runId: mine.id,
+				proceed: { kind: "checkpoint", checkpointId: "no-such-checkpoint" },
+			}),
+		).rejects.toThrow("no such record");
 	});
 });

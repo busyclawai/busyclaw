@@ -889,9 +889,9 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		const engine = engineOver(store);
 
 		const parked = await store.createRun({ input: { prompt: "hello" } });
-		const handle = await engine.continueRun({
-			approvalId: "appr-1",
-			run: { id: parked.id },
+		const handle = await engine.proceedRun({
+			runId: parked.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
 		});
 
 		// SAME id — not a new row beside it.
@@ -911,13 +911,13 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		const engine = engineOver(store);
 		const parked = await store.createRun({ input: { prompt: "hello" } });
 
-		const first = await engine.continueRun({
-			approvalId: "appr-1",
-			run: { id: parked.id },
+		const first = await engine.proceedRun({
+			runId: parked.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
 		});
-		const second = await engine.continueRun({
-			approvalId: "appr-1",
-			run: { id: parked.id },
+		const second = await engine.proceedRun({
+			runId: parked.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
 		});
 		expect(first.id).toBe(parked.id);
 		expect(second.id).toBe(parked.id);
@@ -937,8 +937,14 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		const engine = engineOver(store);
 		const parked = await store.createRun({ input: { prompt: "hello" } });
 
-		await engine.continueRun({ approvalId: "appr-1", run: { id: parked.id } });
-		await engine.continueRun({ approvalId: "appr-2", run: { id: parked.id } });
+		await engine.proceedRun({
+			runId: parked.id,
+			proceed: { kind: "approval", approvalId: "appr-1" },
+		});
+		await engine.proceedRun({
+			runId: parked.id,
+			proceed: { kind: "approval", approvalId: "appr-2" },
+		});
 
 		const tasks = await inner.findMany({
 			model: "runtime_task",
@@ -956,19 +962,27 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 		await store.updateRun(done.id, { status: "completed" });
 
 		await expect(
-			engine.continueRun({ approvalId: "appr-1", run: { id: done.id } }),
+			engine.proceedRun({
+				runId: done.id,
+				proceed: { kind: "approval", approvalId: "appr-1" },
+			}),
 		).rejects.toThrow("already terminal");
 		// …and the run keeps the status it earned.
 		expect((await store.getRun(done.id))?.status).toBe("completed");
 	});
 
-	// A caller with no parked run to name still gets one created — the old behaviour, unchanged.
-	it("creates a run when there is no original to continue", async () => {
+	// CHANGED, deliberately. A continuation that could not find its run used to CREATE one — the last
+	// residue of the R-M10 fork, since the runtime would then restore the original id from the record
+	// and the run that recorded the resume was not the run that recorded the park. There is nothing to
+	// continue when there is no run, so say so.
+	it("refuses to proceed a run that does not exist, rather than inventing one", async () => {
 		const store = createSqlEngineStore(memoryAdapter());
-		const handle = await engineOver(store).continueRun({
-			approvalId: "appr-1",
-		});
-		expect(await store.getRun(handle.id)).not.toBeNull();
+		await expect(
+			engineOver(store).proceedRun({
+				runId: "no-such-run",
+				proceed: { kind: "approval", approvalId: "appr-1" },
+			}),
+		).rejects.toThrow("no such run");
 	});
 });
 

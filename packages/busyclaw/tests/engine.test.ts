@@ -49,11 +49,15 @@ function fakeWorkflowEngine(
 						queue.push({ id, prompt: input.prompt, type: "run" });
 						return { id };
 					},
-					continueRun: async (input) => {
+					proceedRun: async (input) => {
+						if (input.proceed.kind !== "approval") {
+							throw new Error("fake engine only resumes approvals");
+						}
+						const approvalId = input.proceed.approvalId;
 						const id = `fake-${++nextId}`;
-						events.push(`resume:${input.approvalId}`);
-						queue.push({ approvalId: input.approvalId, id, type: "resume" });
-						return { id };
+						events.push(`resume:${approvalId}`);
+						queue.push({ approvalId, id, type: "resume" });
+						return { id: input.runId };
 					},
 					// A fake engine still has to answer the control verb. This one has no park machinery, so
 					// it says so loudly rather than being absent and silently doing nothing.
@@ -139,9 +143,9 @@ describe("createClaw engine", () => {
 		});
 
 		expect(Object.keys(claw.$context.engine ?? {}).sort()).toEqual([
-			"continueRun",
 			"controlRun",
 			"kind",
+			"proceedRun",
 			"startRun",
 			"work",
 		]);
@@ -154,7 +158,6 @@ describe("createClaw engine", () => {
 			"archiveClaw",
 			"archiveThread",
 			"bindConversation",
-			"continueEngineRun",
 			"continueRun",
 			"controlRun",
 			"createCheckpoint",
@@ -186,6 +189,7 @@ describe("createClaw engine", () => {
 			"listRunEvents",
 			"listThreads",
 			"listToolResults",
+			"proceedRun",
 			"putPolicySlice",
 			"registerOpenApiSpec",
 			"sendMessage",
@@ -244,8 +248,11 @@ describe("createClaw engine", () => {
 			principalRef: userPrincipal("stranger"),
 			permission: "manage",
 		});
-		const resume = await claw.api.continueEngineRun(
-			{ approvalId: parked.approvalIds?.[0] },
+		const resume = await claw.api.proceedRun(
+			{
+				runId: first.id,
+				proceed: { kind: "approval", approvalId: parked.approvalIds?.[0] },
+			},
 			{ principal: userPrincipal("stranger") },
 		);
 		const completed = workResult(await claw.$context.engine?.work?.());

@@ -35,7 +35,7 @@ export const RUNTIME_RESUME_RUN_TASK = "runtime.resumeRun";
 
 /** Attempts allowed for a resume task — see the enqueue site for why only this kind gets more
  *  than one. Small on purpose: this covers a crashed host, not a failing run. */
-const RESUME_MAX_ATTEMPTS = 3;
+export const RESUME_MAX_ATTEMPTS = 3;
 
 export const RuntimeRunTaskPayload = type({
 	prompt: "string",

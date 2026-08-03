@@ -8,6 +8,7 @@ import type {
 	JsonValue,
 	Principal,
 	Redactor,
+	RunCheckpointStore,
 	RunMode,
 	TextDeltaStream,
 	ToolDefinitionSet,
@@ -419,6 +420,10 @@ export type Runtime<Config extends RuntimeConfig = RuntimeConfig> = {
 	) => Promise<RuntimeResult | null>;
 	readonly audit?: AuditSink;
 	readonly approvals?: ApprovalStore;
+	/** The durable checkpoint store, exposed for the SAME reason `approvals` is: a door that wants to
+	 *  advance a parked run has to be able to read the record's own `runId` rather than trust the one
+	 *  the caller supplied. Undefined without a database — nothing can park, so nothing can resume. */
+	readonly checkpoints?: RunCheckpointStore;
 	readonly effects?: EffectStore;
 	/** The tool catalog read-path over this runtime's registered tools:
 	 *  traversable tree (list), scoped search, and describe. Visibility only —
@@ -2361,6 +2366,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	return {
 		audit: config.audit,
 		approvals: approvalStore,
+		...(runCheckpointStore ? { checkpoints: runCheckpointStore } : {}),
 		catalog,
 		continueRun,
 		effects: effectStore,

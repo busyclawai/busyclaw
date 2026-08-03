@@ -67,9 +67,11 @@ function exampleEngine(): ClawEngineFactory<RuntimeLike, ExampleHandle> {
 					await runtime.run(input.prompt);
 					return { id: input.run?.id ?? "run-1" };
 				},
-				continueRun: async (input) => {
-					await runtime.continueRun(input.approvalId);
-					return { id: input.run?.id ?? "continue-1" };
+				proceedRun: async (input) => {
+					if (input.proceed.kind === "approval") {
+						await runtime.continueRun(input.proceed.approvalId);
+					}
+					return { id: input.runId };
 				},
 				controlRun: async () => ({ accepted: true, settled: true }),
 				work: async () => ({ processed: 1, status: "drained" }),
@@ -95,13 +97,15 @@ describe("engine-core contract", () => {
 				run: { principal: userPrincipal("alice"), id: "run-id" },
 			}),
 		).resolves.toEqual({ id: "run-id" });
+		// The run id comes back UNCHANGED: a continuation advances the run it was told to, and the
+		// engine's job is to verify that against the record rather than mint an identity of its own.
 		await expect(
-			engine.continueRun({
-				approvalId: "approval-1",
+			engine.proceedRun({
+				runId: "run-id",
+				proceed: { kind: "approval", approvalId: "approval-1" },
 				ctx: { team: "acme" },
-				run: { id: "continue-id" },
 			}),
-		).resolves.toEqual({ id: "continue-id" });
+		).resolves.toEqual({ id: "run-id" });
 		await expect(engine.work()).resolves.toEqual({
 			processed: 1,
 			status: "drained",
@@ -119,7 +123,7 @@ describe("engine-core contract", () => {
 	it("allows managed engines to omit explicit worker lifecycle", () => {
 		const engine: ClawEngineHandle = {
 			kind: "managed",
-			continueRun: async () => ({ id: "continue-1" }),
+			proceedRun: async (input) => ({ id: input.runId }),
 			// `controlRun` is NOT omittable the way `work` is. An engine with no worker lifecycle is a
 			// real shape; an engine that silently cannot be stopped is not, so one that cannot park is
 			// required to say so out loud rather than be absent.

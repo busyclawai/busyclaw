@@ -3,9 +3,9 @@ import type {
 	ClawEngineFactory,
 	ClawEngineHandle,
 	ClawEngineInstance,
-	EngineContinueRunInput,
 	EngineControlRunInput,
 	EngineControlRunResult,
+	EngineProceedRunInput,
 	EngineRunHandle,
 	EngineStartRunInput,
 	RunControlIntent,
@@ -26,7 +26,9 @@ import type {
 } from "./worker";
 import {
 	createSqlEngineWorker,
+	RESUME_MAX_ATTEMPTS,
 	RUNTIME_CONTINUE_RUN_TASK,
+	RUNTIME_RESUME_RUN_TASK,
 	RUNTIME_RUN_TASK,
 } from "./worker";
 
@@ -51,19 +53,19 @@ function raises(current: RunControlIntent, next: RunControlIntent): boolean {
 }
 
 /**
- * The task id for continuing `runId` on `approvalId`. Derived, so the insert itself is the
+ * The task id for advancing `runId` from the record `recordId`. Derived, so the insert itself is the
  * admission — the same construction `deliveryRowId` uses in the channels inbox, NUL-joined for the
  * same reason: `runId` and `approvalId` are opaque ids from different stores and must not be able
  * to collide by concatenation. Written as the escape rather than a literal NUL byte, because a
  * source file carrying a raw NUL is binary to git.
  */
-function continueTaskId(runId: string, approvalId: string): string {
+function proceedTaskId(
+	runId: string,
+	taskKind: string,
+	recordId: string,
+): string {
 	return bytesToHex(
-		sha256(
-			utf8ToBytes(
-				`${runId}\u0000${RUNTIME_CONTINUE_RUN_TASK}\u0000${approvalId}`,
-			),
-		),
+		sha256(utf8ToBytes(`${runId}\u0000${taskKind}\u0000${recordId}`)),
 	);
 }
 
@@ -123,70 +125,77 @@ function createSqlEngineHandle(input: {
 			});
 			return { id: run.id };
 		},
-		async continueRun(
-			continueInput: EngineContinueRunInput,
+		async proceedRun(
+			proceedInput: EngineProceedRunInput,
 		): Promise<EngineRunHandle> {
-			const run = await input.config.store.transaction(async (store) => {
-				// R-M10. A continuation used to CREATE a run, unconditionally. So a resumed run got a
-				// second engine row while the runtime restored the original `runId` from the checkpoint —
-				// two identities for one logical run, and every question asked of it ("what did run X
-				// do?", "is run X still going?") answerable two ways depending on which id you held.
-				// Recovery was the worst of it: the row that recorded the park and the row that recorded
-				// the resume were not the same row, so neither told the whole story.
-				//
-				// Given the original's id, the original is CONTINUED — the task is enqueued against it
-				// and it goes back to `queued`. Idempotent by construction: a continuation delivered
-				// twice finds the run the first one left and adds work to it rather than forking a third
-				// identity. Without an id there is nothing to continue and a run is created, which is the
-				// old behaviour for callers that never had one.
-				const wanted = continueInput.run?.id;
-				const existing = wanted ? await store.getRun(wanted) : null;
-				// A TERMINAL run is not continuable. Resetting one to `queued` — which this did
-				// unconditionally — resurrects a finished run, and the second task then finds the approval
-				// already spent, fails, dead-letters, and rewrites `completed` as `failed`. Two clicks on
-				// one approve button were enough.
-				if (existing && TERMINAL_RUN_STATUSES.has(existing.status)) {
-					throw stateError("run is already terminal and cannot be continued", {
-						runId: existing.id,
-						status: existing.status,
+			// One admit body for every tag. The tag decides two things and nothing else: which task
+			// kind carries the work, and which record id the derived task id is built from.
+			const { proceed } = proceedInput;
+			const [kind, recordId] =
+				proceed.kind === "approval"
+					? ([RUNTIME_CONTINUE_RUN_TASK, proceed.approvalId] as const)
+					: ([RUNTIME_RESUME_RUN_TASK, proceed.checkpointId] as const);
+
+			await input.config.store.transaction(async (store) => {
+				const run = await store.getRun(proceedInput.runId);
+				// R-M10, generalized. A continuation used to CREATE a run when it could not find one,
+				// so a resumed run got a second engine row while the runtime restored the original id
+				// from the record — two identities for one logical run, and the row that recorded the
+				// park was not the row that recorded the resume. There is nothing to continue here.
+				if (!run) {
+					throw stateError("no such run to proceed", {
+						runId: proceedInput.runId,
 					});
 				}
-				const run =
-					existing ??
-					(await store.createRun({
-						...continueInput.run,
-						input: {
-							approvalId: continueInput.approvalId,
-							ctx: continueInput.ctx ?? {},
-						},
-					}));
-				if (existing) {
-					// Back to queued: the worker picks it up again, and a run left `running` by the park
-					// would otherwise look like work already in flight.
-					await store.updateRun(existing.id, { status: "queued" });
+				// A TERMINAL run has nothing left to advance. Resetting one to `queued` resurrects it,
+				// and the slice that follows finds its record already spent and dead-letters — which is
+				// how `completed` used to be rewritten as `failed` by a second click.
+				if (TERMINAL_RUN_STATUSES.has(run.status)) {
+					throw stateError("run is already terminal and cannot proceed", {
+						runId: run.id,
+						status: run.status,
+					});
 				}
-				// The INSERT is the admission. Two continuations of one approval derive the same task id
-				// and the second loses at the database, so one approval can only ever schedule one slice.
-				// Without it each call minted `newId()` and the loser of the approval race was a task that
-				// could only fail — taking its run's status with it.
+
+				// The INSERT is the admission: two calls naming the same (run, kind, record) derive one
+				// id and the second loses at the database, so one record can only ever schedule one
+				// slice. Before this, each call minted its own id and the loser was a task that could
+				// only fail — taking its run's status down with it.
 				try {
 					await store.enqueueTask({
-						id: continueTaskId(run.id, continueInput.approvalId),
-						kind: RUNTIME_CONTINUE_RUN_TASK,
+						id: proceedTaskId(run.id, kind, recordId),
+						kind,
 						payload: {
-							approvalId: continueInput.approvalId,
-							...(continueInput.ctx ? { ctx: continueInput.ctx } : {}),
+							...(proceed.kind === "approval"
+								? { approvalId: proceed.approvalId }
+								: { checkpointId: proceed.checkpointId }),
+							...(proceedInput.ctx ? { ctx: proceedInput.ctx } : {}),
 						},
 						runId: run.id,
+						...(kind === RUNTIME_RESUME_RUN_TASK
+							? { maxAttempts: RESUME_MAX_ATTEMPTS }
+							: {}),
 					});
 				} catch (error) {
-					// Already admitted by an earlier call — the run is scheduled, which is what the caller
-					// wanted. Any other failure is real and must not be swallowed.
+					// Already admitted by an earlier call — the run is scheduled, which is what the
+					// caller wanted. Anything else is real and must not be swallowed.
 					if (!isConflict(error)) throw error;
+					return;
 				}
-				return run;
+
+				// Back to queued so a worker picks it up — and CONDITIONALLY, because a run left
+				// `running` by a park is not ours to relabel and a terminal one must never be revived
+				// by a write that raced the check above.
+				await store.updateRunIfStatus(run.id, {
+					from: ["queued", "running", "waiting"],
+					patch: {
+						status: "queued",
+						waitReason: null,
+						resumeCheckpointId: null,
+					},
+				});
 			});
-			return { id: run.id };
+			return { id: proceedInput.runId };
 		},
 		async controlRun(
 			controlInput: EngineControlRunInput,
