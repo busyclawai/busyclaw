@@ -724,6 +724,9 @@ export function createClaw<
 		config: config.redaction,
 		adapter,
 		clawsStore,
+		// R-M03: whether this deployment can say WHOSE data a value is. Without it every mapping is
+		// minted linked to no subject, so erasure has nothing to find — see `forgetSubject`.
+		hasSubjectResolver: config.subject !== undefined,
 		warn: (message) => warn(`busyclaw redaction: ${message}`),
 	});
 	// The placeholder contract rides the system prompt whenever placeholders can actually appear.

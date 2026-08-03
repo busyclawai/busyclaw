@@ -161,6 +161,9 @@ export function resolveRedaction(input: {
 	adapter: Adapter | undefined;
 	/** Required for posture "per-claw" (the routing reads the claw row). Pass the WRAPPED store. */
 	clawsStore: ClawsStore | undefined;
+	/** Whether the deployment configured a {@link SubjectResolver} — i.e. whether it can say WHOSE
+	 *  personal data a value is. See `forgetSubject` for why erasure depends on it. */
+	hasSubjectResolver?: boolean;
 	warn: (message: string) => void;
 }): ResolvedRedaction {
 	const cfg = normalizeRedactionConfig(input.config);
@@ -250,6 +253,21 @@ export function resolveRedaction(input: {
 			mappings.deleteForSubject(subjectId, container);
 	}
 	const armed = cfg.redactor !== undefined || detector !== undefined;
+	// R-M03. A mapping records WHOSE personal data it is only when something says so — the runtime's
+	// `SubjectResolver` on the run path, or `redact(value, { subjectIds })` through the plugin door.
+	// With neither, every mapping is minted unlinked and `forgetSubject` sweeps for rows that were
+	// never written: it answers "erased 0", which is indistinguishable from a completed shred and is
+	// exactly the sentence a DSR response quotes.
+	//
+	// WARNED, not refused. Refusing was the first attempt and it was wrong: the plugin door links
+	// subjects without any resolver being configured, so "no resolver" does not mean "no lineage" —
+	// the guard would have broken deployments whose erasure works. What can be said truthfully at boot
+	// is that the RUN path will mint unlinked mappings, and that is said.
+	if (armed && input.hasSubjectResolver === false) {
+		input.warn(
+			"no subject resolver: mappings minted by ordinary message and tool redaction are linked to no data subject, so forgetSubject cannot find them (pass `subject` to createClaw, or link explicitly via the plugin redact door)",
+		);
+	}
 	// The handle rides the FINAL resolved redactor (routing included), so its `redact`/`original`
 	// honor per-claw posture exactly like the runtime does.
 	const handleOver = (redactor: Redactor): ClawRedactionHandle => ({
