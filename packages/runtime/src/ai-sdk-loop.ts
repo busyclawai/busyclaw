@@ -71,7 +71,11 @@ export type AiSdkLoopInput = {
 	persistYieldCheckpoint?: (input: {
 		nextStep: number;
 		messages: ModelMessage[];
+		deliveredThrough?: number;
 	}) => Promise<string>;
+	/** The highest inbox `seq` the transcript this loop STARTS with already contains. Seeded from the
+	 *  checkpoint on a resume; absent on a fresh run, which contains none. */
+	deliveredThrough?: number;
 	/**
 	 * The one place the loop looks OUTWARD, called at the top of every step. Returns a park reason
 	 * when an external actor has asked this run to stop, `undefined` to carry on.
@@ -81,7 +85,10 @@ export type AiSdkLoopInput = {
 	 * site changing again. Absent — an ad-hoc `generate` with no database — is one branch and zero
 	 * reads, and behaviour is byte-identical to a loop that never had it.
 	 */
-	controlPoint?: (seenSeq: number) => Promise<RunControlVerdict>;
+	controlPoint?: (
+		seenSeq: number,
+		deliveredThrough: number,
+	) => Promise<RunControlVerdict>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
 	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
 	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
@@ -359,6 +366,9 @@ export async function runAiSdkLoop(
 	// Starts BELOW zero so the first control point always looks: a message admitted while the run was
 	// still queued has to be found, and `controlSeq` is 0 on a run nobody has written to yet.
 	let seenControlSeq = -1;
+	// What the TRANSCRIPT contains, which is a different question from what the control watermark
+	// has reached: a latch write bumps `controlSeq` without producing a message at all.
+	let deliveredThrough = input.deliveredThrough ?? -1;
 
 	// Park the run HERE: every tool result of the previous step is already in `messages` and no call
 	// is pending, so the transcript is a legal resume point by construction. The transcript is also
@@ -378,6 +388,7 @@ export async function runAiSdkLoop(
 		const checkpointId = await input.persistYieldCheckpoint({
 			nextStep: step,
 			messages,
+			deliveredThrough,
 		});
 		// The two differ in ONE thing, and it is the thing the worker branches on: a yield leaves a
 		// continuation behind, a park does not. Same checkpoint, same transcript, different answer to
@@ -407,9 +418,20 @@ export async function runAiSdkLoop(
 		// then the park: a suspend that arrives together with a message should carry that message into
 		// the checkpoint, so the resumed run sees it rather than finding it again on the far side.
 		if (input.controlPoint) {
-			const verdict = await input.controlPoint(seenControlSeq);
+			const verdict = await input.controlPoint(
+				seenControlSeq,
+				deliveredThrough,
+			);
 			seenControlSeq = verdict.seq;
-			if (verdict.deliver?.length) messages.push(...verdict.deliver);
+			if (verdict.deliver?.length) {
+				messages.push(...verdict.deliver.map((entry) => entry.message));
+				// Advanced only AFTER the push, so the window a crash can land in is the one where a
+				// message is re-shown rather than the one where it disappears. Junior's rule: consuming
+				// a message without model visibility is a contract violation; showing it twice is not.
+				for (const entry of verdict.deliver) {
+					if (entry.seq > deliveredThrough) deliveredThrough = entry.seq;
+				}
+			}
 			if (verdict.park) return parkHere(step, verdict.park);
 		}
 

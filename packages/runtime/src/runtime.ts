@@ -195,11 +195,15 @@ export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
  */
 /** What one look outward found. `seq` is the run's control watermark as of this read — the loop
  *  hands it back next time so the port can skip the message query entirely when nothing moved. */
+/** One drained message: what the model sees, and where it sits in the run's order. The `seq` is
+ *  what the transcript watermark advances to once the message is actually pushed. */
+export type RunInboxDelivery = { seq: number; message: ModelMessage };
+
 export type RunControlVerdict = {
 	seq: number;
 	park?: RunParkReason;
 	/** Already-tokenized message bodies, in the run's own order. */
-	deliver?: ModelMessage[];
+	deliver?: RunInboxDelivery[];
 };
 
 /** What the ENGINE answers. Deliberately not `ModelMessage`: the engine stores bodies and knows
@@ -209,10 +213,11 @@ export type RunControlPort = {
 	poll: (
 		runId: string,
 		seenSeq: number,
+		deliveredThrough: number,
 	) => Promise<{
 		seq: number;
 		park?: RunParkReason;
-		deliver?: readonly Record<string, unknown>[];
+		deliver?: readonly { seq: number; body: Record<string, unknown> }[];
 	}>;
 };
 
@@ -727,6 +732,16 @@ export const runtimeYieldMetadata = ark({
 	version: "'runtime.ai-sdk.yield.v1'",
 	nextStep: "number",
 	/**
+	 * The highest inbox `seq` the snapshotted transcript actually CONTAINS.
+	 *
+	 * The redelivery fence, and it has to live here rather than on the message row because only the
+	 * snapshot knows what the model will see. A row is marked `delivered` before it is pushed into
+	 * the in-memory transcript, so a crash in that window leaves a message nothing will ever show
+	 * anyone: not pending, and not in any transcript. Resuming from what the checkpoint contains
+	 * re-delivers exactly those and nothing else.
+	 */
+	"deliveredThrough?": "number | undefined",
+	/**
 	 * The boundary the yielding run was executing in — compared at resume, refused on mismatch.
 	 *
 	 * A parked APPROVAL has immutable `scope`/`scopeId` columns on its record to compare against; a
@@ -1193,13 +1208,21 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	// holding a run id it could ask about somebody ELSE's run.
 	const controlPointFor =
 		(control: RunControlPort, runId: string) =>
-		async (seenSeq: number): Promise<RunControlVerdict> => {
-			const verdict = await control.poll(runId, seenSeq);
+		async (
+			seenSeq: number,
+			deliveredThrough: number,
+		): Promise<RunControlVerdict> => {
+			const verdict = await control.poll(runId, seenSeq, deliveredThrough);
 			return {
 				seq: verdict.seq,
 				...(verdict.park ? { park: verdict.park } : {}),
 				...(verdict.deliver?.length
-					? { deliver: verdict.deliver.map(asInboxMessage) }
+					? {
+							deliver: verdict.deliver.map((entry) => ({
+								seq: entry.seq,
+								message: asInboxMessage(entry.body),
+							})),
+						}
 					: {}),
 			};
 		};
@@ -1211,10 +1234,14 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			? async (input: {
 					nextStep: number;
 					messages: ModelMessage[];
+					deliveredThrough?: number;
 				}): Promise<string> => {
 					const metadata: JsonObject = {
 						version: "runtime.ai-sdk.yield.v1",
 						nextStep: input.nextStep,
+						...(input.deliveredThrough !== undefined
+							? { deliveredThrough: input.deliveredThrough }
+							: {}),
 						messages: toJsonValue(
 							input.messages,
 							"runtime yield messages invalid",
@@ -2373,6 +2400,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			system: config.system,
 			messages: checkpoint.messages,
 			startStep: checkpoint.nextStep,
+			// The transcript watermark travels with the transcript. Without it the resumed slice has no
+			// way to tell a message that IS in these messages from one that was marked delivered and
+			// then lost to a crash before it was ever pushed.
+			...(checkpoint.deliveredThrough !== undefined
+				? { deliveredThrough: checkpoint.deliveredThrough }
+				: {}),
 			ctx,
 			resolvedCtx,
 			core: createRunCore(state, approvalStore, runTools),

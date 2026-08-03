@@ -748,7 +748,11 @@ export function createSqlEngineStore(
 				model: "run_message",
 				where: [
 					{ field: "toRunId", value: toRunId },
-					{ field: "status", value: "pending", connector: "AND" },
+					// NOT filtered on `pending`. A row is marked delivered BEFORE it reaches the in-memory
+					// transcript, so a crash in that window leaves a message that is neither pending nor in
+					// any transcript — invisible forever. `seq > afterSeq` where afterSeq is what the
+					// transcript actually contains re-delivers exactly those and nothing else; `status`
+					// stays as forensics.
 					{ field: "seq", value: afterSeq, operator: "gt", connector: "AND" },
 					// `at_turn_end` is wake fuel for the NEXT run on this conversation and never enters
 					// this one. `interrupt` drains here too until it has teeth of its own — degrading to
@@ -767,15 +771,12 @@ export function createSqlEngineStore(
 			for (const row of rows) {
 				// Pinned on `pending`: a second reader cannot exist by construction, but a retry of THIS
 				// slice can, and marking an already-delivered row again would move its step.
-				const taken = await db.update({
+				await db.update({
 					model: "run_message",
-					where: [
-						{ field: "id", value: row.id },
-						{ field: "status", value: "pending", connector: "AND" },
-					],
+					where: [{ field: "id", value: row.id }],
 					update: { status: "delivered", deliveredAtStep: step, updatedAt: ts },
 				});
-				if (taken) drained.push({ seq: row.seq, body: row.body });
+				drained.push({ seq: row.seq, body: row.body });
 			}
 			return drained;
 		},

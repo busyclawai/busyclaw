@@ -1012,3 +1012,105 @@ describe("run control plane — the inbox: delivery", () => {
 		expect(inboxReads).toBe(1);
 	});
 });
+
+describe("run control plane — the inbox: the redelivery fence", () => {
+	// THE WINDOW. A row is marked `delivered` before it reaches the in-memory transcript, so a crash
+	// in between leaves a message that is neither pending nor in anybody's transcript — invisible
+	// forever, and silently. The fence is what the CHECKPOINT contains, because only the snapshot
+	// knows what the model will actually see; the row's own status cannot answer it.
+	it("re-delivers a message that was marked delivered but never reached the transcript", async () => {
+		const seen: string[] = [];
+		let clock = 0;
+		const h = harness({
+			toolSteps: 3,
+			now: () => iso(clock),
+			onTool: () => {
+				clock += 100_000; // burn past the soft deadline so slice one parks
+			},
+			onModelCall: (prompt) => {
+				seen.push(JSON.stringify(prompt));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		// Slice one yields a checkpoint. Nothing has been delivered, so its `deliveredThrough` is
+		// whatever the transcript contains — nothing.
+		const first = await h.engine.work({ deadlineAt: iso(50_000) });
+		expect(first.status).toBe("yielded");
+
+		// Now stage the crash: a message that the database believes was delivered at a step the
+		// checkpoint predates. This is exactly the state a process death in that window leaves.
+		await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "the lost message" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+		const rows = await h.db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		const lostId = (rows[0] as { id: string }).id;
+		await h.db.update({
+			model: "run_message",
+			where: [{ field: "id", value: lostId }],
+			update: { status: "delivered", deliveredAtStep: 0 },
+		});
+
+		const before = seen.length;
+		const second = await h.engine.work({ deadlineAt: iso(clock + 50_000) });
+		if (second.status === "failed") {
+			throw new Error(`tick failed: ${second.reason}`);
+		}
+
+		// It was shown to the model anyway. A fence built on the row's status would have skipped it,
+		// because the row says delivered and the row is wrong.
+		expect(seen.slice(before).join("")).toContain("the lost message");
+	});
+
+	it("does not re-show a message the checkpoint already contains", async () => {
+		const seen: string[] = [];
+		let clock = 0;
+		let runId = "";
+		const h = harness({
+			toolSteps: 3,
+			now: () => iso(clock),
+			onTool: async (n) => {
+				if (n === 1) {
+					await h.engine.deliverMessage({
+						toRunId: runId,
+						body: { text: "carried across" },
+						mode: "next_step",
+						sender: userPrincipal("operator"),
+						idempotencyKey: "k1",
+					});
+				}
+				clock += 100_000;
+			},
+			onModelCall: (prompt) => {
+				seen.push(JSON.stringify(prompt));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		runId = run.id;
+
+		// The message is delivered AND the slice parks — the same verdict carries both, so the
+		// checkpoint snapshots a transcript that already contains it.
+		expect((await h.engine.work({ deadlineAt: iso(50_000) })).status).toBe(
+			"yielded",
+		);
+		const cps = await h.db.findMany({
+			model: "run_checkpoint",
+			where: [{ field: "runId", value: run.id }],
+		});
+		await h.engine.work({ deadlineAt: iso(clock + 50_000) });
+
+		// It IS in every later prompt — it is part of the transcript now, which is the point. What must
+		// not happen is it being PUSHED a second time, so the count is taken WITHIN one prompt.
+		// Anchoring the fence on the step number instead would re-push on every resume, and this
+		// number would climb by one each time the run parked.
+		const last = seen[seen.length - 1] ?? "";
+		expect(last.split("carried across").length - 1).toBe(1);
+	});
+});

@@ -425,7 +425,7 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
 	// upstream of it.
 	const controlPort: RunControlPort = {
-		poll: async (runId, seenSeq) => {
+		poll: async (runId, seenSeq, deliveredThrough) => {
 			// ONE primary-key read per step, and that is the steady-state cost of the whole control
 			// plane. The message table is touched only when the watermark moved — which is why every
 			// control write bumps it in the same transaction.
@@ -444,13 +444,13 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 			if (seq === seenSeq) return { seq, ...(park ? { park } : {}) };
 			const drained = await store.drainMessages({
 				toRunId: runId,
-				afterSeq: seenSeq,
+				afterSeq: deliveredThrough,
 				step: 0,
 			});
 			return {
 				seq,
 				...(park ? { park } : {}),
-				...(drained.length ? { deliver: drained.map((row) => row.body) } : {}),
+				...(drained.length ? { deliver: drained } : {}),
 			};
 		},
 	};
