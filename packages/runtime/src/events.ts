@@ -90,6 +90,18 @@ export const runYieldedEvent = ark({
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 
+// A run stopped because somebody OUTSIDE it asked, which is what distinguishes this from a yield:
+// the checkpoint is written the same way, but no continuation is enqueued and the run does not
+// resume until an external verb says so.
+export const runParkedEvent = ark({
+	...runtimeEventBaseShape,
+	type: "'run.parked'",
+	steps: "number",
+	checkpointId: "string",
+	reason: "'suspended'",
+	"usage?": runtimeModelUsage.or("undefined"),
+});
+
 export const runDeniedEvent = ark({
 	...runtimeEventBaseShape,
 	type: "'run.denied'",
@@ -177,6 +189,7 @@ export const runtimeEvent = runStartedEvent
 	.or(runCompletedEvent)
 	.or(runWaitingApprovalEvent)
 	.or(runYieldedEvent)
+	.or(runParkedEvent)
 	.or(runDeniedEvent)
 	.or(toolCalledEvent)
 	.or(toolCompletedEvent)

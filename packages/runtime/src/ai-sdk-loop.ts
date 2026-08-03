@@ -70,6 +70,16 @@ export type AiSdkLoopInput = {
 		nextStep: number;
 		messages: ModelMessage[];
 	}) => Promise<string>;
+	/**
+	 * The one place the loop looks OUTWARD, called at the top of every step. Returns a park reason
+	 * when an external actor has asked this run to stop, `undefined` to carry on.
+	 *
+	 * This is the whole seam: durable intents are somebody else's problem, and the loop never learns
+	 * WHY beyond the reason it is handed. That is what lets the intent set grow without this call
+	 * site changing again. Absent — an ad-hoc `generate` with no database — is one branch and zero
+	 * reads, and behaviour is byte-identical to a loop that never had it.
+	 */
+	controlPoint?: (step: number) => Promise<"suspended" | undefined>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
 	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
 	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
@@ -343,8 +353,67 @@ export async function runAiSdkLoop(
 		: [{ role: "user", content: input.prompt ?? "" }];
 	let runUsage: RuntimeModelUsage | undefined;
 
-	for (let step = input.startStep ?? 0; step < input.maxSteps; step++) {
+	const startStep = input.startStep ?? 0;
+
+	// Park the run HERE: every tool result of the previous step is already in `messages` and no call
+	// is pending, so the transcript is a legal resume point by construction. The transcript is also
+	// placeholder-clean (ingress redaction), so it persists as-is — pre- and post-park transcripts
+	// are byte-identical.
+	const parkHere = async (
+		step: number,
+		reason: "suspended" | "deadline",
+	): Promise<AiSdkLoopResult> => {
+		if (!input.persistYieldCheckpoint) {
+			throw configurationError(
+				reason === "deadline"
+					? "deadline yields require a run checkpoint persister"
+					: "suspending a run requires a run checkpoint persister",
+			);
+		}
+		const checkpointId = await input.persistYieldCheckpoint({
+			nextStep: step,
+			messages,
+		});
+		// The two differ in ONE thing, and it is the thing the worker branches on: a yield leaves a
+		// continuation behind, a park does not. Same checkpoint, same transcript, different answer to
+		// "does this run come back on its own?".
+		return reason === "deadline"
+			? {
+					status: "yielded",
+					text: "",
+					steps: step,
+					checkpointId,
+					usage: runUsage,
+				}
+			: {
+					status: "parked",
+					text: "",
+					steps: step,
+					checkpointId,
+					reason,
+					usage: runUsage,
+				};
+	};
+
+	for (let step = startStep; step < input.maxSteps; step++) {
 		abortIfNeeded(input.abortSignal);
+
+		// THE CONTROL POINT — one await, and only when a control seam was supplied.
+		const requested = await input.controlPoint?.(step);
+		if (requested) return parkHere(step, requested);
+
+		// The deadline arm lives here too, so there is one park site rather than two. It requires
+		// PROGRESS: without `step > startStep` a run resumed at its deadline parks again immediately at
+		// the same step, forever, burning a task per round. The intent arm above has no such rule on
+		// purpose — "stop before you start" is exactly what a suspend must be able to say.
+		if (
+			input.deadlineAt !== undefined &&
+			step > startStep &&
+			input.now() >= input.deadlineAt
+		) {
+			return parkHere(step, "deadline");
+		}
+
 		const callParams = {
 			model,
 			tools: input.tools,
@@ -595,33 +664,10 @@ export async function runAiSdkLoop(
 		}
 		messages.push(...toolMessages);
 
-		// The resumable point: every tool result of this step is in the transcript, no call is
-		// pending. Past the soft deadline, park the resume state and yield instead of paying the
-		// next model call. The transcript is already placeholder-clean (ingress redaction), so it
-		// persists as-is — pre- and post-yield transcripts are byte-identical by construction.
-		// Skipped on the final step — the loop is about to exit anyway.
-		if (
-			input.deadlineAt !== undefined &&
-			step + 1 < input.maxSteps &&
-			input.now() >= input.deadlineAt
-		) {
-			if (!input.persistYieldCheckpoint) {
-				throw configurationError(
-					"deadline yields require a run checkpoint persister",
-				);
-			}
-			const checkpointId = await input.persistYieldCheckpoint({
-				nextStep: step + 1,
-				messages,
-			});
-			return {
-				status: "yielded",
-				text: "",
-				steps: step + 1,
-				checkpointId,
-				usage: runUsage,
-			};
-		}
+		// The deadline check used to sit HERE, at end-of-step. It moved to the top of the loop: the two
+		// are the same instant one `for` increment apart (the checkpoint's `nextStep` is N+1 either
+		// way), and collapsing them buys one park site instead of two, coverage of the instant BEFORE
+		// a step's model call, and one predicate that later intents extend without touching this file.
 	}
 
 	throw stateError(

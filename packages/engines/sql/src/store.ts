@@ -16,14 +16,17 @@ import type { Adapter, JsonObject } from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	configurationError,
-	type EntityUpdateInput,
 	errorMessage,
 	jsonObject as jsonObjectSchema,
 	type Principal,
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
-import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
+import {
+	type EntityPatch,
+	type EntityWhere,
+	entityDb,
+} from "@busyclaw/storage-core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type as ark } from "arktype";
@@ -48,18 +51,34 @@ export type TaskStatus = typeof TaskStatus.infer;
 const JsonRecord = jsonObjectSchema;
 const OptionalString = ark("string | undefined");
 
+export const RunControlIntentValue = ark("'suspend' | 'stop' | 'abort'");
+export const RunWaitReasonValue = ark("'approval' | 'suspended'");
+
 export const RunRecord = ark({
 	id: "string",
 	status: RunStatus,
 	input: JsonRecord,
 	"principal?": OptionalString,
+	// The control latch. Absent on every row written before it existed, and on every run nobody has
+	// asked anything of — which is almost all of them.
+	"controlRequestedAt?": OptionalString,
+	"controlIntent?": RunControlIntentValue.or("undefined"),
+	"controlRequestedBy?": OptionalString,
+	"controlReason?": OptionalString,
+	"controlSeq?": "number | undefined",
+	"waitReason?": RunWaitReasonValue.or("undefined"),
+	"resumeCheckpointId?": OptionalString,
 	createdAt: "string",
 	updatedAt: "string",
 });
 // `principal` is the branded Principal (the `run.principal` stamp column, validated by the entityDb
 // read schema); the local arktype checks the string shape, the type carries the brand.
-export type RunRecord = Omit<typeof RunRecord.infer, "principal"> & {
+export type RunRecord = Omit<
+	typeof RunRecord.infer,
+	"principal" | "controlRequestedBy"
+> & {
 	principal?: Principal;
+	controlRequestedBy?: Principal;
 };
 
 export const RuntimeTask = ark({
@@ -182,7 +201,7 @@ export type SqlEngineStore = {
 	getRun: (id: string) => Promise<RunRecord | null>;
 	updateRun: (
 		id: string,
-		patch: EntityUpdateInput<typeof runFields>,
+		patch: EntityPatch<typeof runFields>,
 	) => Promise<RunRecord | null>;
 	/**
 	 * `updateRun`, but only when the run is currently in one of `from` — a compare-and-swap, so it
@@ -194,7 +213,7 @@ export type SqlEngineStore = {
 		id: string,
 		input: {
 			from: readonly RunStatus[];
-			patch: EntityUpdateInput<typeof runFields>;
+			patch: EntityPatch<typeof runFields>;
 		},
 	) => Promise<RunRecord | null>;
 	enqueueTask: (input: EnqueueTaskInput) => Promise<RuntimeTask>;
@@ -215,6 +234,10 @@ export type SqlEngineStore = {
 		leaseToken: string;
 		reason: string;
 	}) => Promise<RuntimeTask | null>;
+	/** CAS every still-pending task of a run to `dead`. What makes a synchronous suspend terminal:
+	 *  a withheld task cannot be picked up later by a host that never saw the intent. Returns how
+	 *  many were withheld. */
+	deadLetterPendingTasks: (runId: string, reason: string) => Promise<number>;
 	reapExpiredLeases: () => Promise<number>;
 	/** Append a `run_event` EXECUTION-STATE row (every worker emit lands here) — not the
 	 *  operational stream; observability is the runtime `EventSink`. See schema.ts. */
@@ -459,6 +482,40 @@ export function createSqlEngineStore(
 					await store.updateRun(candidate.runId, { status: "failed" });
 					continue;
 				}
+				// THE FENCE. A run somebody has asked to stop must not receive another slice on any
+				// host — and a queued run has no holder to observe the latch for it, so the claim path
+				// is where that intent gets honoured. One PK read per candidate, on the path that is
+				// already doing several writes.
+				const candidateRun = await store.getRun(candidate.runId);
+				if (candidateRun?.controlRequestedAt !== undefined) {
+					const withheld = await db.update({
+						model: "runtime_task",
+						where: [
+							{ field: "id", value: candidate.id },
+							{ field: "status", value: "pending", connector: "AND" },
+						],
+						update: {
+							status: "dead",
+							lastError: "run suspended before this task was claimed",
+							updatedAt: ts,
+						},
+					});
+					if (withheld) {
+						await store.updateRunIfStatus(candidate.runId, {
+							from: ["queued", "running", "waiting"],
+							patch: {
+								status: "waiting",
+								waitReason: "suspended",
+								controlRequestedAt: null,
+								controlIntent: null,
+								controlRequestedBy: null,
+								controlReason: null,
+							},
+						});
+					}
+					continue;
+				}
+
 				const leaseToken = newToken();
 				const leaseId = newId();
 				const expiresAt = addMs(ts, input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
@@ -629,6 +686,32 @@ export function createSqlEngineStore(
 				where: [{ field: "id", value: lease.id }],
 			});
 			return row;
+		},
+
+		async deadLetterPendingTasks(runId, reason) {
+			const ts = now();
+			const pending = await db.findMany({
+				model: "runtime_task",
+				where: [
+					{ field: "runId", value: runId },
+					{ field: "status", value: "pending", connector: "AND" },
+				],
+			});
+			let count = 0;
+			for (const task of pending) {
+				// Pinned on `pending`: a task a worker claimed between the read and here belongs to that
+				// worker, and its own control point is what stops it.
+				const updated = await db.update({
+					model: "runtime_task",
+					where: [
+						{ field: "id", value: task.id },
+						{ field: "status", value: "pending", connector: "AND" },
+					],
+					update: { status: "dead", lastError: reason, updatedAt: ts },
+				});
+				if (updated) count++;
+			}
+			return count;
 		},
 
 		async reapExpiredLeases() {

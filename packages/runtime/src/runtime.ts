@@ -187,6 +187,15 @@ export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
 	"busyclaw.runtime.caller",
 );
 
+/**
+ * How the runtime asks whether somebody wants this run stopped. One function, because the loop has
+ * no business knowing where intents are stored or what else they could say — it learns only the park
+ * reason, and the engine owns everything behind that.
+ */
+export type RunControlPort = {
+	poll: (runId: string) => Promise<"suspended" | undefined>;
+};
+
 export type RuntimeRunOptions = {
 	abortSignal?: RuntimeAbortSignal;
 	/** Durable run identity (engine run id) — scopes effect ids and events across attempts/slices. */
@@ -202,6 +211,13 @@ export type RuntimeRunOptions = {
 	 *  call as the spoof-proof `busyclaw__runMode` fact. Default "autonomous" — fail-closed, so an
 	 *  unattended run can't silently satisfy a write policy that a human presence would gate. */
 	runMode?: RunMode;
+	/**
+	 * The durable control seam, polled once per step. Bound by the ENGINE for every slice including a
+	 * resumed one — never by whichever ingress started the run, because the intent outlives the
+	 * process that received it. Server-side only: deliberately absent from the api's serialized
+	 * option schema, exactly like `deadlineAt` and `runId`.
+	 */
+	control?: RunControlPort;
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
 	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
 	 *  key, forge-proof). Seeded as `busyclaw__principal` by the trusted context assembly. */
@@ -349,11 +365,30 @@ export const RuntimeYieldedResult = ark({
 });
 export type RuntimeYieldedResult = typeof RuntimeYieldedResult.infer;
 
+/**
+ * The run stopped because an external actor asked it to, at the first control point it reached.
+ *
+ * A DISTINCT variant rather than a reused `yielded`, because the discriminator this union exists for
+ * is *what the worker must do next*: a yield self-enqueues its continuation, a park enqueues nothing
+ * and writes `waiting`. Reusing `yielded` and having the worker consult the latch would also make
+ * the checkpoint envelope say "yield" when the truth is "suspended" — a lie inside an `immutable`
+ * column that every later reader inherits.
+ */
+export const RuntimeParkedResult = ark({
+	status: "'parked'",
+	text: "''",
+	steps: "number",
+	checkpointId: "string",
+	reason: "'suspended'",
+});
+export type RuntimeParkedResult = typeof RuntimeParkedResult.infer;
+
 export const RuntimeResult = RuntimeCompletedResult.or(
 	RuntimeWaitingApprovalResult,
 )
 	.or(RuntimeDeniedResult)
-	.or(RuntimeYieldedResult);
+	.or(RuntimeYieldedResult)
+	.or(RuntimeParkedResult);
 export type RuntimeResult = typeof RuntimeResult.infer;
 
 export type RunContext<Config extends RuntimeConfig> = InferContext<Config>;
@@ -1065,30 +1100,66 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		result: RuntimeResult,
 		usage: RuntimeModelUsage | undefined,
 	): Promise<void> => {
-		if (result.status === "completed") {
-			await emitEvent(context, {
-				steps: result.steps,
-				text: result.text,
-				type: "run.completed",
-				usage,
-			});
-		} else if (result.status === "waiting_approval") {
-			await emitEvent(context, {
-				approvalIds: result.approvalIds,
-				steps: result.steps,
-				text: result.text,
-				type: "run.waiting_approval",
-				usage,
-			});
-		} else if (result.status === "yielded") {
-			await emitEvent(context, {
-				checkpointId: result.checkpointId,
-				steps: result.steps,
-				type: "run.yielded",
-				usage,
-			});
+		// EXHAUSTIVE, by a switch whose default is `never`. This was an if-chain, and an if-chain that
+		// silently drops an unhandled variant is how `denied` came to emit no terminal event at all —
+		// a run reaching a terminal state with nothing on the operational stream to say so. A new
+		// variant must now fail to compile here rather than fail to be observed in production.
+		switch (result.status) {
+			case "completed":
+				await emitEvent(context, {
+					steps: result.steps,
+					text: result.text,
+					type: "run.completed",
+					usage,
+				});
+				return;
+			case "waiting_approval":
+				await emitEvent(context, {
+					approvalIds: result.approvalIds,
+					steps: result.steps,
+					text: result.text,
+					type: "run.waiting_approval",
+					usage,
+				});
+				return;
+			case "yielded":
+				await emitEvent(context, {
+					checkpointId: result.checkpointId,
+					steps: result.steps,
+					type: "run.yielded",
+					usage,
+				});
+				return;
+			case "parked":
+				await emitEvent(context, {
+					checkpointId: result.checkpointId,
+					reason: result.reason,
+					steps: result.steps,
+					type: "run.parked",
+					usage,
+				});
+				return;
+			case "denied":
+				// Deliberately silent HERE. `denied` is the one outcome that never comes out of the loop
+				// — it is minted by the approval-decision path, which emits its own `run.denied` with the
+				// decision fields at the point it makes them. Emitting again would double-report one
+				// terminal event. Named rather than defaulted, so the silence is a decision on the record.
+				return;
+			default: {
+				const unreachable: never = result;
+				throw stateError("unhandled runtime result", {
+					status: (unreachable as { status?: unknown }).status,
+				});
+			}
 		}
 	};
+
+	// Binds the control port to a run's identity, so the loop asks "should I stop?" without ever
+	// holding a run id it could ask about somebody ELSE's run.
+	const controlPointFor =
+		(control: RunControlPort, runId: string) =>
+		async (): Promise<"suspended" | undefined> =>
+			control.poll(runId);
 
 	// Binds the checkpoint store to a run's identity so the loop can park a yield without knowing
 	// where checkpoints live. Undefined when no database is configured — the loop then cannot yield.
@@ -1764,6 +1835,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			abortSignal: options?.abortSignal,
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
+			...(options?.control && state.runId
+				? { controlPoint: controlPointFor(options.control, state.runId) }
+				: {}),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
 			redactValue: (value) => redactValue(value, resolvedCtx),
 			onDelta,
@@ -2117,6 +2191,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				abortSignal: loopSignal,
 				deadlineAt: options?.deadlineAt,
 				persistYieldCheckpoint: yieldCheckpointPersister(resumeState),
+				...(options?.control && resumeState.runId
+					? {
+							controlPoint: controlPointFor(options.control, resumeState.runId),
+						}
+					: {}),
 				emitEvent: (payload) => emitEvent(emitCtx, payload),
 				redactValue: (value) => redactValue(value, resolvedCtx),
 			});
@@ -2260,6 +2339,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			abortSignal: options?.abortSignal,
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
+			...(options?.control && state.runId
+				? { controlPoint: controlPointFor(options.control, state.runId) }
+				: {}),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
 			redactValue: (value) => redactValue(value, resolvedCtx),
 		});

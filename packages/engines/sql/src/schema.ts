@@ -5,7 +5,12 @@
  */
 
 import type { SchemaDeclaration } from "@busyclaw/contracts";
-import { entity, field } from "@busyclaw/contracts";
+import {
+	entity,
+	field,
+	runControlIntentValues,
+	runWaitReasonValues,
+} from "@busyclaw/contracts";
 
 const runStatusValues = [
 	"queued",
@@ -30,6 +35,37 @@ export const runFields = {
 	status: field.enum(runStatusValues, { required: true, index: true }),
 	input: field.jsonObject({ required: true, immutable: true }),
 	principal: field.principal({ index: true, immutable: true }),
+
+	// ── THE CONTROL LATCH. The PRESENCE of controlRequestedAt is the intent; `status === "running"
+	//    && controlRequestedAt !== undefined` IS the "stopping" state, derived, so runStatusValues
+	//    needs no new member. controlIntent may only be RAISED (suspend < stop < abort); the other
+	//    three are write-once, so an escalation never overwrites the first requester's identity.
+	//    Cleared ONLY by the transition that honours it and by the terminal transitions — never by
+	//    the api, never on a timer: a crash between the checkpoint write and the engine transaction
+	//    must leave the intent live so the re-run honours it.
+	controlRequestedAt: field.string({ index: true, input: false }),
+	controlIntent: field.enum(runControlIntentValues, { input: false }),
+	controlRequestedBy: field.principal({ index: true, input: false }),
+	// `possible`, not `redacted`: an operator explanation a human reads back, which can still carry
+	// a name or a ticket subject.
+	controlReason: field.string({ pii: "possible", input: false }),
+
+	// ── THE WATERMARK every control write bumps, so the loop can read ONE row by primary key per
+	//    step and touch nothing else unless it moved. NOT `required`: planMigrations only ever ADDs
+	//    columns and emits no UPDATE, so rows that already exist have no value here — code reads
+	//    `row.controlSeq ?? 0`. Bumped as a CAS-retry, never `col = col + 1`; the Adapter port takes
+	//    literal values only.
+	controlSeq: field.number({ input: false }),
+
+	// ── WHY this run is waiting, which decides what un-waits it. A YIELDED run is NOT here: it is
+	//    `queued` with a due task, so the yield/park distinction already lives in `status`.
+	waitReason: field.enum(runWaitReasonValues, { index: true, input: false }),
+	// The checkpoint an external resume must name. Set iff waitReason === "suspended" AND the run had
+	// already started; absent for a run suspended before its first claim, whose withheld task IS the
+	// resume state. A fast path only — the authoritative lookup is by runId, because a crash between
+	// the checkpoint write and the terminal transaction eats this column and not the row.
+	resumeCheckpointId: field.string({ input: false }),
+
 	createdAt: field.string({ required: true, immutable: true }),
 	updatedAt: field.string({ required: true, input: false }),
 } as const;

@@ -55,6 +55,12 @@ function fakeWorkflowEngine(
 						queue.push({ approvalId: input.approvalId, id, type: "resume" });
 						return { id };
 					},
+					// A fake engine still has to answer the control verb. This one has no park machinery, so
+					// it says so loudly rather than being absent and silently doing nothing.
+					controlRun: async (input) => {
+						events.push(`control:${input.runId}:${input.intent}`);
+						return { accepted: true, settled: true };
+					},
 					work: async () => {
 						const job = queue.shift();
 						if (!job) return null;
@@ -82,7 +88,9 @@ const TICK_STATUSES = [
 	"idle",
 	"waiting_approval",
 	"yielded",
+	"parked",
 	"completed",
+	"skipped",
 	"failed",
 ] as const;
 
@@ -132,6 +140,7 @@ describe("createClaw engine", () => {
 
 		expect(Object.keys(claw.$context.engine ?? {}).sort()).toEqual([
 			"continueRun",
+			"controlRun",
 			"kind",
 			"startRun",
 			"work",
@@ -147,6 +156,7 @@ describe("createClaw engine", () => {
 			"bindConversation",
 			"continueEngineRun",
 			"continueRun",
+			"controlRun",
 			"createCheckpoint",
 			"createClaw",
 			"createThread",

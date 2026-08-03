@@ -19,6 +19,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import {
+	type RunControlPort,
 	type Runtime,
 	type RuntimeAbortSignal,
 	type RuntimeResult,
@@ -72,6 +73,9 @@ export type WorkerTickResult =
 	| { status: "idle"; reason?: "deadline" }
 	| { status: "waiting_approval"; task: RuntimeTask; approvalIds: string[] }
 	| { status: "yielded"; task: RuntimeTask; checkpointId: string }
+	/** Parked on an external intent. Unlike `yielded`, NO continuation task was enqueued — the run
+	 *  waits until somebody asks it to proceed. */
+	| { status: "parked"; task: RuntimeTask; checkpointId: string }
 	| { status: "completed"; task: RuntimeTask }
 	/** The task had nothing left to do — its resume state is already claimed or spent. The task is
 	 *  retired and the RUN is left exactly as it was. Not a failure: nobody's work was lost. */
@@ -148,6 +152,7 @@ type TaskExecution =
 async function runTask(
 	runtime: Runtime,
 	claim: ClaimedTask,
+	control: RunControlPort,
 	abortSignal?: RuntimeAbortSignal,
 	deadlineAt?: string,
 	principal?: Principal,
@@ -166,6 +171,9 @@ async function runTask(
 		abortSignal,
 		runId: claim.task.runId,
 		...(deadlineAt !== undefined ? { deadlineAt } : {}),
+		// The engine, not the ingress, binds this — the intent outlives whichever process received it,
+		// so every slice including a resumed one has to be able to see it.
+		control,
 	};
 	const withCaller = runtimeRunOptionsWithCaller(options, principal);
 	if (claim.task.kind === RUNTIME_RUN_TASK) {
@@ -338,6 +346,15 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 } {
 	const { store, runtime, workerId, leaseTtlMs } = config;
 	const now = store.now;
+	// One read of the run row per step. `controlRequestedAt` present IS the intent — the loop is told
+	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
+	// upstream of it.
+	const controlPort: RunControlPort = {
+		poll: async (runId) => {
+			const run = await store.getRun(runId);
+			return run?.controlRequestedAt !== undefined ? "suspended" : undefined;
+		},
+	};
 	return {
 		async tick(options?: WorkerTickOptions) {
 			const deadlineAt = options?.deadlineAt;
@@ -380,6 +397,7 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 				const runtimeTask = runTask(
 					runtime,
 					claim,
+					controlPort,
 					heartbeat.abortSignal,
 					deadlineAt,
 					run?.principal,
@@ -514,29 +532,87 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 					});
 				}
 
-				return store.transaction(async (tx) => {
-					const task = await tx.completeTask({
-						taskId: claim.task.id,
-						leaseToken: claim.leaseToken,
-						output: { result },
+				if (result.status === "parked") {
+					// A PARK, not a yield: the runtime already persisted the checkpoint, and this branch
+					// deliberately enqueues NOTHING. That single omission is the whole difference — a
+					// yielded run leaves a due task behind and comes back on its own, a parked one waits
+					// for somebody to ask. The latch is cleared here, in the same transaction that honours
+					// it, so a crash before this point leaves the intent live for the re-run.
+					const checkpointId = result.checkpointId;
+					const parkReason = result.reason;
+					return store.transaction(async (tx) => {
+						const task = await tx.completeTask({
+							taskId: claim.task.id,
+							leaseToken: claim.leaseToken,
+							output: { result },
+						});
+						if (!task)
+							return {
+								status: "failed",
+								task: null,
+								reason: stateError("lease lost before park transition", {
+									taskId: claim.task.id,
+								}).message,
+							};
+						await tx.updateRun(task.runId, {
+							status: "waiting",
+							waitReason: parkReason,
+							resumeCheckpointId: checkpointId,
+							controlRequestedAt: null,
+							controlIntent: null,
+							controlRequestedBy: null,
+							controlReason: null,
+						});
+						await tx.appendEvent({
+							runId: task.runId,
+							type: "run.parked",
+							payload: {
+								taskId: task.id,
+								checkpointId,
+								reason: parkReason,
+								steps: result.steps,
+							},
+						});
+						return { status: "parked", task, checkpointId };
 					});
-					if (!task)
-						return {
-							status: "failed",
-							task: null,
-							reason: stateError("lease lost before completion", {
-								taskId: claim.task.id,
-							}).message,
-						};
+				}
 
-					await tx.updateRun(task.runId, { status: "completed" });
-					await tx.appendEvent({
-						runId: task.runId,
-						type: "run.completed",
-						payload: { taskId: task.id, result },
+				if (result.status === "completed" || result.status === "denied") {
+					const terminal = result;
+					return store.transaction(async (tx) => {
+						const task = await tx.completeTask({
+							taskId: claim.task.id,
+							leaseToken: claim.leaseToken,
+							output: { result: terminal },
+						});
+						if (!task)
+							return {
+								status: "failed",
+								task: null,
+								reason: stateError("lease lost before completion", {
+									taskId: claim.task.id,
+								}).message,
+							};
+
+						await tx.updateRun(task.runId, { status: "completed" });
+						await tx.appendEvent({
+							runId: task.runId,
+							type: "run.completed",
+							payload: { taskId: task.id, result: terminal },
+						});
+						return { status: "completed", task };
 					});
-					return { status: "completed", task };
-				});
+				}
+
+				// EXHAUSTIVE. This was a fall-through, which meant any result the branches above did not
+				// name was silently written `completed` — a parked run would have been reported as having
+				// finished, with its checkpoint left dangling. A new variant fails to compile here now.
+				{
+					const unreachable: never = result;
+					throw stateError("unhandled runtime result in worker", {
+						status: (unreachable as { status?: unknown }).status,
+					});
+				}
 			} catch (err) {
 				// M-08. This reason is PERSISTED — onto the task row and into a `task.failed` event
 				// someone else will read — so an unauthored exception must not travel in it. The raw

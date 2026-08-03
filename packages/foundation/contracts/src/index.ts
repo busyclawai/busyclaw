@@ -220,14 +220,22 @@ export type {
 	DrainWorkResult,
 	DrainWorkStatus,
 	EngineContinueRunInput,
+	EngineControlRunInput,
+	EngineControlRunResult,
 	EngineRunEvent,
 	EngineRunHandle,
 	EngineRunMetadata,
 	EngineRunRecord,
 	EngineStartRunInput,
 	EngineWorkResult,
+	RunControlIntent,
+	RunWaitReason,
 } from "./engine";
-export { drainWork } from "./engine";
+export {
+	drainWork,
+	runControlIntentValues,
+	runWaitReasonValues,
+} from "./engine";
 export type {
 	EntityField,
 	EntityFieldMeta,

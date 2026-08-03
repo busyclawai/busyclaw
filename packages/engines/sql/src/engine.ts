@@ -4,8 +4,11 @@ import type {
 	ClawEngineHandle,
 	ClawEngineInstance,
 	EngineContinueRunInput,
+	EngineControlRunInput,
+	EngineControlRunResult,
 	EngineRunHandle,
 	EngineStartRunInput,
+	RunControlIntent,
 } from "@busyclaw/contracts";
 import {
 	drainWork as drainEngineWork,
@@ -33,6 +36,19 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
 	"failed",
 	"cancelled",
 ]);
+
+/** The monotone ladder. `suspend < stop < abort`, compared by position so a later value can be
+ *  added without every comparison site learning about it. */
+const CONTROL_INTENT_RANK: Record<RunControlIntent, number> = {
+	suspend: 0,
+	stop: 1,
+	abort: 2,
+};
+
+/** Is `next` strictly above `current` on the ladder? Only then may the latch move. */
+function raises(current: RunControlIntent, next: RunControlIntent): boolean {
+	return CONTROL_INTENT_RANK[next] > CONTROL_INTENT_RANK[current];
+}
 
 /**
  * The task id for continuing `runId` on `approvalId`. Derived, so the insert itself is the
@@ -171,6 +187,114 @@ function createSqlEngineHandle(input: {
 				return run;
 			});
 			return { id: run.id };
+		},
+		async controlRun(
+			controlInput: EngineControlRunInput,
+		): Promise<EngineControlRunResult> {
+			return input.config.store.transaction(async (store) => {
+				const run = await store.getRun(controlInput.runId);
+				if (!run) {
+					throw stateError("no such run", { runId: controlInput.runId });
+				}
+				const ts = store.now();
+
+				// TERMINAL — write no latch at all. A latch on a finished run poisons a later
+				// operator-driven resume of a leftover checkpoint, and would sit there forever with
+				// nothing left to observe it. Loud and recorded, not a 404 and not a lie.
+				if (TERMINAL_RUN_STATUSES.has(run.status)) {
+					await store.appendEvent({
+						runId: run.id,
+						type: "run.control_ignored",
+						payload: {
+							intent: controlInput.intent,
+							status: run.status,
+							reason: "already-terminal",
+						},
+					});
+					return {
+						accepted: false,
+						settled: false,
+						reason: "already-terminal",
+					};
+				}
+
+				// The latch is RAISE-ONLY, and the first requester's identity is write-once. So an
+				// escalation lands, a de-escalation is refused, and "who asked" survives both.
+				const current = run.controlIntent;
+				if (current && !raises(current, controlInput.intent)) {
+					return {
+						accepted: false,
+						settled: false,
+						reason: "already-requested",
+					};
+				}
+				const latch = {
+					controlIntent: controlInput.intent,
+					controlSeq: (run.controlSeq ?? 0) + 1,
+					...(current
+						? {}
+						: {
+								controlRequestedAt: ts,
+								...(controlInput.requestedBy
+									? { controlRequestedBy: controlInput.requestedBy }
+									: {}),
+								...(controlInput.reason
+									? { controlReason: controlInput.reason }
+									: {}),
+							}),
+				};
+
+				// NOTHING IN FLIGHT — honour it here, terminally, in this transaction. A queued run has
+				// no holder that will ever reach a control point, so latching and hoping is a run that
+				// waits forever. Its pending tasks are dead-lettered so no host can pick one up later.
+				if (run.status === "queued" || run.status === "waiting") {
+					const withheld = await store.deadLetterPendingTasks(
+						run.id,
+						"run suspended before this task was claimed",
+					);
+					const settledRun = await store.updateRunIfStatus(run.id, {
+						from: ["queued", "waiting"],
+						patch: {
+							...latch,
+							status: "waiting",
+							waitReason: "suspended",
+							controlRequestedAt: null,
+							controlIntent: null,
+							controlRequestedBy: null,
+							controlReason: null,
+						},
+					});
+					// Lost to a claim that started between the read and here. The latch below is the
+					// correct answer now: the holder observes it at its next control point.
+					if (settledRun) {
+						await store.appendEvent({
+							runId: run.id,
+							type: "run.suspended",
+							payload: {
+								intent: controlInput.intent,
+								withheldTasks: withheld,
+								...(controlInput.requestedBy
+									? { requestedBy: controlInput.requestedBy }
+									: {}),
+							},
+						});
+						return { accepted: true, settled: true };
+					}
+				}
+
+				await store.updateRun(run.id, latch);
+				await store.appendEvent({
+					runId: run.id,
+					type: "run.control_requested",
+					payload: {
+						intent: controlInput.intent,
+						...(controlInput.requestedBy
+							? { requestedBy: controlInput.requestedBy }
+							: {}),
+					},
+				});
+				return { accepted: true, settled: false };
+			});
 		},
 		work: (options?: WorkerTickOptions) => worker.tick(options),
 	};

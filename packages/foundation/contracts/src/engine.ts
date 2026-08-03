@@ -31,6 +31,48 @@ export type EngineContinueRunInput = {
 	run?: EngineRunMetadata;
 };
 
+/**
+ * What an external actor is asking of a run in flight, as a MONOTONE ladder: `suspend < stop <
+ * abort`. The intent may only ever be RAISED, so two requesters cannot fight — a stop lands on top
+ * of a suspend, and a suspend arriving after a stop changes nothing. One latch, no "who wins"
+ * question, and no state where a run is both suspend-requested and stop-requested with no answer.
+ *
+ * Only `suspend` is honoured today (it parks and is resumable); `stop` and `abort` are declared here
+ * because the ladder must be total from the start — a value added later cannot be compared against
+ * intents already written to rows.
+ */
+export const runControlIntentValues = ["suspend", "stop", "abort"] as const;
+export type RunControlIntent = (typeof runControlIntentValues)[number];
+
+/**
+ * WHY a run is `waiting`, which decides what un-waits it: `approval` ⇒ a human decision does;
+ * `suspended` ⇒ an explicit resume does. Without this the two are one status and a resumer has to
+ * guess which door to knock on.
+ */
+export const runWaitReasonValues = ["approval", "suspended"] as const;
+export type RunWaitReason = (typeof runWaitReasonValues)[number];
+
+export type EngineControlRunInput = {
+	runId: string;
+	intent: RunControlIntent;
+	/** Stamped by the door from the authenticated caller — never read from a request body. */
+	requestedBy?: Principal;
+	/** An operator's explanation, read back by a human. May carry a name or a ticket subject. */
+	reason?: string;
+};
+
+export type EngineControlRunResult = {
+	/** False when there was nothing to control — the run had already reached a terminal status. */
+	accepted: boolean;
+	/**
+	 * True when the intent was honoured IN THIS CALL rather than latched for the holder to observe.
+	 * A run with nothing in flight is settled synchronously; a running one is not, and the caller
+	 * must not read `accepted` as "it has stopped".
+	 */
+	settled: boolean;
+	reason?: string;
+};
+
 export type EngineWorkResult = unknown;
 
 export type EngineRunRecord = {
@@ -59,6 +101,13 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	kind: string;
 	startRun: (input: EngineStartRunInput) => Promise<EngineRunHandle>;
 	continueRun: (input: EngineContinueRunInput) => Promise<EngineRunHandle>;
+	/**
+	 * Record an external intent against a run in flight. REQUIRED, deliberately not optional: an
+	 * engine that cannot park must throw `unsupportedOperationError` and say so. Optional would mean
+	 * every caller writes `engine.controlRun?.(…)`, which silently does nothing — the worst possible
+	 * answer to "stop this run", and one nobody would notice until they needed it.
+	 */
+	controlRun: (input: EngineControlRunInput) => Promise<EngineControlRunResult>;
 	/** Engines with an explicit worker lifecycle expose this; managed engines may omit it. */
 	work?: () => Promise<WorkResult>;
 };

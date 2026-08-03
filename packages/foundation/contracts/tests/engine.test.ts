@@ -4,7 +4,11 @@ import type {
 	ClawEngineHandle,
 	ClawRunReadModel,
 } from "../src/index";
-import { drainWork, userPrincipal } from "../src/index";
+import {
+	drainWork,
+	unsupportedOperationError,
+	userPrincipal,
+} from "../src/index";
 
 type RuntimeLike = {
 	run: (prompt: string) => Promise<{ prompt: string; status: "ok" }>;
@@ -67,6 +71,7 @@ function exampleEngine(): ClawEngineFactory<RuntimeLike, ExampleHandle> {
 					await runtime.continueRun(input.approvalId);
 					return { id: input.run?.id ?? "continue-1" };
 				},
+				controlRun: async () => ({ accepted: true, settled: true }),
 				work: async () => ({ processed: 1, status: "drained" }),
 			},
 			runs,
@@ -115,10 +120,17 @@ describe("engine-core contract", () => {
 		const engine: ClawEngineHandle = {
 			kind: "managed",
 			continueRun: async () => ({ id: "continue-1" }),
+			// `controlRun` is NOT omittable the way `work` is. An engine with no worker lifecycle is a
+			// real shape; an engine that silently cannot be stopped is not, so one that cannot park is
+			// required to say so out loud rather than be absent.
+			controlRun: async () => {
+				throw unsupportedOperationError("managed engine cannot park a run");
+			},
 			startRun: async () => ({ id: "run-1" }),
 		};
 
 		expect(engine.work).toBeUndefined();
+		expect(engine.controlRun).toBeDefined();
 	});
 
 	it("drains work until idle or a bounded limit", async () => {

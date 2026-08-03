@@ -25,6 +25,7 @@ import type {
 	EffectStore,
 	EndpointHttpMethod,
 	EngineContinueRunInput,
+	EngineControlRunResult,
 	EngineRunEvent,
 	EngineRunHandle,
 	EngineRunRecord,
@@ -36,6 +37,7 @@ import type {
 	RegisteredToolRecord,
 	RouteAuthz,
 	RouteLevel,
+	RunControlIntent,
 	ScopeRef,
 	SecretDeclaration,
 	Secrets,
@@ -393,6 +395,13 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	continueEngineRun: (
 		input: EngineContinueRunInput,
 	) => Promise<EngineRunHandle>;
+	/** Ask a run in flight to stop. `use`, not `manage`: this strictly REDUCES what the run may do,
+	 *  and the requester is stamped from the caller — never read from the body. */
+	controlRun: (input: {
+		runId: string;
+		intent: RunControlIntent;
+		reason?: string;
+	}) => Promise<EngineControlRunResult>;
 	getRun: (input: { id: string }) => Promise<EngineRunRecord | null>;
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
 
@@ -649,6 +658,21 @@ const continueEngineRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	"run?": engineRunMetadataOrUndefined,
 });
+const controlRunInput = ark({
+	runId: ark("string").configure({
+		busyclaw: { doc: "The durable engine run to control." },
+	}),
+	intent: ark("'suspend' | 'stop' | 'abort'").configure({
+		busyclaw: {
+			doc: "What to ask of the run, as a monotone ladder (`suspend` < `stop` < `abort`). The latch may only ever be RAISED. Only `suspend` is honoured today.",
+		},
+	}),
+	"reason?": ark("string | undefined").configure({
+		busyclaw: {
+			doc: "An operator's explanation, read back by a human. There is deliberately no `requestedBy` — the requester is stamped from the authenticated caller.",
+		},
+	}),
+});
 const shareResourceInput = ark({
 	resourceKind: ark("string").configure({
 		busyclaw: {
@@ -820,6 +844,7 @@ export const clawApiInputSchemas = {
 	archiveClaw: idInput,
 	archiveThread: idInput,
 	continueEngineRun: continueEngineRunInput,
+	controlRun: controlRunInput,
 	continueRun: continueRunInput,
 	createCheckpoint: createCheckpointInput,
 	createClaw: createClawInput,
@@ -1081,6 +1106,9 @@ export const clawApiRoutes = {
 		"continueEngineRun",
 		on("manage", "approval", "approvalId"),
 	),
+	// USE, not manage: stopping a run reduces its authority, so the permissive level is the safer one
+	// — and `manage` on a run is the level that RESUMES work, which is the opposite direction.
+	controlRun: apiRoute("controlRun", on("use", "run", "runId")),
 	getRun: apiRoute("getRun", on("read", "run", "id")),
 	listRunEvents: apiRoute("listRunEvents", on("read", "run", "runId")),
 	// The generic share/unshare api — the target kind AND id both come from the INPUT, so any registered
@@ -1887,6 +1915,17 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				},
 			});
 		},
+		// The requester is STAMPED, exactly as `startRun` stamps the run's principal. There is no
+		// `requestedBy` on the input at all, so "who stopped my run" cannot be answered wrongly — qm's
+		// sharpest hole is that its stop signal carries no principal, and its Slack path calls the
+		// internal client with no viewer, so anyone in the thread can kill anyone's run.
+		controlRun: async (args, caller?: ClawApiCaller) =>
+			requireEngine(context.engine).controlRun({
+				runId: args.runId,
+				intent: args.intent,
+				requestedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
+				...(args.reason !== undefined ? { reason: args.reason } : {}),
+			}),
 		continueEngineRun: async (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
 			// R-M10. The engine can only CONTINUE the original run if it is told which one that is, and
