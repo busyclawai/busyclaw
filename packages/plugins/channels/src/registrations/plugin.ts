@@ -238,12 +238,20 @@ export function buildRegistrationsPlugin(
 
 	// A registration's normalized endpoint view. Registrations are webhook-only, so `mode` is the
 	// constant "webhook" (the stored column is gone); credentials and bind scope come from the row.
-	const contextFor = (row: ChannelRegistrationRecord): EndpointContext => ({
+	// `presentedSecret` is the value THIS request echoed, not the row's stored one — R-M07: the column
+	// holds a digest now, so the plaintext exists only for the length of a request. The lookup already
+	// proved the two correspond (the row was FOUND by that digest), so handing the presented value to
+	// `verify` is not trusting the caller: it is giving the channel back the thing already matched.
+	// Absent on the drain path, which sends and never verifies.
+	const contextFor = (
+		row: ChannelRegistrationRecord,
+		presentedSecret?: string,
+	): EndpointContext => ({
 		provider: row.provider,
 		endpointKey: bindingKey(row),
 		mode: "webhook",
 		secret: row.secret,
-		webhookSecret: row.webhookSecret,
+		webhookSecret: presentedSecret ?? row.webhookSecret,
 		claw: clawDefaults(row),
 		thread: threadDefaults(row),
 	});
@@ -414,7 +422,7 @@ export function buildRegistrationsPlugin(
 				const result = await dispatchWebhook({
 					claw: requireClaw(claw),
 					channel,
-					endpoint: contextFor(row),
+					endpoint: contextFor(row, secret),
 					request: inbound,
 					// Registrations require a database, so the claim always has somewhere to live.
 					...(inbox !== undefined ? { inbox } : {}),

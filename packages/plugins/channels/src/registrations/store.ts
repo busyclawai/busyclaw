@@ -12,6 +12,8 @@ import {
 	type EntityWhereClause,
 	entityView,
 } from "@busyclaw/storage-core";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
 import type { EndpointEvent } from "../core/contracts";
 import { endpointId } from "../core/id";
@@ -67,6 +69,24 @@ export type ChannelRegistrationListFilter = {
  * `hasSecret` survives because "is this registration configured" is the real question a management UI
  * asks of the credential, and answering it needs one bit, not the value.
  */
+/**
+ * The stored form of an inbound routing key.
+ *
+ * R-M07. `webhookSecret` was persisted VERBATIM — a live credential sitting in a table, readable by
+ * anything with database access, and the one credential an attacker most wants because presenting it
+ * IS how a request proves which registration it is. It could not simply be encrypted: the row is
+ * FOUND by matching it, and a nonce-per-row ciphertext is unmatchable.
+ *
+ * So it is digested instead, which is what a high-entropy random secret wants anyway — the same shape
+ * every API-key store uses. Lookup hashes what the request presented and matches that; the plaintext
+ * exists only for the length of a request. Unkeyed on purpose: the value is provider-generated random
+ * material, so there is no dictionary to attack and a key here would add custody without adding
+ * secrecy — which is a cost with no buyer.
+ */
+export function webhookSecretDigest(secret: string): string {
+	return bytesToHex(sha256(utf8ToBytes(secret)));
+}
+
 export type ChannelRegistrationView = Omit<
 	ChannelRegistrationRecord,
 	"secret" | "webhookSecret"
@@ -283,7 +303,7 @@ export function createChannelRegistrationsStore(
 			const valid = assertRegisterInput(input);
 			// `createdBy` is immutable and drops out of the rotate patch: a re-registration by someone who
 			// merely MANAGES the row rotates its credentials, it does not make them the registrant.
-			const { provider, endpointKey, createdBy, ...rest } = valid;
+			const { provider, endpointKey, createdBy } = valid;
 			const lookup = { provider, endpointKey };
 			// The webhookSecret is the inbound ROUTING key (the row is found by it), so it must be unique
 			// per provider — a different registration claiming it would make routing ambiguous. Fail loud.
@@ -305,6 +325,9 @@ export function createChannelRegistrationsStore(
 						model: "channel_registration",
 						data: {
 							...valid,
+							// R-M07: the ROUTING KEY is stored digested, never verbatim. Written here rather
+							// than by the caller so no write path can forget it.
+							webhookSecret: webhookSecretDigest(valid.webhookSecret),
 							// Personal until registered into a boundary — the same default a claw takes, and
 							// the reason an omitted boundary can never widen who reaches the row.
 							scope: valid.scope ?? "personal",
@@ -326,7 +349,17 @@ export function createChannelRegistrationsStore(
 		},
 
 		async rotate(lookup, patch, expectedUpdatedAt) {
-			return patchByKey(lookup, patch, expectedUpdatedAt);
+			// R-M07: a rotation carries a NEW routing key, and it is digested on the way in for the same
+			// reason the create digests — the column never holds the verbatim credential, whichever write
+			// path put it there.
+			const secret = patch.webhookSecret;
+			return patchByKey(
+				lookup,
+				typeof secret === "string"
+					? { ...patch, webhookSecret: webhookSecretDigest(secret) }
+					: patch,
+				expectedUpdatedAt,
+			);
 		},
 
 		get(id) {
@@ -349,7 +382,11 @@ export function createChannelRegistrationsStore(
 					model: "channel_registration",
 					where: [
 						{ field: "provider", value: provider },
-						{ field: "webhookSecret", value: webhookSecret, connector: "AND" },
+						{
+							field: "webhookSecret",
+							value: webhookSecretDigest(webhookSecret),
+							connector: "AND",
+						},
 					],
 				}),
 			);

@@ -26,7 +26,10 @@ import {
 	channelRegistrationEntity,
 	channelRegistrationsModels,
 } from "../src/registrations/schema";
-import { createChannelRegistrationsStore } from "../src/registrations/store";
+import {
+	createChannelRegistrationsStore,
+	webhookSecretDigest,
+} from "../src/registrations/store";
 
 // Stores and the configure context take the schema-aware adapter the assembly provides in
 // production; tests wrap manually.
@@ -232,7 +235,10 @@ describe("createChannelRegistrationsStore", () => {
 		if (!rotated) throw new Error("expected the rotation to apply");
 		expect(rotated.id).toBe(first.id);
 		expect(rotated.secret).toBe("token-2");
-		expect(rotated.webhookSecret).toBe("hook-2");
+		// R-M07: the routing key is stored DIGESTED, never verbatim. The property that matters is not
+		// what the column holds but that the presented plaintext still resolves the row.
+		expect(rotated.webhookSecret).not.toBe("hook-2");
+		expect(rotated.webhookSecret).toBe(webhookSecretDigest("hook-2"));
 		expect(rotated.createdBy).toBe(ALICE);
 		await expect(store.list()).resolves.toHaveLength(1);
 
@@ -1085,7 +1091,9 @@ describe("registering cannot take over an existing row unasked (R-H09)", () => {
 				createdBy: MALLORY,
 			}),
 		).toBeNull();
-		expect((await store.getByKey(lookup))?.webhookSecret).toBe("alice-hook");
+		expect((await store.getByKey(lookup))?.webhookSecret).toBe(
+			webhookSecretDigest("alice-hook"),
+		);
 	});
 
 	it("rotate is a compare-and-set against the row that was authorized", async () => {
@@ -1116,7 +1124,9 @@ describe("registering cannot take over an existing row unasked (R-H09)", () => {
 		expect(
 			await store.rotate(lookup, { webhookSecret: "later" }, created.updatedAt),
 		).toBeNull();
-		expect((await store.getByKey(lookup))?.webhookSecret).toBe("rotated");
+		expect((await store.getByKey(lookup))?.webhookSecret).toBe(
+			webhookSecretDigest("rotated"),
+		);
 	});
 });
 
@@ -1152,5 +1162,64 @@ describe("the inbound routing key is physically unique (R-H09)", () => {
 				createdBy: MALLORY,
 			}),
 		).rejects.toThrow(/webhookSecret already in use/);
+	});
+});
+
+// R-M07. The inbound routing key was persisted VERBATIM — a live credential in a table, and the one
+// an attacker most wants, because presenting it IS how a request proves which registration it is. It
+// could not simply be encrypted: the row is FOUND by matching it, and a nonce-per-row ciphertext is
+// unmatchable. Digested instead, which is what a high-entropy random secret wants anyway.
+describe("the inbound routing key is not stored verbatim (R-M07)", () => {
+	it("stores a digest, and still resolves the row from the presented plaintext", async () => {
+		const adapter = db();
+		const store = createChannelRegistrationsStore(adapter, { now });
+		await store.register({
+			provider: "fake",
+			endpointKey: "acme-bot",
+			webhookSecret: "hook-secret",
+			createdBy: userPrincipal("alice"),
+		});
+
+		// Nothing in the row equals what the provider will echo.
+		const row = await store.getByKey({
+			provider: "fake",
+			endpointKey: "acme-bot",
+		});
+		expect(row?.webhookSecret).not.toBe("hook-secret");
+		expect(row?.webhookSecret).toBe(webhookSecretDigest("hook-secret"));
+
+		// …and the lookup the webhook route makes still works, from the plaintext alone.
+		await expect(
+			store.getBySecret("fake", "hook-secret"),
+		).resolves.toMatchObject({ endpointKey: "acme-bot" });
+		await expect(store.getBySecret("fake", "not-it")).resolves.toBeNull();
+	});
+
+	it("digests a rotated key too — no write path leaves the plaintext behind", async () => {
+		const adapter = db();
+		const store = createChannelRegistrationsStore(adapter, { now });
+		const created = await store.register({
+			provider: "fake",
+			endpointKey: "acme-bot",
+			webhookSecret: "first",
+			createdBy: userPrincipal("alice"),
+		});
+		if (!created) throw new Error("expected the registration to be created");
+
+		await store.rotate(
+			{ provider: "fake", endpointKey: "acme-bot" },
+			{ webhookSecret: "second" },
+			created.updatedAt,
+		);
+		const row = await store.getByKey({
+			provider: "fake",
+			endpointKey: "acme-bot",
+		});
+		expect(row?.webhookSecret).not.toBe("second");
+		await expect(store.getBySecret("fake", "second")).resolves.toMatchObject({
+			endpointKey: "acme-bot",
+		});
+		// The old key no longer routes.
+		await expect(store.getBySecret("fake", "first")).resolves.toBeNull();
 	});
 });
