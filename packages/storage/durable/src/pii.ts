@@ -168,74 +168,89 @@ export function createPiiMappingStore(
 		},
 
 		async deleteForSubject(subjectId: string, container?: ScopeRef) {
-			// Find every (placeholder, container) this subject appears on (multi-subject safe), then
-			// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
-			// value's subject rows, scoped to its OWN container so a namesake elsewhere is untouched.
+			// R-M06. Erasure is FOUR writes — shred the mappings, drop the subject rows, then tombstone
+			// each container — and a crash between them leaves a torn one: mappings gone with no standing
+			// instruction, or an instruction with rows still readable. Run inside a transaction when the
+			// adapter has one, which is the shape better-auth uses too (`transaction?` on its adapter
+			// config, with a declared sequential fallback for backends that cannot).
 			//
-			// A `container` narrows the FIND, not the deletes below: those were already per-container
-			// (a shred must never reach a namesake in another one), so bounding the sweep is entirely a
-			// question of which subject rows are in scope. Omitted ⇒ every container, which is the
-			// deployment-wide DSR answer and the only one this verb used to give.
-			const subjectRows = await db.findMany({
-				model: "pii_subject",
-				where: container
-					? [
-							{ field: "subjectId", value: subjectId },
-							{ field: "scope", value: container.scope, connector: "AND" },
-							{ field: "scopeId", value: container.scopeId, connector: "AND" },
-						]
-					: [{ field: "subjectId", value: subjectId }],
-			});
-			const seen = new Set<string>();
-			let erased = 0;
-			for (const row of subjectRows) {
-				const key = JSON.stringify([row.placeholder, row.scope, row.scopeId]);
-				if (seen.has(key)) continue;
-				seen.add(key);
-				erased += await db.deleteMany({
-					model: "pii_mapping",
-					where: mappingWhere(row),
-				});
-				await db.deleteMany({
+			// Sequential otherwise, unchanged — and no longer silent about it: the tombstone failure that
+			// used to be swallowed is loud, so a torn erasure is reported rather than reported as success.
+			const run = async (tx: typeof db): Promise<number> => {
+				// Find every (placeholder, container) this subject appears on (multi-subject safe), then
+				// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
+				// value's subject rows, scoped to its OWN container so a namesake elsewhere is untouched.
+				//
+				// A `container` narrows the FIND, not the deletes below: those were already per-container
+				// (a shred must never reach a namesake in another one), so bounding the sweep is entirely a
+				// question of which subject rows are in scope. Omitted ⇒ every container, which is the
+				// deployment-wide DSR answer and the only one this verb used to give.
+				const subjectRows = await tx.findMany({
 					model: "pii_subject",
-					where: subjectContainerWhere(row),
+					where: container
+						? [
+								{ field: "subjectId", value: subjectId },
+								{ field: "scope", value: container.scope, connector: "AND" },
+								{
+									field: "scopeId",
+									value: container.scopeId,
+									connector: "AND",
+								},
+							]
+						: [{ field: "subjectId", value: subjectId }],
 				});
-			}
-			// The TOMBSTONE, one per container this subject was erased from. Without it erasure is a
-			// point-in-time delete: the mappings go, and the very next turn naming the same person mints
-			// them again — forgotten until somebody says your name. The mark makes the request standing.
-			const containers = new Set<string>();
-			for (const row of subjectRows) {
-				containers.add(JSON.stringify([row.scope, row.scopeId]));
-			}
-			// Nothing found ⇒ nothing marked, and that is the honest limit rather than an oversight:
-			// erasure is addressed by subject alone, with no container in the request, so the only
-			// containers this can name are the ones the subject's own rows named. A subject erased
-			// before they ever appeared leaves no mark — there is nowhere truthful to put one.
-			const at = now();
-			for (const key of containers) {
-				const [scope, scopeId] = JSON.parse(key) as [string, string];
-				// Re-erasing is not an error and must not fail on the composite key.
-				try {
-					await db.create({
-						model: "pii_erasure",
-						data: { subjectId, scope, scopeId, erasedAt: at },
+				const seen = new Set<string>();
+				let erased = 0;
+				for (const row of subjectRows) {
+					const key = JSON.stringify([row.placeholder, row.scope, row.scopeId]);
+					if (seen.has(key)) continue;
+					seen.add(key);
+					erased += await tx.deleteMany({
+						model: "pii_mapping",
+						where: mappingWhere(row),
 					});
-				} catch (error) {
-					// R-M06. ONLY a duplicate is survivable here. This caught everything, so a tombstone
-					// that failed to write for any other reason — the table missing, the connection gone,
-					// a constraint nobody expected — reported a completed erasure whose STANDING half had
-					// silently not happened: the mappings were shredded, and the very next turn naming the
-					// same person would mint them again with nothing to say they must not.
-					//
-					// "Already tombstoned" is still not an error: the instruction stands and its first date
-					// is the true one.
-					if (!isConflict(error)) throw error;
+					await tx.deleteMany({
+						model: "pii_subject",
+						where: subjectContainerWhere(row),
+					});
 				}
-			}
-			// Mappings shredded, not subject rows: it is the mapping that made a placeholder
-			// rehydratable, so it is the mapping whose removal is the erasure.
-			return erased;
+				// The TOMBSTONE, one per container this subject was erased from. Without it erasure is a
+				// point-in-time delete: the mappings go, and the very next turn naming the same person mints
+				// them again — forgotten until somebody says your name. The mark makes the request standing.
+				const containers = new Set<string>();
+				for (const row of subjectRows) {
+					containers.add(JSON.stringify([row.scope, row.scopeId]));
+				}
+				// Nothing found ⇒ nothing marked, and that is the honest limit rather than an oversight:
+				// erasure is addressed by subject alone, with no container in the request, so the only
+				// containers this can name are the ones the subject's own rows named. A subject erased
+				// before they ever appeared leaves no mark — there is nowhere truthful to put one.
+				const at = now();
+				for (const key of containers) {
+					const [scope, scopeId] = JSON.parse(key) as [string, string];
+					// Re-erasing is not an error and must not fail on the composite key.
+					try {
+						await tx.create({
+							model: "pii_erasure",
+							data: { subjectId, scope, scopeId, erasedAt: at },
+						});
+					} catch (error) {
+						// R-M06. ONLY a duplicate is survivable here. This caught everything, so a tombstone
+						// that failed to write for any other reason — the table missing, the connection gone,
+						// a constraint nobody expected — reported a completed erasure whose STANDING half had
+						// silently not happened: the mappings were shredded, and the very next turn naming the
+						// same person would mint them again with nothing to say they must not.
+						//
+						// "Already tombstoned" is still not an error: the instruction stands and its first date
+						// is the true one.
+						if (!isConflict(error)) throw error;
+					}
+				}
+				// Mappings shredded, not subject rows: it is the mapping that made a placeholder
+				// rehydratable, so it is the mapping whose removal is the erasure.
+				return erased;
+			};
+			return db.transaction ? db.transaction(run) : run(db);
 		},
 	};
 }

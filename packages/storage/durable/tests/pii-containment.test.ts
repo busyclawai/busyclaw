@@ -158,9 +158,12 @@ describe("a tombstone that cannot be written is not a completed erasure", () => 
 	it("raises when the tombstone write fails for a reason that is not a duplicate", async () => {
 		const inner = memoryAdapter();
 		const store = await seeded(inner);
-		// Only the tombstone write fails, and not as a conflict.
+		// Only the tombstone write fails, and not as a conflict. Deliberately WITHOUT `transaction`, so
+		// this exercises the sequential fallback — the path where a torn erasure is possible and where
+		// the swallowed tombstone error used to hide it. The transactional path is covered below.
+		const { transaction: _noTx, ...sequential } = inner;
 		const broken = {
-			...inner,
+			...sequential,
 			create: async (input: { model: string }) => {
 				if (input.model === "pii_erasure") {
 					throw new Error("ECONNREFUSED: the database is unreachable");
@@ -184,5 +187,55 @@ describe("a tombstone that cannot be written is not a completed erasure", () => 
 		const store = await seeded(adapter);
 		await expect(store.deleteForSubject("alice")).resolves.toBeGreaterThan(0);
 		await expect(store.deleteForSubject("alice")).resolves.toBe(0);
+	});
+});
+
+// R-M06. Erasure is four writes; a crash between them leaves a torn one. Run inside a transaction
+// when the adapter has one — better-auth's shape (`transaction?` with a declared sequential fallback
+// for backends that cannot).
+describe("erasure is atomic where the adapter can be", () => {
+	it("runs inside a transaction when the adapter offers one", async () => {
+		const inner = memoryAdapter();
+		let used = 0;
+		const counting = {
+			...inner,
+			transaction: async <R>(fn: (tx: typeof inner) => Promise<R>) => {
+				used += 1;
+				return inner.transaction ? inner.transaction(fn as never) : fn(inner);
+			},
+		} as typeof inner;
+
+		const store = createPiiMappingStore(counting);
+		await store.save(
+			{
+				placeholder: NAMESAKE,
+				original: "alice@example.com",
+				kind: "email",
+				createdAt: at,
+				scope: "claw",
+				scopeId: "c1",
+			},
+			["alice"],
+		);
+		await store.deleteForSubject("alice");
+		expect(used).toBe(1);
+	});
+
+	it("still erases when the adapter has none", async () => {
+		const inner = memoryAdapter();
+		const { transaction: _dropped, ...sequential } = inner;
+		const store = createPiiMappingStore(sequential as typeof inner);
+		await store.save(
+			{
+				placeholder: NAMESAKE,
+				original: "alice@example.com",
+				kind: "email",
+				createdAt: at,
+				scope: "claw",
+				scopeId: "c1",
+			},
+			["alice"],
+		);
+		await expect(store.deleteForSubject("alice")).resolves.toBeGreaterThan(0);
 	});
 });
