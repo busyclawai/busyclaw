@@ -1114,3 +1114,65 @@ describe("run control plane — the inbox: the redelivery fence", () => {
 		expect(last.split("carried across").length - 1).toBe(1);
 	});
 });
+
+describe("run control plane — the inbox: waking a parked run", () => {
+	// There is deliberately no `message` proceed tag. A parked run resumes from its checkpoint and
+	// drains its inbox at the first control point on the way back, so "wake it with this message" and
+	// "wake it" are the same call — a separate tag would be a synonym with extra ceremony, and the
+	// exhaustive switch would then carry a case that does nothing different.
+	//
+	// WHO calls it is the router's question, not the engine's: channels wants one live run per
+	// thread, a subagent parent wants to wake a specific child. The engine addresses by runId and
+	// stops there.
+	it("delivers a message admitted while the run was suspended, on resume", async () => {
+		const seen: string[] = [];
+		let suspendFrom: (() => Promise<void>) | undefined;
+		const h = harness({
+			toolSteps: 2,
+			onTool: async (n) => {
+				if (n === 1) await suspendFrom?.();
+			},
+			onModelCall: (prompt) => {
+				seen.push(JSON.stringify(prompt));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		suspendFrom = async () => {
+			await h.engine.controlRun({
+				runId: run.id,
+				intent: "suspend",
+				requestedBy: userPrincipal("operator"),
+			});
+		};
+
+		expect((await h.engine.work()).status).toBe("parked");
+		const parked = await h.store.getRun(run.id);
+		expect(parked?.status).toBe("waiting");
+
+		// The run is parked. A message admitted now has nothing to wake it — the inbox is not a
+		// trigger, and pretending otherwise would put thread arbitration in the engine.
+		const admitted = await h.engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "while you were out" },
+			mode: "next_step",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+		expect(admitted.admitted).toBe(true);
+		expect((await h.engine.work()).status).toBe("idle"); // still nothing due
+
+		if (parked?.resumeCheckpointId === undefined) {
+			throw new Error("expected a resume checkpoint");
+		}
+		await h.engine.proceedRun({
+			runId: run.id,
+			proceed: { kind: "checkpoint", checkpointId: parked.resumeCheckpointId },
+		});
+		const before = seen.length;
+		expect((await h.engine.work()).status).toBe("completed");
+
+		// It was waiting in the inbox the whole time and arrives in the first model call after the
+		// resume — no separate verb, no second mechanism.
+		expect(seen.slice(before).join("")).toContain("while you were out");
+	});
+});
