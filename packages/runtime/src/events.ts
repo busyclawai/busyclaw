@@ -98,7 +98,7 @@ export const runParkedEvent = ark({
 	type: "'run.parked'",
 	steps: "number",
 	checkpointId: "string",
-	reason: "'suspended'",
+	reason: "'suspended' | 'stopped'",
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 

@@ -257,16 +257,19 @@ function createSqlEngineHandle(input: {
 				// no holder that will ever reach a control point, so latching and hoping is a run that
 				// waits forever. Its pending tasks are dead-lettered so no host can pick one up later.
 				if (run.status === "queued" || run.status === "waiting") {
+					const stops = controlInput.intent !== "suspend";
 					const withheld = await store.deadLetterPendingTasks(
 						run.id,
-						"run suspended before this task was claimed",
+						stops
+							? "run cancelled before this task was claimed"
+							: "run suspended before this task was claimed",
 					);
 					const settledRun = await store.updateRunIfStatus(run.id, {
 						from: ["queued", "waiting"],
 						patch: {
 							...latch,
-							status: "waiting",
-							waitReason: "suspended",
+							status: stops ? "cancelled" : "waiting",
+							waitReason: stops ? null : "suspended",
 							controlRequestedAt: null,
 							controlIntent: null,
 							controlRequestedBy: null,
@@ -278,7 +281,7 @@ function createSqlEngineHandle(input: {
 					if (settledRun) {
 						await store.appendEvent({
 							runId: run.id,
-							type: "run.suspended",
+							type: stops ? "run.cancelled" : "run.suspended",
 							payload: {
 								intent: controlInput.intent,
 								withheldTasks: withheld,

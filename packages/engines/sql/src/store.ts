@@ -257,7 +257,7 @@ export type SqlEngineStore = {
 
 /** A run in one of these still has work ahead of it; anything else is finished and must not be
  *  written back into flight by a claim that lost its race. */
-const NON_TERMINAL_RUN_STATUSES = ["queued", "running", "waiting"] as const;
+export const NON_TERMINAL_RUN_STATUSES = ["queued", "running", "waiting"] as const;
 
 /** How many times a task may be CLAIMED before it is abandoned, however it lost each claim. The
  *  backstop against a flapping host, deliberately not a config knob: it bounds crash loops, and a

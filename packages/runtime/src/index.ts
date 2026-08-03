@@ -50,6 +50,7 @@ export {
 	parseRuntimeApprovalMetadata,
 	parseRuntimeYieldMetadata,
 	RUNTIME_CALLER_OPTION,
+	RunParkReason,
 	RuntimeCompletedResult,
 	RuntimeDeniedResult,
 	RuntimeParkedResult,

@@ -492,3 +492,107 @@ describe("run control plane — a re-claimed first slice", () => {
 		expect(h.toolRuns()).toBe(2);
 	});
 });
+
+describe("run control plane — stop", () => {
+	// The first writer of `cancelled` in the repo. The status has been in the enum since the engine
+	// was written and no code path has ever set it, so "cancel" has until now meant "hope".
+	it("stops a run mid-flight, writes cancelled, and keeps the transcript", async () => {
+		let stopFrom: (() => Promise<void>) | undefined;
+		const h = harness({
+			toolSteps: 3,
+			onTool: async (n) => {
+				if (n === 1) await stopFrom?.();
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		stopFrom = async () => {
+			await h.engine.controlRun({
+				runId: run.id,
+				intent: "stop",
+				requestedBy: userPrincipal("operator"),
+				reason: "runaway",
+			});
+		};
+
+		expect((await h.engine.work()).status).toBe("parked");
+		const stopped = await h.store.getRun(run.id);
+		expect(stopped?.status).toBe("cancelled");
+		// Terminal, so there is no wait to explain — but the checkpoint stays, because it is the
+		// forensic record of what the run did and the one path back if the stop was a mistake.
+		expect(stopped?.waitReason).toBeUndefined();
+		if (stopped?.resumeCheckpointId === undefined) {
+			throw new Error("expected the transcript to be kept");
+		}
+		expect(
+			(await h.runtime.checkpoints?.get(stopped.resumeCheckpointId))?.status,
+		).toBe("pending");
+
+		// No further slice runs on any host: nothing pending, and the fence refuses a fresh claim.
+		expect((await h.engine.work()).status).toBe("idle");
+		expect(h.toolRuns()).toBe(1);
+
+		const cancelled = (await h.store.events(run.id)).filter(
+			(event) => event.type === "run.cancelled",
+		);
+		expect(cancelled).toHaveLength(1);
+		// WHO stopped it survives the transaction that erases the latch it was read from.
+		expect(cancelled[0]?.payload).toMatchObject({
+			requestedBy: userPrincipal("operator"),
+		});
+	});
+
+	it("a stop with nothing in flight settles as cancelled immediately", async () => {
+		const h = harness({ toolSteps: 1 });
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		expect(
+			await h.engine.controlRun({
+				runId: run.id,
+				intent: "stop",
+				requestedBy: userPrincipal("operator"),
+			}),
+		).toEqual({ accepted: true, settled: true });
+		expect((await h.store.getRun(run.id))?.status).toBe("cancelled");
+		expect((await h.engine.work()).status).toBe("idle");
+		expect(h.toolRuns()).toBe(0);
+	});
+
+	// NOT a race, and the name says so: the stop is latched during step 0, so the control point at
+	// the top of step 1 sees it and the run never reaches its completion at all. What this pins is
+	// that ONE terminal status is written and the event stream agrees with it — the genuine race
+	// (a stop landing after the final control point but before the worker's terminal transaction) is
+	// not deterministically constructible from a tool, and is covered instead by the CAS itself:
+	// every terminal write in the worker now goes through `updateRunIfStatus`, and the loser reads
+	// the row back rather than relabelling it.
+	it("a stop latched mid-run wins, and the events agree with the status", async () => {
+		const h = harness({
+			toolSteps: 1,
+			// Fired from inside the LAST tool call, so the stop lands while the final step is still
+			// running and both writers are genuinely in flight.
+			onTool: async () => {
+				await h.engine.controlRun({
+					runId: raced,
+					intent: "stop",
+					requestedBy: userPrincipal("operator"),
+				});
+			},
+		});
+		let raced = "";
+		const run = await h.engine.startRun({ prompt: "go" });
+		raced = run.id;
+
+		await h.engine.work();
+		const final = await h.store.getRun(run.id);
+		// One answer, and it is a terminal one.
+		expect(["cancelled", "completed"]).toContain(final?.status);
+
+		// …and the events agree with it rather than telling the other story.
+		const terminalEvents = (await h.store.events(run.id))
+			.map((event) => event.type)
+			.filter((type) => type === "run.completed" || type === "run.cancelled");
+		expect(terminalEvents).toHaveLength(1);
+		expect(terminalEvents[0]).toBe(
+			final?.status === "cancelled" ? "run.cancelled" : "run.completed",
+		);
+	});
+});

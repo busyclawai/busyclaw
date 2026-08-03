@@ -15,6 +15,7 @@ import type {
 import { modelMiddleware } from "./model-middleware";
 import { abortIfNeeded, type RunState } from "./run-state";
 import type {
+	RunParkReason,
 	RuntimeAbortSignal,
 	RuntimeModel,
 	RuntimeResult,
@@ -79,7 +80,7 @@ export type AiSdkLoopInput = {
 	 * site changing again. Absent — an ad-hoc `generate` with no database — is one branch and zero
 	 * reads, and behaviour is byte-identical to a loop that never had it.
 	 */
-	controlPoint?: (step: number) => Promise<"suspended" | undefined>;
+	controlPoint?: (step: number) => Promise<RunParkReason | undefined>;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
 	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
 	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
@@ -361,7 +362,7 @@ export async function runAiSdkLoop(
 	// are byte-identical.
 	const parkHere = async (
 		step: number,
-		reason: "suspended" | "deadline",
+		reason: RunParkReason | "deadline",
 	): Promise<AiSdkLoopResult> => {
 		if (!input.persistYieldCheckpoint) {
 			throw configurationError(

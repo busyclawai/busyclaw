@@ -27,6 +27,7 @@ import {
 	runtimeRunOptionsWithCaller,
 } from "@busyclaw/runtime";
 import { type } from "arktype";
+import { NON_TERMINAL_RUN_STATUSES } from "./store";
 import type { ClaimedTask, RuntimeTask, SqlEngineStore } from "./store";
 
 export const RUNTIME_RUN_TASK = "runtime.run";
@@ -385,7 +386,12 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	const controlPort: RunControlPort = {
 		poll: async (runId) => {
 			const run = await store.getRun(runId);
-			return run?.controlRequestedAt !== undefined ? "suspended" : undefined;
+			if (run?.controlRequestedAt === undefined) return undefined;
+			// The LADDER collapses to what the loop can act on. `abort` is not a different park — it is
+			// a stop that additionally tears down the in-flight provider call, which is a separate
+			// mechanism and a later slice; until it exists an abort still parks like a stop rather than
+			// being silently ignored.
+			return run.controlIntent === "suspend" ? "suspended" : "stopped";
 		},
 	};
 	return {
@@ -548,7 +554,20 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 									taskId: claim.task.id,
 								}).message,
 							};
-						await tx.updateRun(task.runId, { status: "waiting" });
+						// Same reasoning: a run a stop already cancelled must not be walked back to `waiting`
+						// by a slice that was mid-flight when the stop landed.
+						const parked = await tx.updateRunIfStatus(task.runId, {
+							from: NON_TERMINAL_RUN_STATUSES,
+							patch: { status: "waiting", waitReason: "approval" },
+						});
+						if (!parked) {
+							const current = await tx.getRun(task.runId);
+							return {
+								status: "skipped",
+								task,
+								reason: `run already ${current?.status ?? "terminal"}`,
+							};
+						}
 						await tx.appendEvent({
 							runId: task.runId,
 							type: "run.waiting_approval",
@@ -573,6 +592,11 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 					// it, so a crash before this point leaves the intent live for the re-run.
 					const checkpointId = result.checkpointId;
 					const parkReason = result.reason;
+					// Read BEFORE the latch is cleared below — "who stopped this run" is the one fact the
+					// cancellation event exists to carry, and the transaction that records it is the same
+					// one that erases its source.
+					const current_requester = (await store.getRun(claim.task.runId))
+						?.controlRequestedBy;
 					return store.transaction(async (tx) => {
 						const task = await tx.completeTask({
 							taskId: claim.task.id,
@@ -587,23 +611,45 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 									taskId: claim.task.id,
 								}).message,
 							};
-						await tx.updateRun(task.runId, {
-							status: "waiting",
-							waitReason: parkReason,
-							resumeCheckpointId: checkpointId,
-							controlRequestedAt: null,
-							controlIntent: null,
-							controlRequestedBy: null,
-							controlReason: null,
+						// A STOP is terminal; a suspend is not. Both leave the checkpoint `pending` on purpose:
+						// it is the forensic record of what the run actually did, and the one way back if an
+						// operator decides the stop was wrong. Consuming it here would destroy the
+						// transcript to save a row.
+						const stopped = parkReason === "stopped";
+						const settled = await tx.updateRunIfStatus(task.runId, {
+							from: NON_TERMINAL_RUN_STATUSES,
+							patch: {
+								status: stopped ? "cancelled" : "waiting",
+								waitReason: stopped ? null : parkReason,
+								resumeCheckpointId: checkpointId,
+								controlRequestedAt: null,
+								controlIntent: null,
+								controlRequestedBy: null,
+								controlReason: null,
+							},
 						});
+						// Lost to a terminal status somebody else wrote first. Report the winner rather
+						// than relabelling it — a run_event stream that contradicts `run.status` is worse
+						// than either answer alone.
+						if (!settled) {
+							const current = await tx.getRun(task.runId);
+							return {
+								status: "skipped",
+								task,
+								reason: `run already ${current?.status ?? "terminal"}`,
+							};
+						}
 						await tx.appendEvent({
 							runId: task.runId,
-							type: "run.parked",
+							type: stopped ? "run.cancelled" : "run.parked",
 							payload: {
 								taskId: task.id,
 								checkpointId,
 								reason: parkReason,
 								steps: result.steps,
+								...(stopped && current_requester
+									? { requestedBy: current_requester }
+									: {}),
 							},
 						});
 						return { status: "parked", task, checkpointId };
@@ -627,7 +673,22 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 								}).message,
 							};
 
-						await tx.updateRun(task.runId, { status: "completed" });
+						// CONDITIONAL, because a stop can land while the last step is still running. Exactly
+						// one terminal status survives, and the loser reports the winner instead of
+						// relabelling it — otherwise whichever wrote last decides the story, and the
+						// run_event stream ends up contradicting `run.status`.
+						const settled = await tx.updateRunIfStatus(task.runId, {
+							from: NON_TERMINAL_RUN_STATUSES,
+							patch: { status: "completed" },
+						});
+						if (!settled) {
+							const current = await tx.getRun(task.runId);
+							return {
+								status: "skipped",
+								task,
+								reason: `run already ${current?.status ?? "terminal"}`,
+							};
+						}
 						await tx.appendEvent({
 							runId: task.runId,
 							type: "run.completed",

@@ -194,7 +194,7 @@ export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
  * reason, and the engine owns everything behind that.
  */
 export type RunControlPort = {
-	poll: (runId: string) => Promise<"suspended" | undefined>;
+	poll: (runId: string) => Promise<RunParkReason | undefined>;
 };
 
 export type RuntimeRunOptions = {
@@ -375,12 +375,16 @@ export type RuntimeYieldedResult = typeof RuntimeYieldedResult.infer;
  * the checkpoint envelope say "yield" when the truth is "suspended" — a lie inside an `immutable`
  * column that every later reader inherits.
  */
+/** Why a run stopped when somebody else asked it to. `stopped` is terminal; `suspended` is not. */
+export const RunParkReason = ark("'suspended' | 'stopped'");
+export type RunParkReason = typeof RunParkReason.infer;
+
 export const RuntimeParkedResult = ark({
 	status: "'parked'",
 	text: "''",
 	steps: "number",
 	checkpointId: "string",
-	reason: "'suspended'",
+	reason: RunParkReason,
 });
 export type RuntimeParkedResult = typeof RuntimeParkedResult.infer;
 
@@ -1163,7 +1167,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	// holding a run id it could ask about somebody ELSE's run.
 	const controlPointFor =
 		(control: RunControlPort, runId: string) =>
-		async (): Promise<"suspended" | undefined> =>
+		async (): Promise<RunParkReason | undefined> =>
 			control.poll(runId);
 
 	// Binds the checkpoint store to a run's identity so the loop can park a yield without knowing
