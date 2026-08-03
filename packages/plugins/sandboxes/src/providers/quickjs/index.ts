@@ -3,7 +3,7 @@
 // dependency is imported at module top HERE ONLY — this subpath keeps it out of the root import
 // graph (channels subpath-isolation precedent).
 
-import { configurationError } from "@busyclaw/contracts";
+import { configurationError, limitError } from "@busyclaw/contracts";
 import variant from "@jitl/quickjs-ng-wasmfile-release-sync";
 import {
 	createVirtualFileSystem,
@@ -64,6 +64,20 @@ const DEFAULT_MAX_FS_BYTES = 16 * 1024 * 1024;
 // explain itself is not going to be read by a model anyway. The entry cap is CONFIGURABLE beside
 // `maxFsBytes`, because a filesystem costs the host along two independent axes and a workload that
 // legitimately writes many small files has the same claim on the budget as one writing few large.
+/**
+ * R-M15. How much may cross the ONE host bridge in a single call, in either direction.
+ *
+ * `__invoke` was unbounded both ways. Outbound, a guest could hand the host an arbitrarily large
+ * `args` — the guest's own memory is capped, but the host's copy of it was not, so a run that stayed
+ * inside its own limit could still make the HOST allocate whatever it liked, once per call and as
+ * often as it could call. Inbound, a tool result of any size was materialised into guest heap, where
+ * the failure is at least contained but arrives as an opaque OOM rather than a legible refusal.
+ *
+ * Measured as serialized JSON because that is what actually crosses; both directions share one
+ * ceiling because a bridge with two different budgets is a bridge whose limit nobody can state.
+ */
+const MAX_BRIDGE_BYTES = 1024 * 1024;
+
 const MAX_LOG_LINES = 1000;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 8 * 1024;
@@ -367,6 +381,35 @@ function capWrites(fs: IFs, maxBytes: number, maxEntries: number): void {
 // The guest prelude: builds a `tools` proxy over the env-injected `__invoke`. Property access
 // appends a path segment; calling it invokes `__invoke(segments.join("."), args)` and returns its
 // (host-bridged) promise. Dependency-free guest JS — no TypeScript.
+/**
+ * Refuse a bridge payload larger than the ceiling, in the direction it was travelling.
+ *
+ * Serializing to measure is the cost of knowing: the value is about to be structured-cloned across
+ * the boundary anyway, and an unmeasurable payload is exactly the one worth refusing. A value that
+ * cannot be serialized at all (a cycle) is refused for the same reason — it cannot cross either.
+ */
+function assertBridgePayload(
+	value: unknown,
+	direction: "arguments" | "result",
+	path: string,
+): void {
+	let size: number;
+	try {
+		size = JSON.stringify(value ?? null)?.length ?? 0;
+	} catch {
+		throw limitError(`sandbox bridge ${direction} could not be serialized`, {
+			path,
+			reason: "a value crossing the host bridge must be JSON-representable",
+		});
+	}
+	if (size > MAX_BRIDGE_BYTES) {
+		throw limitError(
+			`sandbox bridge ${direction} exceeds ${MAX_BRIDGE_BYTES} bytes`,
+			{ path, size, limit: MAX_BRIDGE_BYTES },
+		);
+	}
+}
+
 const PRELUDE = `
 const __invoke = env.__invoke;
 const __seg = (path) => new Proxy(function () {}, {
@@ -531,8 +574,18 @@ export function quickjs(config: QuickJsConfig = {}): Sandbox {
 				maxIntervalCount,
 				// The ONE host bridge. The wrapper bridges the returned host promise into a guest deferred.
 				env: {
-					__invoke: (path: string, args: unknown) =>
-						input.invoker.invoke({ path, args }),
+					// Kept a SYNC function returning a promise, exactly as before: the wrapper bridges the
+					// returned host promise into a guest deferred, and handing it an async function
+					// instead changes what it is given rather than what it does with it.
+					__invoke: (path: string, args: unknown) => {
+						assertBridgePayload(args, "arguments", path);
+						return input.invoker
+							.invoke({ path, args })
+							.then((result: unknown) => {
+								assertBridgePayload(result, "result", path);
+								return result;
+							});
+					},
 				},
 				// Console is the only overridable ambient injection — EVERY method routes to the
 				// per-execution sink. See CONSOLE_METHODS for why the list is exhaustive.

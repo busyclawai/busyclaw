@@ -1086,3 +1086,74 @@ describe("a displaced outbox sender cannot mark it delivered", () => {
 		expect(await later.markSent(key, taken.leaseId)).toBe(true);
 	});
 });
+
+// R-M11. Every inbound message from every bot on every tenant used to relay as ONE global
+// `system:anonymous`. That principal is also the claw's `createdBy` for a fresh binding, so the owner
+// rule let it relay — and let every OTHER endpoint's traffic relay into the same conversations for
+// exactly the same reason. No attribution, no isolation, nothing per-endpoint to rate-limit or revoke.
+describe("each endpoint relays as its own service principal", () => {
+	const seen: { bind?: string; send?: string } = {};
+
+	const claw = {
+		api: {
+			bindConversation: async (
+				_input: unknown,
+				caller?: { principal?: string },
+			) => {
+				seen.bind = caller?.principal;
+				return { claw: { id: "claw-1" }, thread: { id: "thread-1" } };
+			},
+			sendMessage: async (_input: unknown, caller?: { principal?: string }) => {
+				seen.send = caller?.principal;
+				return { result: { status: "completed", text: "ok" } };
+			},
+		},
+	};
+
+	const channel = (): Channel => ({
+		provider: "fake",
+		supports: { webhook: true, poll: false },
+		mode: "webhook",
+		verify: () => true,
+		parseInbound: () => [
+			{ deliveryId: "u-1", externalConversationId: "chat-1", text: "hi" },
+		],
+		send: async () => {},
+	});
+
+	it("names the provider and the endpoint, not 'anonymous'", async () => {
+		await dispatchWebhook({
+			claw,
+			channel: channel(),
+			endpoint: {
+				provider: "fake",
+				endpointKey: "acme-bot",
+				mode: "webhook",
+			},
+			request: { headers: { get: () => null }, rawBody: "u-1" },
+			persist: async () => {},
+			inbox: createDeliveryInbox(db()),
+		});
+
+		expect(seen.bind).toBe("system:channel:fake:acme-bot");
+		// The RUN acts as the same identity the binding was stamped with — a different one there and
+		// the owner rule would deny the dispatch entry to a claw it created itself.
+		expect(seen.send).toBe("system:channel:fake:acme-bot");
+	});
+
+	it("gives a different endpoint a different identity", async () => {
+		await dispatchWebhook({
+			claw,
+			channel: channel(),
+			endpoint: {
+				provider: "fake",
+				endpointKey: "other-bot",
+				mode: "webhook",
+			},
+			request: { headers: { get: () => null }, rawBody: "u-9" },
+			persist: async () => {},
+			inbox: createDeliveryInbox(db()),
+		});
+		expect(seen.bind).toBe("system:channel:fake:other-bot");
+	});
+});

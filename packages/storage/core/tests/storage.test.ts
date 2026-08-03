@@ -331,6 +331,24 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 			}),
 		).rejects.toThrow(/not a comparison operand/);
 
+		// R-M16. A NATIVE json column used to be exempt from this guard, on the reasoning that "there an
+		// object IS the operand" — true of the DATABASE, which is exactly the problem: Mongo reads
+		// `{ $ne: null }` as an operator document whether the column is json or not. The exemption was
+		// the one door a NoSQL operand could still walk through.
+		const native = schemaAdapter(memoryAdapter(), fieldSchema, {
+			json: "native",
+		});
+		await native.create({
+			model: "claw",
+			data: { id: "c10", organizationId: "t10", context: {} },
+		});
+		await expect(
+			native.findOne({
+				model: "claw",
+				where: [{ field: "context", value: { $ne: null } as never }],
+			}),
+		).rejects.toThrow(/not a comparison operand/);
+
 		// Scalars, arrays of scalars, and null are untouched.
 		expect(
 			await db.findOne({

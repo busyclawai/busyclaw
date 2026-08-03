@@ -250,7 +250,6 @@ function transformWhere(input: {
 		assertComparableValue({
 			action: input.action,
 			field: node.field,
-			isJsonColumn: mapping.meta.type === "json" && input.jsonMode === "native",
 			model: model.logical,
 			operator: node.operator,
 			value,
@@ -275,17 +274,23 @@ function transformWhere(input: {
  * inside busyclaw sends one today; this is what keeps that true the day a boundary forwards something
  * less examined.
  *
- * A NATIVE json column is the one legitimate exception — there an object IS the operand.
+ * R-M16. A NATIVE json column used to be exempt, on the reasoning that there an object IS the
+ * operand. It is — to the DATABASE, which is the problem: Mongo reads `{ $ne: null }` as an operator
+ * document and Prisma reads its own operator names the same way, so an object arriving from anywhere
+ * less examined than a busyclaw call site becomes a query the caller wrote rather than a value they
+ * supplied. Deep-equality against a JSON column is not something anything in this tree does, so the
+ * exemption bought nothing and cost the one place a NoSQL operand could get in.
+ *
+ * Native json STORAGE is unaffected — a native column still reads and writes as JSON. What is refused
+ * is comparing one to a non-scalar.
  */
 function assertComparableValue(input: {
 	action: string;
 	field: string;
-	isJsonColumn: boolean;
 	model: string;
 	operator: WhereClause["operator"];
 	value: unknown;
 }): void {
-	if (input.isJsonColumn) return;
 	const scalar = (value: unknown): boolean =>
 		value === null ||
 		value === undefined ||

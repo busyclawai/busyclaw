@@ -3,12 +3,8 @@
 // EndpointContext, and supplies a persist sink for state events; the engine owns the
 // verify → parse → bind → relay → reply round-trip and never touches storage.
 
-import type { JsonObject, JsonValue } from "@busyclaw/contracts";
-import {
-	errorMessage,
-	SYSTEM_ANONYMOUS,
-	stateError,
-} from "@busyclaw/contracts";
+import type { JsonObject, JsonValue, Principal } from "@busyclaw/contracts";
+import { errorMessage, stateError, systemPrincipal } from "@busyclaw/contracts";
 import type { ClawLike } from "./claw";
 import type {
 	Channel,
@@ -30,6 +26,26 @@ export type ChannelDispatchResult = {
 };
 
 /**
+ * The service principal a dispatch acts as — scoped to the ENDPOINT, not shared by every stranger.
+ *
+ * R-M11. Every inbound message from every bot on every tenant relayed as one global
+ * `system:anonymous`. That principal is the claw's `createdBy` for a fresh binding, so the owner rule
+ * let it relay — and it let EVERY other endpoint's traffic relay into the same conversations for the
+ * same reason. There was no attribution (which bot did this?), no isolation (a policy naming the
+ * relay identity named all of them at once), and nothing per-endpoint to rate-limit or revoke.
+ *
+ * `system:channel:<provider>:<endpointKey>` gives each endpoint its own least-privilege identity. It
+ * is still not the human sender — resolving external actors to real principals is a separate,
+ * larger piece of work, and `message.externalActorId` is recorded on the binding either way — but it
+ * is the difference between "a stranger" and "this bot", which is what a policy can act on.
+ */
+function endpointPrincipal(endpoint: EndpointContext): Principal {
+	return systemPrincipal(
+		`channel:${endpoint.provider}:${endpoint.endpointKey}`,
+	);
+}
+
+/**
  * The shared half every provider reuses: bind the external conversation to a claw/thread (core), relay
  * the message to the claw, and — if the run produced text — reply through the channel. A channel only
  * supplies parse/send; this owns the round-trip. The binding is keyed by the endpoint (the bot scopes
@@ -44,10 +60,10 @@ export async function handleInbound(input: {
 	outbox?: DeliveryOutbox;
 }): Promise<void> {
 	const { claw, channel, endpoint, message } = input;
-	// The dispatch acts for a stranger (no authenticated principal) — the app-authz caller is
-	// `system:anonymous`, the same principal a fresh binding stamps as the claw's `createdBy`, so the
-	// owner rule permits relaying into that conversation's own claw.
-	const caller = { principal: SYSTEM_ANONYMOUS };
+	// The dispatch acts for no authenticated human — the app-authz caller is this ENDPOINT's service
+	// principal, which is also what a fresh binding stamps as the claw's `createdBy`, so the owner rule
+	// permits relaying into that conversation's own claw and permits no other endpoint to.
+	const caller = { principal: endpointPrincipal(endpoint) };
 	const binding = await claw.api.bindConversation(
 		{
 			provider: endpoint.provider,
@@ -277,7 +293,7 @@ async function admitDelivery(input: {
 				title: endpoint.thread?.title ?? message.conversationTitle,
 			},
 		},
-		{ principal: SYSTEM_ANONYMOUS },
+		{ principal: endpointPrincipal(endpoint) },
 	);
 	// Into the CLAW's container, not the plugin's. A token minted in the plugin container is INERT when
 	// the runtime rehydrates in the claw's — it would reach the model as a raw placeholder, silently,
@@ -378,7 +394,11 @@ export async function runDelivery(input: {
 	// from a dead one, so a recovery took over work that was never stuck and ran it a second time.
 	const stopHeartbeat = startLeaseHeartbeat({ inbox, key, leaseId, leaseMs });
 	try {
-		const text = await runTurn({ claw, work });
+		const text = await runTurn({
+			claw,
+			work,
+			principal: endpointPrincipal(endpoint),
+		});
 		const target = replyTargetOf(work);
 		if (text !== null && target !== null) {
 			await deliverReply({
@@ -426,6 +446,9 @@ export async function runDelivery(input: {
 async function runTurn(input: {
 	claw: ClawLike;
 	work: DeliveryWork;
+	/** The endpoint's service principal — the SAME identity the binding was stamped with, or the owner
+	 *  rule would deny the run into a claw this dispatch itself created. */
+	principal: Principal;
 }): Promise<string | null> {
 	const target = replyTargetOf(input.work);
 	// A stored payload that is not a message is not runnable. Thrown rather than skipped: it means the
@@ -443,7 +466,7 @@ async function runTurn(input: {
 			// round-trip a resumed run makes over its stored transcript.
 			message: target.text,
 		},
-		{ principal: SYSTEM_ANONYMOUS },
+		{ principal: input.principal },
 	);
 	if (sent.result.status !== "completed" || !sent.result.text) return null;
 	return sent.result.text;

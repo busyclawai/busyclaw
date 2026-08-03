@@ -655,3 +655,61 @@ describe("@busyclaw/sandboxes — the execution's lifetime reaches its tools (R-
 		expect(finishedAnyway).toBe(false);
 	}, 30000);
 });
+
+// R-M15. The ONE host bridge was unbounded in BOTH directions. Outbound, a guest could hand the host
+// an arbitrarily large `args` — the guest's own memory is capped, but the host's copy of it was not,
+// so a run staying comfortably inside its own limit could still make the HOST allocate whatever it
+// liked, once per call and as often as it could call. Inbound, a tool result of any size was
+// materialised into guest heap.
+describe("@busyclaw/sandboxes — the host bridge is bounded both ways (R-M15)", () => {
+	it("refuses guest arguments larger than the bridge ceiling", async () => {
+		let sawArgs = false;
+		const { output } = await executeInSandbox({
+			sandbox: quickjs({}),
+			code: [
+				"const big = 'x'.repeat(2 * 1024 * 1024);",
+				"try { await tools.echo({ big }); return 'no-refusal'; }",
+				"catch (e) { return String(e && e.message ? e.message : e); }",
+			].join("\n"),
+			invoker: {
+				invoke: async () => {
+					sawArgs = true;
+					return { ok: true };
+				},
+			},
+			context: {},
+		});
+
+		// The host never saw it — refused at the bridge, not after allocating the copy.
+		expect(sawArgs).toBe(false);
+		expect(JSON.stringify(output)).toMatch(/exceeds|bridge/i);
+		await hostStillWorks();
+	}, 30000);
+
+	it("refuses a host result larger than the bridge ceiling", async () => {
+		const { output } = await executeInSandbox({
+			sandbox: quickjs({}),
+			code: [
+				"try { const r = await tools.big({}); return 'no-refusal'; }",
+				"catch (e) { return String(e && e.message ? e.message : e); }",
+			].join("\n"),
+			invoker: {
+				invoke: async () => ({ blob: "y".repeat(2 * 1024 * 1024) }),
+			},
+			context: {},
+		});
+
+		expect(JSON.stringify(output)).toMatch(/exceeds|bridge/i);
+		await hostStillWorks();
+	}, 30000);
+
+	it("leaves an ordinary call alone", async () => {
+		const { output } = await executeInSandbox({
+			sandbox: quickjs({}),
+			code: "return await tools.echo({ hello: 'world' });",
+			invoker: { invoke: async ({ args }) => args },
+			context: {},
+		});
+		expect(output.result).toMatchObject({ hello: "world" });
+	}, 30000);
+});
