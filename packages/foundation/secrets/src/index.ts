@@ -189,6 +189,7 @@ export function buildSecrets(providers: SecretProvider[] = [env()]): Secrets {
 export {
 	cipherFromSecrets,
 	createSecretCipher,
+	optionalCipher,
 	parseSecretStoreKey,
 	SECRET_STORE_KEY_NAME,
 	type SecretBinding,

@@ -12,6 +12,7 @@
 // UNCONTAINED is the interesting case precisely because it used to be the NULL one. It is a container
 // like any other here, and containment has to hold between it and a real one in both directions.
 import { UNCONTAINED } from "@busyclaw/contracts";
+import { buildSecrets, env, optionalCipher } from "@busyclaw/secrets";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createPiiMappingStore } from "../src/pii";
@@ -237,5 +238,85 @@ describe("erasure is atomic where the adapter can be", () => {
 			["alice"],
 		);
 		await expect(store.deleteForSubject("alice")).resolves.toBeGreaterThan(0);
+	});
+});
+
+// R-M07. `pii_mapping.original` holds EVERY value the system has ever tokenized — the largest
+// concentration of personal data anywhere in a deployment, and the table whose whole existence is
+// "we took this seriously". Erasure works by deleting rows, so sealing is defence in depth: it makes
+// a stolen dump useless without the key, and turns shredding one key into a faster answer to a breach
+// than proving rows were deleted.
+describe("stored originals are sealed at rest (R-M07)", () => {
+	const KEY = "22".repeat(32);
+	const sealing = () =>
+		optionalCipher(
+			buildSecrets([env({ vars: { BUSYCLAW_SECRET_STORE_KEY: KEY } })]),
+		);
+
+	const mapping = {
+		placeholder: NAMESAKE,
+		original: "alice@example.com",
+		originalHash: "hash-a",
+		kind: "email",
+		scope: "claw",
+		scopeId: "c1",
+		createdAt: at,
+	} as const;
+
+	it("stores a sealed original and resolves the real one", async () => {
+		const adapter = memoryAdapter();
+		const store = createPiiMappingStore(adapter, { cipher: sealing() });
+		await store.save(mapping, ["alice"]);
+
+		// The column is not the value.
+		const raw = (await adapter.findMany({
+			model: "pii_mapping",
+			where: [{ field: "placeholder", value: NAMESAKE }],
+		})) as { original: string }[];
+		expect(raw[0]?.original).not.toBe("alice@example.com");
+		expect(raw[0]?.original).toMatch(/^k1\./);
+
+		// …and rehydration still gets it back.
+		await expect(
+			store.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+		).resolves.toBe("alice@example.com");
+	});
+
+	// findByHash hands the caller an OPENED mapping and the caller round-trips that same object back
+	// into save() to append subject rows — so a store that only sealed "new" values would re-save an
+	// opened one in the clear.
+	it("survives the findByHash → save round-trip without leaking the plaintext", async () => {
+		const adapter = memoryAdapter();
+		const store = createPiiMappingStore(adapter, { cipher: sealing() });
+		await store.save(mapping, ["alice"]);
+
+		const found = await store.findByHash("hash-a", {
+			scope: "claw",
+			scopeId: "c1",
+		});
+		expect(found?.original).toBe("alice@example.com");
+
+		// The caller's re-save with a new subject — exactly what the redactor does.
+		if (found) await store.save(found, ["bob"]);
+
+		const raw = (await adapter.findMany({
+			model: "pii_mapping",
+			where: [{ field: "placeholder", value: NAMESAKE }],
+		})) as { original: string }[];
+		expect(raw[0]?.original).not.toBe("alice@example.com");
+		await expect(
+			store.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+		).resolves.toBe("alice@example.com");
+	});
+
+	// A row written before a key was configured stays readable — turning sealing on must not make
+	// every historical placeholder un-rehydratable.
+	it("still resolves a row written before sealing was configured", async () => {
+		const adapter = memoryAdapter();
+		await createPiiMappingStore(adapter).save(mapping, ["alice"]);
+		const sealed = createPiiMappingStore(adapter, { cipher: sealing() });
+		await expect(
+			sealed.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+		).resolves.toBe("alice@example.com");
 	});
 });

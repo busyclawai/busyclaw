@@ -727,6 +727,9 @@ export function createClaw<
 		// R-M03: whether this deployment can say WHOSE data a value is. Without it every mapping is
 		// minted linked to no subject, so erasure has nothing to find — see `forgetSubject`.
 		hasSubjectResolver: config.subject !== undefined,
+		// R-M07: the at-rest cipher for stored PII originals, over the same one-door reader everything
+		// else resolves credentials through.
+		secrets,
 		warn: (message) => warn(`busyclaw redaction: ${message}`),
 	});
 	// The placeholder contract rides the system prompt whenever placeholders can actually appear.

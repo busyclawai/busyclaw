@@ -8,6 +8,7 @@ import {
 	piiMappingFields,
 	piiSubjectFields,
 } from "@busyclaw/contracts";
+import type { SecretBinding, SecretCipher } from "@busyclaw/secrets";
 import { type EntityWhere, entityDb } from "@busyclaw/storage-core";
 
 export type PiiMappingStoreOptions = {
@@ -15,6 +16,16 @@ export type PiiMappingStoreOptions = {
 	model?: string;
 	/** The subject junction table. Default "pii_subject". */
 	subjectModel?: string;
+	/**
+	 * The at-rest cipher for the `original` column (R-M07). Absent ⇒ stored as it arrives.
+	 *
+	 * This table holds EVERY value the system has ever tokenized — the largest concentration of
+	 * personal data anywhere in a deployment, and the one whose whole existence is "we took this
+	 * seriously". Erasure works by deleting rows, so sealing is defence in depth rather than a second
+	 * erasure path: it makes a stolen dump useless without also stealing the key, and turns
+	 * shredding one key into a faster answer to a breach than proving rows were deleted.
+	 */
+	cipher?: SecretCipher;
 	/** Time source — for deterministic tombstone timestamps in tests. */
 	now?: () => string;
 };
@@ -74,6 +85,51 @@ function sameContainer(
 	);
 }
 
+/**
+ * The AAD one mapping's original is sealed under.
+ *
+ * The placeholder is unique within a container, so this is row-specific: a ciphertext lifted into
+ * another placeholder's row — or the same placeholder in another claw — will not open, because the
+ * tag is bound to the triple it was sealed for. Same property that lets ONE deployment key cover the
+ * bot token and this table at once.
+ */
+function originalBinding(mapping: {
+	scope: string;
+	scopeId: string;
+	placeholder: string;
+}): SecretBinding {
+	return {
+		scope: mapping.scope,
+		scopeId: mapping.scopeId,
+		name: mapping.placeholder,
+	};
+}
+
+/**
+ * Open a stored original, or hand back what is there.
+ *
+ * A row written before a key was configured is not a failure — it is a row from before, and refusing
+ * it would make every historical placeholder un-rehydratable the moment a deployment turns sealing
+ * on. So an unopenable value passes through: the mapping still resolves, and the operator's migration
+ * is a re-save rather than an outage.
+ */
+async function openOriginal(
+	row: {
+		original: string;
+		scope: string;
+		scopeId: string;
+		placeholder: string;
+	},
+	cipher?: SecretCipher,
+): Promise<string> {
+	if (!cipher) return row.original;
+	try {
+		return await cipher.open(row.original, originalBinding(row));
+	} catch {
+		return row.original;
+	}
+}
+
 export function createPiiMappingStore(
 	adapter: Adapter,
 	options: PiiMappingStoreOptions = {},
@@ -99,6 +155,18 @@ export function createPiiMappingStore(
 		durable: true,
 
 		async save(mapping, subjectIds) {
+			// Sealed on the way in, ALWAYS — `findByHash` hands the caller an opened mapping and the
+			// caller passes that same object straight back here to append subject rows, so a store that
+			// only sealed "new" values would re-save an opened one in the clear.
+			const sealed = options.cipher
+				? {
+						...mapping,
+						original: await options.cipher.seal(
+							mapping.original,
+							originalBinding(mapping),
+						),
+					}
+				: mapping;
 			const rows = await db.findMany({
 				model: "pii_mapping",
 				where: [{ field: "placeholder", value: mapping.placeholder }],
@@ -108,10 +176,10 @@ export function createPiiMappingStore(
 				await db.update({
 					model: "pii_mapping",
 					where: mappingWhere(mapping),
-					update: mapping,
+					update: sealed,
 				});
 			} else {
-				await db.create({ model: "pii_mapping", data: mapping });
+				await db.create({ model: "pii_mapping", data: sealed });
 			}
 			for (const subjectId of subjectIds ?? []) {
 				// The junction is a set, not a log — re-linking an existing (placeholder, subject)
@@ -143,7 +211,8 @@ export function createPiiMappingStore(
 				where: [{ field: "placeholder", value: placeholder }],
 			});
 			const row = rows.find((mapping) => sameContainer(mapping, ctx));
-			return row?.original ?? null;
+			if (row === undefined) return null;
+			return openOriginal(row, options.cipher);
 		},
 
 		async findByHash(originalHash, ctx) {
@@ -151,7 +220,10 @@ export function createPiiMappingStore(
 				model: "pii_mapping",
 				where: [{ field: "originalHash", value: originalHash }],
 			});
-			return rows.find((mapping) => sameContainer(mapping, ctx)) ?? null;
+			const row = rows.find((mapping) => sameContainer(mapping, ctx));
+			if (row === undefined) return null;
+			// Opened, because the caller round-trips this object back into `save` — see there.
+			return { ...row, original: await openOriginal(row, options.cipher) };
 		},
 
 		async isErased(subjectId, ctx) {

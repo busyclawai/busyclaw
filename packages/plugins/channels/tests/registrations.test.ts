@@ -7,7 +7,7 @@ import {
 	type RouteLevel,
 	userPrincipal,
 } from "@busyclaw/contracts";
-import { buildSecrets, env } from "@busyclaw/secrets";
+import { buildSecrets, env, optionalCipher } from "@busyclaw/secrets";
 import { entityAdapter, memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { drainOutbox } from "../src/core/dispatch";
@@ -29,7 +29,6 @@ import {
 import {
 	createChannelRegistrationsStore,
 	openRegistrationSecret,
-	optionalCipher,
 	webhookSecretDigest,
 } from "../src/registrations/store";
 

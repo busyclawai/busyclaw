@@ -10,6 +10,7 @@ import type {
 	RedactionContext,
 	Redactor,
 	ScopeRef,
+	Secrets,
 } from "@busyclaw/contracts";
 import { configurationError, field } from "@busyclaw/contracts";
 import {
@@ -20,6 +21,7 @@ import {
 	createRoutingRedactor,
 	createStoredRedactor,
 } from "@busyclaw/core";
+import { optionalCipher } from "@busyclaw/secrets";
 import { createPiiMappingStore } from "@busyclaw/storage-durable";
 
 export const REDACTION_POSTURES = ["strict", "raw"] as const;
@@ -161,6 +163,8 @@ export function resolveRedaction(input: {
 	adapter: Adapter | undefined;
 	/** Required for posture "per-claw" (the routing reads the claw row). Pass the WRAPPED store. */
 	clawsStore: ClawsStore | undefined;
+	/** The one-door reader, for the at-rest cipher over stored originals (R-M07). */
+	secrets?: Secrets;
 	/** Whether the deployment configured a {@link SubjectResolver} — i.e. whether it can say WHOSE
 	 *  personal data a value is. See `forgetSubject` for why erasure depends on it. */
 	hasSubjectResolver?: boolean;
@@ -240,7 +244,12 @@ export function resolveRedaction(input: {
 		};
 	} else {
 		const mappings = input.adapter
-			? createPiiMappingStore(input.adapter)
+			? createPiiMappingStore(input.adapter, {
+					// R-M07. This table holds every value the system has ever tokenized. Sealed when the
+					// deployment has a master key; passed through when it does not, because turning on
+					// sealing must not make historical placeholders un-rehydratable.
+					...(input.secrets ? { cipher: optionalCipher(input.secrets) } : {}),
+				})
 			: createMemoryPiiMappingStore();
 		strict = createStoredRedactor({
 			mappings,

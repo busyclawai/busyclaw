@@ -325,3 +325,38 @@ export function cipherFromSecrets(
 		);
 	}, options);
 }
+
+/**
+ * A cipher that seals when the deployment has a master key and passes through when it does not.
+ *
+ * The key is read LAZILY (the underlying cipher caches it), so this costs nothing until the first
+ * value is stored — and once it has answered "no key" it stays answered, rather than probing the
+ * resolver on every write.
+ *
+ * Warned once, not silently: a deployment storing bot tokens in the clear should know it is, and a
+ * deployment that never stores one should not be nagged about a key it does not need.
+ */
+export function optionalCipher(
+	secrets: Secrets,
+	warn?: (message: string) => void,
+): SecretCipher {
+	const real = cipherFromSecrets(secrets);
+	let available: boolean | undefined;
+	const usable = async (): Promise<boolean> => {
+		if (available !== undefined) return available;
+		const key = await secrets.get(SECRET_STORE_KEY_NAME).catch(() => null);
+		available = key !== null && key !== undefined;
+		if (!available) {
+			warn?.(
+				`no ${SECRET_STORE_KEY_NAME}: credentials and PII originals are stored unencrypted — set it to seal them at rest`,
+			);
+		}
+		return available;
+	};
+	return {
+		seal: async (plaintext, binding) =>
+			(await usable()) ? real.seal(plaintext, binding) : plaintext,
+		open: async (sealed, binding) =>
+			(await usable()) ? real.open(sealed, binding) : sealed,
+	};
+}

@@ -16,7 +16,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import { readRequestBody } from "@busyclaw/core";
-import type { SecretCipher } from "@busyclaw/secrets";
+import { optionalCipher, type SecretCipher } from "@busyclaw/secrets";
 import { type } from "arktype";
 import type { ChannelsPlugin, ChannelsPluginOptions } from "../channels/plugin";
 import { requireClaw } from "../core/claw";
@@ -52,7 +52,6 @@ import {
 	type ChannelRegistrationView,
 	createChannelRegistrationsStore,
 	openRegistrationSecret,
-	optionalCipher,
 	type RegisterChannelRegistrationInput,
 	toChannelRegistrationView,
 } from "./store";

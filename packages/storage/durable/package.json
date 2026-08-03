@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/secrets": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"arktype": "2.2.0"

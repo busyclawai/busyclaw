@@ -585,6 +585,9 @@ importers:
       '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../../foundation/contracts
+      '@busyclaw/secrets':
+        specifier: workspace:*
+        version: link:../../foundation/secrets
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../core
