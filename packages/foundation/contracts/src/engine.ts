@@ -17,7 +17,6 @@ export type EngineRunHandle = {
 export type EngineRunMetadata = {
 	id?: string;
 	principal?: Principal;
-	team?: string;
 };
 
 export type EngineStartRunInput = {
@@ -39,7 +38,6 @@ export type EngineRunRecord = {
 	status: string;
 	input: JsonObject;
 	principal?: Principal;
-	team?: string;
 	createdAt: string;
 	updatedAt: string;
 };

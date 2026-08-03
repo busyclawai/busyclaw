@@ -180,7 +180,7 @@ const fieldSchema = {
 		modelName: "busyclaw_claw",
 		fields: {
 			id: { type: "string", required: true, unique: true },
-			organizationId: {
+			ownerId: {
 				type: "string",
 				fieldName: "organization_id",
 				required: true,
@@ -209,7 +209,7 @@ const fieldSchema = {
 
 type FieldClaw = {
 	id: string;
-	organizationId: string;
+	ownerId: string;
 	status: string;
 	context: unknown;
 	updatedAt: string;
@@ -224,7 +224,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 
 		const created = (await db.create({
 			model: "claw",
-			data: { id: "c1", organizationId: "t1", secret: "hidden", locked: "v1" },
+			data: { id: "c1", ownerId: "t1", secret: "hidden", locked: "v1" },
 		})) as FieldClaw;
 
 		expect(created).toEqual({
@@ -232,7 +232,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 			id: "c1",
 			locked: "v1",
 			status: "active",
-			organizationId: "t1",
+			ownerId: "t1",
 			updatedAt: "created",
 		});
 
@@ -249,7 +249,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 
 		const found = (await db.findOne({
 			model: "claw",
-			where: [{ field: "organizationId", value: "t1" }],
+			where: [{ field: "ownerId", value: "t1" }],
 		})) as FieldClaw | null;
 		expect(found).toEqual(created);
 	});
@@ -257,34 +257,34 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 	it("maps select, sort, count, and update fields", async () => {
 		const raw = memoryAdapter();
 		const db = schemaAdapter(raw, fieldSchema);
-		await db.create({ model: "claw", data: { id: "c2", organizationId: "b" } });
-		await db.create({ model: "claw", data: { id: "c3", organizationId: "a" } });
+		await db.create({ model: "claw", data: { id: "c2", ownerId: "b" } });
+		await db.create({ model: "claw", data: { id: "c3", ownerId: "a" } });
 
 		const selected = (await db.findOne({
 			model: "claw",
-			select: ["organizationId", "context"],
+			select: ["ownerId", "context"],
 			where: [{ field: "id", value: "c2" }],
 		})) as Partial<FieldClaw> | null;
 		expect(selected).toEqual({
 			context: { source: "default" },
-			organizationId: "b",
+			ownerId: "b",
 		});
 
 		const sorted = (await db.findMany({
 			model: "claw",
-			sortBy: { field: "organizationId", direction: "asc" },
+			sortBy: { field: "ownerId", direction: "asc" },
 		})) as FieldClaw[];
-		expect(sorted.map((row) => row.organizationId)).toEqual(["a", "b"]);
+		expect(sorted.map((row) => row.ownerId)).toEqual(["a", "b"]);
 		expect(
 			await db.count({
 				model: "claw",
-				where: [{ field: "organizationId", value: "a" }],
+				where: [{ field: "ownerId", value: "a" }],
 			}),
 		).toBe(1);
 
 		const updated = (await db.update({
 			model: "claw",
-			where: [{ field: "organizationId", value: "a" }],
+			where: [{ field: "ownerId", value: "a" }],
 			update: { context: { patched: true } },
 		})) as FieldClaw | null;
 		expect(updated?.context).toEqual({ patched: true });
@@ -307,13 +307,13 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		const db = schemaAdapter(memoryAdapter(), fieldSchema);
 		await db.create({
 			model: "claw",
-			data: { id: "c9", organizationId: "t9" },
+			data: { id: "c9", ownerId: "t9" },
 		});
 
 		await expect(
 			db.findOne({
 				model: "claw",
-				where: [{ field: "organizationId", value: { $ne: null } as never }],
+				where: [{ field: "ownerId", value: { $ne: null } as never }],
 			}),
 		).rejects.toThrow(/not a comparison operand/);
 
@@ -323,7 +323,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 				model: "claw",
 				where: [
 					{
-						field: "organizationId",
+						field: "ownerId",
 						operator: "in",
 						value: ["t9", { $gt: "" }] as never,
 					},
@@ -340,7 +340,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		});
 		await native.create({
 			model: "claw",
-			data: { id: "c10", organizationId: "t10", context: {} },
+			data: { id: "c10", ownerId: "t10", context: {} },
 		});
 		await expect(
 			native.findOne({
@@ -368,7 +368,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		const db = schemaAdapter(memoryAdapter(), fieldSchema);
 		await db.create({
 			model: "claw",
-			data: { id: "c4", organizationId: "t4" },
+			data: { id: "c4", ownerId: "t4" },
 		});
 
 		const updated = (await db.update({
@@ -385,11 +385,11 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 
 		await expect(
 			db.create({ model: "claw", data: { id: "missing-organization" } }),
-		).rejects.toThrow(/organizationId.*required/);
+		).rejects.toThrow(/ownerId.*required/);
 		await expect(
 			db.create({
 				model: "claw",
-				data: { id: "bad-field", organizationId: "t", unknown: true },
+				data: { id: "bad-field", ownerId: "t", unknown: true },
 			}),
 		).rejects.toThrow(/unknown field/);
 		await expect(
@@ -402,7 +402,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		await expect(
 			db.create({
 				model: "claw",
-				data: { context: () => undefined, id: "bad-json", organizationId: "t" },
+				data: { context: () => undefined, id: "bad-json", ownerId: "t" },
 			}),
 		).rejects.toThrow(/JSON-serializable/);
 	});
@@ -414,7 +414,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		await db.transaction?.(async (tx) => {
 			await tx.create({
 				model: "claw",
-				data: { id: "tx1", organizationId: "t" },
+				data: { id: "tx1", ownerId: "t" },
 			});
 		});
 
@@ -423,7 +423,7 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 			db.transaction?.(async (tx) => {
 				await tx.create({
 					model: "claw",
-					data: { id: "tx2", organizationId: "t" },
+					data: { id: "tx2", ownerId: "t" },
 				});
 				throw new Error("rollback");
 			}),
@@ -441,16 +441,16 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		const db = schemaAdapter(raw, fieldSchema);
 		await db.create({
 			model: "claw",
-			data: { id: "consume", organizationId: "t" },
+			data: { id: "consume", ownerId: "t" },
 		});
 
 		const consumed = (await db.consumeOne({
 			model: "claw",
-			where: [{ field: "organizationId", value: "t" }],
+			where: [{ field: "ownerId", value: "t" }],
 		})) as FieldClaw | null;
 
 		expect(consumed?.context).toEqual({ source: "default" });
-		expect(consumed?.organizationId).toBe("t");
+		expect(consumed?.ownerId).toBe("t");
 		expect(await raw.count({ model: "busyclaw_claw" })).toBe(0);
 	});
 });

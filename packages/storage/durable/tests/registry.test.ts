@@ -173,7 +173,7 @@ describe("createRegistryStores over memory adapter", () => {
 		).toEqual([]);
 	});
 
-	it("lists are scoped by organizationId — org A rows never leak into org B", async () => {
+	it("lists are scoped by (scope, scopeId) — one boundary's rows never leak into another's", async () => {
 		const stores = createRegistryStores(memoryAdapter());
 		await stores.specRegistrations.upsert(specInput("org-a"));
 		await stores.specRegistrations.upsert(specInput("org-b"));
