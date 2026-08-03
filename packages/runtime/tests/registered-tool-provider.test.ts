@@ -738,6 +738,102 @@ describe("undeclared arguments never reach the wire (R-M01)", () => {
 		).rejects.toThrow(/undeclared arguments/);
 	});
 
+	it("refuses a missing required argument, rather than letting the target answer 400", async () => {
+		const provider = createRegisteredToolProvider({
+			secrets: anySecret("tok"),
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					inputSchema: {
+						type: "object",
+						properties: { petId: { type: "string" } },
+						required: ["petId"],
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+		await expect(exec(tools, "petstore.getPet", {})).rejects.toThrow(
+			/missing required arguments/,
+		);
+	});
+
+	it("refuses a declared argument of the wrong type", async () => {
+		const provider = createRegisteredToolProvider({
+			secrets: anySecret("tok"),
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					inputSchema: {
+						type: "object",
+						properties: { petId: { type: "integer" } },
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+		await expect(
+			exec(tools, "petstore.getPet", { petId: "seven" }),
+		).rejects.toThrow(/must be integer/);
+	});
+
+	it("refuses a value outside a declared enum", async () => {
+		const provider = createRegisteredToolProvider({
+			secrets: anySecret("tok"),
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					inputSchema: {
+						type: "object",
+						properties: { status: { enum: ["available", "sold"] } },
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+		await expect(
+			exec(tools, "petstore.getPet", { status: "anything" }),
+		).rejects.toThrow(/must be one of/);
+	});
+
+	// A union of types passes when ANY member matches — reading only the first would refuse values the
+	// spec allows.
+	it("accepts a value matching any member of a type union", async () => {
+		const { fn } = fakeFetch(
+			() =>
+				new Response(JSON.stringify({ ok: true }), {
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const provider = createRegisteredToolProvider({
+			secrets: anySecret("tok"),
+			fetch: fn,
+			lookup: publicLookup,
+		});
+		const tools = provider(
+			[
+				row({
+					inputSchema: {
+						type: "object",
+						properties: { petId: { type: ["string", "null"] } },
+					},
+				}),
+			],
+			{ scope: "organization", scopeId: "org-a" },
+		);
+		// Reaches the transport rather than the validator — which is the point: `null` is a member of
+		// the declared union, so nothing here should have an opinion about it.
+		await expect(
+			exec(tools, "petstore.getPet", { petId: null }),
+		).resolves.toMatchObject({ status: 200 });
+	});
+
 	// The positive case — declared args reaching the wire — is the suite's own end-to-end test above
 	// ("petstore.getPet" against the captured fetch); repeating it here with a live fetch only buys a
 	// timeout.

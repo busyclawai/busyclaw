@@ -90,37 +90,120 @@ const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * Refuse an argument the tool never declared.
+ * Check the args against the tool's own input schema, before policy sees them and before the wire is
+ * planned — one validator, one normalized object, which is what makes "policy and wire consume the
+ * same thing" true rather than hopeful.
  *
- * The row's `inputSchema` is the flattened parameters-plus-body shape the extractor derived, and it is
- * the SAME shape the policy projection filters against — so checking against it here is what makes
- * "policy and wire consume the identical object" true rather than hopeful.
+ * R-M01. Args were checked only for being an OBJECT. So a field the model invented reached the
+ * request body while the POLICY saw a projection filtered to the declared fields — Cedar decided
+ * about one object and the wire carried another. A missing REQUIRED field reached the transport too,
+ * to fail there as a remote 400 rather than here as a legible refusal.
  *
- * Shallow on purpose: this closes the gap the finding names (undeclared TOP-LEVEL fields reaching the
- * body unauthorized). Deep per-property type checking against the JSON Schema is a further step and a
- * dependency decision — arktype does not consume bare JSON Schema — so it is not smuggled in here.
+ * HAND-ROLLED against the subset the extractor emits, deliberately. `inputSchema` is
+ * "parameters + flattened body properties, local $refs inlined, additionalProperties: false" — a
+ * narrow shape. A dependency able to validate arbitrary JSON Schema is a great deal of surface for
+ * it, and the parts it would add beyond this (nested object graphs, allOf/oneOf composition, format
+ * assertions) are the parts the target's own API validates anyway. What is checked here is what
+ * decides whether POLICY and the WIRE saw the same call:
+ *   - no undeclared property (the projection would have dropped it; the body would have carried it);
+ *   - every required property present;
+ *   - each declared property's top-level type and enum.
+ * Anything deeper is the target's business, and is left to it rather than half-modelled here.
  */
-function assertDeclaredArgs(
+function assertMatchesInputSchema(
 	address: string,
 	inputSchema: unknown,
 	args: Record<string, unknown>,
 ): void {
-	const properties =
-		inputSchema !== null &&
-		typeof inputSchema === "object" &&
-		"properties" in inputSchema
-			? (inputSchema as { properties?: unknown }).properties
+	const schema =
+		inputSchema !== null && typeof inputSchema === "object"
+			? (inputSchema as {
+					properties?: unknown;
+					required?: unknown;
+				})
 			: undefined;
+	const properties = schema?.properties;
 	// A schema declaring no properties says nothing about what is allowed, and inventing a
 	// closed-world reading of it would refuse every call to a tool whose spec simply omitted them.
 	if (properties === null || typeof properties !== "object") return;
-	const declared = new Set(Object.keys(properties));
-	const undeclared = Object.keys(args).filter((key) => !declared.has(key));
-	if (undeclared.length === 0) return;
-	throw validationError(
-		`registered tool "${address}" received undeclared arguments`,
-		`not in this tool's input schema: ${undeclared.join(", ")}`,
+	const declared = properties as Record<string, unknown>;
+
+	const undeclared = Object.keys(args).filter(
+		(key) => !Object.hasOwn(declared, key),
 	);
+	if (undeclared.length > 0) {
+		throw validationError(
+			`registered tool "${address}" received undeclared arguments`,
+			`not in this tool's input schema: ${undeclared.join(", ")}`,
+		);
+	}
+
+	const required = Array.isArray(schema?.required) ? schema.required : [];
+	const missing = required.filter(
+		(key): key is string => typeof key === "string" && args[key] === undefined,
+	);
+	if (missing.length > 0) {
+		throw validationError(
+			`registered tool "${address}" is missing required arguments`,
+			`this tool's input schema requires: ${missing.join(", ")}`,
+		);
+	}
+
+	for (const [key, value] of Object.entries(args)) {
+		const mismatch = propertyMismatch(declared[key], value);
+		if (mismatch !== undefined) {
+			throw validationError(
+				`registered tool "${address}" received an invalid argument`,
+				`"${key}" ${mismatch}`,
+			);
+		}
+	}
+}
+
+/** The one property's complaint, or undefined when it passes. Top-level only — see above. */
+function propertyMismatch(schema: unknown, value: unknown): string | undefined {
+	if (schema === null || typeof schema !== "object") return undefined;
+	const spec = schema as { type?: unknown; enum?: unknown };
+	if (Array.isArray(spec.enum) && !spec.enum.includes(value)) {
+		return `must be one of: ${spec.enum.map((option) => JSON.stringify(option)).join(", ")}`;
+	}
+	// A union of types (`type: ["string", "null"]`) passes when ANY member matches, which is what the
+	// keyword means — reading only the first would refuse values the spec allows.
+	const types = Array.isArray(spec.type)
+		? spec.type
+		: typeof spec.type === "string"
+			? [spec.type]
+			: [];
+	if (types.length === 0) return undefined;
+	const matches = types.some(
+		(type) => typeof type === "string" && matchesJsonType(type, value),
+	);
+	return matches ? undefined : `must be ${types.join(" or ")}`;
+}
+
+function matchesJsonType(type: string, value: unknown): boolean {
+	switch (type) {
+		case "string":
+			return typeof value === "string";
+		case "number":
+			return typeof value === "number" && Number.isFinite(value);
+		case "integer":
+			return typeof value === "number" && Number.isInteger(value);
+		case "boolean":
+			return typeof value === "boolean";
+		case "array":
+			return Array.isArray(value);
+		case "object":
+			return (
+				typeof value === "object" && value !== null && !Array.isArray(value)
+			);
+		case "null":
+			return value === null;
+		default:
+			// A type this does not model is not a type this refuses — an unknown keyword value is the
+			// spec's business, and guessing would turn a valid call into a failure nobody can explain.
+			return true;
+	}
 }
 
 export function createRegisteredToolProvider(
@@ -166,7 +249,7 @@ export function createRegisteredToolProvider(
 				// Refused rather than dropped. Silently discarding an undeclared field would make the
 				// two agree by throwing away what the model asked for, which is a different call than
 				// the one it made — and a model cannot correct a mistake it is never told about.
-				assertDeclaredArgs(row.address, row.inputSchema, validArgs);
+				assertMatchesInputSchema(row.address, row.inputSchema, validArgs);
 				const plan = planHttpRequest(binding, validArgs);
 				// DESTINATION FIRST, then the credential. Both checks below used to run after the secret
 				// was already on the plan, which got the order exactly backwards: the thing being
