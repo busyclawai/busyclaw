@@ -77,7 +77,13 @@ export const runtimeTaskFields = {
 	status: field.enum(taskStatusValues, { required: true, index: true }),
 	payload: field.jsonObject({ required: true }),
 	dueAt: field.string({ required: true, index: true }),
+	// CLAIMS, not failures. A lease lapse costs one of these — the host vanished, which says nothing
+	// about whether the work is bad.
 	attempt: field.number({ required: true }),
+	// FAILURES. Incremented only by `failTask`, never by the reaper, and the only counter
+	// `maxAttempts` bounds. Not `required`: planMigrations only ADDs columns and emits no UPDATE, so
+	// rows that predate it have no value — code reads `?? 0`.
+	errorAttempt: field.number(),
 	maxAttempts: field.number({ required: true }),
 	retryDelayMs: field.number({ required: true }),
 	leaseId: field.string({ index: true }),

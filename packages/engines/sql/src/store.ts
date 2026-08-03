@@ -89,6 +89,7 @@ export const RuntimeTask = ark({
 	payload: JsonRecord,
 	dueAt: "string",
 	attempt: "number",
+	"errorAttempt?": "number | undefined",
 	maxAttempts: "number",
 	retryDelayMs: "number",
 	"leaseId?": OptionalString,
@@ -257,6 +258,11 @@ export type SqlEngineStore = {
 /** A run in one of these still has work ahead of it; anything else is finished and must not be
  *  written back into flight by a claim that lost its race. */
 const NON_TERMINAL_RUN_STATUSES = ["queued", "running", "waiting"] as const;
+
+/** How many times a task may be CLAIMED before it is abandoned, however it lost each claim. The
+ *  backstop against a flapping host, deliberately not a config knob: it bounds crash loops, and a
+ *  deployment that wants more retries wants a higher `maxAttempts`, which is a different question. */
+const MAX_CLAIMS = 8;
 
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
@@ -441,7 +447,11 @@ export function createSqlEngineStore(
 					payload: asJsonRecord(input.payload ?? {}, "task payload"),
 					dueAt: input.dueAt ?? ts,
 					attempt: 0,
-					maxAttempts: input.maxAttempts ?? 1,
+					errorAttempt: 0,
+					// 3, not 1. The single attempt was never a policy about retries — it was the only
+					// thing standing between a lease lapse and a `runtime.run` task restarting its run
+					// from the prompt. That is fixed; a genuine failure may now be retried.
+					maxAttempts: input.maxAttempts ?? 3,
 					retryDelayMs: input.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
 					createdAt: ts,
 					updatedAt: ts,
@@ -466,7 +476,7 @@ export function createSqlEngineStore(
 				limit: input.limit ?? 10,
 			});
 			for (const candidate of candidates) {
-				if (candidate.attempt >= candidate.maxAttempts) {
+				if (candidate.attempt >= MAX_CLAIMS) {
 					await db.update({
 						model: "runtime_task",
 						where: [
@@ -475,7 +485,7 @@ export function createSqlEngineStore(
 						],
 						update: {
 							status: "dead",
-							lastError: "max attempts exhausted before claim",
+							lastError: `abandoned after ${MAX_CLAIMS} claims without completing`,
 							updatedAt: ts,
 						},
 					});
@@ -661,8 +671,12 @@ export function createSqlEngineStore(
 			const lease = await validateLease(task, input.leaseToken);
 			if (!lease) return null;
 			const ts = now();
+			// This is a REAL failure, so it is the error counter that moves — and the error counter is
+			// what `maxAttempts` bounds. A task that keeps being claimed and losing its lease is a
+			// different story with a different limit (MAX_CLAIMS), told by the reaper.
+			const errorAttempt = (task.errorAttempt ?? 0) + 1;
 			const status: TaskStatus =
-				task.attempt >= task.maxAttempts ? "dead" : "pending";
+				errorAttempt >= task.maxAttempts ? "dead" : "pending";
 			const row = await db.update({
 				model: "runtime_task",
 				where: [
@@ -672,6 +686,7 @@ export function createSqlEngineStore(
 				],
 				update: {
 					status,
+					errorAttempt,
 					lastError: input.reason,
 					dueAt:
 						status === "pending" ? addMs(ts, task.retryDelayMs) : task.dueAt,
@@ -736,7 +751,9 @@ export function createSqlEngineStore(
 				// The CAS is what makes two concurrent reapers safe without consuming first: whichever
 				// updates the task sets `leaseId: null`, so the other's `leaseId = <id>` predicate matches
 				// nothing and it does no work. Deleting an already-deleted lease is a no-op either way.
-				const reap = async (tx: typeof db): Promise<boolean> => {
+				const reap = async (
+					tx: typeof db,
+				): Promise<false | { status: TaskStatus; runId: string }> => {
 					const task = await tx.findOne({
 						model: "runtime_task",
 						where: [{ field: "id", value: candidate.taskId }],
@@ -749,8 +766,11 @@ export function createSqlEngineStore(
 						});
 						return false;
 					}
+					// A LAPSE, not a failure: the host vanished mid-claim and nothing was learned about
+					// the work. So this bounds CLAIMS, and `errorAttempt` is left untouched — otherwise a
+					// flapping worker spends a run's whole error budget without the run ever failing.
 					const status: TaskStatus =
-						task.attempt >= task.maxAttempts ? "dead" : "pending";
+						task.attempt >= MAX_CLAIMS ? "dead" : "pending";
 					const updated = await tx.update({
 						model: "runtime_task",
 						where: [
@@ -760,7 +780,10 @@ export function createSqlEngineStore(
 						],
 						update: {
 							status,
-							lastError: "lease expired",
+							lastError:
+								status === "dead"
+									? `abandoned after ${MAX_CLAIMS} claims without completing`
+									: "lease expired",
 							dueAt:
 								status === "pending"
 									? addMs(ts, task.retryDelayMs)
@@ -778,16 +801,27 @@ export function createSqlEngineStore(
 						model: "lease",
 						where: [{ field: "id", value: candidate.id }],
 					});
-					if (status === "dead") {
-						await store.updateRun(task.runId, { status: "failed" });
-					}
-					return true;
+					// The RUN write is deliberately NOT done here. `store.updateRun` goes through the
+					// outer, non-transactional db, and issuing it from inside `db.transaction(reap)`
+					// means an adapter with real isolation can lose or reorder it — which left a run
+					// `running` forever after its task had been abandoned. Report the outcome instead
+					// and let the caller write it once the transaction has actually committed.
+					return { status, runId: task.runId };
 				};
 				// Atomic where the adapter can be; ordered-and-recoverable where it cannot.
 				const reaped = db.transaction
 					? await db.transaction(reap)
 					: await reap(db);
-				if (reaped) count++;
+				if (!reaped) continue;
+				count++;
+				// Claims exhausted, and only that: a requeue leaves the run alone, because "the host
+				// vanished" is not a verdict on the work.
+				if (reaped.status === "dead") {
+					await store.updateRunIfStatus(reaped.runId, {
+						from: ["queued", "running", "waiting"],
+						patch: { status: "failed" },
+					});
+				}
 			}
 			return count;
 		},

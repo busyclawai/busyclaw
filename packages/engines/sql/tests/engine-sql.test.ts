@@ -986,6 +986,101 @@ describe("a continuation continues the run that parked (R-M10)", () => {
 	});
 });
 
+// "The host vanished" and "the work is bad" used to be one row: the reaper spent the same counter a
+// real failure did, so a flapping worker exhausted a run's error budget without the run ever having
+// failed, and the run was written `failed` with a free-text `lastError` as the only clue which had
+// happened. Two counters, two limits, two stories.
+describe("a lapse is not a failure", () => {
+	/** A clock that always moves forward — every claim has to clear the previous retry delay. */
+	function clockAt(startMs: number) {
+		let ms = startMs;
+		return {
+			now: () => new Date(ms).toISOString(),
+			advance: (by: number) => {
+				ms += by;
+			},
+		};
+	}
+
+	it("a lease lapse spends a CLAIM, leaves the error budget alone, and does not fail the run", async () => {
+		const clock = clockAt(0);
+		const store = createSqlEngineStore(memoryAdapter(), { now: clock.now });
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+		});
+
+		await store.claimDueTask({ workerId: "w1", leaseTtlMs: 1_000 });
+		clock.advance(10_000);
+		expect(await store.reapExpiredLeases()).toBe(1);
+
+		const after = await store.getTask(task.id);
+		expect(after?.status).toBe("pending"); // requeued, not dead
+		expect(after?.attempt).toBe(1); // a claim was spent…
+		expect(after?.errorAttempt ?? 0).toBe(0); // …and no error was
+		expect((await store.getRun(run.id))?.status).not.toBe("failed");
+	});
+
+	it("a REAL failure spends the error budget and dead-letters at maxAttempts", async () => {
+		const clock = clockAt(0);
+		const store = createSqlEngineStore(memoryAdapter(), { now: clock.now });
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+			maxAttempts: 2,
+		});
+
+		for (let i = 0; i < 2; i++) {
+			const claim = await store.claimDueTask({ workerId: "w1" });
+			if (!claim) throw new Error(`expected a claim on attempt ${i + 1}`);
+			await store.failTask({
+				taskId: task.id,
+				leaseToken: claim.leaseToken,
+				reason: "provider down",
+			});
+			clock.advance(10_000); // clear the retry delay before the next claim
+		}
+		const dead = await store.getTask(task.id);
+		expect(dead?.status).toBe("dead");
+		expect(dead?.errorAttempt).toBe(2);
+		expect(dead?.lastError).toBe("provider down");
+	});
+
+	it("a task that keeps losing its lease is abandoned by CLAIMS, and says so", async () => {
+		const clock = clockAt(0);
+		const store = createSqlEngineStore(memoryAdapter(), { now: clock.now });
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+		});
+
+		// Eight claims, every one lost to a vanished host. No failure is ever reported.
+		for (let i = 0; i < 8; i++) {
+			const claim = await store.claimDueTask({
+				workerId: "w1",
+				leaseTtlMs: 1_000,
+			});
+			if (!claim) throw new Error(`expected a claim on attempt ${i + 1}`);
+			clock.advance(10_000); // past the lease
+			await store.reapExpiredLeases();
+			clock.advance(10_000); // and past the retry delay the reap just set
+		}
+
+		const abandoned = await store.getTask(task.id);
+		expect(abandoned?.status).toBe("dead");
+		expect(abandoned?.errorAttempt ?? 0).toBe(0); // still never failed
+		// The reason distinguishes a crash loop from bad work — the whole point of splitting them.
+		expect(abandoned?.lastError).toContain("claims without completing");
+		expect((await store.getRun(run.id))?.status).toBe("failed");
+	});
+});
+
 // R-M10. The reaper CONSUMED the lease first — deleted it — and transitioned the task after. A
 // process dying between those two left the task `leased` with a `leaseId` pointing at a row that no
 // longer existed: no lease left to expire, and the claim query only looks at `pending`, so the task
