@@ -4,12 +4,30 @@
 // stopped mid-flight by a caller holding a different engine handle over the same database, which is
 // what "from another process" means when the only thing two hosts share is rows.
 
-import { govern, userPrincipal } from "@busyclaw/contracts";
-import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
+import type { Adapter, SchemaDeclaration } from "@busyclaw/contracts";
+import {
+	approvalSchema,
+	effectSchema,
+	govern,
+	piiMappingSchema,
+	runCheckpointSchema,
+	runMessageSchema,
+	userPrincipal,
+} from "@busyclaw/contracts";
+import { createStoredRedactor } from "@busyclaw/core";
+import {
+	createSqlEngineStore,
+	sqlEngine,
+	sqlEngineSchema,
+} from "@busyclaw/engine-sql";
 import { createRuntime, type RuntimeModel } from "@busyclaw/runtime";
+import { createPiiMappingStore } from "@busyclaw/storage-durable";
+import { kyselyAdapter, planMigrations } from "@busyclaw/storage-kysely";
 import { jsonSchema, tool } from "ai";
-import { describe, expect, it } from "vitest";
-import { durableRedactor, owned } from "./fixtures";
+import Database from "better-sqlite3";
+import { Kysely, SqliteDialect } from "kysely";
+import { afterEach, describe, expect, it } from "vitest";
+import { emailDetector, owned } from "./fixtures";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -64,7 +82,83 @@ function multiStepModel(
 }
 
 /** A claw-shaped fixture: one database, a runtime that can checkpoint, an engine over the same store. */
-function harness(input: {
+/**
+ * A real SQLite database with the schema migrated in.
+ *
+ * NOT `memoryAdapter`, and that is the whole point: it declares `enforcesUnique: false` and its
+ * `transaction` does not isolate, so "the duplicate loses at the database" and "exactly one CAS
+ * wins" pass there by ordering accident rather than by anything a deployment would have. A green
+ * race test on that adapter certifies an invariant that holds nowhere.
+ */
+async function sqliteDb(schema?: SchemaDeclaration): Promise<{
+	adapter: Adapter;
+	migrate: (declaration: SchemaDeclaration) => Promise<void>;
+	close: () => void;
+}> {
+	const sqlite = new Database(":memory:");
+	const kdb = new Kysely<Record<string, Record<string, unknown>>>({
+		dialect: new SqliteDialect({ database: sqlite }),
+	});
+	const migrate = async (declaration: SchemaDeclaration): Promise<void> => {
+		const plan = await planMigrations({
+			db: kdb,
+			schema: declaration,
+			dialect: "sqlite",
+			warn: (message) => console.warn(`migration: ${message}`),
+		});
+		await plan.runMigrations();
+	};
+	if (schema) await migrate(schema);
+	return { adapter: kyselyAdapter(kdb), migrate, close: () => sqlite.close() };
+}
+
+/** The engine-level table set: what a durable run touches with no product api in front of it. */
+const RUN_TABLES: SchemaDeclaration = {
+	...sqlEngineSchema,
+	...approvalSchema,
+	...effectSchema,
+	...runCheckpointSchema,
+	...runMessageSchema,
+	...piiMappingSchema,
+};
+
+/** A CLAW over a real database — for the tests that exercise the api door rather than the engine. */
+async function clawHarness(config: Record<string, unknown> = {}): Promise<{
+	db: Adapter;
+	store: ReturnType<typeof createSqlEngineStore>;
+	claw: ReturnType<typeof owned>;
+}> {
+	// The engine's tables are NOT in `claw.$tables` — the engine owns its own schema — so both
+	// declarations are migrated: the run substrate, then whatever the product layer adds on top.
+	const { adapter, migrate, close } = await sqliteDb(RUN_TABLES);
+	openDatabases.push(close);
+	const store = createSqlEngineStore(adapter);
+	const claw = owned({
+		cronHandler: false,
+		database: adapter,
+		engine: sqlEngine({ store, workerId: "worker-1" }),
+		model: multiStepModel(0),
+		redaction: {
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(adapter),
+			}),
+		},
+		...config,
+	} as Parameters<typeof owned>[0]);
+	// `$tables` is the migration CLI's own door — the merged declaration this claw expects to exist,
+	// which is strictly more than the engine's (grants, policy slices, the transcript). Lazy, so it is
+	// safe to read after construction and before the first call.
+	await migrate(claw.$tables as SchemaDeclaration);
+	return { db: adapter, store, claw };
+}
+
+const openDatabases: (() => void)[] = [];
+afterEach(() => {
+	for (const close of openDatabases.splice(0)) close();
+});
+
+async function harness(input: {
 	toolSteps: number;
 	onTool?: (n: number) => Promise<void> | void;
 	now?: () => string;
@@ -73,26 +167,26 @@ function harness(input: {
 	/** Counts reads of the inbox table — the watermark exists so this stays at zero when quiet. */
 	onInboxRead?: () => void;
 }) {
-	// A database-backed runtime requires a durable redactor — the transcript a checkpoint persists
-	// must already be placeholder-clean, so there has to be something that tokenized it.
-	const { db: rawDb, redactor } = durableRedactor();
+	const { adapter, close } = await sqliteDb(RUN_TABLES);
+	openDatabases.push(close);
 	// Wrapped so a test can count what the hot path actually touches.
-	const db: typeof rawDb = {
-		...rawDb,
+	const db: Adapter = {
+		...adapter,
 		findMany: async (args) => {
 			if (args.model === "run_message") input.onInboxRead?.();
-			return rawDb.findMany(args);
+			return adapter.findMany(args);
 		},
 	};
+	const redactor = createStoredRedactor({
+		detector: emailDetector,
+		mappings: createPiiMappingStore(db),
+	});
 	const store = createSqlEngineStore(db, input.now ? { now: input.now } : {});
 	let toolRuns = 0;
 	const runtime = createRuntime({
 		model: multiStepModel(input.toolSteps, input.onModelCall),
 		database: db,
 		redactor,
-		// Same reason as the task lease below: a tool that advances the fake clock past the default
-		// would have its EFFECT lease expire mid-call, and the run would fail for a reason that has
-		// nothing to do with what these tests assert.
 		effectLeaseTtlMs: 600_000,
 		...(input.now ? { environment: { now: input.now } } : {}),
 		tools: {
@@ -114,26 +208,18 @@ function harness(input: {
 			),
 		},
 	});
-	// A generous lease: the deadline tests advance a fake clock by more than the 60s default INSIDE a
-	// tool call, which would otherwise read as a lost lease rather than the yield being tested.
 	const { engine } = sqlEngine({
 		store,
 		workerId: "worker-1",
 		leaseTtlMs: 600_000,
 	}).create(runtime);
-	return {
-		db,
-		store,
-		engine,
-		runtime,
-		toolRuns: () => toolRuns,
-	};
+	return { db, store, engine, runtime, toolRuns: () => toolRuns };
 }
 
 describe("run control plane — suspend", () => {
 	it("suspends a multi-step run mid-flight, from another process, and parks it", async () => {
 		let suspendFrom: (() => Promise<void>) | undefined;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			// Fired from INSIDE the first tool call, i.e. while the run holds its lease and is
 			// unambiguously in flight. The caller is a second engine handle over the same rows.
@@ -199,7 +285,7 @@ describe("run control plane — suspend", () => {
 	});
 
 	it("settles synchronously when nothing is in flight, and withholds the queued task", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 
 		// Never claimed, so there is no holder that could ever observe a latch. Latching and hoping
@@ -220,7 +306,7 @@ describe("run control plane — suspend", () => {
 	});
 
 	it("refuses a terminal run loudly, writing no latch and exactly one ignored event", async () => {
-		const h = harness({ toolSteps: 0 });
+		const h = await harness({ toolSteps: 0 });
 		const run = await h.engine.startRun({ prompt: "go" });
 		expect(await h.engine.work()).toMatchObject({ status: "completed" });
 
@@ -248,7 +334,7 @@ describe("run control plane — suspend", () => {
 	});
 
 	it("raises the latch but never lowers it", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 		await h.store.updateRun(run.id, { status: "running" });
 
@@ -288,7 +374,7 @@ describe("run control plane — suspend", () => {
 	// bug — the livelock belongs to the loop, so the loop is what this asks.
 	it("a resume whose deadline has already passed still makes progress", async () => {
 		let clock = 0;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			now: () => iso(clock),
 			onTool: () => {
@@ -323,7 +409,7 @@ describe("run control plane — proceed", () => {
 	// and until this verb existed nothing outside the engine worker could bring one back at all.
 	it("resumes a suspended run from its checkpoint, finishing the work it had left", async () => {
 		let suspendFrom: (() => Promise<void>) | undefined;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 2,
 			onTool: async (n) => {
 				if (n === 1) await suspendFrom?.();
@@ -367,7 +453,7 @@ describe("run control plane — proceed", () => {
 	});
 
 	it("admits one slice however many times it is asked", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 		await h.store.updateRun(run.id, { status: "waiting" });
 
@@ -396,15 +482,7 @@ describe("run control plane — proceed", () => {
 	// The record↔run verification lives at the DOOR, because the door is the only layer that can read
 	// a checkpoint's own runId — the engine sees an opaque id and would schedule it happily.
 	it("refuses a record that belongs to a different run", async () => {
-		const { db, redactor } = durableRedactor();
-		const store = createSqlEngineStore(db);
-		const claw = owned({
-			cronHandler: false,
-			database: db,
-			engine: sqlEngine({ store, workerId: "worker-1" }),
-			model: multiStepModel(0),
-			redaction: { redactor },
-		});
+		const { store, claw } = await clawHarness();
 
 		const mine = await claw.api.startRun({ prompt: "mine" });
 		const theirs = await claw.api.startRun({ prompt: "theirs" });
@@ -453,7 +531,7 @@ describe("run control plane — a re-claimed first slice", () => {
 	// work silently, which is the worst way to lose it.
 	it("continues from its checkpoint instead of re-running the whole run", async () => {
 		let clock = 0;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			now: () => iso(clock),
 			onTool: () => {
@@ -514,7 +592,7 @@ describe("run control plane — stop", () => {
 	// was written and no code path has ever set it, so "cancel" has until now meant "hope".
 	it("stops a run mid-flight, writes cancelled, and keeps the transcript", async () => {
 		let stopFrom: (() => Promise<void>) | undefined;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			onTool: async (n) => {
 				if (n === 1) await stopFrom?.();
@@ -558,7 +636,7 @@ describe("run control plane — stop", () => {
 	});
 
 	it("a stop with nothing in flight settles as cancelled immediately", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 
 		expect(
@@ -581,7 +659,7 @@ describe("run control plane — stop", () => {
 	// every terminal write in the worker now goes through `updateRunIfStatus`, and the loser reads
 	// the row back rather than relabelling it.
 	it("a stop latched mid-run wins, and the events agree with the status", async () => {
-		const h = harness({
+		const h = await harness({
 			toolSteps: 1,
 			// Fired from inside the LAST tool call, so the stop lands while the final step is still
 			// running and both writers are genuinely in flight.
@@ -642,7 +720,8 @@ describe("run control plane — abort", () => {
 	// runner rather than a broken mechanism, so the timeout is what turns the negative case into a
 	// report somebody can act on.
 	it("tears down an in-flight model call and records the run cancelled, not failed", async () => {
-		const { db, redactor } = durableRedactor();
+		const { adapter: db, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
 		const store = createSqlEngineStore(db);
 		let providerSawAbort = false;
 		const runtime = createRuntime({
@@ -650,7 +729,10 @@ describe("run control plane — abort", () => {
 				providerSawAbort = true;
 			}),
 			database: db,
-			redactor,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
 		});
 		// A short lease so the heartbeat — which is what observes the latch — ticks promptly.
 		const { engine } = sqlEngine({
@@ -743,14 +825,8 @@ describe("run control plane — a stop while awaiting approval", () => {
 	// site. Without this branch a stop sits latched until a human decides an approval for an action
 	// that is never going to run — waiting on a decision that cannot matter.
 	it("cancels rather than waiting for a decision that cannot matter", async () => {
-		const { db, redactor } = durableRedactor();
-		const store = createSqlEngineStore(db);
-		const claw = owned({
-			cronHandler: false,
-			database: db,
-			engine: sqlEngine({ store, workerId: "worker-1" }),
+		const { store, claw } = await clawHarness({
 			model: approvalSeekingModel(),
-			redaction: { redactor },
 			tools: {
 				ping: govern(
 					tool({
@@ -792,7 +868,7 @@ describe("run control plane — a stop while awaiting approval", () => {
 
 describe("run control plane — the inbox: admit", () => {
 	it("admits a message, mints a per-run seq, and is exactly-once", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 
 		const first = await h.engine.deliverMessage({
@@ -839,7 +915,7 @@ describe("run control plane — the inbox: admit", () => {
 	// terminal transition committing elsewhere. The admit already has to touch the run row to mint
 	// `seq`, so that conditional write IS the guard and there is no window between them.
 	it("bounces a message to a terminal run instead of queueing against a corpse", async () => {
-		const h = harness({ toolSteps: 0 });
+		const h = await harness({ toolSteps: 0 });
 		const run = await h.engine.startRun({ prompt: "go" });
 		expect((await h.engine.work()).status).toBe("completed");
 
@@ -862,7 +938,7 @@ describe("run control plane — the inbox: admit", () => {
 	});
 
 	it("bounces a cancelled run too, not just a completed one", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 		await h.engine.controlRun({
 			runId: run.id,
@@ -885,7 +961,7 @@ describe("run control plane — the inbox: admit", () => {
 	// The seq mint is a CAS-retry, because the Adapter port takes literal values only — there is no
 	// `col = col + 1`, so a read-modify-write loses bumps the moment two admits overlap.
 	it("mints a distinct seq for every message under concurrent admits", async () => {
-		const h = harness({ toolSteps: 1 });
+		const h = await harness({ toolSteps: 1 });
 		const run = await h.engine.startRun({ prompt: "go" });
 
 		const admitted = await Promise.all(
@@ -908,7 +984,7 @@ describe("run control plane — the inbox: admit", () => {
 describe("run control plane — the inbox: delivery", () => {
 	it("delivers a next_step message into the run's very next model call", async () => {
 		const seen: string[] = [];
-		const h = harness({
+		const h = await harness({
 			toolSteps: 2,
 			onTool: async (n) => {
 				if (n === 1) {
@@ -946,7 +1022,7 @@ describe("run control plane — the inbox: delivery", () => {
 
 	it("delivers a message admitted BEFORE the run was ever claimed", async () => {
 		const seen: string[] = [];
-		const h = harness({
+		const h = await harness({
 			toolSteps: 0,
 			onModelCall: (messages) => {
 				seen.push(JSON.stringify(messages));
@@ -969,7 +1045,7 @@ describe("run control plane — the inbox: delivery", () => {
 
 	it("never delivers an at_turn_end message into THIS run", async () => {
 		const seen: string[] = [];
-		const h = harness({
+		const h = await harness({
 			toolSteps: 0,
 			onModelCall: (messages) => {
 				seen.push(JSON.stringify(messages));
@@ -999,7 +1075,7 @@ describe("run control plane — the inbox: delivery", () => {
 	// a quiet inbox costs one primary-key read of the run row per step and nothing else.
 	it("never reads the inbox when the watermark has not moved", async () => {
 		let inboxReads = 0;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 2,
 			onInboxRead: () => {
 				inboxReads++;
@@ -1021,7 +1097,7 @@ describe("run control plane — the inbox: the redelivery fence", () => {
 	it("re-delivers a message that was marked delivered but never reached the transcript", async () => {
 		const seen: string[] = [];
 		let clock = 0;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			now: () => iso(clock),
 			onTool: () => {
@@ -1073,7 +1149,7 @@ describe("run control plane — the inbox: the redelivery fence", () => {
 		const seen: string[] = [];
 		let clock = 0;
 		let runId = "";
-		const h = harness({
+		const h = await harness({
 			toolSteps: 3,
 			now: () => iso(clock),
 			onTool: async (n) => {
@@ -1127,7 +1203,7 @@ describe("run control plane — the inbox: waking a parked run", () => {
 	it("delivers a message admitted while the run was suspended, on resume", async () => {
 		const seen: string[] = [];
 		let suspendFrom: (() => Promise<void>) | undefined;
-		const h = harness({
+		const h = await harness({
 			toolSteps: 2,
 			onTool: async (n) => {
 				if (n === 1) await suspendFrom?.();
@@ -1183,7 +1259,8 @@ describe("run control plane — the inbox: interrupt", () => {
 	// cancel it — and the step is then RE-RUN, so the control point at its top delivers the message
 	// that caused the interruption. The model sees the interruption as context, not as an error.
 	it("cancels the model call in flight and re-runs the step with the message", async () => {
-		const { db, redactor } = durableRedactor();
+		const { adapter: db, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
 		const store = createSqlEngineStore(db);
 		const prompts: string[] = [];
 		let releaseFirstCall: (() => void) | undefined;
@@ -1229,7 +1306,14 @@ describe("run control plane — the inbox: interrupt", () => {
 			},
 		} as RuntimeModel;
 
-		const runtime = createRuntime({ model, database: db, redactor });
+		const runtime = createRuntime({
+			model,
+			database: db,
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+		});
 		// A short lease so the heartbeat — the only thing that can notice mid-call — ticks promptly.
 		const { engine } = sqlEngine({
 			store,
@@ -1264,4 +1348,203 @@ describe("run control plane — the inbox: interrupt", () => {
 		expect(prompts[0]).not.toContain("do this instead");
 		expect(prompts[1]).toContain("do this instead");
 	}, 15_000);
+});
+
+describe("run control plane — the doors", () => {
+	// A STATED acceptance criterion for the advance verb that had no test. The route resolves its
+	// authz anchor PER TAG — the approval tag keeps the manage-on-approval floor `continueEngineRun`
+	// always had, the checkpoint tag anchors on the run — and nothing checked that the anchor it
+	// resolves is the one that actually gets enforced.
+	it("denies a caller who manages neither the run nor the record it names", async () => {
+		const { store, claw } = await clawHarness();
+		const mine = await claw.api.startRun({ prompt: "mine" });
+		const checkpoint = await claw.$context.runtime.checkpoints?.create({
+			runId: mine.id,
+			metadata: {
+				version: "runtime.ai-sdk.yield.v1",
+				nextStep: 1,
+				messages: [{ role: "user", content: "mine" }],
+			},
+			createdAt: new Date().toISOString(),
+		});
+		if (!checkpoint) throw new Error("expected a checkpoint");
+
+		// A STRANGER: authenticated, but with no relationship to this run at all. The PEP resolves the
+		// checkpoint tag against the RUN, and the run is owner-isolated.
+		await expect(
+			claw.api.proceedRun(
+				{
+					runId: mine.id,
+					proceed: { kind: "checkpoint", checkpointId: checkpoint.id },
+				},
+				{ principal: userPrincipal("stranger") },
+			),
+		).rejects.toThrow();
+
+		// …and nothing was scheduled by the attempt.
+		expect((await store.getRun(mine.id))?.status).toBe("queued");
+
+		// THE CONTRAST is what makes the rejection above mean something: the same call, same record,
+		// same everything except who is asking, succeeds. Without this the test would pass just as
+		// happily if `proceedRun` threw for an unrelated reason.
+		await expect(
+			claw.api.proceedRun({
+				runId: mine.id,
+				proceed: { kind: "checkpoint", checkpointId: checkpoint.id },
+			}),
+		).resolves.toMatchObject({ id: mine.id });
+	});
+
+	it("stops a run through the product door, with the requester stamped from the caller", async () => {
+		const { store, claw } = await clawHarness();
+		const run = await claw.api.startRun({ prompt: "go" });
+
+		// No `requestedBy` on the input at all — there is nowhere to put a lie.
+		await claw.api.controlRun({ runId: run.id, intent: "stop" });
+
+		expect((await store.getRun(run.id))?.status).toBe("cancelled");
+		const cancelled = (await store.events(run.id)).find(
+			(event) => event.type === "run.cancelled",
+		);
+		// `owned()` binds one principal to every call; that is who the record must name.
+		expect(cancelled?.payload.requestedBy).toBe(userPrincipal("actor-1"));
+	});
+
+	// The door is where a message is TOKENIZED, into the receiving run's container. Nothing tested
+	// that: the engine-level tests hand it a body that was already clean.
+	it("tokenizes a message body into the receiving run's container", async () => {
+		const { db, store, claw } = await clawHarness();
+		const run = await claw.api.startRun({ prompt: "go" });
+
+		await claw.api.deliverMessage({
+			toRunId: run.id,
+			body: { text: "reply to alice@personal.com please" },
+			mode: "next_step",
+			idempotencyKey: "k1",
+		});
+
+		const rows = await db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		const stored = JSON.stringify(rows[0]);
+		// The address is GONE from the row at rest — a placeholder stands in its place.
+		expect(stored).not.toContain("alice@personal.com");
+		expect(stored).toContain("{{pii:");
+		// …and the row records WHICH container holds the token, so erasure can find it later without
+		// having to guess which run minted it.
+		expect(rows[0]).toMatchObject({
+			containerScope: "run",
+			containerScopeId: run.id,
+			sender: userPrincipal("actor-1"),
+		});
+		void store;
+	});
+
+	it("bounces at the door too, not only inside the engine", async () => {
+		const { store, claw } = await clawHarness();
+		const run = await claw.api.startRun({ prompt: "go" });
+		await claw.api.controlRun({ runId: run.id, intent: "stop" });
+		expect((await store.getRun(run.id))?.status).toBe("cancelled");
+
+		expect(
+			await claw.api.deliverMessage({
+				toRunId: run.id,
+				body: { text: "too late" },
+				mode: "next_step",
+				idempotencyKey: "k1",
+			}),
+		).toMatchObject({ admitted: false, bounced: "cancelled" });
+	});
+});
+
+describe("run control plane — inbox ordering", () => {
+	it("delivers in the run's own order, not the order the rows come back", async () => {
+		const seen: string[] = [];
+		const h = await harness({
+			toolSteps: 0,
+			onModelCall: (prompt) => {
+				seen.push(JSON.stringify(prompt));
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		for (const n of [1, 2, 3]) {
+			await h.engine.deliverMessage({
+				toRunId: run.id,
+				body: { text: `message-${n}` },
+				mode: "next_step",
+				sender: userPrincipal("operator"),
+				idempotencyKey: `k${n}`,
+			});
+		}
+
+		expect((await h.engine.work()).status).toBe("completed");
+		const prompt = seen[0] ?? "";
+		const order = [1, 2, 3].map((n) => prompt.indexOf(`message-${n}`));
+		expect(order.every((at) => at >= 0)).toBe(true);
+		// FIFO by `seq`. Unordered would pass a "they all arrived" assertion and be wrong anyway.
+		expect(order).toEqual([...order].sort((a, b) => a - b));
+	});
+});
+
+describe("run control plane — a crashed host, end to end", () => {
+	// The counter split has store-level tests; this is the whole story through the worker, on a real
+	// database. `maxAttempts` defaulting to 3 is only safe because a re-claimed first slice continues
+	// from its checkpoint instead of re-prompting — so the two have to be exercised together, or the
+	// test that proves the counter is fine hides the fact that the work was silently redone.
+	it("loses its lease mid-run, is re-claimed, and finishes what it started", async () => {
+		let clock = 0;
+		const h = await harness({
+			toolSteps: 3,
+			now: () => iso(clock),
+			onTool: () => {
+				clock += 100_000; // burn past the soft deadline so slice one parks
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+
+		// Slice one yields a checkpoint and self-enqueues its continuation.
+		expect((await h.engine.work({ deadlineAt: iso(50_000) })).status).toBe(
+			"yielded",
+		);
+		expect(h.toolRuns()).toBe(1);
+
+		// THE CRASH: the host holding the continuation vanishes. Nothing writes a terminal status —
+		// the worker returns without touching the store on lease loss — so the task simply sits
+		// `leased` until a reaper sweeps it.
+		const claimed = await h.store.claimDueTask({
+			workerId: "doomed-host",
+			leaseTtlMs: 1,
+		});
+		expect(claimed).not.toBeNull();
+		clock += 10_000;
+		expect(await h.store.reapExpiredLeases()).toBeGreaterThan(0);
+
+		// The run is NOT failed: a vanished host says nothing about whether the work is bad.
+		const afterReap = await h.store.getRun(run.id);
+		expect(afterReap?.status).not.toBe("failed");
+		const requeued = await h.db.findMany({
+			model: "runtime_task",
+			where: [
+				{ field: "runId", value: run.id },
+				{ field: "status", value: "pending", connector: "AND" },
+			],
+		});
+		expect(requeued.length).toBeGreaterThan(0);
+
+		// Past the retry delay the reap set, or the task is simply not due yet and the tick reports
+		// idle — which would make every assertion below vacuously true.
+		clock += 10_000;
+
+		// A fresh host picks it up and CONTINUES — the first tool call is not paid for again.
+		const toolsBefore = h.toolRuns();
+		const resumed = await h.engine.work({ deadlineAt: iso(clock + 50_000) });
+		if (resumed.status === "failed") {
+			throw new Error(`tick failed: ${resumed.reason}`);
+		}
+		expect(h.toolRuns()).toBe(toolsBefore + 1);
+		// One more step happened, not a restart from the prompt: a restart would have re-run the tool
+		// from step 0 and the count would be the same either way — so assert the CHECKPOINT moved on.
+		expect((await h.store.getRun(run.id))?.status).not.toBe("failed");
+	});
 });

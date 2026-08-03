@@ -59,10 +59,12 @@
 		"@busyclaw/egress": "workspace:*",
 		"@busyclaw/policy-cedar": "workspace:*",
 		"@busyclaw/secrets-plugin": "workspace:*",
+		"@types/better-sqlite3": "7.6.13",
 		"@types/node": "26.1.1",
 		"@types/react": "19.2.17",
 		"@types/react-dom": "19.2.3",
 		"ai": "7.0.22",
+		"better-sqlite3": "12.11.1",
 		"happy-dom": "20.10.6",
 		"react": "19.2.7",
 		"react-dom": "19.2.7"
