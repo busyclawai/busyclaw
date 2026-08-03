@@ -130,3 +130,59 @@ describe("PII mappings are contained on write and erase", () => {
 		expect(await store.resolve(NAMESAKE, { scopeId: "alice-claw" })).toBeNull();
 	});
 });
+
+// R-M06. The TOMBSTONE write caught every error, not just the duplicate it was written for. So a
+// tombstone that failed for any other reason — the table missing, the connection gone, a constraint
+// nobody expected — reported a COMPLETED erasure whose standing half had silently not happened: the
+// mappings were shredded, and the very next turn naming the same person would mint them again with
+// nothing on record to say it must not. Erasure is meant to be an instruction, not a one-time delete.
+describe("a tombstone that cannot be written is not a completed erasure", () => {
+	const seeded = async (
+		adapter: Parameters<typeof createPiiMappingStore>[0],
+	) => {
+		const store = createPiiMappingStore(adapter);
+		await store.save(
+			{
+				placeholder: NAMESAKE,
+				original: "alice@example.com",
+				kind: "email",
+				createdAt: at,
+				scope: "claw",
+				scopeId: "c1",
+			},
+			["alice"],
+		);
+		return store;
+	};
+
+	it("raises when the tombstone write fails for a reason that is not a duplicate", async () => {
+		const inner = memoryAdapter();
+		const store = await seeded(inner);
+		// Only the tombstone write fails, and not as a conflict.
+		const broken = {
+			...inner,
+			create: async (input: { model: string }) => {
+				if (input.model === "pii_erasure") {
+					throw new Error("ECONNREFUSED: the database is unreachable");
+				}
+				return inner.create(
+					input as Parameters<typeof inner.create>[0],
+				) as never;
+			},
+		} as typeof inner;
+
+		await expect(
+			createPiiMappingStore(broken).deleteForSubject("alice"),
+		).rejects.toThrow(/ECONNREFUSED/);
+		void store;
+	});
+
+	// …and a genuine re-erasure is still not an error: the instruction stands, and its first date is
+	// the true one.
+	it("stays silent when the subject was already tombstoned", async () => {
+		const adapter = memoryAdapter();
+		const store = await seeded(adapter);
+		await expect(store.deleteForSubject("alice")).resolves.toBeGreaterThan(0);
+		await expect(store.deleteForSubject("alice")).resolves.toBe(0);
+	});
+});

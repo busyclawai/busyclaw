@@ -164,6 +164,51 @@ describe("plugin redaction handles", () => {
 		expect(raw).toBe("reach alice@personal.com");
 	});
 
+	// R-M08. Under MIXED posture, shredding mappings erases the strict containers and reaches NOTHING
+	// in the raw ones — they hold unredacted values with no mapping to delete. `forgetSubject` still
+	// returned a count and called it done, so a deployment could answer a DSR truthfully-looking while
+	// the subject's data sat in the raw claws next door.
+	it("refuses per-subject erasure while a raw-posture claw exists", async () => {
+		const claw = owned({
+			database: memoryAdapter(),
+			model: textModel("done"),
+			redaction: {
+				posture: "per-claw",
+				detectors: [emailDetector],
+				indexKey: "test-key",
+			},
+		});
+		await claw.api.createClaw({
+			id: "strict-claw",
+			name: "strict",
+			redaction: "strict",
+		});
+
+		// All-strict so far: erasure is complete, so it runs.
+		await expect(
+			claw.api.forgetSubject({
+				subjectId: "alice",
+				scope: "claw",
+				scopeId: "strict-claw",
+			}),
+		).resolves.toMatchObject({ erased: expect.any(Number) });
+
+		await claw.api.createClaw({
+			id: "raw-claw",
+			name: "raw",
+			redaction: "raw",
+		});
+
+		// Now it CANNOT be complete, and there is no honest partial number to report.
+		await expect(
+			claw.api.forgetSubject({
+				subjectId: "alice",
+				scope: "claw",
+				scopeId: "strict-claw",
+			}),
+		).rejects.toThrow(/incomplete while raw-posture claws exist/);
+	});
+
 	it("rehydrate round-trips the plugin's own token and lands ONE pii.reidentification audit record", async () => {
 		const audit = createMemoryAudit();
 		const { captured, plugin } = capture();

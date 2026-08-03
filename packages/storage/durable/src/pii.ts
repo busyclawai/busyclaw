@@ -1,5 +1,6 @@
 import type { Adapter, ScopeRef } from "@busyclaw/contracts";
 import {
+	isConflict,
 	type PiiMapping,
 	type PiiMappingStore,
 	piiContainer,
@@ -220,8 +221,16 @@ export function createPiiMappingStore(
 						model: "pii_erasure",
 						data: { subjectId, scope, scopeId, erasedAt: at },
 					});
-				} catch {
-					// Already tombstoned — the instruction stands, and its first date is the true one.
+				} catch (error) {
+					// R-M06. ONLY a duplicate is survivable here. This caught everything, so a tombstone
+					// that failed to write for any other reason — the table missing, the connection gone,
+					// a constraint nobody expected — reported a completed erasure whose STANDING half had
+					// silently not happened: the mappings were shredded, and the very next turn naming the
+					// same person would mint them again with nothing to say they must not.
+					//
+					// "Already tombstoned" is still not an error: the instruction stands and its first date
+					// is the true one.
+					if (!isConflict(error)) throw error;
 				}
 			}
 			// Mappings shredded, not subject rows: it is the mapping that made a placeholder

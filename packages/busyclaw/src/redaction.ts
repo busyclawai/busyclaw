@@ -294,10 +294,41 @@ export function resolveRedaction(input: {
 		return posture;
 	};
 	const routing = createRoutingRedactor({ strict, postureOf });
+	// R-M08. Under MIXED posture, shredding mappings erases the strict containers and reaches nothing
+	// in the raw ones — they hold unredacted values with no mapping to delete. `forgetSubject` still
+	// returned a count and called it done, so a deployment could answer a DSR truthfully-looking while
+	// the subject's data sat in the raw claws next door.
+	//
+	// Refused when any raw container exists, which is the same answer the all-raw posture already
+	// gives, for the same reason: there is no honest partial number to report. "Erased 12" cannot be
+	// qualified by "and an unknown amount elsewhere" in an integer. A deployment that needs erasure to
+	// work does not create raw claws; one that has them has already accepted this.
+	const adapter = input.adapter;
+	const forgetSubjectRouted: ClawRedactionHandle["forgetSubject"] = async (
+		subjectId,
+		container,
+	) => {
+		const raw = adapter
+			? await adapter.findOne({
+					model: "claw",
+					where: [{ field: "redaction", value: "raw" }],
+				})
+			: null;
+		if (raw !== null) {
+			throw configurationError(
+				"per-subject erasure is incomplete while raw-posture claws exist",
+				{
+					reason:
+						'a claw created with redaction "raw" persists unredacted values with no mappings, so shredding mappings cannot reach them — archive or migrate those claws before promising erasure',
+				},
+			);
+		}
+		return forgetSubject(subjectId, container);
+	};
 	return {
 		redactor: routing,
 		armed,
 		perClaw: true,
-		handle: handleOver(routing),
+		handle: { ...handleOver(routing), forgetSubject: forgetSubjectRouted },
 	};
 }
