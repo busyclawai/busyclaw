@@ -138,7 +138,7 @@ describe("@busyclaw/policy-cedar — Cedar PDP", () => {
 		// which could not: a role held in any one boundary answered for every other one.
 		const policies = `permit(principal, action == Action::"send_offer", resource) when { context.roles.contains("team:payments#approver") };`;
 		// resolveContext stamps busyclaw__memberships exactly as the claw's `membership` resolver would
-		// (the list came from principalMemberships({ membershipsOf: teamStore.membershipsOf })).
+		// (the list came from principalMemberships({ membershipsOf }), fed by a plugin's lookup).
 		const asRole = (role: string, scopeId = "payments") =>
 			createGovernance({
 				plugins: [cedarPolicyPlugin({ policies })],

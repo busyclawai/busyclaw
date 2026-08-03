@@ -6,8 +6,6 @@ import {
 	PRINCIPAL_CONTEXT_KEY,
 	userPrincipal,
 } from "@busyclaw/contracts";
-import { memoryAdapter } from "@busyclaw/storage-core";
-import { createTeamStore } from "@busyclaw/storage-durable";
 import { describe, expect, it } from "vitest";
 import {
 	composeContext,
@@ -38,22 +36,19 @@ describe("runtime context", () => {
 	});
 
 	it("resolves EVERY membership through any membershipsOf lookup", async () => {
-		const team = createTeamStore(memoryAdapter());
-		for (const [name, role] of [
-			["acme", "approver"],
-			["platform", "member"],
-		] as const) {
-			const invite = await team.invite({
-				team: name,
-				email: "bob@x.com",
-				role,
-			});
-			await team.accept(invite.id, userPrincipal("bob"));
-		}
+		// A plugin's lookup, standing in for the real one — core ships no membership store, so the seam
+		// is only ever fed from outside.
+		const membershipsOf = async (principal: string) =>
+			principal === userPrincipal("bob")
+				? [
+						{ scope: "team", scopeId: "acme", role: "approver" },
+						{ scope: "team", scopeId: "platform", role: "member" },
+					]
+				: [];
 
 		const resolve = resolverFor({
 			identity: () => userPrincipal("bob"),
-			membership: principalMemberships({ membershipsOf: team.membershipsOf }),
+			membership: principalMemberships({ membershipsOf }),
 		});
 		// No `team` on the context: which boundary is "active" is not an input any more. The predecessor
 		// had to be told, because it could carry only one.

@@ -62,12 +62,26 @@ export function sessionIdentity(deps: {
 }
 
 /**
- * Build a MembershipResolver from any "which boundaries is this principal in" lookup — the native team
- * store's `membershipsOf`, better-auth's org memberships, an LDAP group query, your own.
+ * Build a MembershipResolver from any "which boundaries is this principal in" lookup — better-auth's
+ * org memberships, an LDAP group query, your own.
+ *
+ * Core implements NONE of them. Tenancy here is `(scope, scopeId)` and core has no opinion about what
+ * a boundary is, so it ships no membership store to back this: a claw with no plugin supplying
+ * `membershipsOf` resolves no memberships at all, and every `scopes.contains(…)`/`roles.contains(…)`
+ * policy is false. That is the intended shape — a boundary is a plugin's concept — but it means
+ * membership-gated policy does nothing until a host wires this seam to a real lookup.
  *
  * This is the whole adapter. The predecessor (`roleMembership({ roleOf })`) additionally had to be told
  * where to find the ONE active team on the context, because the model allowed only one; with the lookup
  * returning every membership there is nothing left to configure.
+ *
+ * ONE HAZARD MOVES ACROSS THIS SEAM WITH THE STORAGE. Core used to own the membership table and
+ * declared a composite unique on it, because a duplicate membership row is a REVOCATION BYPASS:
+ * removing the row an admin can see leaves the other one still granting. Whoever owns membership
+ * storage now inherits that, and nothing here can check it — `assertUniquesRepresentable` validates
+ * only the keys a table actually declares, so a plugin that declares none passes silently. A
+ * membership table needs a unique on its own (boundary, principal) pair or the bug reappears
+ * somewhere core cannot see it.
  */
 export function principalMemberships(deps: {
 	membershipsOf: (

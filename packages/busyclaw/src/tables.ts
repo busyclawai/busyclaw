@@ -37,7 +37,6 @@ import {
 	toolResultFields,
 } from "@busyclaw/contracts";
 import type { EntityModelMap, SchemaDeclaration } from "@busyclaw/storage-core";
-import { teamInviteEntity, teamMemberEntity } from "@busyclaw/storage-durable";
 import type { ClawSchemaConfig } from "./models";
 import {
 	clawRedactionFields,
@@ -66,12 +65,7 @@ const CORE_UNIQUES: Record<string, readonly (readonly string[])[]> = {
 	//   conversation_binding — the key its own comment already states: a bot scopes external
 	//     conversation ids (telegram DM chat ids repeat across bots), so without it inbound routing is
 	//     ambiguous and a reply can land in the wrong thread.
-	//   team_member — one membership per (team, user). A duplicate is a revocation bypass: removing
-	//     the row you can see leaves the other one granting.
-	//   team_invite — one open invite per (team, email), or accepting one leaves the rest live.
 	tool_call: [["runId", "toolCallId"]],
-	team_member: [["team", "userId"]],
-	team_invite: [["team", "email"]],
 	conversation_binding: [["provider", "endpointKey", "externalConversationId"]],
 };
 
@@ -118,8 +112,6 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	// The erasure tombstone — durable proof of what was shredded, and from where.
 	pii_erasure: piiErasureFields,
 	run_checkpoint: runCheckpointFields,
-	team_member: teamMemberEntity.fields,
-	team_invite: teamInviteEntity.fields,
 	// The tool registry is PRODUCT (rows), not a plugin — siblings of approvals/run_checkpoint.
 	spec_registration: specRegistrationFields,
 	registered_tool: registeredToolFields,

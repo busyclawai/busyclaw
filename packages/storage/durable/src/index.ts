@@ -16,14 +16,4 @@ export {
 	effectSchema,
 	piiMappingSchema,
 	runCheckpointSchema,
-	teamInviteEntity,
-	teamMemberEntity,
-	teamSchema,
 } from "./schema";
-export type {
-	TeamInvite,
-	TeamMember,
-	TeamStore,
-	TeamStoreOptions,
-} from "./team";
-export { createTeamStore } from "./team";

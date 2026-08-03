@@ -12,12 +12,14 @@ describe("getBusyclawTables", () => {
 			"approval",
 			"effect",
 			"pii_mapping",
-			"team_member",
 		]) {
 			expect(tables[model]).toBeDefined();
 		}
 		// skills tables are NOT core — they only appear when the skills plugin registers them.
 		expect(tables.skill_package).toBeUndefined();
+		// Neither is membership: core owns no team table. Memberships arrive through the
+		// `principalMemberships` seam from a plugin that owns its own storage.
+		expect(tables.team_member).toBeUndefined();
 	});
 
 	it("extends a core table with the host's additionalFields", () => {
@@ -125,10 +127,6 @@ describe("getBusyclawTables — table-level constraints survive assembly", () =>
 		expect(uniquesOf("conversation_binding")).toEqual([
 			["provider", "endpointKey", "externalConversationId"],
 		]);
-		// A second membership row is a revocation bypass: removing the one you can see leaves the
-		// other one granting.
-		expect(uniquesOf("team_member")).toEqual([["team", "userId"]]);
-		expect(uniquesOf("team_invite")).toEqual([["team", "email"]]);
 	});
 
 	it("still carries them when a plugin EXTENDS the model", () => {
