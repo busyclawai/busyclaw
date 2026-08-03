@@ -172,6 +172,16 @@ export const modelCompletedEvent = ark({
 	finishReason: "string",
 });
 
+// A model call cancelled on purpose so the step could be re-run with a message that arrived while
+// it was in flight. NOT `model.failed`: nothing broke, and an operator reading a failure rate should
+// not see deliberate steering in it.
+export const modelInterruptedEvent = ark({
+	...runtimeEventBaseShape,
+	type: "'model.interrupted'",
+	step: "number",
+	durationMs: "number",
+});
+
 export const modelFailedEvent = ark({
 	...runtimeEventBaseShape,
 	type: "'model.failed'",
@@ -197,6 +207,7 @@ export const runtimeEvent = runStartedEvent
 	.or(toolDeniedEvent)
 	.or(toolFailedEvent)
 	.or(modelCompletedEvent)
+	.or(modelInterruptedEvent)
 	.or(modelFailedEvent);
 
 export type RuntimeEvent = typeof runtimeEvent.infer;

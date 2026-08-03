@@ -1176,3 +1176,92 @@ describe("run control plane — the inbox: waking a parked run", () => {
 		expect(seen.slice(before).join("")).toContain("while you were out");
 	});
 });
+
+describe("run control plane — the inbox: interrupt", () => {
+	// A message arriving mid-call cannot be seen by the control point, which does not run again until
+	// that call returns. The heartbeat is the only thing awake, so it is the only thing that can
+	// cancel it — and the step is then RE-RUN, so the control point at its top delivers the message
+	// that caused the interruption. The model sees the interruption as context, not as an error.
+	it("cancels the model call in flight and re-runs the step with the message", async () => {
+		const { db, redactor } = durableRedactor();
+		const store = createSqlEngineStore(db);
+		const prompts: string[] = [];
+		let releaseFirstCall: (() => void) | undefined;
+		let calls = 0;
+
+		const model: RuntimeModel = {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async (options: {
+				prompt?: unknown;
+				abortSignal?: AbortSignal;
+			}) => {
+				prompts.push(JSON.stringify(options.prompt));
+				calls++;
+				// The FIRST call hangs until its signal fires. The second answers immediately.
+				if (calls === 1) {
+					return new Promise((_resolve, reject) => {
+						releaseFirstCall = () => reject(new Error("aborted"));
+						options.abortSignal?.addEventListener("abort", () => {
+							reject(new Error("aborted"));
+						});
+					});
+				}
+				return {
+					content: [{ type: "text" as const, text: "done" }],
+					finishReason: { unified: "stop" as const, raw: undefined },
+					usage: {
+						inputTokens: {
+							total: 1,
+							noCache: undefined,
+							cacheRead: undefined,
+							cacheWrite: undefined,
+						},
+						outputTokens: { total: 1, text: undefined, reasoning: undefined },
+					},
+					warnings: [],
+				};
+			},
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		} as RuntimeModel;
+
+		const runtime = createRuntime({ model, database: db, redactor });
+		// A short lease so the heartbeat — the only thing that can notice mid-call — ticks promptly.
+		const { engine } = sqlEngine({
+			store,
+			workerId: "worker-1",
+			leaseTtlMs: 600,
+		}).create(runtime);
+
+		const run = await engine.startRun({ prompt: "go" });
+		const tick = engine.work();
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		await engine.deliverMessage({
+			toRunId: run.id,
+			body: { text: "actually, stop and do this instead" },
+			mode: "interrupt",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k1",
+		});
+
+		const result = await tick;
+		if (result.status === "failed") {
+			throw new Error(`tick failed: ${result.reason}`);
+		}
+		void releaseFirstCall;
+
+		// The run FINISHED — the interrupt re-ran the step rather than ending the run, which is the
+		// whole difference between this and `abort`.
+		expect(result.status).toBe("completed");
+		expect((await store.getRun(run.id))?.status).toBe("completed");
+		// Two model calls: the one that was cancelled, and the re-run.
+		expect(calls).toBe(2);
+		// The first saw no message; the re-run saw it. That ordering is the mechanism.
+		expect(prompts[0]).not.toContain("do this instead");
+		expect(prompts[1]).toContain("do this instead");
+	}, 15_000);
+});

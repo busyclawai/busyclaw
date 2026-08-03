@@ -219,6 +219,9 @@ export type RunControlPort = {
 		park?: RunParkReason;
 		deliver?: readonly { seq: number; body: Record<string, unknown> }[];
 	}>;
+	/** Register a way to cancel the model call about to happen. Re-registered every step, because an
+	 *  AbortController fires once and the step after an interrupt must be interruptible too. */
+	armInterrupt?: (runId: string, fire: () => void) => void;
 };
 
 export type RuntimeRunOptions = {
@@ -1204,6 +1207,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		content: typeof body.text === "string" ? body.text : JSON.stringify(body),
 	});
 
+	const armInterruptFor =
+		(control: RunControlPort, runId: string) =>
+		(fire: () => void): void =>
+			control.armInterrupt?.(runId, fire);
+
 	// Binds the control port to a run's identity, so the loop asks "should I stop?" without ever
 	// holding a run id it could ask about somebody ELSE's run.
 	const controlPointFor =
@@ -1906,7 +1914,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			deadlineAt: options?.deadlineAt,
 			persistYieldCheckpoint: yieldCheckpointPersister(state),
 			...(options?.control && state.runId
-				? { controlPoint: controlPointFor(options.control, state.runId) }
+				? {
+						controlPoint: controlPointFor(options.control, state.runId),
+						...(options.control.armInterrupt
+							? { armInterrupt: armInterruptFor(options.control, state.runId) }
+							: {}),
+					}
 				: {}),
 			emitEvent: (payload) => emitEvent(emitCtx, payload),
 			redactValue: (value) => redactValue(value, resolvedCtx),

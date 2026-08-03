@@ -249,6 +249,9 @@ export type SqlEngineStore = {
 		afterSeq: number;
 		step: number;
 	}) => Promise<readonly { seq: number; body: JsonObject }[]>;
+	/** Is there an undelivered `interrupt`-mode message for this run? The one question the heartbeat
+	 *  asks on behalf of a model call already in flight. */
+	hasPendingInterrupt: (runId: string) => Promise<boolean>;
 	/** Admit a message to a run's inbox. Mints `seq` and decides the bounce in ONE conditional write
 	 *  against the run row — see the implementation for why those cannot be two. */
 	admitMessage: (input: {
@@ -779,6 +782,19 @@ export function createSqlEngineStore(
 				drained.push({ seq: row.seq, body: row.body });
 			}
 			return drained;
+		},
+
+		async hasPendingInterrupt(runId) {
+			const rows = await db.findMany({
+				model: "run_message",
+				where: [
+					{ field: "toRunId", value: runId },
+					{ field: "status", value: "pending", connector: "AND" },
+					{ field: "mode", value: "interrupt", connector: "AND" },
+				],
+				limit: 1,
+			});
+			return rows.length > 0;
 		},
 
 		async admitMessage(input) {

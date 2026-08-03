@@ -342,6 +342,8 @@ type HeartbeatHandle = {
 	 *  slice writes is `cancelled` or `failed`, which is the whole difference between "somebody
 	 *  stopped it" and "it broke". */
 	abortedByIntent: () => boolean;
+	/** The current step's interrupt hook, replaced every step by the loop. */
+	setInterrupt: (fire: () => void) => void;
 };
 
 function startHeartbeat(
@@ -372,6 +374,7 @@ function startHeartbeat(
 	// latch here costs one narrow read on a timer that exists — and it is the ONLY place that can
 	// reach an in-flight provider call, because a step can be minutes long and the loop's control
 	// point does not run again until that step returns.
+	let interruptFire: (() => void) | undefined;
 	let intentAborted = false;
 	const markAborted = (): void => {
 		if (intentAborted || lostReason !== undefined) return;
@@ -393,7 +396,21 @@ function startHeartbeat(
 					return;
 				}
 				const run = await store.getRun(claim.task.runId);
-				if (run?.controlIntent === "abort") markAborted();
+				if (run?.controlIntent === "abort") {
+					markAborted();
+					return;
+				}
+				// An `interrupt`-mode message cannot be noticed by the loop's control point, which does
+				// not run again until the in-flight model call returns. This timer is the only thing
+				// awake during that call, so it is the only thing that can cancel it.
+				if (
+					interruptFire &&
+					(await store.hasPendingInterrupt(claim.task.runId))
+				) {
+					const fire = interruptFire;
+					interruptFire = undefined;
+					fire();
+				}
 			})
 			.catch((err) => {
 				markLost(errorMessage(err));
@@ -412,6 +429,9 @@ function startHeartbeat(
 		lost,
 		lostReason: () => lostReason,
 		abortedByIntent: () => intentAborted,
+		setInterrupt: (fire) => {
+			interruptFire = fire;
+		},
 		stop,
 	};
 }
@@ -424,7 +444,13 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	// One read of the run row per step. `controlRequestedAt` present IS the intent — the loop is told
 	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
 	// upstream of it.
+	// The heartbeat driving the slice that is running RIGHT NOW. One tick runs one task, so there is
+	// only ever one — but it is per-claim, while the port is per-worker, so they are joined here.
+	let currentHeartbeat: HeartbeatHandle | undefined;
 	const controlPort: RunControlPort = {
+		armInterrupt: (_runId, fire) => {
+			currentHeartbeat?.setInterrupt(fire);
+		},
 		poll: async (runId, seenSeq, deliveredThrough) => {
 			// ONE primary-key read per step, and that is the steady-state cost of the whole control
 			// plane. The message table is touched only when the watermark moved — which is why every
@@ -465,6 +491,7 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 			const claim = await store.claimDueTask({ workerId, leaseTtlMs });
 			if (!claim) return { status: "idle" };
 			const heartbeat = startHeartbeat(store, claim, leaseTtlMs);
+			currentHeartbeat = heartbeat;
 
 			try {
 				if (

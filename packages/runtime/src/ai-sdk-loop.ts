@@ -89,6 +89,16 @@ export type AiSdkLoopInput = {
 		seenSeq: number,
 		deliveredThrough: number,
 	) => Promise<RunControlVerdict>;
+	/**
+	 * Hands the control seam a way to cancel the model call that is ABOUT to happen, re-registered
+	 * every step because an AbortController fires once.
+	 *
+	 * This is the only interrupt path that can exist: a message arriving mid-call cannot be noticed
+	 * by the control point, which does not run again until that call returns. Whoever watches on a
+	 * timer fires this, the step is re-run, and the control point at the top of it delivers the
+	 * message that caused the interrupt.
+	 */
+	armInterrupt?: (fire: () => void) => void;
 	emitEvent?: (payload: RuntimeEventPayloadInput) => Promise<void>;
 	/** The redaction seam: applied ONCE to content entering the transcript (MODEL output and tool
 	 *  outputs) and to event payloads. Everything downstream — model prompt, events, checkpoints,
@@ -174,6 +184,43 @@ function serializeToolOutput(output: unknown): string {
 	throw stateError("tool output is not JSON-serializable", {
 		reason: "JSON.stringify returned undefined",
 	});
+}
+
+/** Has a cooperative-or-platform run signal already aborted? Distinguishes "the RUN was told to
+ *  stop" from "this model call was interrupted", which land in the same catch. */
+function isAborted(signal: RuntimeAbortSignal | undefined): boolean {
+	return signal?.aborted === true;
+}
+
+/**
+ * One step's interrupt handle, or undefined when nothing can interrupt.
+ *
+ * The signal handed to the provider must abort on EITHER the run's own signal or this interrupt, so
+ * the two are combined — and only when both are real platform signals, because `AbortSignal.any`
+ * needs real ones. On a host whose run signal is the cooperative shim, interrupt degrades to
+ * arriving at the next control point, which is the same honest degradation `abort` already makes.
+ */
+function armStepInterrupt(
+	input: AiSdkLoopInput,
+): { signal: AbortSignal; fired: () => boolean } | undefined {
+	if (!input.armInterrupt) return undefined;
+	const Controller = (
+		globalThis as { AbortController?: typeof AbortController }
+	).AbortController;
+	if (!Controller) return undefined;
+	const controller = new Controller();
+	input.armInterrupt(() => controller.abort());
+	const run = input.abortSignal;
+	const combinable =
+		typeof AbortSignal !== "undefined" &&
+		typeof AbortSignal.any === "function" &&
+		run instanceof AbortSignal;
+	return {
+		signal: combinable
+			? AbortSignal.any([run as AbortSignal, controller.signal])
+			: controller.signal,
+		fired: () => controller.signal.aborted,
+	};
 }
 
 async function redact<T>(input: AiSdkLoopInput, value: T): Promise<T> {
@@ -411,8 +458,14 @@ export async function runAiSdkLoop(
 				};
 	};
 
-	for (let step = startStep; step < input.maxSteps; step++) {
+	let step = startStep;
+	while (step < input.maxSteps) {
 		abortIfNeeded(input.abortSignal);
+
+		// A FRESH controller per step: an AbortController fires once, and the step after an interrupt
+		// must be interruptible too. Armed here and never handed to a tool — an interrupt that could
+		// tear through a running effect would be a different and much worse primitive.
+		const interrupt = armStepInterrupt(input);
 
 		// THE CONTROL POINT — one await, and only when a control seam was supplied. Messages first,
 		// then the park: a suspend that arrives together with a message should carry that message into
@@ -453,7 +506,11 @@ export async function runAiSdkLoop(
 			instructions: input.system,
 			messages,
 			stopWhen: isStepCount(1),
-			...(input.abortSignal ? { abortSignal: input.abortSignal as never } : {}),
+			...(interrupt?.signal
+				? { abortSignal: interrupt.signal as never }
+				: input.abortSignal
+					? { abortSignal: input.abortSignal as never }
+					: {}),
 		};
 		// Streaming and non-streaming converge on the same normalized result (usage / finishReason /
 		// response.messages / toolCalls / text) — so the whole tool-governance loop below is shared.
@@ -501,6 +558,19 @@ export async function runAiSdkLoop(
 		try {
 			res = await callModel();
 		} catch (err) {
+			// AN INTERRUPT IS NOT A FAILURE. The step is re-run from the top, where the control point
+			// delivers the message that caused it — so the model sees the interruption as context
+			// rather than as a provider error. Nothing was pushed to `messages` yet (that happens
+			// after the call returns), so the partial response is simply discarded and the transcript
+			// never contains a half-written assistant turn.
+			if (interrupt?.fired() && !isAborted(input.abortSignal)) {
+				await input.emitEvent?.({
+					durationMs: Date.now() - modelStartedAt,
+					step,
+					type: "model.interrupted",
+				});
+				continue;
+			}
 			// Provider errors can echo prompt content — same redaction seam as tool.failed's error.
 			const redactedError = await redact(input, errorEventPayload(err));
 			await input.emitEvent?.({
@@ -698,9 +768,14 @@ export async function runAiSdkLoop(
 		messages.push(...toolMessages);
 
 		// The deadline check used to sit HERE, at end-of-step. It moved to the top of the loop: the two
-		// are the same instant one `for` increment apart (the checkpoint's `nextStep` is N+1 either
-		// way), and collapsing them buys one park site instead of two, coverage of the instant BEFORE
-		// a step's model call, and one predicate that later intents extend without touching this file.
+		// are the same instant one increment apart (the checkpoint's `nextStep` is N+1 either way),
+		// and collapsing them buys one park site instead of two, coverage of the instant BEFORE a
+		// step's model call, and one predicate that later intents extend without touching this file.
+		//
+		// The increment lives here, not in a `for` header, because an INTERRUPT re-runs the same step:
+		// it `continue`s past this line so the control point at the top delivers the message that
+		// caused it. There is no other `continue` in this body — check before adding one.
+		step++;
 	}
 
 	throw stateError(
