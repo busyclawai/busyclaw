@@ -677,3 +677,99 @@ describe("run control plane — abort", () => {
 		).toBe(false);
 	}, 15_000);
 });
+
+describe("run control plane — a stop while awaiting approval", () => {
+	/** Calls a tool the floor will gate, so the run parks on an approval rather than finishing. */
+	function approvalSeekingModel(): RuntimeModel {
+		let call = 0;
+		const usage = {
+			inputTokens: {
+				total: 1,
+				noCache: undefined,
+				cacheRead: undefined,
+				cacheWrite: undefined,
+			},
+			outputTokens: { total: 1, text: undefined, reasoning: undefined },
+		};
+		return {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async () =>
+				call++ === 0
+					? {
+							content: [
+								{
+									type: "tool-call" as const,
+									toolCallId: "c1",
+									toolName: "ping",
+									input: JSON.stringify({ n: 1 }),
+								},
+							],
+							finishReason: { unified: "tool-calls" as const, raw: undefined },
+							usage,
+							warnings: [],
+						}
+					: {
+							content: [{ type: "text" as const, text: "done" }],
+							finishReason: { unified: "stop" as const, raw: undefined },
+							usage,
+							warnings: [],
+						},
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		} as RuntimeModel;
+	}
+
+	// `waiting_approval` returns from inside the tool loop, so it never reaches the loop-top control
+	// site. Without this branch a stop sits latched until a human decides an approval for an action
+	// that is never going to run — waiting on a decision that cannot matter.
+	it("cancels rather than waiting for a decision that cannot matter", async () => {
+		const { db, redactor } = durableRedactor();
+		const store = createSqlEngineStore(db);
+		const claw = owned({
+			cronHandler: false,
+			database: db,
+			engine: sqlEngine({ store, workerId: "worker-1" }),
+			model: approvalSeekingModel(),
+			redaction: { redactor },
+			tools: {
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async ({ n }) => ({ pong: n }),
+					}),
+					{},
+				),
+			},
+		});
+
+		const run = await claw.api.startRun({ prompt: "go" });
+		// The floor gates the unconfirmed autonomous write, so this slice parks on an approval.
+		const parked = await claw.$context.engine?.work?.();
+		expect((parked as { status?: string } | undefined)?.status).toBe(
+			"waiting_approval",
+		);
+		expect((await store.getRun(run.id))?.status).toBe("waiting");
+
+		// A stop, while the run sits on that approval and nothing is in flight.
+		await claw.api.controlRun({ runId: run.id, intent: "stop" });
+
+		// It is honoured by the SYNCHRONOUS branch — the run is `waiting`, so there is no holder to
+		// observe a latch, and leaving it parked would be the hang this test exists to prevent.
+		const stopped = await store.getRun(run.id);
+		expect(stopped?.status).toBe("cancelled");
+		expect(
+			(await store.events(run.id)).some(
+				(event) => event.type === "run.cancelled",
+			),
+		).toBe(true);
+	});
+});

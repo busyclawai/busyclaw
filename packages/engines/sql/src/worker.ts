@@ -581,6 +581,66 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 				}
 
 				if (result.status === "waiting_approval") {
+					// `waiting_approval` returns from INSIDE the tool loop, before the `for` increment, so
+					// it never reaches the loop-top control site — and the worker then enqueues nothing.
+					// A latch raised during that window would otherwise be observed only when a human
+					// happens to decide the approval, which is not a bound at all.
+					//
+					// A STOP is honoured here: waiting for someone to approve an action that will never
+					// run is the worst of both. A SUSPEND is not — the run is already parked and not
+					// consuming anything, so the latch simply persists and is honoured at the first
+					// control point after it resumes.
+					const latched = await store.getRun(claim.task.runId);
+					if (
+						latched?.controlIntent === "stop" ||
+						latched?.controlIntent === "abort"
+					) {
+						const requestedBy = latched.controlRequestedBy;
+						return store.transaction(async (tx) => {
+							const task = await tx.completeTask({
+								taskId: claim.task.id,
+								leaseToken: claim.leaseToken,
+								output: { result },
+							});
+							if (!task)
+								return {
+									status: "failed",
+									task: null,
+									reason: stateError("lease lost before approval stop", {
+										taskId: claim.task.id,
+									}).message,
+								};
+							const settled = await tx.updateRunIfStatus(task.runId, {
+								from: NON_TERMINAL_RUN_STATUSES,
+								patch: {
+									status: "cancelled",
+									waitReason: null,
+									controlRequestedAt: null,
+									controlIntent: null,
+									controlRequestedBy: null,
+									controlReason: null,
+								},
+							});
+							if (!settled) {
+								const current = await tx.getRun(task.runId);
+								return {
+									status: "skipped",
+									task,
+									reason: `run already ${current?.status ?? "terminal"}`,
+								};
+							}
+							await tx.appendEvent({
+								runId: task.runId,
+								type: "run.cancelled",
+								payload: {
+									taskId: task.id,
+									reason: "stopped-while-awaiting-approval",
+									...(requestedBy ? { requestedBy } : {}),
+								},
+							});
+							return { status: "cancelled", task };
+						});
+					}
 					return store.transaction(async (tx) => {
 						const task = await tx.completeTask({
 							taskId: claim.task.id,
