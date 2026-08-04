@@ -316,7 +316,7 @@ export type PluginEventRedaction = {
 	 *  door events pass through by the same decision its transcript writes do. */
 	redactor: Redactor;
 	/** The emitting plugin's id: a claw-less event (boot/cron/webhook — no `recording`) redacts
-	 *  into the ("plugin", <id>) container, mirroring the ("claw", <clawId>) transcript container. */
+	 *  into the ("plugin", <id>) containerKind, mirroring the ("claw", <clawId>) transcript containerKind. */
 	plugin: string;
 };
 
@@ -347,8 +347,8 @@ async function redactDoorEvent(
 	);
 	const ctx =
 		recording instanceof ark.errors
-			? { scope: "plugin", scopeId: redaction.plugin }
-			: { scope: "claw", scopeId: recording.clawId };
+			? { containerKind: "plugin", containerId: redaction.plugin }
+			: { containerKind: "claw", containerId: recording.clawId };
 	const redacted = await redaction.redactor.redactValue(payload, ctx);
 	// Envelope last: it stays verbatim no matter what a custom redactor returned.
 	return { ...redacted, ...envelope } as Event;

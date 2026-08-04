@@ -115,7 +115,7 @@ describe("getBusyclawTables — table-level constraints survive assembly", () =>
 			["scope", "scopeId", "actionId"],
 		]);
 		expect(uniquesOf("pii_mapping")).toEqual([
-			["scope", "scopeId", "originalHash"],
+			["containerKind", "containerId", "originalHash"],
 		]);
 	});
 

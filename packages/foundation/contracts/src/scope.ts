@@ -29,21 +29,9 @@ export type ScopeRef = {
  *  core mints for itself cannot collide with one a plugin means. */
 export const RESERVED_SCOPE_PREFIX = "busyclaw:";
 
-/**
- * The container for a row that genuinely belongs to no boundary — a redaction performed with no turn
- * context, which has no claw, no run, and no subject to inherit one from.
- *
- * It exists because "no container" and "some container" cannot both be representable in a column that
- * is part of a PRIMARY KEY: a key column cannot be NULL. Rather than leave the key undeclared, the
- * absent case gets a value. The value is deliberately one NOBODY CAN BE A MEMBER OF — a membership
- * resolver returning a `busyclaw:`-prefixed scope is refused by {@link isReservedScope}, so a sentinel
- * container can never widen access. It narrows: rows here are reachable only by an equally
- * context-less read.
- */
-export const UNCONTAINED = Object.freeze({
-	scope: `${RESERVED_SCOPE_PREFIX}uncontained`,
-	scopeId: "-",
-}) satisfies ScopeRef;
+// UNCONTAINED used to live here, and that was the tell: it is a PII CONTAINER sentinel, not a
+// boundary. It moved to pii-container.ts along with the type, which is why this file is now only
+// about boundaries — the thing its own doc-comment above always said it was about.
 
 /**
  * The config-scope boundary of a run that resolves no tenant — a single-tenant deployment, a cron

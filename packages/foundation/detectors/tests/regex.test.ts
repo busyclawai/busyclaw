@@ -128,7 +128,7 @@ describe("nothing to find", () => {
 describe("end-to-end through the real redactor", () => {
 	it("produces rehydratable placeholders for detected spans", async () => {
 		const redactor = createMemoryRedactor(regexDetector);
-		const ctx = { scope: "claw", scopeId: "c1" };
+		const ctx = { containerKind: "claw", containerId: "c1" };
 		const redacted = await redactor.redactValue(
 			"mail dana@example.com or call +49 30 901820",
 			ctx,

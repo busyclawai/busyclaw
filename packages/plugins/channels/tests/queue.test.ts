@@ -702,7 +702,7 @@ describe("a delivery survives the process that received it", () => {
 			},
 		});
 
-		// Into the claw's container, never the plugin's — a token minted in the wrong one reaches the
+		// Into the claw's containerKind, never the plugin's — a token minted in the wrong one reaches the
 		// model as a raw placeholder, silently, with nothing thrown.
 		expect(seen).toEqual([{ clawId: "claw-7" }]);
 

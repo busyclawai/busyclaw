@@ -92,7 +92,7 @@ export const channelDeliveryFields = {
 	payload: field.jsonObject({
 		pii: "redacted",
 		immutable: true,
-		doc: "The normalized inbound message, tokenized into the claw's container. Immutable: what was admitted is what runs.",
+		doc: "The normalized inbound message, tokenized into the claw's containerKind. Immutable: what was admitted is what runs.",
 	}),
 	/** WHERE the work lands, resolved at ingress. Binding is a cheap, deterministic lookup-or-create, so
 	 *  it happens on the acknowledged path and the worker inherits a fully-resolved unit of work rather

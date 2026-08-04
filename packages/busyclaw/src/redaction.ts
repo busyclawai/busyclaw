@@ -7,9 +7,9 @@ import type {
 	Adapter,
 	ClawsStore,
 	Detector,
+	PiiContainerRef,
 	RedactionContext,
 	Redactor,
-	ScopeRef,
 	Secrets,
 } from "@busyclaw/contracts";
 import { configurationError, field } from "@busyclaw/contracts";
@@ -41,7 +41,7 @@ export type StrictRedactionConfig = {
 	 *  cleartext with no symptom. Overlaps across detectors are resolved centrally (earliest start
 	 *  wins, ties to the longer span) — no `composeDetectors`. */
 	detectors?: readonly Detector[];
-	/** Dedup key — deterministic placeholders per (value, kind, container). Loss/rotation only
+	/** Dedup key — deterministic placeholders per (value, kind, containerKind). Loss/rotation only
 	 *  resets dedup, never rehydration. */
 	indexKey?: string;
 	/** Recover MANGLED placeholders on rehydrate — snap a token a (cheap) model corrupted back to its
@@ -109,18 +109,18 @@ export const REDACTION_SYSTEM_FRAGMENT = [
  *  or cached durably. `redact` is the write-side twin for the api's OWN persistence (e.g. the
  *  sendMessage user-message append) — posture-aware, so per-claw raw rows pass through. */
 export type ClawRedactionHandle = {
-	original: <T>(
-		value: T,
-		ctx: { scope: string; scopeId: string },
-	) => Promise<T>;
-	redact: <T>(value: T, ctx: { scope: string; scopeId: string }) => Promise<T>;
+	original: <T>(value: T, ctx: PiiContainerRef) => Promise<T>;
+	redact: <T>(value: T, ctx: PiiContainerRef) => Promise<T>;
 	/** Crypto-shred every mapping this subject appears on, and report how many went. Zero is a real
 	 *  answer and a load-bearing one: a subject is only ever linked when trusted code stamps it, so
 	 *  "nothing was linked to this person" is the likeliest outcome and must not read as "erased". */
 	/** Crypto-shred a subject's mappings, bounded to `container` when one is named. Omitted sweeps
 	 *  EVERY container the subject appears in — the deployment-wide DSR answer, reachable only from
 	 *  in-process trusted code holding this handle. The public api always names one (R-H01). */
-	forgetSubject: (subjectId: string, container?: ScopeRef) => Promise<number>;
+	forgetSubject: (
+		subjectId: string,
+		container?: PiiContainerRef,
+	) => Promise<number>;
 };
 
 export type ResolvedRedaction = {
@@ -258,8 +258,8 @@ export function resolveRedaction(input: {
 			...(cfg.recover !== undefined ? { recover: cfg.recover } : {}),
 			warn: input.warn,
 		});
-		forgetSubject = async (subjectId, container) =>
-			mappings.deleteForSubject(subjectId, container);
+		forgetSubject = async (subjectId, containerKind) =>
+			mappings.deleteForSubject(subjectId, containerKind);
 	}
 	const armed = cfg.redactor !== undefined || detector !== undefined;
 	// R-M03. A mapping records WHOSE personal data it is only when something says so — the runtime's
@@ -308,16 +308,17 @@ export function resolveRedaction(input: {
 	const postureOf = async (
 		ctx?: RedactionContext,
 	): Promise<ContainerPosture> => {
-		const scopeId = ctx?.scope === "claw" ? ctx.scopeId : undefined;
-		if (scopeId === undefined) return defaultPosture;
-		const cached = postureCache.get(scopeId);
+		const containerId =
+			ctx?.containerKind === "claw" ? ctx.containerId : undefined;
+		if (containerId === undefined) return defaultPosture;
+		const cached = postureCache.get(containerId);
 		if (cached !== undefined) return cached;
-		const row = await clawsStore.claws.get(scopeId);
+		const row = await clawsStore.claws.get(containerId);
 		if (row === null) return defaultPosture;
 		const value = (row as Record<string, unknown>)["redaction"];
 		const posture =
 			value === "raw" || value === "strict" ? value : defaultPosture;
-		postureCache.set(scopeId, posture);
+		postureCache.set(containerId, posture);
 		return posture;
 	};
 	const routing = createRoutingRedactor({ strict, postureOf });
@@ -333,7 +334,7 @@ export function resolveRedaction(input: {
 	const adapter = input.adapter;
 	const forgetSubjectRouted: ClawRedactionHandle["forgetSubject"] = async (
 		subjectId,
-		container,
+		containerKind,
 	) => {
 		const raw = adapter
 			? await adapter.findOne({
@@ -350,7 +351,7 @@ export function resolveRedaction(input: {
 				},
 			);
 		}
-		return forgetSubject(subjectId, container);
+		return forgetSubject(subjectId, containerKind);
 	};
 	return {
 		redactor: routing,

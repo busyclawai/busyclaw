@@ -69,7 +69,7 @@ export const RunRecord = ark({
 	// The tenancy anchor, absent until a slice has resolved one.
 	"scope?": OptionalString,
 	"scopeId?": OptionalString,
-	// Where the run's output belongs — the authz parent and the redaction container.
+	// Where the run's output belongs — the authz parent and the redaction containerKind.
 	"clawId?": OptionalString,
 	"threadId?": OptionalString,
 	"originMessageId?": OptionalString,

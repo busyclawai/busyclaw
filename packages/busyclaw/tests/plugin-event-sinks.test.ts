@@ -492,8 +492,8 @@ describe("door redaction", () => {
 		expect(saved[0]).toMatchObject({
 			kind: "email",
 			original: "alice@personal.com",
-			scope: "plugin",
-			scopeId: "notifier",
+			containerKind: "plugin",
+			containerId: "notifier",
 		});
 	});
 
@@ -531,10 +531,13 @@ describe("door redaction", () => {
 		await doorEmit;
 
 		expect(host.received[0]?.["note"]).toMatch(TOKEN);
-		expect(saved[0]).toMatchObject({ scope: "plugin", scopeId: "notifier" });
+		expect(saved[0]).toMatchObject({
+			containerKind: "plugin",
+			containerId: "notifier",
+		});
 	});
 
-	// core/redact.ts findByHash filters by the (scope, scopeId) container, so lookup-or-mint is
+	// core/redact.ts findByHash filters by the (containerKind, containerId) container, so lookup-or-mint is
 	// container-LOCAL: the same value shares one token within a container and mints a fresh one
 	// across containers. Both directions asserted here against the real transcript write.
 	it("token coherence: a claw-attributed door token equals the transcript token; the plugin container mints its own", async () => {

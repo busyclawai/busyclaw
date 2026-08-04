@@ -408,7 +408,7 @@ describe("a yield cannot be resumed into another tenant", () => {
 // A run's boundary is ALWAYS a value. Six consumers used to each decide what an absent one meant —
 // five narrowed, one widened — and no signature carrying `ScopeRef | undefined` could say which was
 // intended. `UNSCOPED` is the answer for "this run names no tenant", the same move `UNCONTAINED`
-// already made for the redaction container.
+// already made for the redaction containerKind.
 describe("every run carries a boundary", () => {
 	const boundarySeenBy = async (
 		config: Partial<Parameters<typeof createRuntime>[0]>,

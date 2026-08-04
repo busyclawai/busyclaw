@@ -34,8 +34,8 @@ const detectorFor =
 		return spans;
 	};
 
-const ctxA = { scope: "claw", scopeId: "a" };
-const ctxB = { scope: "claw", scopeId: "b" };
+const ctxA = { containerKind: "claw", containerId: "a" };
+const ctxB = { containerKind: "claw", containerId: "b" };
 const born = "2026-07-22T00:00:00.000Z";
 
 /** Save a mapping under a chosen placeholder so recovery has a known target. */
@@ -43,7 +43,7 @@ function seed(
 	store: ReturnType<typeof createMemoryPiiMappingStore>,
 	placeholder: string,
 	original: string,
-	ctx: { scope: string; scopeId: string },
+	ctx: { containerKind: string; containerId: string },
 	subjectIds?: string[],
 ) {
 	return store.save(
@@ -51,8 +51,8 @@ function seed(
 			placeholder,
 			original,
 			kind: "email",
-			scope: ctx.scope,
-			scopeId: ctx.scopeId,
+			containerKind: ctx.containerKind,
+			containerId: ctx.containerId,
 			createdAt: born,
 		},
 		subjectIds,
@@ -202,7 +202,7 @@ describe("container-scoped identity", () => {
 		);
 	});
 
-	it("erases a subject in its OWN container, sparing a namesake elsewhere", async () => {
+	it("erases a subject in its OWN containerKind, sparing a namesake elsewhere", async () => {
 		const store = createMemoryPiiMappingStore();
 		await seed(store, "{{pii:email:apache-blizzard}}", "Zoe", ctxA, [
 			"subject-1",

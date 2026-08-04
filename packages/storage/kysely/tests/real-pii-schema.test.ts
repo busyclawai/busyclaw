@@ -8,7 +8,7 @@ import { planMigrations } from "../src/migrations";
 //
 // Everything else in this file uses fixtures shaped to exercise the emitter. This one asserts the
 // table busyclaw actually ships: its key is the container triple, and that key was undeclarable until
-// `scope`/`scopeId` became required — a primary key cannot contain NULL. The emitter's composite
+// `container`/`containerId` became required — a primary key cannot contain NULL. The emitter's composite
 // support was already tested; that the REAL schema uses it was asserted and not run.
 describe("the real PII schema", () => {
 	it("creates with its container-composite primary key", async () => {
@@ -22,10 +22,12 @@ describe("the real PII schema", () => {
 			warn: () => {},
 		});
 		const sql = plan.compileMigrations();
-		expect(sql).toContain('primary key ("placeholder", "scope", "scopeId")');
+		expect(sql).toContain(
+			'primary key ("placeholder", "containerKind", "containerId")',
+		);
 		// Key columns must be NOT NULL or SQLite would quietly admit a null into the key.
-		expect(sql).toContain('"scope" text not null');
-		expect(sql).toContain('"scopeId" text not null');
+		expect(sql).toContain('"containerKind" text not null');
+		expect(sql).toContain('"containerId" text not null');
 		await expect(plan.runMigrations()).resolves.toBeUndefined();
 		await db.destroy();
 	});

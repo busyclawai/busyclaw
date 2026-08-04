@@ -85,12 +85,12 @@ describe("plugin redaction handles", () => {
 		expect(saved[0]).toMatchObject({
 			kind: "email",
 			original: "alice@personal.com",
-			scope: "plugin",
-			scopeId: "keeper",
+			containerKind: "plugin",
+			containerId: "keeper",
 		});
 	});
 
-	// core/redact.ts findByHash filters by the (scope, scopeId) container, so lookup-or-mint is
+	// core/redact.ts findByHash filters by the (containerKind, containerId) container, so lookup-or-mint is
 	// container-LOCAL: sharing the claw's container with the transcript means sharing its tokens.
 	it("redact({ clawId }) mints the SAME token the transcript minted for the same value", async () => {
 		const { captured, plugin } = capture();
@@ -190,8 +190,8 @@ describe("plugin redaction handles", () => {
 		// The erasure the host will later be asked for actually reaches it.
 		const erased = await claw.api.forgetSubject({
 			subjectId: "cust_42",
-			scope: "claw",
-			scopeId: "c1",
+			containerKind: "claw",
+			containerId: "c1",
 		});
 		expect(erased.erased).toBeGreaterThan(0);
 	});
@@ -218,8 +218,8 @@ describe("plugin redaction handles", () => {
 		// starts working by accident.
 		const erased = await claw.api.forgetSubject({
 			subjectId: "cust_42",
-			scope: "claw",
-			scopeId: "c1",
+			containerKind: "claw",
+			containerId: "c1",
 		});
 		expect(erased.erased).toBe(0);
 	});
@@ -248,8 +248,8 @@ describe("plugin redaction handles", () => {
 		await expect(
 			claw.api.forgetSubject({
 				subjectId: "alice",
-				scope: "claw",
-				scopeId: "strict-claw",
+				containerKind: "claw",
+				containerId: "strict-claw",
 			}),
 		).resolves.toMatchObject({ erased: expect.any(Number) });
 
@@ -263,8 +263,8 @@ describe("plugin redaction handles", () => {
 		await expect(
 			claw.api.forgetSubject({
 				subjectId: "alice",
-				scope: "claw",
-				scopeId: "strict-claw",
+				containerKind: "claw",
+				containerId: "strict-claw",
 			}),
 		).rejects.toThrow(/incomplete while raw-posture claws exist/);
 	});
@@ -291,7 +291,7 @@ describe("plugin redaction handles", () => {
 		expect(records[0]).toMatchObject({
 			boundary: "privacy",
 			status: "ok",
-			payload: { scope: "plugin", scopeId: "keeper" },
+			payload: { containerKind: "plugin", containerId: "keeper" },
 		});
 	});
 

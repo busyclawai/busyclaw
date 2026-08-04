@@ -124,8 +124,8 @@ describe("generatePrismaSchema", () => {
 
 describe("prisma — the real PII vault schema", () => {
 	// The PII tables were the reason this generator needed a keyless escape hatch at all: their key is
-	// (placeholder, scope, scopeId), and while the container columns were nullable it could not be
-	// declared, so both models came out `@@ignore` — absent from the Prisma client, which meant
+	// (placeholder, containerKind, containerId), and while the container columns were nullable it could
+	// not be declared, so both models came out `@@ignore` — absent from the Prisma client, which meant
 	// busyclaw's PII vault could not run on Prisma. Making the container required unblocked it, and
 	// this is the test that says so rather than a README paragraph nobody re-reads.
 	it("emits both PII models with a real composite key and no @@ignore", () => {
@@ -135,13 +135,15 @@ describe("prisma — the real PII vault schema", () => {
 			warn: (message: string) => void warnings.push(message),
 		});
 
-		expect(code).toContain("@@id([placeholder, scope, scopeId])");
-		expect(code).toContain("@@id([placeholder, subjectId, scope, scopeId])");
+		expect(code).toContain("@@id([placeholder, containerKind, containerId])");
+		expect(code).toContain(
+			"@@id([placeholder, subjectId, containerKind, containerId])",
+		);
 		expect(code).not.toContain("@@ignore");
 		expect(warnings).toEqual([]);
 		// Key columns must be non-nullable or Prisma rejects the @@id.
-		expect(code).not.toMatch(/\bscope\s+String\?/);
-		expect(code).not.toMatch(/\bscopeId\s+String\?/);
+		expect(code).not.toMatch(/\bcontainerKind\s+String\?/);
+		expect(code).not.toMatch(/\bcontainerId\s+String\?/);
 	});
 });
 

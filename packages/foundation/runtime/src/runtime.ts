@@ -21,12 +21,12 @@ import {
 	CLAW_ID_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
+	PII_CONTAINER_ID_CONTEXT_KEY,
+	PII_CONTAINER_KIND_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
 	redactionContextFrom,
-	SCOPE_CONTEXT_KEY,
-	SCOPE_ID_CONTEXT_KEY,
 	stampRunActions,
 	stateError,
 	THREAD_ID_CONTEXT_KEY,
@@ -1330,8 +1330,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// message 3 has to rehydrate in message 40. An ad-hoc run has no such life — nothing survives it
 		// — so its own id is the honest boundary, and erasure reaches it the same way it reaches a claw.
 		if (recording !== undefined) {
-			ctx[SCOPE_CONTEXT_KEY] = "claw";
-			ctx[SCOPE_ID_CONTEXT_KEY] = recording.clawId;
+			ctx[PII_CONTAINER_KIND_CONTEXT_KEY] = "claw";
+			ctx[PII_CONTAINER_ID_CONTEXT_KEY] = recording.clawId;
 			return ctx;
 		}
 		// A container has to be the SAME one on the way back in: a placeholder minted before an approval
@@ -1340,8 +1340,8 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		// now would put the read in a namespace the mint never used. Nothing throws on a container
 		// mismatch; the value just comes back as a raw placeholder, which is why this stays explicit.
 		if (runId !== undefined) {
-			ctx[SCOPE_CONTEXT_KEY] = "run";
-			ctx[SCOPE_ID_CONTEXT_KEY] = runId;
+			ctx[PII_CONTAINER_KIND_CONTEXT_KEY] = "run";
+			ctx[PII_CONTAINER_ID_CONTEXT_KEY] = runId;
 		}
 		return ctx;
 	};

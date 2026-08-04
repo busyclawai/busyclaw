@@ -1476,7 +1476,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 				...durableStores(db),
 				redactor: createStoredRedactor({
 					detector: emailDetector,
-					// The SAME mapping store — the isolation has to come from the container, not from
+					// The SAME mapping store — the isolation has to come from the containerKind, not from
 					// two runtimes that simply cannot see each other's rows.
 					mappings: createPiiMappingStore(db),
 				}),

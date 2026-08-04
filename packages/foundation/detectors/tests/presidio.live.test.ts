@@ -57,7 +57,7 @@ describe.skipIf(!url)("presidio (live analyzer)", () => {
 
 	it("round-trips through the redactor with the live analyzer", async () => {
 		const redactor = createMemoryRedactor(detect);
-		const ctx = { scope: "claw", scopeId: "live" };
+		const ctx = { containerKind: "claw", containerId: "live" };
 		const text = "Dana Schmidt — dana.schmidt@example.com";
 		const redacted = await redactor.redactValue(text, ctx);
 		expect(redacted).not.toContain("dana.schmidt@example.com");

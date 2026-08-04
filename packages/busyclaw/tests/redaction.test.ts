@@ -216,26 +216,26 @@ describe("per-claw posture routing", () => {
 		if (!redactor) throw new Error("expected a redactor");
 
 		const raw = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "r1",
+			containerKind: "claw",
+			containerId: "r1",
 		});
 		expect(raw).toBe("email a@b.com");
 
 		const strict = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "s1",
+			containerKind: "claw",
+			containerId: "s1",
 		});
 		expect(strict).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 
 		// No redaction field on the row and unknown rows → the declared default.
 		const bare = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "bare",
+			containerKind: "claw",
+			containerId: "bare",
 		});
 		expect(bare).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 		const unknown = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "ghost",
+			containerKind: "claw",
+			containerId: "ghost",
 		});
 		expect(unknown).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 	});
@@ -254,7 +254,7 @@ describe("per-claw posture routing", () => {
 		});
 		const redactor = resolved.redactor;
 		if (!redactor) throw new Error("expected a redactor");
-		const ctx = { scope: "claw", scopeId: "s1" };
+		const ctx = { containerKind: "claw", containerId: "s1" };
 		await redactor.redactValue("email a@b.com", ctx);
 		await redactor.redactValue("email c@d.com", ctx);
 		await redactor.redactValue("email e@f.com", ctx);
@@ -341,7 +341,11 @@ describe("governed read path (view + forgetSubject)", () => {
 		expect(entry).toMatchObject({
 			boundary: "privacy",
 			status: "ok",
-			payload: { scope: "claw", scopeId: "claw-1", threadId: thread.id },
+			payload: {
+				containerKind: "claw",
+				containerId: "claw-1",
+				threadId: thread.id,
+			},
 		});
 	});
 
@@ -412,8 +416,8 @@ describe("governed read path (view + forgetSubject)", () => {
 				placeholder: "{{pii:email:seededtoken00}}",
 				original: "subject@x.com",
 				kind: "email",
-				scope: "claw",
-				scopeId: "claw-1",
+				containerKind: "claw",
+				containerId: "claw-1",
 				createdAt: "2026-07-13T00:00:00.000Z",
 			},
 			["subject-1"],
@@ -434,8 +438,8 @@ describe("governed read path (view + forgetSubject)", () => {
 
 		await claw.api.forgetSubject({
 			subjectId: "subject-1",
-			scope: "claw",
-			scopeId: "claw-1",
+			containerKind: "claw",
+			containerId: "claw-1",
 		});
 
 		const after = await claw.api.listMessages({
@@ -467,8 +471,8 @@ describe("governed read path (view + forgetSubject)", () => {
 		await expect(
 			raw.api.forgetSubject({
 				subjectId: "s1",
-				scope: "claw",
-				scopeId: rawClaw.id,
+				containerKind: "claw",
+				containerId: rawClaw.id,
 			}),
 		).rejects.toThrow(/erasure is impossible/);
 
@@ -480,19 +484,23 @@ describe("governed read path (view + forgetSubject)", () => {
 			appAuthz: { unsafeOpen: true },
 		});
 		await expect(
-			none.api.forgetSubject({ subjectId: "s1", scope: "claw", scopeId: "c1" }),
+			none.api.forgetSubject({
+				subjectId: "s1",
+				containerKind: "claw",
+				containerId: "c1",
+			}),
 		).rejects.toThrow(/no redaction configured/);
 	});
 	// R-H01 — erasure names the container it acts in, and the container's own owner rule authorizes it.
 	//
-	// `forgetSubject` took a bare `subjectId`. The rows it deletes have always carried `(scope, scopeId)`,
+	// `forgetSubject` took a bare `subjectId`. The rows it deletes have always carried `(containerKind, containerId)`,
 	// but the REQUEST named none — so the sweep crossed every container the subject appeared in, and the
 	// route had nothing to resolve against, which is why it was `callerOnly`. Over HTTP that is an
 	// unbounded delete of any subject's mappings by any authenticated caller: destructive, cross-tenant,
 	// and irreversible by construction, since a crypto-shred is the point.
 	//
 	// The container is part of the request now, and it binds exactly like `shareResource` does — the
-	// caller NAMES a kind and an id, and the generic owner ∪ scope ∪ grant rule decides it at `manage`.
+	// caller NAMES a kind and an id, and the generic owner ∪ container ∪ grant rule decides it at `manage`.
 	// A `("claw", clawId)` container therefore asks the claw's owner rule; an unregistered kind resolves
 	// nothing and denies. Erasing across EVERY container is still a real DSR need and still possible —
 	// from in-process trusted code holding the redaction handle, never from the wire.
@@ -504,14 +512,14 @@ describe("governed read path (view + forgetSubject)", () => {
 			);
 			const mappings = createPiiMappingStore(db);
 			// The SAME subject and the SAME token, in two containers. Only one is named by the request.
-			for (const scopeId of ["claw-1", "claw-2"]) {
+			for (const containerId of ["claw-1", "claw-2"]) {
 				await mappings.save(
 					{
 						placeholder: "{{pii:email:seededtoken00}}",
 						original: "subject@x.com",
 						kind: "email",
-						scope: "claw",
-						scopeId,
+						containerKind: "claw",
+						containerId,
 						createdAt: "2026-07-13T00:00:00.000Z",
 					},
 					["subject-1"],
@@ -520,23 +528,23 @@ describe("governed read path (view + forgetSubject)", () => {
 
 			const { erased } = await claw.api.forgetSubject({
 				subjectId: "subject-1",
-				scope: "claw",
-				scopeId: "claw-1",
+				containerKind: "claw",
+				containerId: "claw-1",
 			});
 			expect(erased).toBe(1);
 
 			// Gone where it was asked for…
 			expect(
 				await mappings.resolve("{{pii:email:seededtoken00}}", {
-					scope: "claw",
-					scopeId: "claw-1",
+					containerKind: "claw",
+					containerId: "claw-1",
 				}),
 			).toBeNull();
 			// …and untouched where it was not. The bare-subjectId sweep destroyed both.
 			expect(
 				await mappings.resolve("{{pii:email:seededtoken00}}", {
-					scope: "claw",
-					scopeId: "claw-2",
+					containerKind: "claw",
+					containerId: "claw-2",
 				}),
 			).toBe("subject@x.com");
 		});
@@ -548,8 +556,8 @@ describe("governed read path (view + forgetSubject)", () => {
 			await expect(
 				withPrincipal(claw, userPrincipal("stranger")).api.forgetSubject({
 					subjectId: "subject-1",
-					scope: "claw",
-					scopeId: "claw-1",
+					containerKind: "claw",
+					containerId: "claw-1",
 				}),
 			).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		});
@@ -562,7 +570,9 @@ describe("governed read path (view + forgetSubject)", () => {
 			await expect(
 				claw.api.forgetSubject({
 					subjectId: "subject-1",
-					...UNCONTAINED,
+					// The wire still says (containerKind, containerId); UNCONTAINED is a container now.
+					containerKind: UNCONTAINED.containerKind,
+					containerId: UNCONTAINED.containerId,
 				}),
 			).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 		});

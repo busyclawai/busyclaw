@@ -60,15 +60,15 @@ describe("busyclaw core — entity-derived schemas", () => {
 		// nothing new — and it would not catch the race it appears to, because two concurrent writers
 		// mint two DIFFERENT placeholders. What they collide on is the value, which originalHash names.
 		expect(piiMappingSchema.pii_mapping?.uniques).toEqual([
-			["scope", "scopeId", "originalHash"],
+			["containerKind", "containerId", "originalHash"],
 		]);
 		const piiMapping = piiMappingSchema.pii_mapping;
 		if (!piiMapping)
 			throw new Error("piiMappingSchema has no pii_mapping model");
 		expect(uniqueConstraints("pii_mapping", piiMapping)).toEqual([
 			{
-				name: "pii_mapping_scope_scopeId_originalHash_uq",
-				columns: ["scope", "scopeId", "originalHash"],
+				name: "pii_mapping_containerKind_containerId_originalHash_uq",
+				columns: ["containerKind", "containerId", "originalHash"],
 			},
 		]);
 	});

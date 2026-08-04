@@ -60,12 +60,20 @@ describe("the real core schema", () => {
 				.filter(([, field]) => field.primaryKey === true)
 				.map(([name]) => name);
 
-		expect(keyOf("pii_mapping")).toEqual(["placeholder", "scope", "scopeId"]);
+		// `(containerKind, containerId)`, not `(scope, scopeId)`. A PII container is an ENTITY
+		// reference — `forgetSubject` resolves the pair as `{kind, id}` against the authz resource
+		// registry — while a tenancy scope is a boundary someone can be a MEMBER of. Sharing one name
+		// (and one type) made the two silently assignable to each other.
+		expect(keyOf("pii_mapping")).toEqual([
+			"placeholder",
+			"containerKind",
+			"containerId",
+		]);
 		expect(keyOf("pii_subject")).toEqual([
 			"placeholder",
 			"subjectId",
-			"scope",
-			"scopeId",
+			"containerKind",
+			"containerId",
 		]);
 	});
 

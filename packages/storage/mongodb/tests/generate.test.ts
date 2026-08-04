@@ -132,7 +132,7 @@ describe("the generated indexes against a real mongod", () => {
 			placeholder: "{{pii:email:x}}",
 		};
 		await mappings.insertOne({ id: "a", ...row });
-		// Same container, same placeholder — the constraint the redaction vault actually wants.
+		// Same containerKind, same placeholder — the constraint the redaction vault actually wants.
 		await expect(mappings.insertOne({ id: "b", ...row })).rejects.toThrow();
 		// A namesake token in ANOTHER container is a different mapping, and must still insert.
 		await expect(

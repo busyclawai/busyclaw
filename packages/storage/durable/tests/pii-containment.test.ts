@@ -1,11 +1,11 @@
-// Container exactness on the WRITE and ERASE paths — the property that made `(scope, scopeId)`
+// Container exactness on the WRITE and ERASE paths — the property that made `(containerKind, containerId)`
 // required.
 //
-// Word-code placeholders are minted with a collision check scoped to ONE container, so the same token
+// Word-code placeholders are minted with a collision check scoped to ONE containerKind, so the same token
 // legitimately exists in several: a namesake is expected, not a clash. Every store predicate therefore
-// has to name the whole container. While the columns were nullable the predicates were assembled
+// has to name the whole containerKind. While the columns were nullable the predicates were assembled
 // conditionally, and a row with no container produced a where of `placeholder` alone — which matches
-// the namesake in every other container, so a context-less erasure destroyed another claw's mapping.
+// the namesake in every other containerKind, so a context-less erasure destroyed another claw's mapping.
 // The two erase cases below are the regression; the write cases are the guard on the neighbouring path
 // that survived only because `sameContainer` happened to reject the match first.
 //
@@ -40,8 +40,8 @@ describe("PII mappings are contained on write and erase", () => {
 				placeholder: NAMESAKE,
 				original: "alice@example.com",
 				kind: "email",
-				scope: "claw",
-				scopeId: "alice-claw",
+				containerKind: "claw",
+				containerId: "alice-claw",
 				createdAt: at,
 			},
 			["subject-alice"],
@@ -54,34 +54,43 @@ describe("PII mappings are contained on write and erase", () => {
 		// ...and NOT in a container the erasure was never about. Alice did not ask to be forgotten, and
 		// an unrelated subject's erasure must never be able to destroy her rehydration.
 		expect(
-			await store.resolve(NAMESAKE, { scope: "claw", scopeId: "alice-claw" }),
+			await store.resolve(NAMESAKE, {
+				containerKind: "claw",
+				containerId: "alice-claw",
+			}),
 		).toBe("alice@example.com");
 	});
 
 	it("erasing a contained subject leaves the namesake in every other container intact", async () => {
 		const store = createPiiMappingStore(memoryAdapter());
-		for (const scopeId of ["a", "b"]) {
+		for (const containerId of ["a", "b"]) {
 			await store.save(
 				{
 					placeholder: NAMESAKE,
-					original: `${scopeId}@example.com`,
+					original: `${containerId}@example.com`,
 					kind: "email",
-					scope: "claw",
-					scopeId,
+					containerKind: "claw",
+					containerId,
 					createdAt: at,
 				},
-				[`subject-${scopeId}`],
+				[`subject-${containerId}`],
 			);
 		}
 
 		await store.deleteForSubject("subject-a");
 
-		expect(await store.resolve(NAMESAKE, { scope: "claw", scopeId: "a" })).toBe(
-			null,
-		);
-		expect(await store.resolve(NAMESAKE, { scope: "claw", scopeId: "b" })).toBe(
-			"b@example.com",
-		);
+		expect(
+			await store.resolve(NAMESAKE, {
+				containerKind: "claw",
+				containerId: "a",
+			}),
+		).toBe(null);
+		expect(
+			await store.resolve(NAMESAKE, {
+				containerKind: "claw",
+				containerId: "b",
+			}),
+		).toBe("b@example.com");
 	});
 
 	it("saving into one container never rewrites the namesake in another", async () => {
@@ -90,8 +99,8 @@ describe("PII mappings are contained on write and erase", () => {
 			placeholder: NAMESAKE,
 			original: "alice@example.com",
 			kind: "email",
-			scope: "claw",
-			scopeId: "alice-claw",
+			containerKind: "claw",
+			containerId: "alice-claw",
 			createdAt: at,
 		});
 		// An uncontained write of the SAME token. If this ever landed on Alice's row, her placeholder
@@ -106,7 +115,10 @@ describe("PII mappings are contained on write and erase", () => {
 		});
 
 		expect(
-			await store.resolve(NAMESAKE, { scope: "claw", scopeId: "alice-claw" }),
+			await store.resolve(NAMESAKE, {
+				containerKind: "claw",
+				containerId: "alice-claw",
+			}),
 		).toBe("alice@example.com");
 		expect(await store.resolve(NAMESAKE, UNCONTAINED)).toBe(
 			"nobody@example.com",
@@ -119,16 +131,18 @@ describe("PII mappings are contained on write and erase", () => {
 			placeholder: NAMESAKE,
 			original: "alice@example.com",
 			kind: "email",
-			scope: "claw",
-			scopeId: "alice-claw",
+			containerKind: "claw",
+			containerId: "alice-claw",
 			createdAt: at,
 		});
 
 		// No context at all, and a HALF context — both normalize to UNCONTAINED, so neither can read
 		// Alice's value. A half-named container used to be its own bucket, distinct from both.
 		expect(await store.resolve(NAMESAKE)).toBeNull();
-		expect(await store.resolve(NAMESAKE, { scope: "claw" })).toBeNull();
-		expect(await store.resolve(NAMESAKE, { scopeId: "alice-claw" })).toBeNull();
+		expect(await store.resolve(NAMESAKE, { containerKind: "claw" })).toBeNull();
+		expect(
+			await store.resolve(NAMESAKE, { containerId: "alice-claw" }),
+		).toBeNull();
 	});
 });
 
@@ -148,8 +162,8 @@ describe("a tombstone that cannot be written is not a completed erasure", () => 
 				original: "alice@example.com",
 				kind: "email",
 				createdAt: at,
-				scope: "claw",
-				scopeId: "c1",
+				containerKind: "claw",
+				containerId: "c1",
 			},
 			["alice"],
 		);
@@ -213,8 +227,8 @@ describe("erasure is atomic where the adapter can be", () => {
 				original: "alice@example.com",
 				kind: "email",
 				createdAt: at,
-				scope: "claw",
-				scopeId: "c1",
+				containerKind: "claw",
+				containerId: "c1",
 			},
 			["alice"],
 		);
@@ -232,8 +246,8 @@ describe("erasure is atomic where the adapter can be", () => {
 				original: "alice@example.com",
 				kind: "email",
 				createdAt: at,
-				scope: "claw",
-				scopeId: "c1",
+				containerKind: "claw",
+				containerId: "c1",
 			},
 			["alice"],
 		);
@@ -258,8 +272,8 @@ describe("stored originals are sealed at rest (R-M07)", () => {
 		original: "alice@example.com",
 		originalHash: "hash-a",
 		kind: "email",
-		scope: "claw",
-		scopeId: "c1",
+		containerKind: "claw",
+		containerId: "c1",
 		createdAt: at,
 	} as const;
 
@@ -278,7 +292,7 @@ describe("stored originals are sealed at rest (R-M07)", () => {
 
 		// …and rehydration still gets it back.
 		await expect(
-			store.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+			store.resolve(NAMESAKE, { containerKind: "claw", containerId: "c1" }),
 		).resolves.toBe("alice@example.com");
 	});
 
@@ -291,8 +305,8 @@ describe("stored originals are sealed at rest (R-M07)", () => {
 		await store.save(mapping, ["alice"]);
 
 		const found = await store.findByHash("hash-a", {
-			scope: "claw",
-			scopeId: "c1",
+			containerKind: "claw",
+			containerId: "c1",
 		});
 		expect(found?.original).toBe("alice@example.com");
 
@@ -305,7 +319,7 @@ describe("stored originals are sealed at rest (R-M07)", () => {
 		})) as { original: string }[];
 		expect(raw[0]?.original).not.toBe("alice@example.com");
 		await expect(
-			store.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+			store.resolve(NAMESAKE, { containerKind: "claw", containerId: "c1" }),
 		).resolves.toBe("alice@example.com");
 	});
 
@@ -316,7 +330,7 @@ describe("stored originals are sealed at rest (R-M07)", () => {
 		await createPiiMappingStore(adapter).save(mapping, ["alice"]);
 		const sealed = createPiiMappingStore(adapter, { cipher: sealing() });
 		await expect(
-			sealed.resolve(NAMESAKE, { scope: "claw", scopeId: "c1" }),
+			sealed.resolve(NAMESAKE, { containerKind: "claw", containerId: "c1" }),
 		).resolves.toBe("alice@example.com");
 	});
 });

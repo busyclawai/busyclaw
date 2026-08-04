@@ -179,8 +179,8 @@ describe("createPiiMappingStore", () => {
 				placeholder: "{{pii:aaa}}",
 				original: "alice@example.com",
 				kind: "email",
-				scope: "claw",
-				scopeId: "a",
+				containerKind: "claw",
+				containerId: "a",
 				createdAt: "2026-01-01T00:00:00Z",
 			},
 			["u1"],
@@ -190,8 +190,8 @@ describe("createPiiMappingStore", () => {
 				placeholder: "{{pii:bbb}}",
 				original: "bob@example.com",
 				kind: "email",
-				scope: "claw",
-				scopeId: "b",
+				containerKind: "claw",
+				containerId: "b",
 				createdAt: "2026-01-01T00:00:00Z",
 			},
 			["u2"],
@@ -202,35 +202,53 @@ describe("createPiiMappingStore", () => {
 				placeholder: "{{pii:ccc}}",
 				original: "123 Main St",
 				kind: "address",
-				scope: "claw",
-				scopeId: "a",
+				containerKind: "claw",
+				containerId: "a",
 				createdAt: "2026-01-01T00:00:00Z",
 			},
 			["u1", "u2"],
 		);
 
-		// Rehydration only within the SAME container.
+		// Rehydration only within the SAME containerKind.
 		expect(
-			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "a" }),
+			await store.resolve("{{pii:aaa}}", {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBe("alice@example.com");
 		expect(
-			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "b" }),
+			await store.resolve("{{pii:aaa}}", {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBeNull();
 		expect(await store.resolve("{{pii:aaa}}")).toBeNull();
 		expect(
-			await store.resolve("{{pii:bbb}}", { scope: "claw", scopeId: "b" }),
+			await store.resolve("{{pii:bbb}}", {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe("bob@example.com");
 
 		// Erase u1 → alice's mapping AND the shared value (u1+u2) both gone; bob's untouched.
 		await store.deleteForSubject("u1");
 		expect(
-			await store.resolve("{{pii:aaa}}", { scope: "claw", scopeId: "a" }),
+			await store.resolve("{{pii:aaa}}", {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBeNull();
 		expect(
-			await store.resolve("{{pii:ccc}}", { scope: "claw", scopeId: "a" }),
+			await store.resolve("{{pii:ccc}}", {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBeNull();
 		expect(
-			await store.resolve("{{pii:bbb}}", { scope: "claw", scopeId: "b" }),
+			await store.resolve("{{pii:bbb}}", {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe("bob@example.com");
 	});
 });

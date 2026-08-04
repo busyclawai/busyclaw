@@ -326,6 +326,8 @@ export {
 	membershipScopeRef,
 	modelCall,
 	modelMessage,
+	PII_CONTAINER_ID_CONTEXT_KEY,
+	PII_CONTAINER_KIND_CONTEXT_KEY,
 	PRINCIPAL_CONTEXT_KEY,
 	policyAnnotations,
 	RESERVED_CONTEXT_PREFIX,
@@ -333,8 +335,6 @@ export {
 	RUN_ID_CONTEXT_KEY,
 	RUN_MODE_CONTEXT_KEY,
 	runActionsOf,
-	SCOPE_CONTEXT_KEY,
-	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 	stampedFacts,
 	stampRunActions,
@@ -458,6 +458,8 @@ export type {
 	RouteOutputSchema,
 } from "./governance/route";
 export { route } from "./governance/route";
+export type { PiiContainerRef } from "./pii-container";
+export { UNCONTAINED } from "./pii-container";
 // ── the run itself: the GOVERNANCE record every engine needs, whatever schedules its work ────
 export {
 	runEntity,
@@ -504,7 +506,6 @@ export {
 	namesTenant,
 	RESERVED_SCOPE_PREFIX,
 	scopeFields,
-	UNCONTAINED,
 	UNSCOPED,
 } from "./scope";
 // ── standard-schema interop: accept any standard-schema library without depending on one ──────

@@ -41,7 +41,7 @@ function tokensOf(text: string): string[] {
 }
 
 describe("deterministic placeholders (indexKey)", () => {
-	const ctx = { scope: "claw", scopeId: "a" };
+	const ctx = { containerKind: "claw", containerId: "a" };
 
 	it("same value → same token, within one text and across calls", async () => {
 		const redactor = createStoredRedactor({
@@ -74,26 +74,32 @@ describe("deterministic placeholders (indexKey)", () => {
 		expect(out).toMatch(/\{\{pii:email:[a-z0-9-]+\}\}/);
 	});
 
-	it("cross-container: different tokens, and a traveling token is inert", async () => {
+	it("cross-containerKind: different tokens, and a traveling token is inert", async () => {
 		const redactor = createStoredRedactor({
 			detector: emailDetector,
 			mappings: createMemoryPiiMappingStore(),
 			indexKey: "test-key",
 		});
 		const inA = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 		});
 		const inB = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "b",
+			containerKind: "claw",
+			containerId: "b",
 		});
 		expect(tokensOf(inA)[0]).not.toBe(tokensOf(inB)[0]);
 		expect(
-			await redactor.rehydrateValue(inA, { scope: "claw", scopeId: "b" }),
+			await redactor.rehydrateValue(inA, {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe(inA);
 		expect(
-			await redactor.rehydrateValue(inA, { scope: "claw", scopeId: "a" }),
+			await redactor.rehydrateValue(inA, {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBe("email a@b.com");
 	});
 
@@ -141,7 +147,7 @@ describe("deterministic placeholders (indexKey)", () => {
 	});
 
 	it("concurrency does not leak ACROSS containers", async () => {
-		// The latch is keyed by (container, hash). Coalescing must never hand claw b a token minted
+		// The latch is keyed by (containerKind, hash). Coalescing must never hand claw b a token minted
 		// for claw a, which would make one claw's placeholder resolve inside the other.
 		const redactor = createStoredRedactor({
 			detector: emailDetector,
@@ -150,13 +156,22 @@ describe("deterministic placeholders (indexKey)", () => {
 		});
 
 		const [inA, inB] = await Promise.all([
-			redactor.redactValue("email a@b.com", { scope: "claw", scopeId: "a" }),
-			redactor.redactValue("email a@b.com", { scope: "claw", scopeId: "b" }),
+			redactor.redactValue("email a@b.com", {
+				containerKind: "claw",
+				containerId: "a",
+			}),
+			redactor.redactValue("email a@b.com", {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		]);
 
 		expect(tokensOf(inA)[0]).not.toBe(tokensOf(inB)[0]);
 		expect(
-			await redactor.rehydrateValue(inA, { scope: "claw", scopeId: "b" }),
+			await redactor.rehydrateValue(inA, {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe(inA);
 	});
 
@@ -198,7 +213,7 @@ describe("deterministic placeholders (indexKey)", () => {
 
 	// ── losing the cross-process race ───────────────────────────────────────────────────────────────
 	// The half the in-process latch cannot cover: another INSTANCE minted for this value a moment
-	// earlier, so the unique on (scope, scopeId, originalHash) rejects our insert. A store that only
+	// earlier, so the unique on (containerKind, containerId, originalHash) rejects our insert. A store that only
 	// swallowed the conflict would leave us holding a placeholder that was never written — a token with
 	// no mapping behind it, which rehydrates as itself into a finished draft. So the winner is adopted.
 
@@ -207,8 +222,8 @@ describe("deterministic placeholders (indexKey)", () => {
 		original: "a@b.com",
 		originalHash: "hash-of-a@b.com",
 		kind: "email",
-		scope: "claw",
-		scopeId: "a",
+		containerKind: "claw",
+		containerId: "a",
 		createdAt: "2026-01-01T00:00:00.000Z",
 	};
 
@@ -359,7 +374,10 @@ describe("deterministic placeholders (indexKey)", () => {
 		// Per CONTAINER: erasing from one claw has said nothing about another, and a mark that reached
 		// across them would disable re-identification for tenants who never asked.
 		expect(
-			await mappings.isErased("s1", { scope: "claw", scopeId: "other" }),
+			await mappings.isErased("s1", {
+				containerKind: "claw",
+				containerId: "other",
+			}),
 		).toBe(false);
 		// A subject who was never here leaves no mark — there is nowhere truthful to put one, since
 		// erasure names a subject with no container.
@@ -400,25 +418,25 @@ describe("createRoutingRedactor", () => {
 	});
 	const routing = createRoutingRedactor({
 		strict,
-		postureOf: (ctx) => (ctx?.scopeId === "raw1" ? "raw" : "strict"),
+		postureOf: (ctx) => (ctx?.containerId === "raw1" ? "raw" : "strict"),
 	});
 
 	it("routes per container: raw passes through, strict tokenizes", async () => {
 		const raw = await routing.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "raw1",
+			containerKind: "claw",
+			containerId: "raw1",
 		});
 		expect(raw).toBe("email a@b.com");
 
 		const redacted = await routing.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "strict1",
+			containerKind: "claw",
+			containerId: "strict1",
 		});
 		expect(redacted).toMatch(TOKEN);
 	});
 
 	it("rehydration always delegates (raw containers hold no live tokens)", async () => {
-		const strictCtx = { scope: "claw", scopeId: "strict1" };
+		const strictCtx = { containerKind: "claw", containerId: "strict1" };
 		const redacted = await routing.redactValue("email a@b.com", strictCtx);
 		expect(await routing.rehydrateValue(redacted, strictCtx)).toBe(
 			"email a@b.com",
@@ -426,8 +444,8 @@ describe("createRoutingRedactor", () => {
 		// The same token traveling into a raw container resolves to nothing.
 		expect(
 			await routing.rehydrateValue(redacted, {
-				scope: "claw",
-				scopeId: "raw1",
+				containerKind: "claw",
+				containerId: "raw1",
 			}),
 		).toBe(redacted);
 	});
@@ -470,8 +488,8 @@ describe("composeDetectors", () => {
 			indexKey: "test-key",
 		});
 		const out = await redactor.redactValue("email a@b.com now", {
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 		});
 		// The email span (earlier start) wins the overlap; exactly one token, no residue.
 		expect(out).toMatch(/^email \{\{pii:email:[a-z0-9-]+\}\} now$/);
@@ -479,7 +497,7 @@ describe("composeDetectors", () => {
 });
 
 describe("idempotence over existing placeholders", () => {
-	const ctx = { scope: "claw", scopeId: "a" };
+	const ctx = { containerKind: "claw", containerId: "a" };
 	// The hostile shape: a hex-run detector ALWAYS matches inside a token's 32-hex body, so
 	// without span masking a second pass is guaranteed to corrupt the placeholder.
 	const hexDetector: Detector = (text) => {

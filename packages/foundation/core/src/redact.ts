@@ -5,6 +5,7 @@
 
 import {
 	type Detector,
+	type PiiContainerRef,
 	type PiiKind,
 	type PiiMapping,
 	type PiiMappingStore,
@@ -18,7 +19,6 @@ import {
 	type RehydrationContext,
 	redactionContext,
 	rehydrationContext,
-	type ScopeRef,
 } from "@busyclaw/contracts";
 import { isConflict, validationError } from "@busyclaw/errors";
 import { hmac } from "@noble/hashes/hmac.js";
@@ -114,7 +114,7 @@ function formatPlaceholder(kind: PiiKind, code: string): string {
 //
 // Precise about what this does NOT buy: a mangling that happens to land inside some other word's
 // radius is indistinguishable from that word at ANY tolerance, and no radius fixes it. What narrows
-// that residue is the layer above — a repair is used only if it also RESOLVES in-container, so a wrong
+// that residue is the layer above — a repair is used only if it also RESOLVES in-containerKind, so a wrong
 // word is inert unless that token is separately saved in the same container.
 //
 // The cost is real: this is a tolerance, not a bug fix, and dropping it to 1 stops recovering
@@ -222,20 +222,28 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 	// rather than quietly re-creating what was just shredded.
 	const erasedContainers = new Map<string, Set<string>>();
 	/** The container half of {@link containerKey} — a tombstone marks a container, not a placeholder. */
-	const erasureKey = (c: ScopeRef): string =>
-		JSON.stringify([c.scope, c.scopeId]);
-	// A whole container, never two independently-optional halves: `piiContainer` has already collapsed
+	const erasureKey = (c: PiiContainerRef): string =>
+		JSON.stringify([c.containerKind, c.containerId]);
+	// A whole containerKind, never two independently-optional halves: `piiContainer` has already collapsed
 	// the absent and half-absent cases to UNCONTAINED, so there is no `?? null` to get wrong here and
 	// no way for a write and a read to disagree about which bucket "no context" means.
-	const containerKey = (container: ScopeRef, placeholder: string): string =>
-		JSON.stringify([container.scope, container.scopeId, placeholder]);
+	const containerKey = (
+		containerKind: PiiContainerRef,
+		placeholder: string,
+	): string =>
+		JSON.stringify([
+			containerKind.containerKind,
+			containerKind.containerId,
+			placeholder,
+		]);
 	const sameContainer = (
 		mapping: PiiMapping,
 		ctx?: RehydrationContext,
 	): boolean => {
-		const container = piiContainer(ctx);
+		const containerKind = piiContainer(ctx);
 		return (
-			mapping.scope === container.scope && mapping.scopeId === container.scopeId
+			mapping.containerKind === containerKind.containerKind &&
+			mapping.containerId === containerKind.containerId
 		);
 	};
 	return {
@@ -273,12 +281,12 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 			return null;
 		},
 		isErased(subjectId, ctx) {
-			const container = piiContainer(ctx);
+			const containerKind = piiContainer(ctx);
 			return (
-				erasedContainers.get(subjectId)?.has(erasureKey(container)) === true
+				erasedContainers.get(subjectId)?.has(erasureKey(containerKind)) === true
 			);
 		},
-		deleteForSubject(subjectId, container) {
+		deleteForSubject(subjectId, containerKind) {
 			// `container` BOUNDS which of this subject's rows are in scope; omitted means all of them,
 			// the deployment-wide DSR sweep this verb used to be the only form of. A subject with no
 			// rows and a subject with no MATCHING rows do the same thing here, so both are the empty
@@ -288,9 +296,9 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 				const mapping = byKey.get(key);
 				if (mapping === undefined) return false;
 				return (
-					container === undefined ||
-					(mapping.scope === container.scope &&
-						mapping.scopeId === container.scopeId)
+					containerKind === undefined ||
+					(mapping.containerKind === containerKind.containerKind &&
+						mapping.containerId === containerKind.containerId)
 				);
 			};
 			const keys = [...all].filter(inScope);
@@ -325,7 +333,7 @@ export type StoredRedactorOptions = {
 	mappings: PiiMappingStore;
 	now?: () => string;
 	/**
-	 * Dedup key: with it, the same (value, kind, container) always yields the SAME placeholder —
+	 * Dedup key: with it, the same (value, kind, containerKind) always yields the SAME placeholder —
 	 * coreference across mentions/steps/artifacts, stable prompt caching, one mapping row per value.
 	 * The key only feeds the lookup hash; rehydration never depends on it, so loss or rotation
 	 * merely resets dedup. Omit → every occurrence mints fresh (a durable store warns once).
@@ -424,7 +432,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 						),
 					);
 
-	// Mint a fresh placeholder whose word-code is unique WITHIN the container. At 44 bits over a
+	// Mint a fresh placeholder whose word-code is unique WITHIN the containerKind. At 44 bits over a
 	// container's hundreds–thousands of tokens a collision is astronomically unlikely, so the loop
 	// almost never turns; adding a word after several attempts is a hard backstop, not an expected path.
 	const mintPlaceholder = async (
@@ -450,7 +458,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	// list of documents: arrays are the normal payload shape, not an edge case. Sequential paths — the
 	// span loop inside one text, and object keys — were never affected, which is why this survived.
 	//
-	// Coalescing by (container, hash) makes the first caller do the work and the rest await its answer,
+	// Coalescing by (containerKind, hash) makes the first caller do the work and the rest await its answer,
 	// so concurrent mints inside one process settle on ONE placeholder.
 	//
 	// Why a latch and not a DERIVED code (the obvious fix — HMAC the container and hash, and two
@@ -539,10 +547,10 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		if (originalHash === undefined) {
 			return (await lookupOrMint(span, undefined, ctx)).placeholder;
 		}
-		const container = piiContainer(ctx);
+		const containerKind = piiContainer(ctx);
 		const key = JSON.stringify([
-			container.scope,
-			container.scopeId,
+			containerKind.containerKind,
+			containerKind.containerId,
 			originalHash,
 		]);
 		const running = inFlight.get(key);
@@ -584,7 +592,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		let out = "";
 		let last = 0;
 		for (const span of spans) {
-			// Lookup-or-mint: an already-known (value, kind, container) reuses its placeholder, so
+			// Lookup-or-mint: an already-known (value, kind, containerKind) reuses its placeholder, so
 			// every mention wears the same token. The awaited save above the next lookup makes the
 			// dedup hold for two occurrences inside ONE text; the latch inside `placeholderFor` is
 			// what makes it hold when the caller walks several texts CONCURRENTLY (arrays do).
@@ -600,7 +608,7 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 	// Snap a mangled frame back to its mapping. Fast path first: the kind + words exactly as written
 	// (pure structural damage — braces/spacing/case — with no word corruption) may already resolve.
 	// Otherwise repair each word to its dictionary word(s), enumerate the (bounded) candidate codes,
-	// resolve each in-container, and accept ONLY if every hit is the SAME value. Two distinct values →
+	// resolve each in-containerKind, and accept ONLY if every hit is the SAME value. Two distinct values →
 	// the repair could cross a subject boundary → refuse. Returns null when nothing safely recovers.
 	const recoverFrame = async (
 		kindRaw: string,

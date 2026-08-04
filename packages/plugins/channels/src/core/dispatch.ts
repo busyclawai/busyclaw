@@ -295,7 +295,7 @@ async function admitDelivery(input: {
 		},
 		{ principal: endpointPrincipal(endpoint) },
 	);
-	// Into the CLAW's container, not the plugin's. A token minted in the plugin container is INERT when
+	// Into the CLAW's containerKind, not the plugin's. A token minted in the plugin container is INERT when
 	// the runtime rehydrates in the claw's — it would reach the model as a raw placeholder, silently,
 	// with nothing thrown. Same container the transcript uses, so the same value wears the same token.
 	const payload = await tokenize(

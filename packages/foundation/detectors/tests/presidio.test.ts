@@ -279,7 +279,7 @@ describe("presidioDetector — the factory (injected fetch)", () => {
 			]),
 		});
 		const redactor = createMemoryRedactor(detect);
-		const ctx = { scope: "claw", scopeId: "c1" };
+		const ctx = { containerKind: "claw", containerId: "c1" };
 		const redacted = await redactor.redactValue(text, ctx);
 		expect(redacted).not.toContain("dana.schmidt@example.com");
 		expect(redacted.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/g)).toHaveLength(1);

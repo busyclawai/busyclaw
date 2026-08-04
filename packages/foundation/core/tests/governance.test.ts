@@ -2,11 +2,11 @@ import {
 	type ApprovalRecord,
 	type ApprovalStore,
 	type Detector,
+	PII_CONTAINER_ID_CONTEXT_KEY,
+	PII_CONTAINER_KIND_CONTEXT_KEY,
 	type PiiMapping,
 	type PiiMappingStore,
 	type PiiSpan,
-	SCOPE_CONTEXT_KEY,
-	SCOPE_ID_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 	UNSCOPED,
 	userPrincipal,
@@ -179,15 +179,18 @@ describe("busyclaw governance — the neutral pipeline", () => {
 			redactor: createStoredRedactor({ detector: emailDetector, mappings }),
 			resolveContext: (ctx) => ({
 				...ctx,
-				[SCOPE_CONTEXT_KEY]: "claw",
-				[SCOPE_ID_CONTEXT_KEY]: "claw-1",
+				[PII_CONTAINER_KIND_CONTEXT_KEY]: "claw",
+				[PII_CONTAINER_ID_CONTEXT_KEY]: "claw-1",
 				[SUBJECT_CONTEXT_KEY]: "subject-1",
 			}),
 		});
 
 		await ec.handleToolCall({ name: "x", args: { email: "a@b.com" } });
 
-		expect(saved[0]).toMatchObject({ scope: "claw", scopeId: "claw-1" });
+		expect(saved[0]).toMatchObject({
+			containerKind: "claw",
+			containerId: "claw-1",
+		});
 		expect(savedSubjects[0]).toEqual(["subject-1"]);
 	});
 
@@ -199,22 +202,28 @@ describe("busyclaw governance — the neutral pipeline", () => {
 		});
 
 		const first = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 		});
 		const second = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "b",
+			containerKind: "claw",
+			containerId: "b",
 		});
 
 		expect(first).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 		expect(second).toMatch(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/);
 		expect(first).not.toBe(second);
 		expect(
-			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "a" }),
+			await redactor.rehydrateValue(first, {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBe("email a@b.com");
 		expect(
-			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "b" }),
+			await redactor.rehydrateValue(first, {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe(first);
 	});
 
@@ -226,23 +235,29 @@ describe("busyclaw governance — the neutral pipeline", () => {
 		});
 
 		const first = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 			subjectIds: ["subject-1"],
 		});
 		const second = await redactor.redactValue("email a@b.com", {
-			scope: "claw",
-			scopeId: "b",
+			containerKind: "claw",
+			containerId: "b",
 			subjectIds: ["subject-1"],
 		});
 
 		await mappings.deleteForSubject("subject-1");
 
 		expect(
-			await redactor.rehydrateValue(first, { scope: "claw", scopeId: "a" }),
+			await redactor.rehydrateValue(first, {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBe(first);
 		expect(
-			await redactor.rehydrateValue(second, { scope: "claw", scopeId: "b" }),
+			await redactor.rehydrateValue(second, {
+				containerKind: "claw",
+				containerId: "b",
+			}),
 		).toBe(second);
 	});
 

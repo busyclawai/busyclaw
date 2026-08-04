@@ -257,7 +257,7 @@ export type BusyclawPluginConfigureContext = {
 		value: unknown,
 		opts?: { clawId?: string; subjectIds?: readonly string[] },
 	) => Promise<unknown>;
-	/** Resolve tokens this plugin itself minted — ONLY within its own ("plugin", id) container.
+	/** Resolve tokens this plugin itself minted — ONLY within its own ("plugin", id) containerKind.
 	 *  Deliberately no `clawId` option: a claw/transcript token is INERT here by containment
 	 *  (resolution requires the minting container to match), so a plugin can never lift PII out of
 	 *  a conversation it merely observes. Every call against an armed redactor is audited

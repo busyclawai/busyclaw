@@ -437,7 +437,7 @@ function collectPluginTools(input: {
 
 /** The context fields bound PER PLUGIN (the emit door + the redaction handles) — each closes over
  *  the plugin's id so claw-less door redactions and plugin-minted mappings attribute to that
- *  plugin's own ("plugin", id) container, never a shared bucket. */
+ *  plugin's own ("plugin", id) containerKind, never a shared bucket. */
 type PluginBoundContext = Pick<
 	BusyclawPluginConfigureContext,
 	"events" | "redact" | "rehydrate"
@@ -469,7 +469,7 @@ const identity = async (value: unknown): Promise<unknown> => value;
  * container its claw-less door events use — and with `clawId` into that claw's ("claw", clawId)
  * container, the SAME container transcript writes use, over the SAME resolved redactor, so tokens
  * cohere with the transcript and per-claw birth posture decides here exactly like everywhere else.
- * `rehydrate` resolves ONLY the plugin's own container: a claw token is inert by containment
+ * `rehydrate` resolves ONLY the plugin's own containerKind: a claw token is inert by containment
  * (resolution requires the minting container to match — no token filtering exists or is needed),
  * and every call against an armed redactor lands one pii.reidentification audit record when audit
  * is configured. Unarmed (`redactor` absent: no detector/custom redactor, or posture "raw") both
@@ -482,12 +482,12 @@ function pluginRedactionHandles(input: {
 }): Pick<BusyclawPluginConfigureContext, "redact" | "rehydrate"> {
 	const redactor = input.redactor;
 	if (!redactor) return { redact: identity, rehydrate: identity };
-	const container = { scope: "plugin", scopeId: input.plugin.id };
+	const container = { containerKind: "plugin", containerId: input.plugin.id };
 	return {
 		redact: (value, opts) =>
 			redactor.redactValue(value, {
 				...(opts?.clawId !== undefined
-					? { scope: "claw", scopeId: opts.clawId }
+					? { containerKind: "claw", containerId: opts.clawId }
 					: container),
 				...(opts?.subjectIds !== undefined
 					? { subjectIds: [...opts.subjectIds] }
@@ -846,7 +846,7 @@ export function createClaw<
 	// is tokenized BEFORE fan-out, but only under redacted postures — `armed` is false for the
 	// no-redaction recipe and posture "raw", and that path stays byte-identical (the door never
 	// walks the payload). Each plugin gets its OWN door: a claw-less emit (boot/cron/webhook — no
-	// recording) lands in that plugin's ("plugin", id) container, while a recording-carrying emit
+	// recording) lands in that plugin's ("plugin", id) containerKind, while a recording-carrying emit
 	// lands in the claw's ("claw", clawId) container — the same container transcript writes use,
 	// over the same resolved redactor, so per-claw birth posture decides door events exactly like
 	// transcript rows. The runtime's own event kinds never pass through the door; they are

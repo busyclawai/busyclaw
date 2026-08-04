@@ -261,8 +261,8 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	 *  no redaction configured): a no-op "success" would be false comfort. */
 	forgetSubject: (input: {
 		subjectId: string;
-		scope: string;
-		scopeId: string;
+		containerKind: string;
+		containerId: string;
 	}) => Promise<{ erased: number }>;
 
 	createToolCall: (
@@ -611,14 +611,14 @@ const forgetSubjectInput = ark({
 			doc: "The data-subject key crypto-shredded across this container's PII mappings; fails loud (not a silent success) when the deployment cannot honor erasure, and is audited as `pii.erasure`.",
 		},
 	}),
-	scope: ark("string").configure({
+	containerKind: ark("string").configure({
 		busyclaw: {
-			doc: "The container KIND to erase within ('claw', 'run', or a plugin's). Resolved as a resource of that kind and authorized at `manage`, so naming a container you have no claim on denies.",
+			doc: "The PII CONTAINER KIND to erase within ('claw', 'run', or a plugin's) — an entity kind, never a tenancy scope. Resolved as a resource of that kind and authorized at `manage`, so naming a container you have no claim on denies.",
 		},
 	}),
-	scopeId: ark("string").configure({
+	containerId: ark("string").configure({
 		busyclaw: {
-			doc: "The container's id — with `scope` it names exactly which mappings are in scope. Erasure across EVERY container is a trusted in-process call on the redaction handle, never a request.",
+			doc: "The container's id — with `containerKind` it names exactly which mappings are in range. Erasure across EVERY container is a trusted in-process call on the redaction handle, never a request.",
 		},
 	}),
 });
@@ -660,7 +660,7 @@ const listApprovalsInput = ark({
 // forwards its input to `ClawEngineHandle.startRun`, whose type grows as the engine grows — so a
 // field added to `EngineStartRunInput` becomes wire-reachable the moment it exists unless something
 // says otherwise. `recording` is exactly that field: it names the run's authz parent, its redaction
-// container, and the thread its answers are appended to.
+// containerKind, and the thread its answers are appended to.
 const startRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	prompt: ark("string").configure({
@@ -705,7 +705,7 @@ const deliverMessageInput = ark({
 	}),
 	body: jsonObject.configure({
 		busyclaw: {
-			doc: "The message. Tokenized at admit into the RECEIVING run's container; the drain never re-redacts.",
+			doc: "The message. Tokenized at admit into the RECEIVING run's containerKind; the drain never re-redacts.",
 		},
 	}),
 	mode: ark("'at_turn_end' | 'next_step' | 'interrupt'").configure({
@@ -1066,7 +1066,9 @@ export const clawApiRoutes = {
 	forgetSubject: apiRoute("forgetSubject", {
 		mode: "resource",
 		level: "manage",
-		resolve: (input) => ({ kind: input.scope, id: input.scopeId }),
+		// The pair IS a resource reference — which is the clearest evidence that a PII container was
+		// never a tenancy scope. `{kind, id}` is what the PEP resolves; the wire now says the same.
+		resolve: (input) => ({ kind: input.containerKind, id: input.containerId }),
 	}),
 	// R-H02. Authorized on the THREAD, not the claw: a thread implies its claw (the loader walks up),
 	// and the row carries BOTH ids, so binding the shallower one let a caller who owned any claw hang a
@@ -1421,7 +1423,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	/**
 	 * Tokenize one artifact column against its claw's container before it is persisted.
 	 *
-	 * ONE place names the container, because naming it twice is how the two halves drift: a value
+	 * ONE place names the containerKind, because naming it twice is how the two halves drift: a value
 	 * minted under `{claw, X}` and read under anything else comes back as a raw placeholder, and
 	 * nothing throws when it does. `undefined` passes through — an absent column is not a value to
 	 * redact, and walking it would only invent one.
@@ -1450,7 +1452,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		const userContent = context.redaction
 			? await context.redaction.redact(
 					{ text: args.message },
-					{ scope: "claw", scopeId: args.clawId },
+					{ containerKind: "claw", containerId: args.clawId },
 				)
 			: { text: args.message };
 		const userMessage = await store().messages.append({
@@ -1490,8 +1492,8 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		value === undefined || context.redaction === undefined
 			? value
 			: context.redaction.redact(value, {
-					scope: "claw",
-					scopeId: clawId,
+					containerKind: "claw",
+					containerId: clawId,
 					// R-M03: the lineage the host supplied rides into the mapping, so erasure can find it.
 					// Without it the mapping is minted linked to nobody and `forgetSubject` sweeps for rows
 					// that were never written.
@@ -1676,7 +1678,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			}
 			const thread = await store().threads.get(args.threadId);
 			if (!thread) return rows;
-			const container = { scope: "claw", scopeId: thread.clawId };
+			const container = { containerKind: "claw", containerId: thread.clawId };
 			const revealed = await Promise.all(
 				rows.map(async (message) => ({
 					...message,
@@ -1709,7 +1711,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				return response;
 			}
 			// Same read-side rule as listMessages: only the RETURNED copy is re-identified.
-			const container = { scope: "claw", scopeId: args.clawId };
+			const container = { containerKind: "claw", containerId: args.clawId };
 			const revealed = await requireRedaction().original(response, container);
 			await auditPrivacy(
 				"pii.reidentification",
@@ -1736,20 +1738,23 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return { ...stream, userMessage };
 		},
 
-		async forgetSubject({ subjectId, scope, scopeId }, caller?: ClawApiCaller) {
+		async forgetSubject(
+			{ subjectId, containerKind, containerId },
+			caller?: ClawApiCaller,
+		) {
 			// A FAILED erasure is the entry a regulator most wants — "it was asked for and it did not
 			// happen" — and it used to write nothing at all, because only the success path reached the
 			// log. Recorded either way now, and the failure is still raised.
 			let erased: number;
 			try {
 				erased = await requireRedaction().forgetSubject(subjectId, {
-					scope,
-					scopeId,
+					containerKind,
+					containerId,
 				});
 			} catch (error) {
 				await auditPrivacy(
 					"pii.erasure",
-					{ subjectId, scope, scopeId, erased: 0 },
+					{ subjectId, containerKind, containerId, erased: 0 },
 					{
 						status: "error",
 						reason: errorMessage(error),
@@ -1763,7 +1768,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// somebody wrote the number down at the moment it was true.
 			await auditPrivacy(
 				"pii.erasure",
-				{ subjectId, scope, scopeId, erased },
+				{ subjectId, containerKind, containerId, erased },
 				caller?.principal ? { by: caller.principal } : {},
 			);
 			return { erased };
@@ -1985,7 +1990,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// `{ ...args }` forwards whatever the caller sent, including fields this input schema has
 			// never heard of. Harmless only while `EngineStartRunInput` has nothing worth forging; the
 			// moment it gains a `recording` (which names the run's authz parent, its redaction
-			// container, and the thread its answers land in) a spread hands all three to the caller
+			// containerKind, and the thread its answers land in) a spread hands all three to the caller
 			// with no schema change anywhere and nothing to notice. The schema rejects undeclared keys
 			// too, and the two are deliberately redundant: one of them is the door, the other survives
 			// somebody adding a field to the engine input without looking here.
@@ -2016,13 +2021,13 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// `{{pii:…}}` string with nothing thrown anywhere.
 			//
 			// The extra read is not new cost — `admitMessage` already loads this row inside its CAS
-			// loop and already refuses an unknown run. A run with no claw keeps the run container,
+			// loop and already refuses an unknown run. A run with no claw keeps the run containerKind,
 			// which is still correct for it and still derivable before it starts.
 			const target = await context.runs?.get(args.toRunId);
 			const container =
 				target?.clawId !== undefined
-					? { scope: "claw", scopeId: target.clawId }
-					: { scope: "run", scopeId: args.toRunId };
+					? { containerKind: "claw", containerId: target.clawId }
+					: { containerKind: "run", containerId: args.toRunId };
 			const body = context.redaction
 				? await context.redaction.redact(args.body, container)
 				: args.body;
@@ -2032,8 +2037,8 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				mode: args.mode,
 				sender: caller?.principal ?? SYSTEM_ANONYMOUS,
 				idempotencyKey: args.idempotencyKey,
-				containerScope: container.scope,
-				containerScopeId: container.scopeId,
+				containerScope: container.containerKind,
+				containerScopeId: container.containerId,
 			});
 		},
 		controlRun: async (args, caller?: ClawApiCaller) =>

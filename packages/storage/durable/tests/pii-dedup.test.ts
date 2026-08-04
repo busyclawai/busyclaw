@@ -14,8 +14,8 @@ describe("createPiiMappingStore.findByHash", () => {
 			original: "a@b.com",
 			originalHash: "h1",
 			kind: "email",
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 			createdAt: at,
 		});
 		await store.save({
@@ -23,18 +23,27 @@ describe("createPiiMappingStore.findByHash", () => {
 			original: "a@b.com",
 			originalHash: "h1",
 			kind: "email",
-			scope: "claw",
-			scopeId: "b",
+			containerKind: "claw",
+			containerId: "b",
 			createdAt: at,
 		});
 
-		const inA = await store.findByHash("h1", { scope: "claw", scopeId: "a" });
+		const inA = await store.findByHash("h1", {
+			containerKind: "claw",
+			containerId: "a",
+		});
 		expect(inA?.placeholder).toBe("{{pii:email:aaa}}");
-		const inB = await store.findByHash("h1", { scope: "claw", scopeId: "b" });
+		const inB = await store.findByHash("h1", {
+			containerKind: "claw",
+			containerId: "b",
+		});
 		expect(inB?.placeholder).toBe("{{pii:email:bbb}}");
 		expect(await store.findByHash("h1")).toBeNull();
 		expect(
-			await store.findByHash("nope", { scope: "claw", scopeId: "a" }),
+			await store.findByHash("nope", {
+				containerKind: "claw",
+				containerId: "a",
+			}),
 		).toBeNull();
 	});
 
@@ -46,21 +55,21 @@ describe("createPiiMappingStore.findByHash", () => {
 				original: "c@d.com",
 				originalHash: "h2",
 				kind: "email",
-				scope: "claw",
-				scopeId: "a",
+				containerKind: "claw",
+				containerId: "a",
 				createdAt: at,
 			},
 			["s1"],
 		);
 		await store.deleteForSubject("s1");
 		expect(
-			await store.findByHash("h2", { scope: "claw", scopeId: "a" }),
+			await store.findByHash("h2", { containerKind: "claw", containerId: "a" }),
 		).toBeNull();
 	});
 });
 
 describe("createPiiMappingStore container-scoped erasure", () => {
-	it("erases a subject in its OWN container, sparing a same-code token elsewhere", async () => {
+	it("erases a subject in its OWN containerKind, sparing a same-code token elsewhere", async () => {
 		// Word-code placeholders are unique only within a container, so two containers can carry the
 		// SAME token for different values. Erasure must delete the right one, never the namesake.
 		const store = createPiiMappingStore(memoryAdapter());
@@ -71,8 +80,8 @@ describe("createPiiMappingStore container-scoped erasure", () => {
 				original: "Zoe",
 				originalHash: "hz",
 				kind: "name",
-				scope: "claw",
-				scopeId: "a",
+				containerKind: "claw",
+				containerId: "a",
 				createdAt: at,
 			},
 			["s1"],
@@ -83,8 +92,8 @@ describe("createPiiMappingStore container-scoped erasure", () => {
 				original: "Yan",
 				originalHash: "hy",
 				kind: "name",
-				scope: "claw",
-				scopeId: "b",
+				containerKind: "claw",
+				containerId: "b",
 				createdAt: at,
 			},
 			["s2"],
@@ -93,14 +102,19 @@ describe("createPiiMappingStore container-scoped erasure", () => {
 		await store.deleteForSubject("s1");
 
 		expect(
-			await store.resolve(shared, { scope: "claw", scopeId: "a" }),
+			await store.resolve(shared, { containerKind: "claw", containerId: "a" }),
 		).toBeNull();
-		expect(await store.resolve(shared, { scope: "claw", scopeId: "b" })).toBe(
-			"Yan",
-		);
+		expect(
+			await store.resolve(shared, { containerKind: "claw", containerId: "b" }),
+		).toBe("Yan");
 		// The spared container keeps its dedup row and junction link too.
 		expect(
-			(await store.findByHash("hy", { scope: "claw", scopeId: "b" }))?.original,
+			(
+				await store.findByHash("hy", {
+					containerKind: "claw",
+					containerId: "b",
+				})
+			)?.original,
 		).toBe("Yan");
 	});
 });
@@ -114,8 +128,8 @@ describe("createPiiMappingStore subject junction", () => {
 			original: "d@e.com",
 			originalHash: "h3",
 			kind: "email" as const,
-			scope: "claw",
-			scopeId: "a",
+			containerKind: "claw",
+			containerId: "a",
 			createdAt: at,
 		};
 		await store.save(mapping, ["s1"]);

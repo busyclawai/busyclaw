@@ -1416,7 +1416,7 @@ describe("run control plane — the doors", () => {
 		expect(cancelled?.payload.requestedBy).toBe(userPrincipal("actor-1"));
 	});
 
-	// The door is where a message is TOKENIZED, into the receiving run's container. Nothing tested
+	// The door is where a message is TOKENIZED, into the receiving run's containerKind. Nothing tested
 	// that: the engine-level tests hand it a body that was already clean.
 	it("tokenizes a message body into the receiving run's container", async () => {
 		const { db, store, claw } = await clawHarness();

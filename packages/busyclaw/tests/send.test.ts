@@ -487,7 +487,7 @@ describe("createClaw send", () => {
 
 	// The run's redaction CONTAINER is a fence, not a label. This exercises the namespace the RUNTIME
 	// mints into — PII born INSIDE a run, in a tool RESULT — which is the half the api never touches
-	// (a user message is already tokenized, in the claw's container, before the run starts).
+	// (a user message is already tokenized, in the claw's containerKind, before the run starts).
 	//
 	// Unstamped, the runtime redacted with NO container, so every run of every claw minted into one
 	// global namespace and claw A's token resolved to cleartext at claw B's tool edge. Nothing throws
@@ -522,7 +522,7 @@ describe("createClaw send", () => {
 
 		// The tool RESULT as persisted — tokenized at rest, which is the whole point. This mapping was
 		// minted by the runtime (the address never passed through the api), so it is the one that used
-		// to land in the global container.
+		// to land in the global containerKind.
 		const persistedA = JSON.stringify(
 			await apiA.listToolResults({ runId: "run-a", toolCallId: "lookup-1" }),
 		);

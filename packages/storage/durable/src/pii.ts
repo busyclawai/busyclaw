@@ -1,4 +1,4 @@
-import type { Adapter, ScopeRef } from "@busyclaw/contracts";
+import type { Adapter, PiiContainerRef } from "@busyclaw/contracts";
 import {
 	isConflict,
 	type PiiMapping,
@@ -36,7 +36,7 @@ type SubjectWhere = EntityWhere<typeof piiSubjectFields>;
 // Every predicate below names BOTH halves of the container unconditionally. That is the point of the
 // columns being required: while they were optional these clauses were built conditionally, so a row
 // with no container produced a where of `placeholder` alone — which matches the namesake token in
-// every OTHER container. Word-code placeholders are collision-minted per container, so namesakes are
+// every OTHER containerKind. Word-code placeholders are collision-minted per container, so namesakes are
 // expected rather than rare.
 //
 // `deleteForSubject` was the reachable consequence: erasing an uncontained subject deleted contained
@@ -48,40 +48,41 @@ type SubjectWhere = EntityWhere<typeof piiSubjectFields>;
 /** The exact-row predicate: the placeholder plus its whole container — the composite primary key. */
 function mappingWhere(row: {
 	placeholder: string;
-	scope: string;
-	scopeId: string;
+	containerKind: string;
+	containerId: string;
 }): MappingWhere[] {
 	return [
 		{ field: "placeholder", value: row.placeholder },
-		{ field: "scope", value: row.scope, connector: "AND" },
-		{ field: "scopeId", value: row.scopeId, connector: "AND" },
+		{ field: "containerKind", value: row.containerKind, connector: "AND" },
+		{ field: "containerId", value: row.containerId, connector: "AND" },
 	];
 }
 
 /** A junction predicate scoped to one container — the placeholder is unique only within it, so
- *  erasure must never reach a namesake mapping in another container. */
+ *  erasure must never reach a namesake mapping in another containerKind. */
 function subjectContainerWhere(row: {
 	placeholder: string;
-	scope: string;
-	scopeId: string;
+	containerKind: string;
+	containerId: string;
 }): SubjectWhere[] {
 	return [
 		{ field: "placeholder", value: row.placeholder },
-		{ field: "scope", value: row.scope, connector: "AND" },
-		{ field: "scopeId", value: row.scopeId, connector: "AND" },
+		{ field: "containerKind", value: row.containerKind, connector: "AND" },
+		{ field: "containerId", value: row.containerId, connector: "AND" },
 	];
 }
 
-/** Containment: a placeholder rehydrates only within the same (scope, scopeId) container. A context
+/** Containment: a placeholder rehydrates only within the same (containerKind, containerId) containerKind. A context
  *  with no container — or only half of one — resolves to UNCONTAINED, so it can only ever match rows
  *  written by an equally context-less redaction. */
 function sameContainer(
 	mapping: PiiMapping,
 	ctx: Parameters<PiiMappingStore["resolve"]>[1],
 ): boolean {
-	const container = piiContainer(ctx);
+	const containerKind = piiContainer(ctx);
 	return (
-		mapping.scope === container.scope && mapping.scopeId === container.scopeId
+		mapping.containerKind === containerKind.containerKind &&
+		mapping.containerId === containerKind.containerId
 	);
 }
 
@@ -94,13 +95,18 @@ function sameContainer(
  * bot token and this table at once.
  */
 function originalBinding(mapping: {
-	scope: string;
-	scopeId: string;
+	containerKind: string;
+	containerId: string;
 	placeholder: string;
 }): SecretBinding {
+	// `SecretBinding` is AAD, and deliberately namespace-agnostic: it binds ciphertext to SOME
+	// `(scope, scopeId, name)` triple without caring which dimension that is. A secret binds to a
+	// tenancy boundary; a sealed PII original binds to its CONTAINER. Mapped here rather than renamed
+	// there, because forcing one of the two meanings onto a type that serves both is how the
+	// conflation started.
 	return {
-		scope: mapping.scope,
-		scopeId: mapping.scopeId,
+		scope: mapping.containerKind,
+		scopeId: mapping.containerId,
 		name: mapping.placeholder,
 	};
 }
@@ -116,8 +122,8 @@ function originalBinding(mapping: {
 async function openOriginal(
 	row: {
 		original: string;
-		scope: string;
-		scopeId: string;
+		containerKind: string;
+		containerId: string;
 		placeholder: string;
 	},
 	cipher?: SecretCipher,
@@ -184,7 +190,7 @@ export function createPiiMappingStore(
 			for (const subjectId of subjectIds ?? []) {
 				// The junction is a set, not a log — re-linking an existing (placeholder, subject)
 				// pair (deterministic placeholders re-save on reuse) must not duplicate rows. Scoped to
-				// the container, since the placeholder is unique only within it.
+				// the containerKind, since the placeholder is unique only within it.
 				const linked = await db.findMany({
 					model: "pii_subject",
 					where: [
@@ -198,8 +204,8 @@ export function createPiiMappingStore(
 					data: {
 						placeholder: mapping.placeholder,
 						subjectId,
-						scope: mapping.scope,
-						scopeId: mapping.scopeId,
+						containerKind: mapping.containerKind,
+						containerId: mapping.containerId,
 					},
 				});
 			}
@@ -227,19 +233,27 @@ export function createPiiMappingStore(
 		},
 
 		async isErased(subjectId, ctx) {
-			const container = piiContainer(ctx);
+			const containerKind = piiContainer(ctx);
 			const row = await db.findOne({
 				model: "pii_erasure",
 				where: [
 					{ field: "subjectId", value: subjectId },
-					{ field: "scope", value: container.scope, connector: "AND" },
-					{ field: "scopeId", value: container.scopeId, connector: "AND" },
+					{
+						field: "containerKind",
+						value: containerKind.containerKind,
+						connector: "AND",
+					},
+					{
+						field: "containerId",
+						value: containerKind.containerId,
+						connector: "AND",
+					},
 				],
 			});
 			return row !== null;
 		},
 
-		async deleteForSubject(subjectId: string, container?: ScopeRef) {
+		async deleteForSubject(subjectId: string, containerKind?: PiiContainerRef) {
 			// R-M06. Erasure is FOUR writes — shred the mappings, drop the subject rows, then tombstone
 			// each container — and a crash between them leaves a torn one: mappings gone with no standing
 			// instruction, or an instruction with rows still readable. Run inside a transaction when the
@@ -249,23 +263,27 @@ export function createPiiMappingStore(
 			// Sequential otherwise, unchanged — and no longer silent about it: the tombstone failure that
 			// used to be swallowed is loud, so a torn erasure is reported rather than reported as success.
 			const run = async (tx: typeof db): Promise<number> => {
-				// Find every (placeholder, container) this subject appears on (multi-subject safe), then
+				// Find every (placeholder, containerKind) this subject appears on (multi-subject safe), then
 				// erase the value — the placeholder becomes permanently un-rehydratable — and all of that
 				// value's subject rows, scoped to its OWN container so a namesake elsewhere is untouched.
 				//
 				// A `container` narrows the FIND, not the deletes below: those were already per-container
 				// (a shred must never reach a namesake in another one), so bounding the sweep is entirely a
-				// question of which subject rows are in scope. Omitted ⇒ every container, which is the
+				// question of which subject rows are in containerKind. Omitted ⇒ every container, which is the
 				// deployment-wide DSR answer and the only one this verb used to give.
 				const subjectRows = await tx.findMany({
 					model: "pii_subject",
-					where: container
+					where: containerKind
 						? [
 								{ field: "subjectId", value: subjectId },
-								{ field: "scope", value: container.scope, connector: "AND" },
 								{
-									field: "scopeId",
-									value: container.scopeId,
+									field: "containerKind",
+									value: containerKind.containerKind,
+									connector: "AND",
+								},
+								{
+									field: "containerId",
+									value: containerKind.containerId,
 									connector: "AND",
 								},
 							]
@@ -274,7 +292,11 @@ export function createPiiMappingStore(
 				const seen = new Set<string>();
 				let erased = 0;
 				for (const row of subjectRows) {
-					const key = JSON.stringify([row.placeholder, row.scope, row.scopeId]);
+					const key = JSON.stringify([
+						row.placeholder,
+						row.containerKind,
+						row.containerId,
+					]);
 					if (seen.has(key)) continue;
 					seen.add(key);
 					erased += await tx.deleteMany({
@@ -291,7 +313,7 @@ export function createPiiMappingStore(
 				// them again — forgotten until somebody says your name. The mark makes the request standing.
 				const containers = new Set<string>();
 				for (const row of subjectRows) {
-					containers.add(JSON.stringify([row.scope, row.scopeId]));
+					containers.add(JSON.stringify([row.containerKind, row.containerId]));
 				}
 				// Nothing found ⇒ nothing marked, and that is the honest limit rather than an oversight:
 				// erasure is addressed by subject alone, with no container in the request, so the only
@@ -299,12 +321,15 @@ export function createPiiMappingStore(
 				// before they ever appeared leaves no mark — there is nowhere truthful to put one.
 				const at = now();
 				for (const key of containers) {
-					const [scope, scopeId] = JSON.parse(key) as [string, string];
+					const [containerKind, containerId] = JSON.parse(key) as [
+						string,
+						string,
+					];
 					// Re-erasing is not an error and must not fail on the composite key.
 					try {
 						await tx.create({
 							model: "pii_erasure",
-							data: { subjectId, scope, scopeId, erasedAt: at },
+							data: { subjectId, containerKind, containerId, erasedAt: at },
 						});
 					} catch (error) {
 						// R-M06. ONLY a duplicate is survivable here. This caught everything, so a tombstone

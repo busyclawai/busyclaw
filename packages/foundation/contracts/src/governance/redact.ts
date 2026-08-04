@@ -6,10 +6,10 @@
 import { type } from "arktype";
 import type { EntityRecord } from "../entity";
 import { entity, field } from "../entity";
-import { type ScopeRef, UNCONTAINED } from "../scope";
+import { type PiiContainerRef, UNCONTAINED } from "../pii-container";
 import {
-	SCOPE_CONTEXT_KEY,
-	SCOPE_ID_CONTEXT_KEY,
+	PII_CONTAINER_ID_CONTEXT_KEY,
+	PII_CONTAINER_KIND_CONTEXT_KEY,
 	SUBJECT_CONTEXT_KEY,
 	type TurnContext,
 } from "./boundary";
@@ -57,7 +57,7 @@ export type PiiSpans = typeof piiSpans.infer;
 //
 // That is a correctness fix, not only a schema tidy. While the columns were nullable, the durable
 // store built its container clauses CONDITIONALLY — an uncontained row produced a where of
-// `placeholder` alone, which matches the namesake token in every other container. Erasing an
+// `placeholder` alone, which matches the namesake token in every other containerKind. Erasing an
 // uncontained subject therefore deleted contained mappings belonging to other claws, destroying their
 // rehydration. Required columns make the predicate unconditional, so the container is always part of
 // the question. This is the erasure gap the cleanroom brief flags in §7.
@@ -65,26 +65,30 @@ export const piiMappingFields = {
 	placeholder: field.string({ required: true, index: true, primaryKey: true }),
 	original: field.string({ required: true, pii: "contains" }),
 	// Dedup index: keyed hash of (kind, original) — what makes placeholders deterministic per
-	// (value, kind, container). KEYED (never a bare hash) so low-entropy PII can't be
+	// (value, kind, containerKind). KEYED (never a bare hash) so low-entropy PII can't be
 	// dictionary-attacked offline; optional because a keyless redactor cannot compute it and
 	// falls back to minting fresh placeholders. Losing the key only resets dedup — rehydration
 	// never depends on it.
 	originalHash: field.string({ index: true }),
 	kind: field.enum(piiKindValues, { required: true, index: true }),
-	// Containment: the (scope, scopeId) container this was redacted in — `claw:<clawId>` today,
+	// Containment: the (containerKind, containerId) this was redacted in — `claw:<clawId>` today,
 	// `memory:<kbId>` / `task:<taskId>` later. A placeholder rehydrates ONLY within the same
-	// container. `scopeId` is a unique entity id, so the container implies its boundary — pii
-	// carries NO organizationId, ever. Normalize a context into one with `piiContainer`.
-	scope: field.string({ required: true, index: true, primaryKey: true }),
-	scopeId: field.string({ required: true, index: true, primaryKey: true }),
+	// containerKind. `containerId` is a unique ENTITY id, so the container implies its boundary — pii
+	// carries NO organizationId and no tenancy scope, ever. Normalize a context with `piiContainer`.
+	containerKind: field.string({
+		required: true,
+		index: true,
+		primaryKey: true,
+	}),
+	containerId: field.string({ required: true, index: true, primaryKey: true }),
 	createdAt: field.string({ required: true }),
 } as const;
 
 /**
  * One value, one placeholder, per container — enforced by the DATABASE.
  *
- * The tuple is (scope, scopeId, originalHash), NOT the placeholder: `placeholder` + `scope` +
- * `scopeId` are already the composite primary key, so a unique over those would only restate it. Two
+ * The tuple is (containerKind, containerId, originalHash), NOT the placeholder: `placeholder` +
+ * `container` + `containerId` are already the composite primary key, so a unique over those would only restate it. Two
  * concurrent writers never collide on the placeholder — they mint two DIFFERENT ones, which is
  * exactly why the primary key could not catch this. What they share is the VALUE, and `originalHash`
  * is what names it.
@@ -99,7 +103,7 @@ export const piiMappingFields = {
  * them as equal and would reject the second, is not among them.
  */
 export const piiMappingEntity = entity("pii_mapping", piiMappingFields, {
-	uniques: [["scope", "scopeId", "originalHash"]],
+	uniques: [["containerKind", "containerId", "originalHash"]],
 });
 export const piiMapping = piiMappingEntity.record;
 export type PiiMapping = EntityRecord<typeof piiMappingFields>;
@@ -120,8 +124,12 @@ export const piiMappingSchema = piiMappingEntity.storage;
 export const piiSubjectFields = {
 	placeholder: field.string({ required: true, index: true, primaryKey: true }),
 	subjectId: field.string({ required: true, index: true, primaryKey: true }),
-	scope: field.string({ required: true, index: true, primaryKey: true }),
-	scopeId: field.string({ required: true, index: true, primaryKey: true }),
+	containerKind: field.string({
+		required: true,
+		index: true,
+		primaryKey: true,
+	}),
+	containerId: field.string({ required: true, index: true, primaryKey: true }),
 } as const;
 
 export const piiSubjectEntity = entity("pii_subject", piiSubjectFields);
@@ -131,7 +139,7 @@ export type PiiSubject = EntityRecord<typeof piiSubjectFields>;
 /** The storage schema backing the durable subject junction. */
 export const piiSubjectSchema = piiSubjectEntity.storage;
 
-// The erasure TOMBSTONE — one row per (subject, container) that has been shredded.
+// The erasure TOMBSTONE — one row per (subject, containerKind) that has been shredded.
 //
 // Erasure without it is a point-in-time delete, not a standing instruction: the mappings go, and the
 // very next turn that mentions the same person mints them again. The person asked to be forgotten and
@@ -142,8 +150,12 @@ export const piiSubjectSchema = piiSubjectEntity.storage;
 // for tenants who never asked for it.
 export const piiErasureFields = {
 	subjectId: field.string({ required: true, index: true, primaryKey: true }),
-	scope: field.string({ required: true, index: true, primaryKey: true }),
-	scopeId: field.string({ required: true, index: true, primaryKey: true }),
+	containerKind: field.string({
+		required: true,
+		index: true,
+		primaryKey: true,
+	}),
+	containerId: field.string({ required: true, index: true, primaryKey: true }),
 	/** When the shred happened — the durable half of the `pii.erasure` audit line, which lives in a
 	 *  different store and answers a different question ("was it requested" vs "is it still in force"). */
 	erasedAt: field.string({ required: true }),
@@ -194,7 +206,7 @@ export type PiiMappingStore = {
 	 */
 	deleteForSubject: (
 		subjectId: string,
-		container?: ScopeRef,
+		containerKind?: PiiContainerRef,
 	) => number | Promise<number>;
 	/**
 	 * Has this subject been erased from this container? Reads the tombstone.
@@ -213,8 +225,8 @@ export type PiiMappingStore = {
 };
 
 export const redactionContext = type({
-	"scope?": "string | undefined",
-	"scopeId?": "string | undefined",
+	"containerKind?": "string | undefined",
+	"containerId?": "string | undefined",
 	"subjectIds?": "string[] | undefined",
 });
 export type RedactionContext = typeof redactionContext.infer;
@@ -223,34 +235,34 @@ export const rehydrationContext = redactionContext;
 export type RehydrationContext = typeof rehydrationContext.infer;
 
 /**
- * The container a redaction or rehydration acts in, normalized to a whole {@link ScopeRef}. Every
+ * The container a redaction or rehydration acts in, normalized to a whole {@link PiiContainerRef}. Every
  * store goes through this — it is the ONE place the absent container becomes a value, so mint, lookup,
  * dedup and erasure cannot disagree about which bucket a context-less call lands in.
  *
- * BOTH halves must be present to count. A half-named container (`{ scope: "claw" }` with no `scopeId`)
+ * BOTH halves must be present to count. A half-named container (`{ containerKind: "claw" }` with no `containerId`)
  * used to form its own bucket — distinct from the fully-absent one and from every real claw — so a
  * placeholder minted under one was rehydratable only by a caller who repeated the identical mistake.
  * Collapsing a partial context to {@link UNCONTAINED} makes the absent case exactly one bucket rather
  * than an open family of near-misses.
  */
-export function piiContainer(ctx?: RehydrationContext): ScopeRef {
-	return ctx?.scope !== undefined && ctx.scopeId !== undefined
-		? { scope: ctx.scope, scopeId: ctx.scopeId }
+export function piiContainer(ctx?: RehydrationContext): PiiContainerRef {
+	return ctx?.containerKind !== undefined && ctx.containerId !== undefined
+		? { containerKind: ctx.containerKind, containerId: ctx.containerId }
 		: UNCONTAINED;
 }
 
 export function redactionContextFrom(
 	ctx: TurnContext,
 ): RedactionContext | undefined {
-	const scope = ctx[SCOPE_CONTEXT_KEY];
-	const scopeId = ctx[SCOPE_ID_CONTEXT_KEY];
+	const containerKind = ctx[PII_CONTAINER_KIND_CONTEXT_KEY];
+	const containerId = ctx[PII_CONTAINER_ID_CONTEXT_KEY];
 	const subjectId = ctx[SUBJECT_CONTEXT_KEY];
 	const out: RedactionContext = {};
-	if (typeof scope === "string") out.scope = scope;
-	if (typeof scopeId === "string") out.scopeId = scopeId;
+	if (typeof containerKind === "string") out.containerKind = containerKind;
+	if (typeof containerId === "string") out.containerId = containerId;
 	if (typeof subjectId === "string") out.subjectIds = [subjectId];
-	return out.scope === undefined &&
-		out.scopeId === undefined &&
+	return out.containerKind === undefined &&
+		out.containerId === undefined &&
 		out.subjectIds === undefined
 		? undefined
 		: out;

@@ -192,8 +192,11 @@ export const CONFIG_SCOPE_ID_CONTEXT_KEY = "busyclaw__configScopeId";
 // redaction happened in (`claw:<clawId>` today, `memory:<kbId>` / `task:<taskId>` later). A PII
 // placeholder rehydrates only within the same container. `scopeId` is a unique entity id, so the
 // container implies its boundary — redaction stays scope-blind (no boundary key anywhere in pii).
-export const SCOPE_CONTEXT_KEY = "busyclaw__scope";
-export const SCOPE_ID_CONTEXT_KEY = "busyclaw__scopeId";
+/** WHICH PII NAMESPACE this turn reads and mints in — an ENTITY reference (`claw`, `run`, a plugin
+ *  id), not a tenancy boundary. See pii-container.ts for why the two are different dimensions and why
+ *  sharing one name cost a silent class of bug. */
+export const PII_CONTAINER_KIND_CONTEXT_KEY = "busyclaw__piiContainerKind";
+export const PII_CONTAINER_ID_CONTEXT_KEY = "busyclaw__piiContainerId";
 // How the run started — stamped by the runtime from mechanical fact (sendMessage/api.generate =
 // interactive; engine/scheduled runs = autonomous), never claimed by a caller. Policies read it
 // to attenuate borrowed authority: an autonomous run has no human present to confirm.
