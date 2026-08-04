@@ -17,6 +17,8 @@ import {
 import { createStoredRedactor } from "@busyclaw/core";
 import {
 	createSqlEngineStore,
+	driveClaim,
+	RUNTIME_RUN_TASK,
 	sqlEngine,
 	sqlEngineSchema,
 } from "@busyclaw/engine-sql";
@@ -1658,4 +1660,195 @@ describe("run control plane — the run's tenancy boundary", () => {
 		expect(executed?.scope).toBeUndefined();
 		expect(executed?.scopeId).toBeUndefined();
 	});
+});
+
+describe("run control plane — the targeted claim", () => {
+	/**
+	 * `claimTask` is `claimDueTask`'s acquisition half without its candidate scan. These pin the two
+	 * properties that make the split safe, on SQLite — where a lost CAS is a real lost CAS rather
+	 * than an ordering accident on an adapter that does not isolate.
+	 */
+	it("loses to a claimant that already holds the task, and leaves no orphan lease", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+
+		const run = await store.createRun({ input: { prompt: "go" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+		});
+
+		const first = await store.claimTask(task.id, { workerId: "worker-1" });
+		const second = await store.claimTask(task.id, { workerId: "worker-2" });
+
+		expect(first).not.toBeNull();
+		expect(second).toBeNull();
+		// The loser mints a lease BEFORE its CAS — the row is the arbiter, not the lease — so the
+		// unwind that deletes it is the whole reason a lost claim is not a slow leak of lease rows.
+		const leases = await adapter.findMany({
+			model: "lease",
+			where: [{ field: "taskId", value: task.id }],
+		});
+		expect(leases).toHaveLength(1);
+		expect((leases[0] as { workerId: string }).workerId).toBe("worker-1");
+	});
+
+	it("refuses a task still inside its retry backoff", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+
+		const run = await store.createRun({ input: { prompt: "go" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+			// Due well past any plausible `now()`, exactly as `failTask` schedules a retry.
+			dueAt: new Date(Date.now() + 3_600_000).toISOString(),
+		});
+
+		// `claimDueTask` never sees it — `pendingWhere` filters on `dueAt`. A claim by primary key has
+		// no such filter in front of it, so the predicate has to live in the shared CAS or a targeted
+		// claim walks straight past a backoff and re-runs failing work with no delay.
+		expect(await store.claimDueTask({ workerId: "worker-1" })).toBeNull();
+		expect(await store.claimTask(task.id, { workerId: "worker-1" })).toBeNull();
+
+		const untouched = await store.getTask(task.id);
+		expect(untouched?.status).toBe("pending");
+		expect(untouched?.attempt).toBe(0);
+	});
+});
+
+describe("run control plane — two claims in one process", () => {
+	/**
+	 * THE PER-CLAIM REGRESSION. The heartbeat and the control port used to be per WORKER, resting on
+	 * "one tick runs one task": `currentHeartbeat` was a single mutable slot, and `armInterrupt`
+	 * routed to whatever sat in it. Two claims in one process is not exotic — it is one replica
+	 * serving two requests, which is the shape the whole one-run model is built on.
+	 *
+	 * The ordering is forced rather than raced. Run A emits a tool call on its first step, and the
+	 * tool starts the tick that claims run B — so B's heartbeat becomes the most recent one BEFORE A
+	 * arms the interrupt for its second step. Under the shared slot that arm lands on B's heartbeat,
+	 * leaving A's holding its STALE step-one controller: A's heartbeat then fires a controller nobody
+	 * is listening to, and the live call runs to completion.
+	 *
+	 * The observable has to be the abort itself. An interrupt that cannot reach the in-flight call
+	 * still degrades to `next_step` delivery, so asserting on the transcript passes either way.
+	 */
+	it("arms the interrupt on its own claim, not on whichever started last", async () => {
+		const { adapter: db, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(db);
+
+		let sawAbort = false;
+		let secondTick: Promise<unknown> | undefined;
+		// Counts calls of THIS run only. A counter shared across both runs is what made an earlier
+		// version of this test blame the wrong call — run B's step landed in the middle of run A's.
+		let aCalls = 0;
+		const usage = {
+			inputTokens: {
+				total: 1,
+				noCache: undefined,
+				cacheRead: undefined,
+				cacheWrite: undefined,
+			},
+			outputTokens: { total: 1, text: undefined, reasoning: undefined },
+		};
+		const model: RuntimeModel = {
+			specificationVersion: "v4",
+			provider: "mock",
+			modelId: "mock",
+			supportedUrls: {},
+			doGenerate: async (options: {
+				prompt?: unknown;
+				abortSignal?: AbortSignal;
+			}) => {
+				if (!JSON.stringify(options.prompt).includes("run a")) {
+					return {
+						content: [{ type: "text" as const, text: "b done" }],
+						finishReason: { unified: "stop" as const, raw: undefined },
+						usage,
+						warnings: [],
+					};
+				}
+				aCalls++;
+				if (aCalls === 1) {
+					return {
+						content: [
+							{
+								type: "tool-call" as const,
+								toolCallId: "t1",
+								toolName: "ping",
+								input: JSON.stringify({ n: 1 }),
+							},
+						],
+						finishReason: { unified: "tool-calls" as const, raw: undefined },
+						usage,
+						warnings: [],
+					};
+				}
+				// Run A's SECOND step: the call the interrupt has to tear down, with B's claim live.
+				return new Promise((_resolve, reject) => {
+					options.abortSignal?.addEventListener("abort", () => {
+						sawAbort = true;
+						reject(new Error("aborted"));
+					});
+					setTimeout(() => reject(new Error("never interrupted")), 4_000);
+				});
+			},
+			doStream: async () => {
+				throw new Error("stream not used");
+			},
+		} as RuntimeModel;
+
+		const runtime = createRuntime({
+			model,
+			...durableStores(db),
+			redactor: createStoredRedactor({
+				detector: emailDetector,
+				mappings: createPiiMappingStore(db),
+			}),
+			tools: {
+				ping: govern(
+					tool({
+						description: "Ping.",
+						inputSchema: jsonSchema<{ n: number }>({
+							type: "object",
+							properties: { n: { type: "number" } },
+							required: ["n"],
+						}),
+						execute: async () => {
+							secondTick = engine.work();
+							await new Promise((resolve) => setTimeout(resolve, 60));
+							return { pong: 1 };
+						},
+					}),
+					{},
+				),
+			},
+		});
+		const { engine } = sqlEngine({
+			store,
+			workerId: "worker-1",
+			leaseTtlMs: 600,
+		}).create(runtime);
+
+		const a = await engine.startRun({ prompt: "run a" });
+		await engine.startRun({ prompt: "run b" });
+
+		const tick = engine.work();
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		await engine.deliverMessage({
+			toRunId: a.id,
+			body: { text: "for run a only" },
+			mode: "interrupt",
+			sender: userPrincipal("operator"),
+			idempotencyKey: "k-a",
+		});
+		await Promise.all([tick, secondTick]);
+
+		expect(sawAbort).toBe(true);
+	}, 20_000);
 });

@@ -447,15 +447,60 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 } {
 	const { store, runtime, workerId, leaseTtlMs } = config;
 	const now = store.now;
+	return {
+		async tick(options?: WorkerTickOptions) {
+			const deadlineAt = options?.deadlineAt;
+			// Budget spent → claim nothing, end the drain cleanly. The pending task waits for the
+			// next invocation instead of being killed mid-run by the platform.
+			if (deadlineAt !== undefined && now() >= deadlineAt) {
+				return { status: "idle", reason: "deadline" };
+			}
+			// SELECTION is the only thing a tick does that a caller-driven claim must not: it takes the
+			// oldest due task, which for a caller would mean driving somebody else's run.
+			const claim = await store.claimDueTask({ workerId, leaseTtlMs });
+			if (!claim) return { status: "idle" };
+			return driveClaim({
+				claim,
+				runtime,
+				store,
+				workerId,
+				...(leaseTtlMs !== undefined ? { leaseTtlMs } : {}),
+				...(deadlineAt !== undefined ? { deadlineAt } : {}),
+			});
+		},
+	};
+}
+
+/**
+ * Drive one ALREADY-CLAIMED task to a terminal transition.
+ *
+ * Everything after the claim, and nothing about acquiring one — so the two things that can hold a
+ * lease (a cron drain, and a caller driving its own run in its own invocation) share one body. That
+ * matters more than it looks: each branch of the terminal switch below carries a race argument that
+ * took a bug to learn, and the `const unreachable: never` at the end is the only reason a new
+ * `RuntimeResult` variant is a compile error instead of a silent fall-through to `completed`. A
+ * second copy would make that guarantee local to whichever file you happened to be editing.
+ *
+ * The heartbeat and the control port are PER CLAIM. They used to be per WORKER, resting on "one tick
+ * runs one task" — the moment two claims are driven in one process, a shared heartbeat would arm the
+ * wrong run's AbortController.
+ */
+export async function driveClaim(input: {
+	store: SqlEngineStore;
+	runtime: Runtime;
+	claim: ClaimedTask;
+	workerId: string;
+	leaseTtlMs?: number;
+	deadlineAt?: string;
+}): Promise<WorkerTickResult> {
+	const { claim, deadlineAt, leaseTtlMs, runtime, store, workerId } = input;
+	const heartbeat = startHeartbeat(store, claim, leaseTtlMs);
 	// One read of the run row per step. `controlRequestedAt` present IS the intent — the loop is told
 	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
 	// upstream of it.
-	// The heartbeat driving the slice that is running RIGHT NOW. One tick runs one task, so there is
-	// only ever one — but it is per-claim, while the port is per-worker, so they are joined here.
-	let currentHeartbeat: HeartbeatHandle | undefined;
 	const controlPort: RunControlPort = {
 		armInterrupt: (_runId, fire) => {
-			currentHeartbeat?.setInterrupt(fire);
+			heartbeat.setInterrupt(fire);
 		},
 		poll: async (runId, seenSeq, deliveredThrough) => {
 			// ONE primary-key read per step, and that is the steady-state cost of the whole control
@@ -486,477 +531,461 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 			};
 		},
 	};
-	return {
-		async tick(options?: WorkerTickOptions) {
-			const deadlineAt = options?.deadlineAt;
-			// Budget spent → claim nothing, end the drain cleanly. The pending task waits for the
-			// next invocation instead of being killed mid-run by the platform.
-			if (deadlineAt !== undefined && now() >= deadlineAt) {
-				return { status: "idle", reason: "deadline" };
-			}
-			const claim = await store.claimDueTask({ workerId, leaseTtlMs });
-			if (!claim) return { status: "idle" };
-			const heartbeat = startHeartbeat(store, claim, leaseTtlMs);
-			currentHeartbeat = heartbeat;
+	try {
+		if (
+			claim.task.kind !== RUNTIME_RUN_TASK &&
+			claim.task.kind !== RUNTIME_CONTINUE_RUN_TASK &&
+			claim.task.kind !== RUNTIME_RESUME_RUN_TASK
+		) {
+			heartbeat.stop();
+			return failClaim(
+				store,
+				claim,
+				unsupportedOperationError(`unsupported task kind: ${claim.task.kind}`, {
+					kind: claim.task.kind,
+				}).message,
+			);
+		}
 
-			try {
-				if (
-					claim.task.kind !== RUNTIME_RUN_TASK &&
-					claim.task.kind !== RUNTIME_CONTINUE_RUN_TASK &&
-					claim.task.kind !== RUNTIME_RESUME_RUN_TASK
-				) {
-					heartbeat.stop();
-					return failClaim(
-						store,
-						claim,
-						unsupportedOperationError(
-							`unsupported task kind: ${claim.task.kind}`,
-							{ kind: claim.task.kind },
-						).message,
-					);
-				}
+		await store.appendEvent({
+			runId: claim.task.runId,
+			type: "run.started",
+			payload: { taskId: claim.task.id, workerId },
+		});
 
-				await store.appendEvent({
-					runId: claim.task.runId,
-					type: "run.started",
-					payload: { taskId: claim.task.id, workerId },
+		// The identity this durable run belongs to, read from the run row rather than invented
+		// by the worker. A run with none executes with none, and the floor refuses it — which is
+		// the correct answer for a task nobody can be shown to have asked for.
+		const run = await store.getRun(claim.task.runId);
+		// The boundary this slice resolves, recorded once the slice ends. A run started by a
+		// system principal on behalf of a tenant is otherwise owned by nobody a tenant admin
+		// can name — the PEP isolates by the run's own principal, and that principal is the
+		// system.
+		let boundary: { scope: string; scopeId: string } | undefined;
+		const runtimeTask = runTask(
+			runtime,
+			claim,
+			controlPort,
+			(resolved) => {
+				boundary = resolved;
+			},
+			heartbeat.abortSignal,
+			deadlineAt,
+			run?.principal,
+		);
+		void runtimeTask.catch(() => undefined);
+		const execution = await Promise.race([
+			runtimeTask,
+			heartbeat.lost.then((reason) => {
+				throw stateError("task lease lost during runtime execution", {
+					taskId: claim.task.id,
+					reason,
 				});
+			}),
+		]);
+		if (heartbeat.isLost()) {
+			return {
+				status: "failed",
+				task: null,
+				reason: stateError("task lease lost before terminal transition", {
+					taskId: claim.task.id,
+					reason: heartbeat.lostReason(),
+				}).message,
+			};
+		}
 
-				// The identity this durable run belongs to, read from the run row rather than invented
-				// by the worker. A run with none executes with none, and the floor refuses it — which is
-				// the correct answer for a task nobody can be shown to have asked for.
-				const run = await store.getRun(claim.task.runId);
-				// The boundary this slice resolves, recorded once the slice ends. A run started by a
-				// system principal on behalf of a tenant is otherwise owned by nobody a tenant admin
-				// can name — the PEP isolates by the run's own principal, and that principal is the
-				// system.
-				let boundary: { scope: string; scopeId: string } | undefined;
-				const runtimeTask = runTask(
-					runtime,
-					claim,
-					controlPort,
-					(resolved) => {
-						boundary = resolved;
-					},
-					heartbeat.abortSignal,
-					deadlineAt,
-					run?.principal,
-				);
-				void runtimeTask.catch(() => undefined);
-				const execution = await Promise.race([
-					runtimeTask,
-					heartbeat.lost.then((reason) => {
-						throw stateError("task lease lost during runtime execution", {
-							taskId: claim.task.id,
-							reason,
-						});
-					}),
-				]);
-				if (heartbeat.isLost()) {
+		// Written before any of the terminal branches below, so a run is attributable as soon as
+		// its first slice ends however that slice ended — a parked or failed run is exactly the
+		// one a tenant admin most needs to find.
+		// A RESERVED scope is not written. `UNSCOPED` is the boundary core mints for the ABSENCE
+		// of one, and recording it would turn "this run belongs to nothing" into a value that
+		// looks exactly like a boundary every other unscoped run in the deployment also shares.
+		// An absent column says the same thing and cannot be mistaken for a tenant.
+		if (boundary && !isReservedScope(boundary.scope)) {
+			await store.updateRun(claim.task.runId, {
+				scope: boundary.scope,
+				scopeId: boundary.scopeId,
+			});
+		}
+
+		if (execution.outcome === "skipped") {
+			// Retire the task, touch NOTHING on the run. Whoever holds the resume state owns the
+			// run's status; a duplicate task must not narrate an outcome it did not produce.
+			const reason = execution.reason;
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { skipped: reason },
+				});
+				if (!task)
 					return {
 						status: "failed",
 						task: null,
-						reason: stateError("task lease lost before terminal transition", {
+						reason: stateError("lease lost before skip transition", {
 							taskId: claim.task.id,
-							reason: heartbeat.lostReason(),
 						}).message,
 					};
-				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "task.skipped",
+					payload: { taskId: task.id, reason },
+				});
+				return { status: "skipped", task, reason };
+			});
+		}
 
-				// Written before any of the terminal branches below, so a run is attributable as soon as
-				// its first slice ends however that slice ended — a parked or failed run is exactly the
-				// one a tenant admin most needs to find.
-				// A RESERVED scope is not written. `UNSCOPED` is the boundary core mints for the ABSENCE
-				// of one, and recording it would turn "this run belongs to nothing" into a value that
-				// looks exactly like a boundary every other unscoped run in the deployment also shares.
-				// An absent column says the same thing and cannot be mistaken for a tenant.
-				if (boundary && !isReservedScope(boundary.scope)) {
-					await store.updateRun(claim.task.runId, {
-						scope: boundary.scope,
-						scopeId: boundary.scopeId,
-					});
-				}
+		const result = execution.result;
 
-				if (execution.outcome === "skipped") {
-					// Retire the task, touch NOTHING on the run. Whoever holds the resume state owns the
-					// run's status; a duplicate task must not narrate an outcome it did not produce.
-					const reason = execution.reason;
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
+		if (result.status === "yielded") {
+			// Self-continuation: park is already durable (the runtime persisted the checkpoint);
+			// one transaction completes this slice and enqueues the next. The run returns to
+			// "queued" — honest: a due task exists. Original ctx rides along on the continuation.
+			const ctx = execution.ctx;
+			const checkpointId = result.checkpointId;
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { result },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before yield transition", {
 							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { skipped: reason },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before skip transition", {
-									taskId: claim.task.id,
-								}).message,
-							};
-						await tx.appendEvent({
-							runId: task.runId,
-							type: "task.skipped",
-							payload: { taskId: task.id, reason },
-						});
-						return { status: "skipped", task, reason };
+						}).message,
+					};
+				await tx.updateRun(task.runId, { status: "queued" });
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "run.yielded",
+					payload: {
+						taskId: task.id,
+						checkpointId,
+						steps: result.steps,
+					},
+				});
+				await tx.enqueueTask({
+					kind: RUNTIME_RESUME_RUN_TASK,
+					runId: task.runId,
+					payload: {
+						checkpointId,
+						...(ctx !== undefined ? { ctx } : {}),
+					},
+					// Retryable, unlike `runtime.run`. A resume task names its work by checkpoint id
+					// and that work is now RE-CLAIMABLE after a crash, so a second attempt continues
+					// the same transcript. (`runtime.run` carries only a prompt and would re-run the
+					// whole run from step 0, which is why its single attempt stays.) Without this the
+					// checkpoint's lease could lapse with no task left alive to take it.
+					maxAttempts: RESUME_MAX_ATTEMPTS,
+				});
+				return { status: "yielded", task, checkpointId };
+			});
+		}
+
+		if (result.status === "waiting_approval") {
+			// `waiting_approval` returns from INSIDE the tool loop, before the `for` increment, so
+			// it never reaches the loop-top control site — and the worker then enqueues nothing.
+			// A latch raised during that window would otherwise be observed only when a human
+			// happens to decide the approval, which is not a bound at all.
+			//
+			// A STOP is honoured here: waiting for someone to approve an action that will never
+			// run is the worst of both. A SUSPEND is not — the run is already parked and not
+			// consuming anything, so the latch simply persists and is honoured at the first
+			// control point after it resumes.
+			const latched = await store.getRun(claim.task.runId);
+			if (
+				latched?.controlIntent === "stop" ||
+				latched?.controlIntent === "abort"
+			) {
+				const requestedBy = latched.controlRequestedBy;
+				return store.transaction(async (tx) => {
+					const task = await tx.completeTask({
+						taskId: claim.task.id,
+						leaseToken: claim.leaseToken,
+						output: { result },
 					});
-				}
-
-				const result = execution.result;
-
-				if (result.status === "yielded") {
-					// Self-continuation: park is already durable (the runtime persisted the checkpoint);
-					// one transaction completes this slice and enqueues the next. The run returns to
-					// "queued" — honest: a due task exists. Original ctx rides along on the continuation.
-					const ctx = execution.ctx;
-					const checkpointId = result.checkpointId;
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
-							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { result },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before yield transition", {
-									taskId: claim.task.id,
-								}).message,
-							};
-						await tx.updateRun(task.runId, { status: "queued" });
-						await tx.appendEvent({
-							runId: task.runId,
-							type: "run.yielded",
-							payload: {
-								taskId: task.id,
-								checkpointId,
-								steps: result.steps,
-							},
-						});
-						await tx.enqueueTask({
-							kind: RUNTIME_RESUME_RUN_TASK,
-							runId: task.runId,
-							payload: {
-								checkpointId,
-								...(ctx !== undefined ? { ctx } : {}),
-							},
-							// Retryable, unlike `runtime.run`. A resume task names its work by checkpoint id
-							// and that work is now RE-CLAIMABLE after a crash, so a second attempt continues
-							// the same transcript. (`runtime.run` carries only a prompt and would re-run the
-							// whole run from step 0, which is why its single attempt stays.) Without this the
-							// checkpoint's lease could lapse with no task left alive to take it.
-							maxAttempts: RESUME_MAX_ATTEMPTS,
-						});
-						return { status: "yielded", task, checkpointId };
-					});
-				}
-
-				if (result.status === "waiting_approval") {
-					// `waiting_approval` returns from INSIDE the tool loop, before the `for` increment, so
-					// it never reaches the loop-top control site — and the worker then enqueues nothing.
-					// A latch raised during that window would otherwise be observed only when a human
-					// happens to decide the approval, which is not a bound at all.
-					//
-					// A STOP is honoured here: waiting for someone to approve an action that will never
-					// run is the worst of both. A SUSPEND is not — the run is already parked and not
-					// consuming anything, so the latch simply persists and is honoured at the first
-					// control point after it resumes.
-					const latched = await store.getRun(claim.task.runId);
-					if (
-						latched?.controlIntent === "stop" ||
-						latched?.controlIntent === "abort"
-					) {
-						const requestedBy = latched.controlRequestedBy;
-						return store.transaction(async (tx) => {
-							const task = await tx.completeTask({
-								taskId: claim.task.id,
-								leaseToken: claim.leaseToken,
-								output: { result },
-							});
-							if (!task)
-								return {
-									status: "failed",
-									task: null,
-									reason: stateError("lease lost before approval stop", {
-										taskId: claim.task.id,
-									}).message,
-								};
-							const settled = await tx.updateRunIfStatus(task.runId, {
-								from: NON_TERMINAL_RUN_STATUSES,
-								patch: {
-									status: "cancelled",
-									waitReason: null,
-									controlRequestedAt: null,
-									controlIntent: null,
-									controlRequestedBy: null,
-									controlReason: null,
-								},
-							});
-							if (!settled) {
-								const current = await tx.getRun(task.runId);
-								return {
-									status: "skipped",
-									task,
-									reason: `run already ${current?.status ?? "terminal"}`,
-								};
-							}
-							await tx.appendEvent({
-								runId: task.runId,
-								type: "run.cancelled",
-								payload: {
-									taskId: task.id,
-									reason: "stopped-while-awaiting-approval",
-									...(requestedBy ? { requestedBy } : {}),
-								},
-							});
-							return { status: "cancelled", task };
-						});
-					}
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
-							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { result },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before approval wait", {
-									taskId: claim.task.id,
-								}).message,
-							};
-						// Same reasoning: a run a stop already cancelled must not be walked back to `waiting`
-						// by a slice that was mid-flight when the stop landed.
-						const parked = await tx.updateRunIfStatus(task.runId, {
-							from: NON_TERMINAL_RUN_STATUSES,
-							patch: { status: "waiting", waitReason: "approval" },
-						});
-						if (!parked) {
-							const current = await tx.getRun(task.runId);
-							return {
-								status: "skipped",
-								task,
-								reason: `run already ${current?.status ?? "terminal"}`,
-							};
-						}
-						await tx.appendEvent({
-							runId: task.runId,
-							type: "run.waiting_approval",
-							payload: {
-								taskId: task.id,
-								approvalIds: result.approvalIds ?? [],
-							},
-						});
+					if (!task)
 						return {
-							status: "waiting_approval",
-							task,
-							approvalIds: result.approvalIds ?? [],
+							status: "failed",
+							task: null,
+							reason: stateError("lease lost before approval stop", {
+								taskId: claim.task.id,
+							}).message,
 						};
+					const settled = await tx.updateRunIfStatus(task.runId, {
+						from: NON_TERMINAL_RUN_STATUSES,
+						patch: {
+							status: "cancelled",
+							waitReason: null,
+							controlRequestedAt: null,
+							controlIntent: null,
+							controlRequestedBy: null,
+							controlReason: null,
+						},
 					});
-				}
-
-				if (result.status === "parked") {
-					// A PARK, not a yield: the runtime already persisted the checkpoint, and this branch
-					// deliberately enqueues NOTHING. That single omission is the whole difference — a
-					// yielded run leaves a due task behind and comes back on its own, a parked one waits
-					// for somebody to ask. The latch is cleared here, in the same transaction that honours
-					// it, so a crash before this point leaves the intent live for the re-run.
-					const checkpointId = result.checkpointId;
-					const parkReason = result.reason;
-					// Read BEFORE the latch is cleared below — "who stopped this run" is the one fact the
-					// cancellation event exists to carry, and the transaction that records it is the same
-					// one that erases its source.
-					const current_requester = (await store.getRun(claim.task.runId))
-						?.controlRequestedBy;
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
-							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { result },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before park transition", {
-									taskId: claim.task.id,
-								}).message,
-							};
-						// A STOP is terminal; a suspend is not. Both leave the checkpoint `pending` on purpose:
-						// it is the forensic record of what the run actually did, and the one way back if an
-						// operator decides the stop was wrong. Consuming it here would destroy the
-						// transcript to save a row.
-						const stopped = parkReason === "stopped";
-						const settled = await tx.updateRunIfStatus(task.runId, {
-							from: NON_TERMINAL_RUN_STATUSES,
-							patch: {
-								status: stopped ? "cancelled" : "waiting",
-								waitReason: stopped ? null : parkReason,
-								resumeCheckpointId: checkpointId,
-								controlRequestedAt: null,
-								controlIntent: null,
-								controlRequestedBy: null,
-								controlReason: null,
-							},
-						});
-						// Lost to a terminal status somebody else wrote first. Report the winner rather
-						// than relabelling it — a run_event stream that contradicts `run.status` is worse
-						// than either answer alone.
-						if (!settled) {
-							const current = await tx.getRun(task.runId);
-							return {
-								status: "skipped",
-								task,
-								reason: `run already ${current?.status ?? "terminal"}`,
-							};
-						}
-						await tx.appendEvent({
-							runId: task.runId,
-							type: stopped ? "run.cancelled" : "run.parked",
-							payload: {
-								taskId: task.id,
-								checkpointId,
-								reason: parkReason,
-								steps: result.steps,
-								...(stopped && current_requester
-									? { requestedBy: current_requester }
-									: {}),
-							},
-						});
-						return { status: "parked", task, checkpointId };
+					if (!settled) {
+						const current = await tx.getRun(task.runId);
+						return {
+							status: "skipped",
+							task,
+							reason: `run already ${current?.status ?? "terminal"}`,
+						};
+					}
+					await tx.appendEvent({
+						runId: task.runId,
+						type: "run.cancelled",
+						payload: {
+							taskId: task.id,
+							reason: "stopped-while-awaiting-approval",
+							...(requestedBy ? { requestedBy } : {}),
+						},
 					});
-				}
-
-				if (result.status === "completed" || result.status === "denied") {
-					const terminal = result;
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
-							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { result: terminal },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before completion", {
-									taskId: claim.task.id,
-								}).message,
-							};
-
-						// CONDITIONAL, because a stop can land while the last step is still running. Exactly
-						// one terminal status survives, and the loser reports the winner instead of
-						// relabelling it — otherwise whichever wrote last decides the story, and the
-						// run_event stream ends up contradicting `run.status`.
-						const settled = await tx.updateRunIfStatus(task.runId, {
-							from: NON_TERMINAL_RUN_STATUSES,
-							patch: { status: "completed" },
-						});
-						if (!settled) {
-							const current = await tx.getRun(task.runId);
-							return {
-								status: "skipped",
-								task,
-								reason: `run already ${current?.status ?? "terminal"}`,
-							};
-						}
-						await tx.appendEvent({
-							runId: task.runId,
-							type: "run.completed",
-							payload: { taskId: task.id, result: terminal },
-						});
-						return { status: "completed", task };
-					});
-				}
-
-				// EXHAUSTIVE. This was a fall-through, which meant any result the branches above did not
-				// name was silently written `completed` — a parked run would have been reported as having
-				// finished, with its checkpoint left dangling. A new variant fails to compile here now.
-				{
-					const unreachable: never = result;
-					throw stateError("unhandled runtime result in worker", {
-						status: (unreachable as { status?: unknown }).status,
-					});
-				}
-			} catch (err) {
-				// AN ABORT IS NOT A FAILURE, and this is the only place that can tell the difference.
-				// Firing the heartbeat's controller fires `state.abortSignal`, so the loop unwinds
-				// through the ordinary abort path and arrives here as an exception — indistinguishable
-				// from a real one unless the latch that caused it is read back. Without this branch a
-				// deliberate cancellation is recorded as `failed`, with the operator who asked for it
-				// nowhere in the record.
-				if (heartbeat.abortedByIntent()) {
-					heartbeat.stop();
-					const requestedBy = (await store.getRun(claim.task.runId))
-						?.controlRequestedBy;
-					return store.transaction(async (tx) => {
-						const task = await tx.completeTask({
-							taskId: claim.task.id,
-							leaseToken: claim.leaseToken,
-							output: { aborted: true },
-						});
-						if (!task)
-							return {
-								status: "failed",
-								task: null,
-								reason: stateError("lease lost before abort transition", {
-									taskId: claim.task.id,
-								}).message,
-							};
-						const settled = await tx.updateRunIfStatus(task.runId, {
-							from: NON_TERMINAL_RUN_STATUSES,
-							patch: {
-								status: "cancelled",
-								controlRequestedAt: null,
-								controlIntent: null,
-								controlRequestedBy: null,
-								controlReason: null,
-							},
-						});
-						if (!settled) {
-							const current = await tx.getRun(task.runId);
-							return {
-								status: "skipped",
-								task,
-								reason: `run already ${current?.status ?? "terminal"}`,
-							};
-						}
-						await tx.appendEvent({
-							runId: task.runId,
-							type: "run.cancelled",
-							payload: {
-								taskId: task.id,
-								reason: "aborted",
-								...(requestedBy ? { requestedBy } : {}),
-							},
-						});
-						// NO checkpoint: an abort tears down mid-step, so there is no resumable point to
-						// record. That is the cost the caller accepted by escalating past `stop`, which
-						// parks cleanly and keeps its transcript.
-						return { status: "cancelled", task };
-					});
-				}
-				// M-08. This reason is PERSISTED — onto the task row and into a `task.failed` event
-				// someone else will read — so an unauthored exception must not travel in it. The raw
-				// failure goes to the operator's console instead, joined by the id the row carries.
-				const reason = safeFailureMessage(err, (id, raw) =>
-					console.error(
-						`busyclaw engine task ${claim.task.id} failed [${id}]`,
-						raw,
-					),
-				);
-				if (heartbeat.isLost()) {
-					return { status: "failed", task: null, reason };
-				}
-				heartbeat.stop();
-				return failClaim(store, claim, reason);
-			} finally {
-				heartbeat.stop();
+					return { status: "cancelled", task };
+				});
 			}
-		},
-	};
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { result },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before approval wait", {
+							taskId: claim.task.id,
+						}).message,
+					};
+				// Same reasoning: a run a stop already cancelled must not be walked back to `waiting`
+				// by a slice that was mid-flight when the stop landed.
+				const parked = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: { status: "waiting", waitReason: "approval" },
+				});
+				if (!parked) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "run.waiting_approval",
+					payload: {
+						taskId: task.id,
+						approvalIds: result.approvalIds ?? [],
+					},
+				});
+				return {
+					status: "waiting_approval",
+					task,
+					approvalIds: result.approvalIds ?? [],
+				};
+			});
+		}
+
+		if (result.status === "parked") {
+			// A PARK, not a yield: the runtime already persisted the checkpoint, and this branch
+			// deliberately enqueues NOTHING. That single omission is the whole difference — a
+			// yielded run leaves a due task behind and comes back on its own, a parked one waits
+			// for somebody to ask. The latch is cleared here, in the same transaction that honours
+			// it, so a crash before this point leaves the intent live for the re-run.
+			const checkpointId = result.checkpointId;
+			const parkReason = result.reason;
+			// Read BEFORE the latch is cleared below — "who stopped this run" is the one fact the
+			// cancellation event exists to carry, and the transaction that records it is the same
+			// one that erases its source.
+			const current_requester = (await store.getRun(claim.task.runId))
+				?.controlRequestedBy;
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { result },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before park transition", {
+							taskId: claim.task.id,
+						}).message,
+					};
+				// A STOP is terminal; a suspend is not. Both leave the checkpoint `pending` on purpose:
+				// it is the forensic record of what the run actually did, and the one way back if an
+				// operator decides the stop was wrong. Consuming it here would destroy the
+				// transcript to save a row.
+				const stopped = parkReason === "stopped";
+				const settled = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: {
+						status: stopped ? "cancelled" : "waiting",
+						waitReason: stopped ? null : parkReason,
+						resumeCheckpointId: checkpointId,
+						controlRequestedAt: null,
+						controlIntent: null,
+						controlRequestedBy: null,
+						controlReason: null,
+					},
+				});
+				// Lost to a terminal status somebody else wrote first. Report the winner rather
+				// than relabelling it — a run_event stream that contradicts `run.status` is worse
+				// than either answer alone.
+				if (!settled) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: stopped ? "run.cancelled" : "run.parked",
+					payload: {
+						taskId: task.id,
+						checkpointId,
+						reason: parkReason,
+						steps: result.steps,
+						...(stopped && current_requester
+							? { requestedBy: current_requester }
+							: {}),
+					},
+				});
+				return { status: "parked", task, checkpointId };
+			});
+		}
+
+		if (result.status === "completed" || result.status === "denied") {
+			const terminal = result;
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { result: terminal },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before completion", {
+							taskId: claim.task.id,
+						}).message,
+					};
+
+				// CONDITIONAL, because a stop can land while the last step is still running. Exactly
+				// one terminal status survives, and the loser reports the winner instead of
+				// relabelling it — otherwise whichever wrote last decides the story, and the
+				// run_event stream ends up contradicting `run.status`.
+				const settled = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: { status: "completed" },
+				});
+				if (!settled) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "run.completed",
+					payload: { taskId: task.id, result: terminal },
+				});
+				return { status: "completed", task };
+			});
+		}
+
+		// EXHAUSTIVE. This was a fall-through, which meant any result the branches above did not
+		// name was silently written `completed` — a parked run would have been reported as having
+		// finished, with its checkpoint left dangling. A new variant fails to compile here now.
+		{
+			const unreachable: never = result;
+			throw stateError("unhandled runtime result in worker", {
+				status: (unreachable as { status?: unknown }).status,
+			});
+		}
+	} catch (err) {
+		// AN ABORT IS NOT A FAILURE, and this is the only place that can tell the difference.
+		// Firing the heartbeat's controller fires `state.abortSignal`, so the loop unwinds
+		// through the ordinary abort path and arrives here as an exception — indistinguishable
+		// from a real one unless the latch that caused it is read back. Without this branch a
+		// deliberate cancellation is recorded as `failed`, with the operator who asked for it
+		// nowhere in the record.
+		if (heartbeat.abortedByIntent()) {
+			heartbeat.stop();
+			const requestedBy = (await store.getRun(claim.task.runId))
+				?.controlRequestedBy;
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { aborted: true },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before abort transition", {
+							taskId: claim.task.id,
+						}).message,
+					};
+				const settled = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: {
+						status: "cancelled",
+						controlRequestedAt: null,
+						controlIntent: null,
+						controlRequestedBy: null,
+						controlReason: null,
+					},
+				});
+				if (!settled) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "run.cancelled",
+					payload: {
+						taskId: task.id,
+						reason: "aborted",
+						...(requestedBy ? { requestedBy } : {}),
+					},
+				});
+				// NO checkpoint: an abort tears down mid-step, so there is no resumable point to
+				// record. That is the cost the caller accepted by escalating past `stop`, which
+				// parks cleanly and keeps its transcript.
+				return { status: "cancelled", task };
+			});
+		}
+		// M-08. This reason is PERSISTED — onto the task row and into a `task.failed` event
+		// someone else will read — so an unauthored exception must not travel in it. The raw
+		// failure goes to the operator's console instead, joined by the id the row carries.
+		const reason = safeFailureMessage(err, (id, raw) =>
+			console.error(
+				`busyclaw engine task ${claim.task.id} failed [${id}]`,
+				raw,
+			),
+		);
+		if (heartbeat.isLost()) {
+			return { status: "failed", task: null, reason };
+		}
+		heartbeat.stop();
+		return failClaim(store, claim, reason);
+	} finally {
+		heartbeat.stop();
+	}
 }

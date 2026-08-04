@@ -225,6 +225,22 @@ export type SqlEngineStore = {
 	enqueueTask: (input: EnqueueTaskInput) => Promise<RuntimeTask>;
 	getTask: (id: string) => Promise<RuntimeTask | null>;
 	claimDueTask: (input: ClaimTaskInput) => Promise<ClaimedTask | null>;
+	/**
+	 * Claim ONE task by primary key — the same acquisition `claimDueTask` performs, without its
+	 * candidate scan.
+	 *
+	 * Deliberately NOT on `ClawEngineHandle` and never reachable from `clawApiRoutes`, because a
+	 * leased task is a strictly bigger privilege loan than any api verb hands out: whoever holds the
+	 * lease can also `completeTask` it with arbitrary `output`. The taskId is never caller-supplied.
+	 *
+	 * The scan is what it must not share. A caller that ran `claimDueTask` after enqueuing its own
+	 * task would take the OLDEST due task, drive somebody else's run under that run's principal, and
+	 * hand back that other tenant's result — a cross-tenant disclosure, not a latency question.
+	 */
+	claimTask: (
+		taskId: string,
+		input: ClaimTaskInput,
+	) => Promise<ClaimedTask | null>;
 	heartbeatLease: (input: {
 		leaseId: string;
 		leaseToken: string;
@@ -401,6 +417,149 @@ export function createSqlEngineStore(
 		run_message: { fields: runMessageFields },
 	});
 
+	/**
+	 * ACQUISITION — everything a claim does once a candidate has been chosen, and nothing about
+	 * choosing one. Extracted verbatim from `claimDueTask` so the two claim paths cannot drift: the
+	 * MAX_CLAIMS retirement, the control-latch fence, the lease mint, the task CAS, its unwind, the
+	 * non-terminal run guard and ITS unwind are one body carrying one set of race arguments.
+	 *
+	 * `null` means "not claimable", for every reason it can mean that — retired, withheld, CAS lost,
+	 * run already finished. `claimDueTask` reads that as "try the next candidate"; a targeted claim
+	 * reads it as "somebody else owns this". Both are correct without either branching on which.
+	 */
+	async function attemptClaim(
+		candidate: RuntimeTask,
+		input: ClaimTaskInput,
+		ts: string,
+	): Promise<ClaimedTask | null> {
+		if (candidate.attempt >= MAX_CLAIMS) {
+			await db.update({
+				model: "runtime_task",
+				where: [
+					{ field: "id", value: candidate.id },
+					{ field: "status", value: "pending", connector: "AND" },
+				],
+				update: {
+					status: "dead",
+					lastError: `abandoned after ${MAX_CLAIMS} claims without completing`,
+					updatedAt: ts,
+				},
+			});
+			await store.updateRun(candidate.runId, { status: "failed" });
+			return null;
+		}
+		// THE FENCE. A run somebody has asked to stop must not receive another slice on any
+		// host — and a queued run has no holder to observe the latch for it, so the claim path
+		// is where that intent gets honoured. One PK read per candidate, on the path that is
+		// already doing several writes.
+		const candidateRun = await store.getRun(candidate.runId);
+		if (candidateRun?.controlRequestedAt !== undefined) {
+			const withheld = await db.update({
+				model: "runtime_task",
+				where: [
+					{ field: "id", value: candidate.id },
+					{ field: "status", value: "pending", connector: "AND" },
+				],
+				update: {
+					status: "dead",
+					lastError: "run suspended before this task was claimed",
+					updatedAt: ts,
+				},
+			});
+			if (withheld) {
+				await store.updateRunIfStatus(candidate.runId, {
+					from: ["queued", "running", "waiting"],
+					patch: {
+						status: "waiting",
+						waitReason: "suspended",
+						controlRequestedAt: null,
+						controlIntent: null,
+						controlRequestedBy: null,
+						controlReason: null,
+					},
+				});
+			}
+			return null;
+		}
+
+		const leaseToken = newToken();
+		const leaseId = newId();
+		const expiresAt = addMs(ts, input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
+		const lease: LeaseRecord = {
+			id: leaseId,
+			taskId: candidate.id,
+			workerId: input.workerId,
+			tokenHash: hashText(leaseToken),
+			expiresAt,
+			lastHeartbeatAt: ts,
+			createdAt: ts,
+		};
+		await db.create({ model: "lease", data: lease });
+		const updated = await db.update({
+			model: "runtime_task",
+			where: [
+				{ field: "id", value: candidate.id },
+				{ field: "status", value: "pending", connector: "AND" },
+				// A NO-OP for `claimDueTask`, whose candidates were already filtered by `pendingWhere`,
+				// and load-bearing for a targeted claim: `failTask` pushes `dueAt` out to schedule a
+				// retry backoff, and a claim by primary key would otherwise walk straight past it and
+				// re-run failing work with no delay at all.
+				{ field: "dueAt", value: ts, operator: "lte", connector: "AND" },
+			],
+			update: {
+				status: "leased",
+				leaseId,
+				workerId: input.workerId,
+				leasedUntil: expiresAt,
+				attempt: candidate.attempt + 1,
+				updatedAt: ts,
+			},
+		});
+		if (!updated) {
+			await db.delete({
+				model: "lease",
+				where: [{ field: "id", value: leaseId }],
+			});
+			return null;
+		}
+		// CONDITIONAL. A claim can arrive after the run it belongs to has already reached a
+		// terminal status — a duplicate task, a late deadline arm, a stop that landed between
+		// this claim's task CAS and here. Writing `running` unconditionally resurrected it:
+		// `completed` became `running` and stayed there, contradicting the run's own event
+		// stream, and a cancelled run silently went back to work.
+		const started = await store.updateRunIfStatus(updated.runId, {
+			from: NON_TERMINAL_RUN_STATUSES,
+			patch: { status: "running" },
+		});
+		if (!started) {
+			// The run is finished and this task has nothing to do. Retire it and release the
+			// lease rather than handing a worker a slice against a corpse.
+			await db.update({
+				model: "runtime_task",
+				where: [
+					{ field: "id", value: updated.id },
+					{ field: "status", value: "leased", connector: "AND" },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: {
+					status: "dead",
+					lastError:
+						"run reached a terminal status before this task was claimed",
+					leaseId: null,
+					workerId: null,
+					leasedUntil: null,
+					updatedAt: ts,
+				},
+			});
+			await db.delete({
+				model: "lease",
+				where: [{ field: "id", value: leaseId }],
+			});
+			return null;
+		}
+		return { task: updated, leaseId, leaseToken, expiresAt };
+	}
+
 	async function validateLease(
 		task: RuntimeTask,
 		token: string,
@@ -522,129 +681,23 @@ export function createSqlEngineStore(
 				limit: input.limit ?? 10,
 			});
 			for (const candidate of candidates) {
-				if (candidate.attempt >= MAX_CLAIMS) {
-					await db.update({
-						model: "runtime_task",
-						where: [
-							{ field: "id", value: candidate.id },
-							{ field: "status", value: "pending", connector: "AND" },
-						],
-						update: {
-							status: "dead",
-							lastError: `abandoned after ${MAX_CLAIMS} claims without completing`,
-							updatedAt: ts,
-						},
-					});
-					await store.updateRun(candidate.runId, { status: "failed" });
-					continue;
-				}
-				// THE FENCE. A run somebody has asked to stop must not receive another slice on any
-				// host — and a queued run has no holder to observe the latch for it, so the claim path
-				// is where that intent gets honoured. One PK read per candidate, on the path that is
-				// already doing several writes.
-				const candidateRun = await store.getRun(candidate.runId);
-				if (candidateRun?.controlRequestedAt !== undefined) {
-					const withheld = await db.update({
-						model: "runtime_task",
-						where: [
-							{ field: "id", value: candidate.id },
-							{ field: "status", value: "pending", connector: "AND" },
-						],
-						update: {
-							status: "dead",
-							lastError: "run suspended before this task was claimed",
-							updatedAt: ts,
-						},
-					});
-					if (withheld) {
-						await store.updateRunIfStatus(candidate.runId, {
-							from: ["queued", "running", "waiting"],
-							patch: {
-								status: "waiting",
-								waitReason: "suspended",
-								controlRequestedAt: null,
-								controlIntent: null,
-								controlRequestedBy: null,
-								controlReason: null,
-							},
-						});
-					}
-					continue;
-				}
-
-				const leaseToken = newToken();
-				const leaseId = newId();
-				const expiresAt = addMs(ts, input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
-				const lease: LeaseRecord = {
-					id: leaseId,
-					taskId: candidate.id,
-					workerId: input.workerId,
-					tokenHash: hashText(leaseToken),
-					expiresAt,
-					lastHeartbeatAt: ts,
-					createdAt: ts,
-				};
-				await db.create({ model: "lease", data: lease });
-				const updated = await db.update({
-					model: "runtime_task",
-					where: [
-						{ field: "id", value: candidate.id },
-						{ field: "status", value: "pending", connector: "AND" },
-					],
-					update: {
-						status: "leased",
-						leaseId,
-						workerId: input.workerId,
-						leasedUntil: expiresAt,
-						attempt: candidate.attempt + 1,
-						updatedAt: ts,
-					},
-				});
-				if (!updated) {
-					await db.delete({
-						model: "lease",
-						where: [{ field: "id", value: leaseId }],
-					});
-					continue;
-				}
-				// CONDITIONAL. A claim can arrive after the run it belongs to has already reached a
-				// terminal status — a duplicate task, a late deadline arm, a stop that landed between
-				// this claim's task CAS and here. Writing `running` unconditionally resurrected it:
-				// `completed` became `running` and stayed there, contradicting the run's own event
-				// stream, and a cancelled run silently went back to work.
-				const started = await store.updateRunIfStatus(updated.runId, {
-					from: NON_TERMINAL_RUN_STATUSES,
-					patch: { status: "running" },
-				});
-				if (!started) {
-					// The run is finished and this task has nothing to do. Retire it and release the
-					// lease rather than handing a worker a slice against a corpse.
-					await db.update({
-						model: "runtime_task",
-						where: [
-							{ field: "id", value: updated.id },
-							{ field: "status", value: "leased", connector: "AND" },
-							{ field: "leaseId", value: leaseId, connector: "AND" },
-						],
-						update: {
-							status: "dead",
-							lastError:
-								"run reached a terminal status before this task was claimed",
-							leaseId: null,
-							workerId: null,
-							leasedUntil: null,
-							updatedAt: ts,
-						},
-					});
-					await db.delete({
-						model: "lease",
-						where: [{ field: "id", value: leaseId }],
-					});
-					continue;
-				}
-				return { task: updated, leaseId, leaseToken, expiresAt };
+				const claimed = await attemptClaim(candidate, input, ts);
+				if (claimed) return claimed;
 			}
 			return null;
+		},
+
+		async claimTask(taskId, input) {
+			// A primary-key read, and that is the point: a scan can be widened or re-sorted by accident
+			// into the cross-tenant bug above, a `findOne` by id cannot. `attemptClaim`'s CAS re-checks
+			// `status = "pending"` and `dueAt <= now`, so a task that is leased, dead, or still inside a
+			// `failTask` backoff yields null here exactly as it would to the drain.
+			const candidate = await db.findOne({
+				model: "runtime_task",
+				where: [{ field: "id", value: taskId }],
+			});
+			if (!candidate) return null;
+			return attemptClaim(candidate, input, now());
 		},
 
 		async heartbeatLease(input) {
