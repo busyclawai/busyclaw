@@ -457,6 +457,14 @@ export type {
 	RouteOutputSchema,
 } from "./governance/route";
 export { route } from "./governance/route";
+// ── the run itself: the GOVERNANCE record every engine needs, whatever schedules its work ────
+export {
+	runEntity,
+	runEventEntity,
+	runEventFields,
+	runFields,
+	runSchema,
+} from "./run";
 export type {
 	NewRunCheckpoint,
 	RunCheckpointRecord,

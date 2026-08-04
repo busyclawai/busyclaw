@@ -1,6 +1,11 @@
 export type { SqlEngineConfig, SqlEngineHandle } from "./engine";
 export { sqlEngine } from "./engine";
-export { sqlEngineSchema } from "./schema";
+export {
+	/** This engine's OWN tables, as the factory declares them. `run`/`run_event` are core and are not
+	 *  here — see schema.ts for why the line falls where it does. */
+	sqlEngineModels,
+	sqlEngineSchema,
+} from "./schema";
 export type {
 	ClaimedTask,
 	ClaimTaskInput,

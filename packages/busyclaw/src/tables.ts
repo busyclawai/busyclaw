@@ -12,6 +12,7 @@ import {
 	approvalFields,
 	authzChangeFields,
 	type BusyclawPlugin,
+	type ClawEngineFactory,
 	checkpointFields,
 	clawFields,
 	configurationError,
@@ -30,6 +31,8 @@ import {
 	policySliceFields,
 	registeredToolFields,
 	runCheckpointFields,
+	runEventFields,
+	runFields,
 	runMessageFields,
 	specRegistrationEntity,
 	specRegistrationFields,
@@ -113,6 +116,12 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	// The erasure tombstone — durable proof of what was shredded, and from where.
 	pii_erasure: piiErasureFields,
 	run_checkpoint: runCheckpointFields,
+	// THE RUN and its execution history. Core, not the engine's: `run` carries the authz parent, the
+	// tenancy anchor, the control latch and the id every transcript row points at, so euroclaw needs
+	// it whatever schedules the work. The engine's own scheduling tables ride
+	// `ClawEngineFactory.models` instead — see `getBusyclawModels`.
+	run: runFields,
+	run_event: runEventFields,
 	// The run inbox. CORE, not the engine's: the drain lives inside the runtime loop, and two
 	// plugin-owned mailboxes would mean two drains at one site.
 	run_message: runMessageFields,
@@ -172,6 +181,9 @@ export function getBusyclawModels(config: {
 	plugins?: readonly BusyclawPlugin[];
 	schema?: ClawSchemaConfig;
 	redaction?: RedactionConfig;
+	/** The engine FACTORY, not the constructed engine — this runs before `create()` is ever called,
+	 *  which is exactly why the tables ride the factory. */
+	engine?: { models?: ClawEngineFactory["models"] };
 }): EntityModelMap {
 	const extra = collectModelFields(
 		config.plugins ?? [],
@@ -181,6 +193,22 @@ export function getBusyclawModels(config: {
 	const merged: Record<string, Record<string, EntityField>> = {
 		...CORE_MODELS,
 	};
+	// The engine's own scheduling tables. A key colliding with a core model throws for the same reason
+	// a plugin's would — schema is additive, and an engine silently redefining `run` is the fork this
+	// whole split exists to prevent.
+	const engineUniques: Record<string, readonly (readonly string[])[]> = {};
+	for (const [model, decl] of Object.entries(config.engine?.models ?? {})) {
+		if (model in CORE_MODELS) {
+			throw configurationError(
+				`engine declares model "${model}", which is a core model`,
+				{ model },
+			);
+		}
+		merged[model] = decl.fields;
+		if (decl.uniques && decl.uniques.length > 0) {
+			engineUniques[model] = decl.uniques;
+		}
+	}
 	for (const [model, fields] of Object.entries(extra)) {
 		if (Object.keys(fields).length === 0) continue;
 		const core = CORE_MODELS[model];
@@ -200,7 +228,7 @@ export function getBusyclawModels(config: {
 	}
 	return Object.fromEntries(
 		Object.entries(merged).map(([model, fields]) => {
-			const uniques = CORE_UNIQUES[model];
+			const uniques = CORE_UNIQUES[model] ?? engineUniques[model];
 			assertUniquesRepresentable(model, fields, uniques);
 			return [
 				model,
@@ -219,6 +247,7 @@ export function getBusyclawTables(config: {
 	plugins?: readonly BusyclawPlugin[];
 	schema?: ClawSchemaConfig;
 	redaction?: RedactionConfig;
+	engine?: { models?: ClawEngineFactory["models"] };
 }): SchemaDeclaration {
 	const tables: SchemaDeclaration = {};
 	for (const [model, decl] of Object.entries(getBusyclawModels(config))) {

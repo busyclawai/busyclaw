@@ -131,9 +131,10 @@ async function clawHarness(config: Record<string, unknown> = {}): Promise<{
 	store: ReturnType<typeof createSqlEngineStore>;
 	claw: ReturnType<typeof owned>;
 }> {
-	// The engine's tables are NOT in `claw.$tables` — the engine owns its own schema — so both
-	// declarations are migrated: the run substrate, then whatever the product layer adds on top.
-	const { adapter, migrate, close } = await sqliteDb(RUN_TABLES);
+	// ONE declaration now. `run`/`run_event` are core and `runtime_task`/`lease`/`idempotency_key`
+	// ride the engine FACTORY, so `claw.$tables` is the whole set — it used to be strictly less than
+	// the engine's, and this harness migrated both to paper over the gap.
+	const { adapter, migrate, close } = await sqliteDb();
 	openDatabases.push(close);
 	const store = createSqlEngineStore(adapter);
 	const claw = owned({
@@ -149,9 +150,9 @@ async function clawHarness(config: Record<string, unknown> = {}): Promise<{
 		},
 		...config,
 	} as Parameters<typeof owned>[0]);
-	// `$tables` is the migration CLI's own door — the merged declaration this claw expects to exist,
-	// which is strictly more than the engine's (grants, policy slices, the transcript). Lazy, so it is
-	// safe to read after construction and before the first call.
+	// `$tables` is the migration CLI's own door — the merged declaration this claw expects to exist:
+	// the engine's tables AND the product layer's (grants, policy slices, the transcript). Lazy, so it
+	// is safe to read after construction and before the first call.
 	await migrate(claw.$tables as SchemaDeclaration);
 	return { db: adapter, store, claw };
 }

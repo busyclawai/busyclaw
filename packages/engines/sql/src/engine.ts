@@ -20,6 +20,7 @@ import {
 import type { Runtime } from "@busyclaw/runtime";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { sqlEngineModels } from "./schema";
 import { addMs, type SqlEngineStore } from "./store";
 import type {
 	SqlEngineWorkerConfig,
@@ -399,6 +400,9 @@ export function sqlEngine<const Config extends SqlEngineConfig>(
 ): ClawEngineFactory<Runtime, SqlEngineHandle, SqlEngineCronFlag<Config>> {
 	return {
 		kind: "sql",
+		// THIS ENGINE'S scheduling tables, readable without constructing it. `run`/`run_event` are not
+		// here — they are core, because they are the governance record rather than scheduling state.
+		models: sqlEngineModels,
 		create: (
 			runtime,
 		): ClawEngineInstance<SqlEngineHandle, SqlEngineCronFlag<Config>> => {

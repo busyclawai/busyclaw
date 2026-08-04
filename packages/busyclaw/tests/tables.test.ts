@@ -165,3 +165,66 @@ describe("getBusyclawTables — table-level constraints survive assembly", () =>
 		).not.toThrow();
 	});
 });
+
+describe("getBusyclawTables — the engine split", () => {
+	/**
+	 * `run` and `run_event` are CORE; an engine's scheduling tables are its own. The line is "does a
+	 * second engine need this?" — `run` carries the authz parent, the tenancy anchor, the control
+	 * latch and the id every transcript row points at, so a Temporal or Durable-Objects engine needs
+	 * it exactly as much as this one does. Queues and leases it does not.
+	 */
+	it("migrates the run tables for a claw with NO engine at all", () => {
+		const tables = getBusyclawTables({});
+
+		expect(tables.run).toBeDefined();
+		expect(tables.run_event).toBeDefined();
+		// The flagship example configures no engine and is migrated by this exact function. Before the
+		// split it had no `run` table, so the first durable run would have thrown at `db.create`.
+		expect(tables.run?.fields.controlIntent).toBeDefined();
+		// …and it does NOT get somebody else's scheduler.
+		expect(tables.runtime_task).toBeUndefined();
+		expect(tables.lease).toBeUndefined();
+		expect(tables.idempotency_key).toBeUndefined();
+	});
+
+	it("adds an engine's own tables from the FACTORY, without constructing it", () => {
+		const tables = getBusyclawTables({
+			engine: {
+				models: {
+					runtime_task: { fields: { id: field.string({ required: true }) } },
+					lease: { fields: { id: field.string({ required: true }) } },
+				},
+			},
+		});
+
+		expect(tables.runtime_task).toBeDefined();
+		expect(tables.lease).toBeDefined();
+		// Still core, still exactly once.
+		expect(tables.run).toBeDefined();
+	});
+
+	/**
+	 * THE PORTABILITY REGRESSION, and the one test that keeps a second engine a drop-in. An engine
+	 * whose backend owns its own durability — Temporal, Durable Objects — declares no models and must
+	 * contribute no tables, while still getting the governance record it cannot do without.
+	 */
+	it("contributes nothing for an engine that declares no models", () => {
+		const tables = getBusyclawTables({ engine: {} });
+
+		expect(tables.run).toBeDefined();
+		expect(tables.run_event).toBeDefined();
+		expect(tables.runtime_task).toBeUndefined();
+		expect(tables.lease).toBeUndefined();
+		expect(tables.idempotency_key).toBeUndefined();
+	});
+
+	it("refuses an engine that redefines a core model", () => {
+		expect(() =>
+			getBusyclawTables({
+				engine: {
+					models: { run: { fields: { id: field.string({ required: true }) } } },
+				},
+			}),
+		).toThrow(/core model/);
+	});
+});

@@ -705,6 +705,9 @@ export function createClaw<
 		schema: config.schema,
 		plugins: pluginList,
 		redaction: config.redaction,
+		// The FACTORY, read before `create()` — the engine does not exist yet at this point in the
+		// assembly, which is the whole reason its tables ride the factory rather than its plugins.
+		...(config.engine ? { engine: config.engine } : {}),
 	});
 	const modelFields = collectModelFields(
 		pluginList,
@@ -1016,6 +1019,7 @@ export function createClaw<
 				schema: config.schema,
 				plugins: pluginList,
 				redaction: config.redaction,
+				...(config.engine ? { engine: config.engine } : {}),
 			});
 			return tables;
 		},

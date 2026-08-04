@@ -7,6 +7,7 @@
 
 import { configurationError } from "@busyclaw/errors";
 import type { JsonObject } from "./common";
+import type { EntityField } from "./entity";
 import type { BusyclawCronFlag, BusyclawPlugin } from "./governance/plugin";
 import type { Principal } from "./governance/principal";
 import type { RunMessageMode } from "./run-message";
@@ -198,6 +199,30 @@ export type ClawEngineFactory<
 > = {
 	kind: Handle["kind"];
 	create: (runtime: RuntimeLike) => ClawEngineInstance<Handle, HasCron>;
+	/**
+	 * The tables THIS engine needs, readable without constructing it.
+	 *
+	 * On the FACTORY rather than the instance, and that placement is the whole point: the schema
+	 * collectors (`getBusyclawModels` / the `$tables` getter) run before `create()` — the engine is
+	 * born after the runtime it wraps — so a contribution shaped like a plugin's is structurally too
+	 * late, while one shaped like this is exactly on time.
+	 *
+	 * `run` and `run_event` are NOT here. They are core, because they are the GOVERNANCE record — the
+	 * authz parent, the tenancy anchor, the control latch, the id every transcript row points at —
+	 * which euroclaw needs whether or not this particular engine is the one scheduling the work. What
+	 * belongs here is scheduling state: queues, leases, whatever this backend uses to find work again.
+	 * An engine over a backend that owns its own durability declares nothing and migrates nothing.
+	 *
+	 * A model key colliding with a core model throws, exactly as a plugin's would: schema is additive,
+	 * never a rewrite.
+	 */
+	models?: Record<
+		string,
+		{
+			fields: Record<string, EntityField>;
+			uniques?: readonly (readonly string[])[];
+		}
+	>;
 	$HasCron?: HasCron;
 };
 

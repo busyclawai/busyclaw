@@ -13,6 +13,7 @@ import {
 	RUNTIME_RESUME_RUN_TASK,
 	RUNTIME_RUN_TASK,
 	sqlEngine,
+	sqlEngineModels,
 	sqlEngineSchema,
 } from "../src/index";
 
@@ -80,6 +81,29 @@ function engineRuntime(parts: Partial<Runtime>): Runtime {
 }
 
 describe("@busyclaw/engine-sql", () => {
+	// THE SPLIT, from this side. `sqlEngineSchema` still names all five so a hand-wired host keeps
+	// working, but only three of them are THIS ENGINE'S to declare — the other two are core, because
+	// `run` is the governance record (authz parent, tenancy anchor, control latch) that any engine
+	// needs, not scheduling state. `models` is what `getBusyclawTables` reads off the factory.
+	it("declares only its own scheduling tables on the factory", () => {
+		expect(Object.keys(sqlEngineModels).sort()).toEqual([
+			"idempotency_key",
+			"lease",
+			"runtime_task",
+		]);
+		// Declaring `run` here would collide with the core model and throw at assembly — the fork this
+		// split exists to prevent.
+		expect(Object.keys(sqlEngineModels)).not.toContain("run");
+		// …while the full set a SQL deployment ends up with still reads as five.
+		expect(Object.keys(sqlEngineSchema).sort()).toEqual([
+			"idempotency_key",
+			"lease",
+			"run",
+			"run_event",
+			"runtime_task",
+		]);
+	});
+
 	it("derives its storage schema from entity fields", () => {
 		expect(sqlEngineSchema.run?.fields.input).toMatchObject({
 			type: "json",
