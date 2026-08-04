@@ -9,6 +9,7 @@ import {
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime, type RuntimeEvent } from "../src/index";
+import { durableStores } from "./durable-stores";
 
 const emailDetector: Detector = (text) => {
 	const spans: PiiSpan[] = [];
@@ -85,7 +86,7 @@ describe("runtime yield & resume", () => {
 		let toolRuns = 0;
 		const runtime = createRuntime({
 			model: multiStepModel(2),
-			database: db,
+			...durableStores(db, { now: () => iso(clock) }),
 			environment: { now: () => iso(clock) },
 			effectLeaseTtlMs: 600_000,
 			events: {
@@ -171,7 +172,7 @@ describe("runtime yield & resume", () => {
 		let clock = 0;
 		const runtime = createRuntime({
 			model: multiStepModel(2),
-			database: db,
+			...durableStores(db, { now: () => iso(clock) }),
 			environment: { now: () => iso(clock) },
 			effectLeaseTtlMs: 600_000,
 			redactor: createStoredRedactor({
@@ -225,7 +226,7 @@ describe("runtime yield & resume", () => {
 		let clock = 0;
 		const runtime = createRuntime({
 			model: multiStepModel(5),
-			database: db,
+			...durableStores(db, { now: () => iso(clock) }),
 			environment: { now: () => iso(clock) },
 			effectLeaseTtlMs: 600_000,
 			maxSteps: 1,

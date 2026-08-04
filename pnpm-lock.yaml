@@ -129,7 +129,7 @@ importers:
     dependencies:
       '@busyclaw/runtime':
         specifier: workspace:*
-        version: link:../../runtime
+        version: link:../../foundation/runtime
     devDependencies:
       '@opentelemetry/api':
         specifier: 1.9.1
@@ -151,7 +151,7 @@ importers:
         version: link:../foundation/errors
       '@busyclaw/runtime':
         specifier: workspace:*
-        version: link:../runtime
+        version: link:../foundation/runtime
       '@busyclaw/secrets':
         specifier: workspace:*
         version: link:../foundation/secrets
@@ -192,6 +192,9 @@ importers:
       '@busyclaw/secrets-plugin':
         specifier: workspace:*
         version: link:../plugins/secrets
+      '@types/better-sqlite3':
+        specifier: 7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
@@ -204,6 +207,9 @@ importers:
       ai:
         specifier: 7.0.22
         version: 7.0.22(zod@4.4.3)
+      better-sqlite3:
+        specifier: 12.11.1
+        version: 12.11.1
       happy-dom:
         specifier: 20.10.6
         version: 20.10.6
@@ -270,7 +276,7 @@ importers:
         version: link:../../foundation/contracts
       '@busyclaw/runtime':
         specifier: workspace:*
-        version: link:../../runtime
+        version: link:../../foundation/runtime
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
@@ -353,6 +359,40 @@ importers:
         version: 7.0.22(zod@4.4.3)
 
   packages/foundation/errors: {}
+
+  packages/foundation/runtime:
+    dependencies:
+      '@busyclaw/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@busyclaw/core':
+        specifier: workspace:*
+        version: link:../core
+      '@busyclaw/egress':
+        specifier: workspace:*
+        version: link:../egress
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
+      ai:
+        specifier: 7.0.22
+        version: 7.0.22(zod@4.4.3)
+      arktype:
+        specifier: 2.2.0
+        version: 2.2.0
+    devDependencies:
+      '@busyclaw/secrets':
+        specifier: workspace:*
+        version: link:../secrets
+      '@busyclaw/storage-core':
+        specifier: workspace:*
+        version: link:../../storage/core
+      '@busyclaw/storage-durable':
+        specifier: workspace:*
+        version: link:../../storage/durable
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/foundation/secrets:
     dependencies:
@@ -480,7 +520,7 @@ importers:
         version: link:../../foundation/core
       '@busyclaw/runtime':
         specifier: workspace:*
-        version: link:../../runtime
+        version: link:../../foundation/runtime
       '@busyclaw/storage-core':
         specifier: workspace:*
         version: link:../../storage/core
@@ -514,40 +554,6 @@ importers:
       arktype:
         specifier: 2.2.0
         version: 2.2.0
-
-  packages/runtime:
-    dependencies:
-      '@busyclaw/contracts':
-        specifier: workspace:*
-        version: link:../foundation/contracts
-      '@busyclaw/core':
-        specifier: workspace:*
-        version: link:../foundation/core
-      '@busyclaw/egress':
-        specifier: workspace:*
-        version: link:../foundation/egress
-      '@busyclaw/storage-durable':
-        specifier: workspace:*
-        version: link:../storage/durable
-      '@noble/hashes':
-        specifier: 2.2.0
-        version: 2.2.0
-      ai:
-        specifier: 7.0.22
-        version: 7.0.22(zod@4.4.3)
-      arktype:
-        specifier: 2.2.0
-        version: 2.2.0
-    devDependencies:
-      '@busyclaw/secrets':
-        specifier: workspace:*
-        version: link:../foundation/secrets
-      '@busyclaw/storage-core':
-        specifier: workspace:*
-        version: link:../storage/core
-      '@types/node':
-        specifier: 26.1.1
-        version: 26.1.1
 
   packages/storage/core:
     dependencies:

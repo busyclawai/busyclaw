@@ -98,9 +98,7 @@ export type RunCheckpointStore = {
 	 * and is also what lets a retried first-slice task discover it has work to continue rather than
 	 * starting the run over.
 	 */
-	latestPendingForRun: (
-		runId: string,
-	) => Promise<RunCheckpointRecord | null>;
+	latestPendingForRun: (runId: string) => Promise<RunCheckpointRecord | null>;
 	/**
 	 * Atomically take the row for one attempt (race-safe): `pending` → `claimed`, or a `claimed`
 	 * row whose lease has EXPIRED → re-claimed by the new attempt. Returns null when the row is

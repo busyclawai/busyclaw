@@ -12,6 +12,7 @@ import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { createRuntime } from "../src/runtime";
+import { durableStores } from "./durable-stores";
 
 const emailDetector: Detector = (text) => {
 	const spans: PiiSpan[] = [];
@@ -193,7 +194,7 @@ describe("redact-at-ingress coherence", () => {
 		const events: unknown[] = [];
 		const runtime = createRuntime({
 			model: echoTokenModel(received),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),

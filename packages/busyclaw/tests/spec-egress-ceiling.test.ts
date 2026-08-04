@@ -1,5 +1,5 @@
 // The generated egress ceiling — EVALUATED. The text-shape half lives in
-// packages/runtime/tests/spec-egress-policy.test.ts; this asks whether Cedar agrees with it, which
+// packages/foundation/runtime/tests/spec-egress-policy.test.ts; this asks whether Cedar agrees with it, which
 // needs an engine, which is why it is here rather than beside the generator.
 //
 // Every case runs under a blanket permit, so the ONLY thing that can produce a deny is the generated

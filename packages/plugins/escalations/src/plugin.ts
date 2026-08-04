@@ -203,7 +203,7 @@ export function escalations(
 					...stampsOf(ctx),
 				});
 			} catch (err) {
-				// The observer contract (the runtime's observer fan-out, packages/runtime/src/events.ts):
+				// The observer contract (the runtime's observer fan-out, packages/foundation/runtime/src/events.ts):
 				// isolated, warned, never propagated. This handler runs inside governance's `finally`, so
 				// a throw here would surface as the run's failure and mask the real outcome.
 				warn(

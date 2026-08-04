@@ -15,7 +15,6 @@ import type {
 	ToolEffectPolicy,
 } from "@busyclaw/contracts";
 import {
-	type Adapter,
 	APPROVED_BY_CONTEXT_KEY,
 	asPrincipal,
 	BusyclawError,
@@ -37,11 +36,6 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import { createGovernance, type Governance } from "@busyclaw/core";
-import {
-	createApprovalStore,
-	createEffectStore,
-	createRunCheckpointStore,
-} from "@busyclaw/storage-durable";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { ModelMessage, wrapLanguageModel } from "ai";
@@ -329,15 +323,20 @@ export type RuntimeConfig = {
 	 */
 	approvalAuthority?: "requester" | "approver";
 	effectStore?: EffectStore;
-	/** The durable approval store. Defaults to one over `database`; supply your own to back approvals
-	 *  somewhere else. Same shape as {@link RuntimeConfig.effectStore}. */
+	/** The durable approval store. SUPPLIED, never defaulted — absent means nothing can park on an
+	 *  approval. Same shape as {@link RuntimeConfig.effectStore}. */
 	approvalStore?: ApprovalStore;
+	/** The durable checkpoint store. SUPPLIED, never defaulted — absent means the loop cannot yield,
+	 *  which `assertYieldable` refuses loudly rather than silently running past a deadline.
+	 *
+	 *  Its clock must be the SAME one this runtime uses (`environment.now`), or a checkpoint's
+	 *  timestamps drift from the run that wrote them. The assembly builds both from one value. */
+	checkpoints?: RunCheckpointStore;
 	/** How long a resume's execution lease lasts, in ms. Default 15 minutes — see
 	 *  {@link APPROVAL_LEASE_MS} for why that is deliberately generous. The keepalive renews it at a
 	 *  third of this, so lowering it makes both the beat and the recovery window shorter together. */
 	approvalLeaseMs?: number;
 	effectLeaseTtlMs?: number;
-	database?: Adapter;
 	environment?: RuntimeEnvironment;
 	/** Observer sinks (telemetry): awaited in order per event, but isolated — a throwing observer
 	 *  is swallowed and reported via `warn`, never failing the run. */
@@ -1025,24 +1024,29 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		observers: eventSinksFrom(config.events),
 		warn,
 	};
-	const adapter = config.database;
-	if (adapter && config.redactor?.durable !== true) {
+	// THE THREE DURABLE STORES ARE SUPPLIED, NEVER CONSTRUCTED HERE. The runtime used to take a
+	// `database` Adapter and build all three itself, which made this package depend on a storage
+	// IMPLEMENTATION (@busyclaw/storage-durable) rather than on the ports in contracts — the only
+	// package below busyclaw that did. It also meant "which checkpoint store did this run use" was
+	// answered by reading three `??` fallbacks and knowing whether an adapter happened to be present.
+	// The assembly wires them now (packages/busyclaw/src/index.ts), which is where every real caller
+	// already was: `createRuntime` has exactly one production call site.
+	const approvalStore = config.approvalStore;
+	const effectStore = config.effectStore;
+	const runCheckpointStore = config.checkpoints;
+	// The guard follows the STORES, not an adapter. Same invariant, stated against the thing it is
+	// actually about: anything that persists redacted content across a process — a parked approval's
+	// arguments, a checkpoint's transcript — can only be rehydrated later if the mapping outlived the
+	// process too. It now also fires for a host that brings its own stores, which the adapter-keyed
+	// version could not see.
+	if (
+		(approvalStore !== undefined || runCheckpointStore !== undefined) &&
+		config.redactor?.durable !== true
+	) {
 		throw configurationError(
 			"database-backed runtime approvals require a durable redactor",
 		);
 	}
-	// Resolved like its sibling `effectStore` below — a host may bring its own. It used to be built
-	// from the adapter unconditionally while the effect store honoured an override, which is an
-	// inconsistency between two ports that do the same kind of job, and it made the one race this
-	// resume has (a reclaimed lease) unreachable from a test.
-	const approvalStore =
-		config.approvalStore ??
-		(adapter ? createApprovalStore(adapter) : undefined);
-	const effectStore =
-		config.effectStore ?? (adapter ? createEffectStore(adapter) : undefined);
-	const runCheckpointStore = adapter
-		? createRunCheckpointStore(adapter, { now })
-		: undefined;
 	const resolveContext = composeContext({
 		identity: config.identity,
 		membership: config.membership,
@@ -1814,7 +1818,10 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		callerPrincipal: Principal | undefined,
 		recording: RuntimeRecordingContext | undefined,
 		runId: string | undefined,
-		onAuthorityResolved?: (boundary: { scope: string; scopeId: string }) => void,
+		onAuthorityResolved?: (boundary: {
+			scope: string;
+			scopeId: string;
+		}) => void,
 	): Promise<{ authority: RunAuthority; ctx: Record<string, unknown> }> => {
 		const { authority, ctx } = await resolveRunAuthority({
 			ctx: stripReserved(ctxInput ?? {}),

@@ -1,4 +1,5 @@
 import type {
+	Adapter,
 	BusyclawPlugin,
 	Detector,
 	PiiSpan,
@@ -8,7 +9,12 @@ import type {
 import { govern } from "@busyclaw/contracts";
 import { createStoredRedactor } from "@busyclaw/core";
 import { memoryAdapter } from "@busyclaw/storage-core";
-import { createPiiMappingStore } from "@busyclaw/storage-durable";
+import {
+	createApprovalStore,
+	createEffectStore,
+	createPiiMappingStore,
+	createRunCheckpointStore,
+} from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
 import { createClaw } from "../src/index";
 
@@ -237,6 +243,32 @@ export function emailTool(
 		}),
 		{ access: "write", ...governance },
 	);
+}
+
+/**
+ * The three durable ports a runtime needs, built over one adapter.
+ *
+ * `createRuntime` no longer constructs these from a `database` field — it takes the ports, and the
+ * assembly (`createClaw`) does the wiring for real hosts. A suite that drives `createRuntime`
+ * DIRECTLY is the other caller, so it wires them the same way rather than rediscovering that an
+ * unsupplied checkpoint store means the loop cannot yield.
+ *
+ * `now` is threaded deliberately: the checkpoint store stamps its own rows, so a suite on a fake
+ * clock must hand the SAME clock to both halves or its checkpoints carry wall-clock timestamps while
+ * its run carries frozen ones.
+ */
+export function durableStores(
+	adapter: Adapter,
+	options?: { now?: () => string },
+) {
+	return {
+		approvalStore: createApprovalStore(adapter),
+		effectStore: createEffectStore(adapter),
+		checkpoints: createRunCheckpointStore(
+			adapter,
+			options?.now ? { now: options.now } : undefined,
+		),
+	};
 }
 
 export function durableRedactor(db = memoryAdapter()) {

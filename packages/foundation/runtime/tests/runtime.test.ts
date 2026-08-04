@@ -27,6 +27,7 @@ import {
 	type RuntimeResult,
 	runtimeRunOptionsWithRecording,
 } from "../src/index";
+import { durableStores } from "./durable-stores";
 
 const emailDetector: Detector = (text) => {
 	const spans: PiiSpan[] = [];
@@ -127,23 +128,50 @@ function textOnlyModel(text: string, onGenerate?: () => void): V2Model {
 }
 
 describe("@busyclaw/runtime", () => {
-	it("rejects database-backed approval runtime with non-durable redactor", () => {
+	it("rejects a durable-store runtime with a non-durable redactor", () => {
 		expect(() =>
 			createRuntime({
 				model: scriptedModel({ prompt: "" }),
-				database: memoryAdapter(),
+				...durableStores(memoryAdapter()),
 				redactor: createMemoryRedactor(emailDetector),
 			}),
 		).toThrow(/durable redactor/);
 	});
 
-	it("rejects database-backed approval runtime with no redactor", () => {
+	it("rejects a durable-store runtime with no redactor", () => {
 		expect(() =>
 			createRuntime({
 				model: scriptedModel({ prompt: "" }),
-				database: memoryAdapter(),
+				...durableStores(memoryAdapter()),
 			}),
 		).toThrow(/durable redactor/);
+	});
+
+	// The inversion, pinned. The runtime used to take a `database` Adapter and build all three durable
+	// stores from it, so "does this runtime persist approvals" was answered by whether an adapter
+	// happened to be in the config — three `??` fallbacks away from the reader. It takes ports now:
+	// unsupplied means ABSENT, and absent is refused loudly at the one place it matters rather than
+	// discovered at a deadline. Constructing one with an adapter is not even expressible here, which
+	// is the point.
+	it("constructs no durable stores of its own, even handed an adapter", async () => {
+		// `database` is deliberately passed and deliberately inert. It is no longer a RuntimeConfig
+		// field, but createRuntime is generic over its config, so a host that still sets it compiles —
+		// and this pins that it now does NOTHING rather than half-working. On the old code this same
+		// config built all three stores (and threw the durable-redactor guard before it got here), so
+		// the test fails without the inversion in both directions.
+		const runtime = createRuntime({
+			model: scriptedModel({ prompt: "" }),
+			database: memoryAdapter(),
+		});
+
+		expect(runtime.approvals).toBeUndefined();
+		expect(runtime.checkpoints).toBeUndefined();
+		expect(runtime.effects).toBeUndefined();
+		await expect(
+			runtime.generate("go", undefined, {
+				deadlineAt: "2026-01-01T00:00:00.000Z",
+			}),
+		).rejects.toThrow(/run checkpoint store/);
 	});
 
 	it("redacts model prompts, rehydrates tool args, and audits both boundaries", async () => {
@@ -308,7 +336,7 @@ describe("@busyclaw/runtime", () => {
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
 			audit: createMemoryAudit(),
-			database: db,
+			...durableStores(db),
 			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
@@ -358,7 +386,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
@@ -565,7 +593,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -654,7 +682,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -740,7 +768,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			effectStore,
 			redactor: createStoredRedactor({
 				detector: emailDetector,
@@ -788,7 +816,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -863,7 +891,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -909,7 +937,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -1118,7 +1146,7 @@ describe("@busyclaw/runtime", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			events: { emit: (event) => void events.push(event) },
 			redactor: createStoredRedactor({
 				detector: emailDetector,
@@ -1268,7 +1296,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			const db = memoryAdapter();
 			const runtime = createRuntime({
 				model: scriptedModel({ prompt: "" }),
-				database: db,
+				...durableStores(db),
 				redactor: createStoredRedactor({
 					detector: emailDetector,
 					mappings: createPiiMappingStore(db),
@@ -1399,7 +1427,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -1445,7 +1473,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 		const make = () =>
 			createRuntime({
 				model: scriptedModel({ prompt: "" }),
-				database: db,
+				...durableStores(db),
 				redactor: createStoredRedactor({
 					detector: emailDetector,
 					// The SAME mapping store — the isolation has to come from the container, not from
@@ -1475,7 +1503,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 		const first = { prompt: "" };
 		const runtimeA = createRuntime({
 			model: scriptedModel(first),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -1520,7 +1548,7 @@ describe("governanceToolResult — what a blocked call tells the model", () => {
 			const mappings = createPiiMappingStore(db);
 			const runtime = createRuntime({
 				model: scriptedModel({ prompt: "" }),
-				database: db,
+				...durableStores(db),
 				redactor: createStoredRedactor({ detector: emailDetector, mappings }),
 				...(subject !== undefined ? { subject } : {}),
 				tools: {
@@ -1603,7 +1631,7 @@ describe("a superseded approval resume does not report success", () => {
 
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			approvalStore,
 			redactor: createStoredRedactor({
 				detector: emailDetector,
@@ -1667,7 +1695,7 @@ describe("a superseded approval resume does not report success", () => {
 		};
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			approvalStore,
 			events: { emit: (event: RuntimeEvent) => void events.push(event) },
 			redactor: createStoredRedactor({
@@ -1723,7 +1751,7 @@ describe("an approval lease is kept alive, and lost is stopped", () => {
 		};
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			approvalStore,
 			// Short enough that the keepalive fires while the tool is still running — the beat interval
 			// is a third of the lease, so this makes the race observable in milliseconds instead of
@@ -1812,7 +1840,7 @@ describe("an approval lease is kept alive, and lost is stopped", () => {
 		const approvalStore = { ...real, heartbeat: async () => null };
 		const runtime = createRuntime({
 			model: insistent,
-			database: db,
+			...durableStores(db),
 			approvalStore,
 			approvalLeaseMs: 900,
 			maxSteps: 20,
@@ -1869,7 +1897,7 @@ describe("a lost approval lease stops the run without unrecording the work", () 
 		const approvalStore = { ...real, heartbeat: async () => null };
 		const runtime = createRuntime({
 			model: scriptedModel({ prompt: "" }),
-			database: db,
+			...durableStores(db),
 			approvalStore,
 			approvalLeaseMs: 900,
 			redactor: createStoredRedactor({

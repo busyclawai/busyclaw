@@ -6,6 +6,7 @@ import type {
 } from "@busyclaw/contracts";
 import {
 	type Adapter,
+	type ApprovalStore,
 	type AuditSink,
 	type BusyclawCronFlag,
 	type BusyclawPlugin,
@@ -20,6 +21,7 @@ import {
 	type InferPluginApi,
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
+	type RunCheckpointStore,
 	type Secrets,
 	type ToolDefinitionSet,
 	toolModelName,
@@ -39,9 +41,11 @@ import { buildSecrets, env } from "@busyclaw/secrets";
 import { entityAdapter, verifiedAdapter } from "@busyclaw/storage-core";
 import {
 	createAccessGrantStore,
+	createApprovalStore,
 	createClawsStore,
 	createEffectStore,
 	createRegistryStores,
+	createRunCheckpointStore,
 	type RegistryStores,
 } from "@busyclaw/storage-durable";
 import { type as ark } from "arktype";
@@ -114,6 +118,12 @@ export type ClawStores = {
 	claws?: ClawsStore;
 	effects?: EffectStore;
 	registry?: RegistryStores;
+	/** The durable approval store. The assembly builds one over `database`; supply your own to back
+	 *  approvals somewhere else. The runtime no longer constructs any of these — it takes ports. */
+	approvals?: ApprovalStore;
+	/** The durable checkpoint store. Built over `database` with the SAME clock the runtime gets, so a
+	 *  checkpoint's timestamps cannot drift from the run that wrote them. */
+	checkpoints?: RunCheckpointStore;
 };
 
 export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
@@ -744,6 +754,24 @@ export function createClaw<
 		config.stores?.effects ??
 		configuredEffectStore ??
 		(adapter ? createEffectStore(adapter) : undefined);
+	// THE OTHER TWO DURABLE RUNTIME PORTS, built HERE rather than inside createRuntime. The runtime
+	// used to construct all three from an Adapter it was handed, which is why @busyclaw/runtime
+	// depended on a storage IMPLEMENTATION while every other package below this one depends on the
+	// ports in contracts. The assembly is where the wiring belongs and where it already was for
+	// effects, the registry and grants — this only makes the family consistent.
+	const approvalsStore =
+		config.stores?.approvals ??
+		(adapter ? createApprovalStore(adapter) : undefined);
+	// ONE clock for the runtime and its checkpoint store. Resolved here, with the same default
+	// createRuntime uses, because a checkpoint stamped from a different `now` than the run that wrote
+	// it is a drift nothing would report.
+	const runtimeNow =
+		config.environment?.now ?? (() => new Date().toISOString());
+	const checkpointStore =
+		config.stores?.checkpoints ??
+		(adapter
+			? createRunCheckpointStore(adapter, { now: runtimeNow })
+			: undefined);
 	// The tool registry rides the same adapter — it's product durable state, not a plugin.
 	const registryStores =
 		config.stores?.registry ??
@@ -883,8 +911,12 @@ export function createClaw<
 		// AFTER the spread: the assembled set (host + plugin tools) replaces the host's own, so
 		// dispatch, the model-facing projection, and the catalog all see what the floor governs.
 		...(tools ? { tools } : {}),
-		...(adapter ? { database: adapter } : {}),
+		// The three durable ports the runtime no longer builds for itself. Absent ⇒ absent: a claw with
+		// no database cannot park on an approval and cannot yield, which `assertYieldable` says out
+		// loud rather than discovering at the deadline.
 		...(effectsStore ? { effectStore: effectsStore } : {}),
+		...(approvalsStore ? { approvalStore: approvalsStore } : {}),
+		...(checkpointStore ? { checkpoints: checkpointStore } : {}),
 		// Explicit, AFTER the spread: overrides `config.events` with the merged host+plugin observer
 		// list so the runtime's own fan-out fires the SAME sink instances as the plugin emit door.
 		events: observerSinks,

@@ -225,7 +225,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
   selection in the spec author's declared order, and style/explode serialization capture.
   Rewritten without Effect and reduced to busyclaw's scope (local-$ref-only inlining, the
   governance-facts stamping, and the skipped/warnings reporting are busyclaw's own). File:
-  - `packages/runtime/src/tools/sources/openapi/extractor.ts`
+  - `packages/foundation/runtime/src/tools/sources/openapi/extractor.ts`
 
   > Note: this is listed as a provenance courtesy. The implementation is independent
   > TypeScript. If we later copy verbatim code (e.g. the invoker), update this notice.

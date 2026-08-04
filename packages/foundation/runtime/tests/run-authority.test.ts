@@ -28,6 +28,7 @@ import {
 	govern,
 	runtimeRunOptionsWithCaller,
 } from "../src/index";
+import { durableStores } from "./durable-stores";
 
 type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
 
@@ -244,7 +245,7 @@ function tenantRuntime() {
 	const db = memoryAdapter();
 	return createRuntime({
 		model: callsInOrder("t"),
-		database: db,
+		...durableStores(db),
 		redactor: createStoredRedactor({
 			detector: () => [],
 			mappings: createPiiMappingStore(db),
@@ -310,7 +311,7 @@ describe("a resume cannot change tenant", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: callsInOrder("t"),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: () => [],
 				mappings: createPiiMappingStore(db),
@@ -334,7 +335,7 @@ function yieldingRuntime() {
 	let clock = 0;
 	return createRuntime({
 		model: callsInOrder("t", "t"),
-		database: db,
+		...durableStores(db, { now: () => new Date(clock).toISOString() }),
 		environment: { now: () => new Date(clock).toISOString() },
 		// The fake clock jumps past the soft deadline inside the tool; without a long lease the effect
 		// it holds expires mid-call and the failure under test never gets reached.

@@ -26,7 +26,6 @@
 		"@busyclaw/contracts": "workspace:*",
 		"@busyclaw/core": "workspace:*",
 		"@busyclaw/egress": "workspace:*",
-		"@busyclaw/storage-durable": "workspace:*",
 		"@noble/hashes": "2.2.0",
 		"ai": "7.0.22",
 		"arktype": "2.2.0"
@@ -34,6 +33,7 @@
 	"devDependencies": {
 		"@busyclaw/secrets": "workspace:*",
 		"@busyclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
 		"@types/node": "26.1.1"
 	}
 }

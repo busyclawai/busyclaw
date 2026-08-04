@@ -27,7 +27,7 @@ import { jsonSchema, tool } from "ai";
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
-import { emailDetector, owned } from "./fixtures";
+import { durableStores, emailDetector, owned } from "./fixtures";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -187,7 +187,7 @@ async function harness(input: {
 	let toolRuns = 0;
 	const runtime = createRuntime({
 		model: multiStepModel(input.toolSteps, input.onModelCall),
-		database: db,
+		...durableStores(db, input.now ? { now: input.now } : undefined),
 		redactor,
 		effectLeaseTtlMs: 600_000,
 		...(input.now ? { environment: { now: input.now } } : {}),
@@ -730,7 +730,7 @@ describe("run control plane — abort", () => {
 			model: hangingModel(() => {
 				providerSawAbort = true;
 			}),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -1310,7 +1310,7 @@ describe("run control plane — the inbox: interrupt", () => {
 
 		const runtime = createRuntime({
 			model,
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),

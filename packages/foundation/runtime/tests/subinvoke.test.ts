@@ -25,6 +25,7 @@ import {
 	NESTED_INVOKER_TOOL,
 	type SubInvoke,
 } from "../src/index";
+import { durableStores } from "./durable-stores";
 
 const emailDetector: Detector = (text) => {
 	const spans: PiiSpan[] = [];
@@ -305,7 +306,7 @@ describe("@busyclaw/runtime subInvoke", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: callToolOnceModel("run_code", {}),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -574,7 +575,7 @@ describe("@busyclaw/runtime subInvoke", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: callToolOnceModel("run_code", {}),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
@@ -618,7 +619,7 @@ describe("@busyclaw/runtime subInvoke", () => {
 		const db = memoryAdapter();
 		const runtime = createRuntime({
 			model: callToolOnceModel("run_code", {}),
-			database: db,
+			...durableStores(db),
 			redactor: createStoredRedactor({
 				detector: emailDetector,
 				mappings: createPiiMappingStore(db),
