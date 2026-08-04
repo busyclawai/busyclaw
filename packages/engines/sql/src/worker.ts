@@ -657,7 +657,30 @@ export async function driveClaim(input: {
 							taskId: claim.task.id,
 						}).message,
 					};
-				await tx.updateRun(task.runId, { status: "queued" });
+				// CONDITIONAL, like every sibling branch — this was the one that stayed unconditional.
+				// A run that reached `cancelled` between this slice starting and this transaction
+				// committing was walked back into flight, and worse, WITH A CONTINUATION BEHIND IT:
+				// the enqueue below would then hand a stopped run its next slice. Losing here means
+				// somebody else already decided how this run ends, so the resume is not enqueued and
+				// the winner is reported rather than overwritten.
+				// CONDITIONAL, like every sibling branch — this was the one that stayed unconditional.
+				// A run that reached `cancelled` between this slice starting and this transaction
+				// committing was walked back into flight, and worse, WITH A CONTINUATION BEHIND IT:
+				// the enqueue below would then hand a stopped run its next slice. Losing here means
+				// somebody else already decided how this run ends, so the resume is not enqueued and
+				// the winner is reported rather than overwritten.
+				const requeued = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: { status: "queued" },
+				});
+				if (!requeued) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
 				await tx.appendEvent({
 					runId: task.runId,
 					type: "run.yielded",

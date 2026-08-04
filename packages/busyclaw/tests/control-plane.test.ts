@@ -18,6 +18,7 @@ import { createStoredRedactor } from "@busyclaw/core";
 import {
 	createSqlEngineStore,
 	driveClaim,
+	RUNTIME_RESUME_RUN_TASK,
 	RUNTIME_RUN_TASK,
 	sqlEngine,
 	sqlEngineSchema,
@@ -1851,4 +1852,152 @@ describe("run control plane — two claims in one process", () => {
 
 		expect(sawAbort).toBe(true);
 	}, 20_000);
+});
+
+describe("run control plane — writes that must not lie about a run", () => {
+	/** A run with a live driver, plus a duplicate task that has exhausted its claims. */
+	async function runWithExhaustedDuplicate(): Promise<{
+		adapter: Adapter;
+		store: ReturnType<typeof createSqlEngineStore>;
+		runId: string;
+		stale: string;
+	}> {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const run = await store.createRun({ input: { prompt: "go" } });
+		const live = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+		});
+		// A real claim: the task is leased and the run is `running` under it.
+		expect(
+			await store.claimTask(live.id, { workerId: "driver" }),
+		).not.toBeNull();
+		const stale = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+		});
+		// Spent every claim it will ever get — the next one retires it.
+		await adapter.update({
+			model: "runtime_task",
+			where: [{ field: "id", value: stale.id }],
+			update: { attempt: 8 },
+		});
+		return { adapter, store, runId: run.id, stale: stale.id };
+	}
+
+	it("retires an exhausted duplicate task without failing the run driving beside it", async () => {
+		const { store, runId, stale } = await runWithExhaustedDuplicate();
+
+		expect(await store.claimTask(stale, { workerId: "latecomer" })).toBeNull();
+
+		// The retirement is TASK-scoped. Unconditional, it marked a healthy in-flight run `failed`
+		// from underneath its driver — and would do the same to an already-`completed` one.
+		expect((await store.getTask(stale))?.status).toBe("dead");
+		expect((await store.getRun(runId))?.status).toBe("running");
+	});
+
+	it("honours a bare stop latch as a CANCELLATION, not as a park", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const run = await store.createRun({ input: { prompt: "go" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+		});
+		// A BARE latch — what `controlRun` leaves behind when its synchronous branch loses the CAS to
+		// a claim that started between the read and the write. The claim path is then the only thing
+		// that will ever honour this intent.
+		await store.updateRun(run.id, {
+			controlRequestedAt: "2026-01-01T00:00:00.000Z",
+			controlIntent: "stop",
+			controlRequestedBy: userPrincipal("operator"),
+		});
+
+		expect(await store.claimTask(task.id, { workerId: "worker-1" })).toBeNull();
+
+		const settled = await store.getRun(run.id);
+		expect(settled?.status).toBe("cancelled");
+		expect(settled?.waitReason).toBeUndefined();
+		expect(settled?.controlRequestedAt).toBeUndefined();
+		const events = (await store.events(run.id)).map((e) => e.type);
+		expect(events).toContain("run.cancelled");
+		expect(events).not.toContain("run.suspended");
+	});
+
+	it("does not settle a run on behalf of one task while another holds a live lease", async () => {
+		const { adapter, store, runId, stale } = await runWithExhaustedDuplicate();
+		// Reset the exhausted counter — this test is about the LATCH path, not the retirement one.
+		await adapter.update({
+			model: "runtime_task",
+			where: [{ field: "id", value: stale }],
+			update: { attempt: 0 },
+		});
+		// The narrow window the `from` pin cannot see: a live lease while the run still reads
+		// `queued`, i.e. between another claim's task CAS and its run-status write.
+		await store.updateRun(runId, {
+			status: "queued",
+			controlRequestedAt: "2026-01-01T00:00:00.000Z",
+			controlIntent: "suspend",
+			controlRequestedBy: userPrincipal("operator"),
+		});
+
+		expect(await store.claimTask(stale, { workerId: "latecomer" })).toBeNull();
+
+		// THE SWALLOWED STOP (C4). The latch is RUN-scoped and belongs to whoever holds the run — the
+		// live driver observes it at its next control point. Clearing it here on behalf of a stale
+		// duplicate would leave that driver working with its intent already consumed.
+		const after = await store.getRun(runId);
+		expect(after?.controlRequestedAt).toBeDefined();
+		expect(after?.controlIntent).toBe("suspend");
+		expect(after?.status).toBe("queued");
+	});
+});
+
+describe("run control plane — a yield that lost its run", () => {
+	/**
+	 * The yield branch was the ONE terminal write that stayed unconditional while every sibling
+	 * became a CAS. It walked a run that had reached a terminal status back to `queued` — and worse,
+	 * with a continuation behind it, so a stopped run was handed its next slice.
+	 *
+	 * The run is taken terminal from inside the tool call, with the latch left CLEAR: a latch would
+	 * make the loop park instead of yield, which is a different branch. This is the narrower, nastier
+	 * case — whoever ended this run did so through a path that already settled it.
+	 */
+	it("does not resurrect a terminal run, and enqueues no continuation", async () => {
+		let clock = 0;
+		let runId = "";
+		const h = await harness({
+			toolSteps: 2,
+			now: () => iso(clock),
+			onTool: async () => {
+				clock += 100_000; // past the soft deadline, so this slice yields
+				await h.store.updateRun(runId, { status: "cancelled" });
+			},
+		});
+		const run = await h.engine.startRun({ prompt: "go" });
+		runId = run.id;
+
+		const result = await h.engine.work({ deadlineAt: iso(50_000) });
+
+		// The slice reports the winner rather than overwriting it.
+		expect(result.status).toBe("skipped");
+		expect((await h.store.getRun(runId))?.status).toBe("cancelled");
+		// AND NOTHING IS SCHEDULED. A resurrected run is recoverable; a resurrected run with a live
+		// continuation task behind it keeps working after somebody stopped it.
+		const tasks = await h.db.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: runId }],
+		});
+		expect(
+			tasks.filter(
+				(t) => (t as { kind: string }).kind === RUNTIME_RESUME_RUN_TASK,
+			),
+		).toHaveLength(0);
+	}, 15_000);
 });

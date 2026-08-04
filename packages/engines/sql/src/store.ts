@@ -445,7 +445,16 @@ export function createSqlEngineStore(
 					updatedAt: ts,
 				},
 			});
-			await store.updateRun(candidate.runId, { status: "failed" });
+			// CONDITIONAL. This retires ONE task; the run may be perfectly healthy and, under a
+			// caller-driven claim, may be `running` under somebody's live lease right now. An
+			// unconditional write marked that turn `failed` from underneath its driver — and marked an
+			// already-`completed` run `failed` too. `queued` is the only status where an exhausted task
+			// is genuinely the run's last hope. The reaper's own exhaustion path already had this shape
+			// (`store.ts` `reapExpiredLeases`); this is the copy that was never made.
+			await store.updateRunIfStatus(candidate.runId, {
+				from: ["queued"],
+				patch: { status: "failed" },
+			});
 			return null;
 		}
 		// THE FENCE. A run somebody has asked to stop must not receive another slice on any
@@ -454,6 +463,12 @@ export function createSqlEngineStore(
 		// already doing several writes.
 		const candidateRun = await store.getRun(candidate.runId);
 		if (candidateRun?.controlRequestedAt !== undefined) {
+			// BRANCH ON THE INTENT, exactly as the synchronous control path does
+			// (`engine.ts:277-311`). This used to write `waiting`/`suspended` whatever the latch said,
+			// so a `stop` or `abort` that lost the CAS there and fell through to a bare latch was
+			// honoured here as a SUSPEND — the claim path quietly relabelled a cancellation as a park,
+			// and the requester who asked for the run to end was told it was merely waiting.
+			const stops = candidateRun.controlIntent !== "suspend";
 			const withheld = await db.update({
 				model: "runtime_task",
 				where: [
@@ -462,22 +477,62 @@ export function createSqlEngineStore(
 				],
 				update: {
 					status: "dead",
-					lastError: "run suspended before this task was claimed",
+					lastError: stops
+						? "run cancelled before this task was claimed"
+						: "run suspended before this task was claimed",
 					updatedAt: ts,
 				},
 			});
 			if (withheld) {
-				await store.updateRunIfStatus(candidate.runId, {
-					from: ["queued", "running", "waiting"],
-					patch: {
-						status: "waiting",
-						waitReason: "suspended",
-						controlRequestedAt: null,
-						controlIntent: null,
-						controlRequestedBy: null,
-						controlReason: null,
-					},
+				// THE LATCH IS RUN-SCOPED; this task is not. Retiring one task is task-scoped and always
+				// correct, but SETTLING the run on its behalf is only correct when no holder exists to
+				// observe the latch itself — otherwise a stale duplicate task swallows a stop the live
+				// driver never sees, and the run keeps working with its intent already cleared (C4).
+				// `from` excludes `running` for that reason, matching the synchronous path.
+				const holders = await db.findMany({
+					model: "runtime_task",
+					where: [
+						{ field: "runId", value: candidate.runId },
+						{ field: "status", value: "leased", connector: "AND" },
+						{
+							field: "leasedUntil",
+							value: ts,
+							operator: "gt",
+							connector: "AND",
+						},
+					],
+					limit: 1,
 				});
+				// A live lease with the run still `queued` is the window between another claim's task
+				// CAS and its run-status write. The `from` pin cannot see that one; this can.
+				if (holders.length === 0) {
+					const settled = await store.updateRunIfStatus(candidate.runId, {
+						from: ["queued", "waiting"],
+						patch: {
+							status: stops ? "cancelled" : "waiting",
+							waitReason: stops ? null : "suspended",
+							controlRequestedAt: null,
+							controlIntent: null,
+							controlRequestedBy: null,
+							controlReason: null,
+						},
+					});
+					if (settled) {
+						await store.appendEvent({
+							runId: candidate.runId,
+							type: stops ? "run.cancelled" : "run.suspended",
+							payload: {
+								taskId: candidate.id,
+								...(candidateRun.controlIntent
+									? { intent: candidateRun.controlIntent }
+									: {}),
+								...(candidateRun.controlRequestedBy
+									? { requestedBy: candidateRun.controlRequestedBy }
+									: {}),
+							},
+						});
+					}
+				}
 			}
 			return null;
 		}
