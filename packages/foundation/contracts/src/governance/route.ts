@@ -120,7 +120,15 @@ type RequireAuthz = (
 export type RouteAuthz =
 	| {
 			readonly mode: "resource";
-			readonly level: RouteLevel;
+			/**
+			 * The permission this call demands, or a function of the input when one verb carries two
+			 * different asks. `proceedRun` is the case that forced it: resuming from a CHECKPOINT is the
+			 * inverse of the stop a `use` holder could already issue, while continuing an APPROVAL
+			 * replays a gated call by id and stays `manage`. One static level made the safe half as
+			 * expensive as the dangerous half, so a `use` grantee could park every member's turn and
+			 * nobody but an owner could un-park it.
+			 */
+			readonly level: RouteLevel | ((input: never) => RouteLevel);
 			readonly resolve: (input: never) => AuthzTarget | Promise<AuthzTarget>;
 	  }
 	| { readonly mode: "caller"; readonly reason: string };

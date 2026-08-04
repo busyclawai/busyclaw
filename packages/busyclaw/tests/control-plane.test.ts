@@ -2207,3 +2207,69 @@ describe("run control plane — a run belongs to its claw", () => {
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 	}, 15_000);
 });
+
+describe("run control plane — proceedRun's level splits by tag", () => {
+	/**
+	 * G4. A CHECKPOINT resume is the exact inverse of the stop `controlRun` already grants at `use`, so
+	 * pinning the whole verb at `manage` meant a `use` grantee could park every member's turn and only
+	 * an owner could un-park it — a denial of service wearing a permission level. An APPROVAL
+	 * continuation stays `manage`, because it replays a gated call by id, which is the direction that
+	 * ADDS authority.
+	 *
+	 * BOTH halves are asserted. A test that only checked the loosened half would pass just as happily
+	 * if the level had been lowered for every tag, which is the mistake this is guarding against.
+	 */
+	it("lets a `use` grantee resume a checkpoint but not continue an approval", async () => {
+		const { claw } = await clawHarness();
+		const BOB = userPrincipal("bob");
+
+		const c = await claw.api.createClaw({ name: "shared" });
+		const thread = await claw.api.createThread({ clawId: c.id });
+		await claw.api.shareResource({
+			resourceKind: "claw",
+			resourceId: c.id,
+			principalRef: BOB,
+			permission: "use",
+		});
+		// Claw-bound, so Bob's `use` on the claw is what the run's ladder resolves (D12).
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: c.id, threadId: thread.id },
+			run: { principal: userPrincipal("actor-1") },
+		});
+		if (!run) throw new Error("expected an engine");
+		const checkpoint = await claw.$context.runtime.checkpoints?.create({
+			runId: run.id,
+			metadata: {
+				version: "runtime.ai-sdk.yield.v1",
+				nextStep: 1,
+				messages: [{ role: "user", content: "go" }],
+			},
+			createdAt: new Date().toISOString(),
+		});
+		if (!checkpoint) throw new Error("expected a checkpoint");
+
+		// USE is enough to un-stop what `use` could stop.
+		await expect(
+			claw.api.proceedRun(
+				{
+					runId: run.id,
+					proceed: { kind: "checkpoint", checkpointId: checkpoint.id },
+				},
+				{ principal: BOB },
+			),
+		).resolves.toMatchObject({ id: run.id });
+
+		// …and NOT enough to replay a gated call. The approval tag anchors on the approval record and
+		// still demands `manage`, so this denies before it can discover the id is fictional.
+		await expect(
+			claw.api.proceedRun(
+				{
+					runId: run.id,
+					proceed: { kind: "approval", approvalId: "approval-1" },
+				},
+				{ principal: BOB },
+			),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+	}, 15_000);
+});

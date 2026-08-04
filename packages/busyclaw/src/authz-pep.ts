@@ -434,13 +434,18 @@ export function buildResourceRegistry(input: {
 			// own copy of the check, which is one drift away from three loaders disagreeing about what
 			// counts as a tenant — and `run.scope` is optional here where theirs is required, so the
 			// presence test stays.
-			const recorded =
-				run.scope !== undefined &&
-				run.scopeId !== undefined &&
-				namesTenant({ scope: run.scope, scopeId: run.scopeId });
-			const boundary = recorded
-				? { scope: run.scope as string, scopeId: run.scopeId as string }
-				: { scope: "personal", scopeId: principal };
+			// Destructured so the narrowing actually reaches the result. Reading `run.scope` after a
+			// stored boolean does not narrow — control flow analysis does not follow a `const` holding
+			// the outcome of the checks — which is why this used to end in `as string` twice. A cast
+			// there is not cosmetic: it asserts the very thing the branch exists to establish, so if
+			// the predicate is ever loosened the cast keeps compiling and lies.
+			const { scope, scopeId } = run;
+			const boundary =
+				scope !== undefined &&
+				scopeId !== undefined &&
+				namesTenant({ scope, scopeId })
+					? { scope, scopeId }
+					: { scope: "personal", scopeId: principal };
 			return { createdBy: principal, ...boundary };
 		});
 	}
@@ -940,9 +945,25 @@ export function governApi(input: {
 						{ method, decision: "deny", reason: errorMessage(error) },
 					);
 				}
+				// The level may be a function of the input — one verb, two different asks. Resolved
+				// HERE, beside the resolver, so both derive from the same validated input and a route
+				// cannot end up authorizing one thing at the level of another. A throwing level is a
+				// DENY for the same reason a throwing resolver is.
+				let level: ApiPermissionLevel;
+				try {
+					level =
+						typeof declared.level === "function"
+							? declared.level(domainInput as never)
+							: declared.level;
+				} catch (error) {
+					throw authorizationError(
+						`app-authz denied ${method}: could not resolve the permission level to demand`,
+						{ method, decision: "deny", reason: errorMessage(error) },
+					);
+				}
 				await enforce({
 					method,
-					level: declared.level,
+					level,
 					principal,
 					resource: await loadResource(target),
 				});

@@ -972,7 +972,9 @@ function apiHttpMethod(method: ClawApiMethod): ClawApiHttpMethod {
 type ApiRouteAuthz<Input> =
 	| {
 			readonly mode: "resource";
-			readonly level: RouteLevel;
+			/** A value, or a function of the input when one verb carries two different asks — see
+			 *  `RouteAuthz.level` and `proceedRun` below. */
+			readonly level: RouteLevel | ((input: Input) => RouteLevel);
 			readonly resolve: (input: Input) => AuthzTarget | Promise<AuthzTarget>;
 	  }
 	| { readonly mode: "caller"; readonly reason: string };
@@ -1172,7 +1174,12 @@ export const clawApiRoutes = {
 	// required manage on the approval and nothing at all on the run.
 	proceedRun: apiRoute("proceedRun", {
 		mode: "resource",
-		level: "manage",
+		// SPLIT BY TAG. A CHECKPOINT resume is the exact inverse of the stop `controlRun` already
+		// grants at `use` — so pinning it at `manage` meant a `use` grantee could park every member's
+		// turn and only an owner could un-park it, which is a denial-of-service wearing a permission
+		// level. An APPROVAL continuation stays `manage`: it replays a gated call by id, which is the
+		// direction that ADDS authority. The route comment on `controlRun` already drew this line.
+		level: (input) => (input.proceed.kind === "approval" ? "manage" : "use"),
 		resolve: (input) =>
 			input.proceed.kind === "approval"
 				? { kind: "approval", id: input.proceed.approvalId }
