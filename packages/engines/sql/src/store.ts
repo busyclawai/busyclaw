@@ -280,7 +280,16 @@ export type SqlEngineStore = {
 		toRunId: string;
 		afterSeq: number;
 		step: number;
-	}) => Promise<readonly { seq: number; body: JsonObject }[]>;
+		/** WHO this slice is executing as. A message from anyone else is not drained — it becomes the
+		 *  next slice's, under its own sender. Absent means "drain regardless", which is what a run
+		 *  with no principal (an unauthenticated start) can honestly do. */
+		runAs?: Principal;
+	}) => Promise<{
+		readonly delivered: readonly { seq: number; body: JsonObject }[];
+		/** Set when the drain STOPPED at a message from another principal. The slice hands over: it
+		 *  checkpoints here and its continuation runs as this sender. */
+		readonly handoverTo?: Principal;
+	}>;
 	/** Is there an undelivered `interrupt`-mode message for this run? The one question the heartbeat
 	 *  asks on behalf of a model call already in flight. */
 	hasPendingInterrupt: (runId: string) => Promise<boolean>;
@@ -876,7 +885,7 @@ export function createSqlEngineStore(
 			return row;
 		},
 
-		async drainMessages({ toRunId, afterSeq, step }) {
+		async drainMessages({ toRunId, afterSeq, step, runAs }) {
 			const rows = await db.findMany({
 				model: "run_message",
 				where: [
@@ -902,6 +911,18 @@ export function createSqlEngineStore(
 			const ts = now();
 			const drained: { seq: number; body: JsonObject }[] = [];
 			for (const row of rows) {
+				// PER-SLICE AUTHORITY. A slice executes every tool call under ONE principal, resolved
+				// once — so a message from anyone else cannot join it without lending them this run's
+				// authority and signing the audit line with the wrong name. The drain STOPS here
+				// instead: everything before this message is delivered, this one and everything after
+				// it stay pending, and the slice hands over to a continuation that runs as the sender.
+				//
+				// Stopping rather than skipping is what keeps the run's own FIFO honest. Skipping would
+				// reorder one person's messages around another's, and the order they were sent in is
+				// the only order anybody can reason about.
+				if (runAs !== undefined && row.sender !== runAs) {
+					return { delivered: drained, handoverTo: row.sender };
+				}
 				// Pinned on `pending`: a second reader cannot exist by construction, but a retry of THIS
 				// slice can, and marking an already-delivered row again would move its step.
 				await db.update({
@@ -911,7 +932,7 @@ export function createSqlEngineStore(
 				});
 				drained.push({ seq: row.seq, body: row.body });
 			}
-			return drained;
+			return { delivered: drained };
 		},
 
 		async hasPendingInterrupt(runId) {

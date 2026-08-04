@@ -12,6 +12,7 @@
 
 import type { EngineRecording } from "@busyclaw/contracts";
 import {
+	asPrincipal,
 	errorMessage,
 	isReservedScope,
 	type Principal,
@@ -41,6 +42,14 @@ export const RUNTIME_RESUME_RUN_TASK = "runtime.resumeRun";
  *  than one. Small on purpose: this covers a crashed host, not a failing run. */
 export const RESUME_MAX_ATTEMPTS = 3;
 
+/** The principal a TASK names, when it names one. Only a handover continuation does. */
+function slicePrincipalOf(task: RuntimeTask): Principal | undefined {
+	const declared = task.payload["principal"];
+	return typeof declared === "string" && declared.trim() !== ""
+		? asPrincipal(declared)
+		: undefined;
+}
+
 export const RuntimeRunTaskPayload = type({
 	prompt: "string",
 	"ctx?": type.Record("string", "unknown"),
@@ -57,6 +66,11 @@ export type RuntimeContinueRunTaskPayload =
 export const RuntimeResumeRunTaskPayload = type({
 	checkpointId: "string",
 	"ctx?": type.Record("string", "unknown"),
+	/** WHOSE turn this continuation is. Present only on a handover — a slice that stopped because the
+	 *  next message came from somebody else — and it is what makes per-slice authority real: the
+	 *  continuation's tool calls are authorized against, and audited as, this principal rather than
+	 *  the one who happened to start the run. */
+	"principal?": "string | undefined",
 });
 export type RuntimeResumeRunTaskPayload =
 	typeof RuntimeResumeRunTaskPayload.infer;
@@ -515,6 +529,12 @@ export async function driveClaim(input: {
 }): Promise<WorkerTickResult> {
 	const { claim, deadlineAt, leaseTtlMs, runtime, store, workerId } = input;
 	const heartbeat = startHeartbeat(store, claim, leaseTtlMs);
+	// WHO THIS SLICE EXECUTES AS, and who it must hand over to. Recorded here rather than returned
+	// through the loop because the loop is deliberately principal-blind: it is told to stop, not told
+	// whose turn is next. Set by the drain when it meets a message from somebody else; read by the
+	// yield branch, which enqueues the continuation under that person.
+	let sliceAs: Principal | undefined;
+	let handoverTo: Principal | undefined;
 	// One read of the run row per step. `controlRequestedAt` present IS the intent — the loop is told
 	// only the park reason, never the ladder, so raising `stop` later changes this file and nothing
 	// upstream of it.
@@ -543,11 +563,22 @@ export async function driveClaim(input: {
 				toRunId: runId,
 				afterSeq: deliveredThrough,
 				step: 0,
+				runAs: sliceAs,
 			});
+			// A foreign sender ends the slice. Everything ahead of them still lands in THIS turn — the
+			// run's own FIFO is preserved — and the message that stopped the drain stays pending, so
+			// the continuation drains it as the person who sent it.
+			if (drained.handoverTo !== undefined) {
+				handoverTo = drained.handoverTo;
+			}
 			return {
 				seq,
-				...(park ? { park } : {}),
-				...(drained.length ? { deliver: drained } : {}),
+				...(park
+					? { park }
+					: drained.handoverTo !== undefined
+						? { park: "handover" as const }
+						: {}),
+				...(drained.delivered.length ? { deliver: drained.delivered } : {}),
 			};
 		},
 	};
@@ -577,6 +608,11 @@ export async function driveClaim(input: {
 		// by the worker. A run with none executes with none, and the floor refuses it — which is
 		// the correct answer for a task nobody can be shown to have asked for.
 		const run = await store.getRun(claim.task.runId);
+		// WHO THIS SLICE RUNS AS. `run.principal` is who STARTED the run; a slice created by a handover
+		// carries its own on the task, because the whole point is that it executes as somebody else.
+		// One resolution, before anything can act, so the drain and the tool floor agree by
+		// construction rather than by both reading the row and hoping.
+		sliceAs = slicePrincipalOf(claim.task) ?? run?.principal;
 		// The boundary this slice resolves, recorded once the slice ends. A run started by a
 		// system principal on behalf of a tenant is otherwise owned by nobody a tenant admin
 		// can name — the PEP isolates by the run's own principal, and that principal is the
@@ -591,7 +627,7 @@ export async function driveClaim(input: {
 			},
 			heartbeat.abortSignal,
 			deadlineAt,
-			run?.principal,
+			sliceAs,
 			// From the SAME row read that yielded the principal. The run row is the only record of
 			// where a durable run's output belongs that survives the process, and reading it twice
 			// would be two chances to disagree.
@@ -726,6 +762,12 @@ export async function driveClaim(input: {
 					payload: {
 						checkpointId,
 						...(ctx !== undefined ? { ctx } : {}),
+						// PER-SLICE AUTHORITY, carried on the task because that is the only thing the
+						// next claim reads before it acts. Present only on a handover; absent, the
+						// continuation falls back to the run's own principal, which is every other
+						// yield. Without it a handover would checkpoint correctly and then resume as
+						// exactly the person it was handing away from.
+						...(handoverTo !== undefined ? { principal: handoverTo } : {}),
 					},
 					// Retryable, unlike `runtime.run`. A resume task names its work by checkpoint id
 					// and that work is now RE-CLAIMABLE after a crash, so a second attempt continues

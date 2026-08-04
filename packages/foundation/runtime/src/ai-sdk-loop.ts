@@ -423,7 +423,7 @@ export async function runAiSdkLoop(
 	// are byte-identical.
 	const parkHere = async (
 		step: number,
-		reason: RunParkReason | "deadline",
+		reason: RunParkReason | "deadline" | "handover",
 	): Promise<AiSdkLoopResult> => {
 		if (!input.persistYieldCheckpoint) {
 			throw configurationError(
@@ -440,7 +440,11 @@ export async function runAiSdkLoop(
 		// The two differ in ONE thing, and it is the thing the worker branches on: a yield leaves a
 		// continuation behind, a park does not. Same checkpoint, same transcript, different answer to
 		// "does this run come back on its own?".
-		return reason === "deadline"
+		//
+		// A HANDOVER answers yes, which is why it lands here rather than beside the suspends: the run
+		// is not waiting for anybody, it is continuing under a different principal. The engine holds
+		// who; this loop never learns that principals exist.
+		return reason === "deadline" || reason === "handover"
 			? {
 					status: "yielded",
 					text: "",

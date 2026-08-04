@@ -193,9 +193,18 @@ export const RUNTIME_CALLER_OPTION: unique symbol = Symbol(
  *  what the transcript watermark advances to once the message is actually pushed. */
 export type RunInboxDelivery = { seq: number; message: ModelMessage };
 
+/**
+ * WHY a slice stops when the engine says so. `handover` is not a park in the user-visible sense —
+ * nobody asked for the run to stop — it is the run changing WHOSE authority it executes under,
+ * which can only happen at a slice boundary because authority is resolved once per slice. It leaves
+ * a continuation behind, exactly like a deadline yield, and differs only in who the continuation
+ * runs as. The loop is told nothing about principals; the engine remembers who.
+ */
+export type RunStopReason = RunParkReason | "handover";
+
 export type RunControlVerdict = {
 	seq: number;
-	park?: RunParkReason;
+	park?: RunStopReason;
 	/** Already-tokenized message bodies, in the run's own order. */
 	deliver?: RunInboxDelivery[];
 };
@@ -210,7 +219,7 @@ export type RunControlPort = {
 		deliveredThrough: number,
 	) => Promise<{
 		seq: number;
-		park?: RunParkReason;
+		park?: RunStopReason;
 		deliver?: readonly { seq: number; body: Record<string, unknown> }[];
 	}>;
 	/** Register a way to cancel the model call about to happen. Re-registered every step, because an

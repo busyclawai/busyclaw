@@ -2273,3 +2273,109 @@ describe("run control plane — proceedRun's level splits by tag", () => {
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
 	}, 15_000);
 });
+
+describe("run control plane — a slice runs as whoever's message drives it", () => {
+	/**
+	 * D11. A durable run executes every tool call under ONE principal, resolved once per slice — so a
+	 * message delivered into a running slice used to execute as the RUN's principal, whoever sent it.
+	 * Bob could ask Alice's run to do something Bob may not do, the floor would authorize it against
+	 * Alice, and the audit line would say Alice did it.
+	 *
+	 * The fix is not to restrict delivery. Authority is per SLICE, so a message from a different
+	 * principal simply does not join the running one: the drain stops, the slice checkpoints, and the
+	 * continuation runs as the sender. Nobody's authority is lent and nothing is refused.
+	 */
+	it("hands over to the sender instead of lending them the run's authority", async () => {
+		const { db, store, claw } = await clawHarness();
+		const ALICE = userPrincipal("actor-1");
+		const BOB = userPrincipal("bob");
+
+		const c = await claw.api.createClaw({ name: "shared" });
+		const thread = await claw.api.createThread({ clawId: c.id });
+		await claw.api.shareResource({
+			resourceKind: "claw",
+			resourceId: c.id,
+			principalRef: BOB,
+			permission: "use",
+		});
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: c.id, threadId: thread.id },
+			run: { principal: ALICE },
+		});
+		if (!run) throw new Error("expected an engine");
+
+		// BOB writes into ALICE's live run, before it is ever claimed.
+		await claw.api.deliverMessage(
+			{
+				toRunId: run.id,
+				body: { text: "from bob" },
+				mode: "next_step",
+				idempotencyKey: "k-bob",
+			},
+			{ principal: BOB },
+		);
+
+		const first = await claw.$context.engine?.work?.();
+		expect((first as { status: string }).status).toBe("yielded");
+
+		// The slice STOPPED rather than swallowing Bob's words under Alice's name, and left a
+		// continuation that names him. That payload is the whole mechanism: it is the only thing the
+		// next claim reads before it acts.
+		const tasks = await db.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: run.id }],
+		});
+		const resumeRow = tasks.find(
+			(t) => (t as { kind: string }).kind === RUNTIME_RESUME_RUN_TASK,
+		);
+		expect(resumeRow).toBeDefined();
+		// Read back through the STORE, not the raw row: `payload` is a JSON column and the adapter
+		// hands it over unparsed.
+		const resume = await store.getTask((resumeRow as { id: string }).id);
+		expect(resume?.payload.principal).toBe(BOB);
+
+		// Bob's message is still PENDING — it was never delivered into Alice's turn.
+		const messages = await db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect((messages[0] as { status: string }).status).toBe("pending");
+
+		// …and the run itself is unchanged in who started it. `run.principal` means "who started it";
+		// the slice principal rides the task.
+		expect((await store.getRun(run.id))?.principal).toBe(ALICE);
+	}, 20_000);
+
+	it("does not hand over for a message from the run's own principal", async () => {
+		const { db, claw } = await clawHarness();
+		const ALICE = userPrincipal("actor-1");
+
+		const c = await claw.api.createClaw({ name: "solo" });
+		const thread = await claw.api.createThread({ clawId: c.id });
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: c.id, threadId: thread.id },
+			run: { principal: ALICE },
+		});
+		if (!run) throw new Error("expected an engine");
+
+		await claw.api.deliverMessage({
+			toRunId: run.id,
+			body: { text: "from alice" },
+			mode: "next_step",
+			idempotencyKey: "k-alice",
+		});
+
+		// THE FAST PATH, unchanged: her own message joins her own slice, costs no checkpoint, and the
+		// run completes in one. A handover here would be a per-message checkpoint for every chat turn.
+		const result = await claw.$context.engine?.work?.();
+		expect((result as { status: string }).status).toBe("completed");
+
+		const messages = await db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect((messages[0] as { status: string }).status).toBe("delivered");
+	}, 20_000);
+});
