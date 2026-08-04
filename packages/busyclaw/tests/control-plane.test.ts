@@ -2142,3 +2142,68 @@ describe("run control plane — a durable run lands in its thread", () => {
 		expect(row).toMatchObject({ clawId: created.id, threadId: thread.id });
 	}, 15_000);
 });
+
+describe("run control plane — a run belongs to its claw", () => {
+	/**
+	 * D12. Without the claw rung, giving a chat turn a row is a security REGRESSION: a claw is shared
+	 * exactly one way (an `access_grant` on `("claw", id)`) and a run used to reach people through a
+	 * completely different door — its own principal, `personal:<that principal>`. So the claw's OWNER
+	 * could not touch a run executing inside her own claw.
+	 *
+	 * Both directions are asserted. An allow-only test would pass just as happily if the rung resolved
+	 * every run to every caller.
+	 */
+	it("is reachable by the claw's owner, by its grantee, and by nobody else", async () => {
+		const { claw, store } = await clawHarness();
+		const ALICE = userPrincipal("actor-1"); // `owned()` binds this as the caller
+		const BOB = userPrincipal("bob");
+		const CAROL = userPrincipal("carol");
+
+		const c = await claw.api.createClaw({ name: "shared" });
+		const thread = await claw.api.createThread({ clawId: c.id });
+		await claw.api.shareResource({
+			resourceKind: "claw",
+			resourceId: c.id,
+			principalRef: BOB,
+			permission: "use",
+		});
+
+		// BOB's run, inside ALICE's claw — the ordering the old loader got wrong.
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: c.id, threadId: thread.id },
+			run: { principal: BOB },
+		});
+		if (!run) throw new Error("expected an engine");
+
+		// The claw's OWNER reaches it, though the run is not hers and she holds no grant on it.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: ALICE }),
+		).resolves.toMatchObject({ id: run.id });
+		// Its own principal still does.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: BOB }),
+		).resolves.toMatchObject({ id: run.id });
+		// And a stranger does NOT — the rung anchors on the claw, it does not open the run up.
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: CAROL }),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+
+		void store;
+	}, 15_000);
+
+	it("keeps a claw-less run isolated to its own principal", async () => {
+		const { claw } = await clawHarness();
+
+		// No recording ⇒ no claw ⇒ the ladder falls through, and the run keeps exactly the isolation
+		// it had before the rung existed. This is the branch a cron-started run lives on.
+		const run = await claw.api.startRun({ prompt: "go" });
+
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: userPrincipal("actor-1") }),
+		).resolves.toMatchObject({ id: run.id });
+		await expect(
+			claw.api.getRun({ id: run.id }, { principal: userPrincipal("stranger") }),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+	}, 15_000);
+});

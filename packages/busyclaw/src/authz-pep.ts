@@ -381,6 +381,37 @@ export function buildResourceRegistry(input: {
 		registry.set("run", async (id) => {
 			const run = await runs.get(id);
 			if (!run) return null;
+			// THE CLAW RUNG, and without it giving a chat turn a row is a security REGRESSION rather
+			// than a feature. A claw is shared exactly one way — an `access_grant` on ("claw", id) —
+			// and a run reaches people through a completely different door. So Alice, who owns claw C
+			// and granted Bob `use`, could not stop, read or inspect a run executing INSIDE HER OWN
+			// CLAW, because Bob's run resolved `personal:bob` and she is not Bob.
+			//
+			// The same ladder `approval` and `effect` already take, for the same reason: they are all
+			// things a run left behind, and all of them belong to the claw the run ran in.
+			//
+			// THE COST, stated rather than discovered: `ApiResourceShape` carries ONE `(scope,
+			// scopeId)`, and a claw's is `personal:<creator>` until `createClaw` stamps a real
+			// boundary. So a claw-bound run's TENANT anchor is gone from the shape — a tenant admin
+			// holding no grant on the claw can no longer reach it. Claw-first is still right: the
+			// alternative leaves the claw's own OWNER locked out, which is worse and commoner. The
+			// tenant path returns for free once org-tenancy lands, because the claw will carry the
+			// boundary and one slot will serve both readers.
+			// The claws store is guarded separately from `runs`, so a deployment can have one without
+			// the other. No store ⇒ no claw to climb to ⇒ fall through to the rungs below, which keep
+			// exactly the isolation this loader had before. A MISSING claw row is different and denies,
+			// like every other loader: a run naming a claw nobody can find is not a question you get to
+			// answer by guessing.
+			if (run.clawId !== undefined && clawsStore !== undefined) {
+				const claw = await clawsStore.claws.get(run.clawId);
+				if (!claw) return null;
+				return {
+					createdBy: claw.createdBy,
+					scope: claw.scope,
+					scopeId: claw.scopeId,
+					grantParents: [{ kind: "claw", id: run.clawId }],
+				};
+			}
 			const principal = run.principal;
 			if (principal === undefined || principal.trim() === "") return null;
 			// The DURABLE boundary when the run has one — the tenant its authority actually resolved
@@ -398,10 +429,15 @@ export function buildResourceRegistry(input: {
 			// everyone", which is the exact failure `isReservedScope` exists to name. Defence at both
 			// ends because a row written by an older build, or by hand, must not be able to widen an
 			// ACL by looking like a tenant.
+			//
+			// `namesTenant`, the same predicate the approval and effect loaders use. This inlined its
+			// own copy of the check, which is one drift away from three loaders disagreeing about what
+			// counts as a tenant — and `run.scope` is optional here where theirs is required, so the
+			// presence test stays.
 			const recorded =
 				run.scope !== undefined &&
 				run.scopeId !== undefined &&
-				!isReservedScope(run.scope);
+				namesTenant({ scope: run.scope, scopeId: run.scopeId });
 			const boundary = recorded
 				? { scope: run.scope as string, scopeId: run.scopeId as string }
 				: { scope: "personal", scopeId: principal };
