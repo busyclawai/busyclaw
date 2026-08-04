@@ -127,8 +127,8 @@ export type EngineDeliverMessageInput = {
 	/** Makes the admission idempotent: the row id is derived from it, so a redelivered message loses
 	 *  the insert instead of appearing twice in somebody's context window. */
 	idempotencyKey: string;
-	containerScope?: string;
-	containerScopeId?: string;
+	containerKind?: string;
+	containerId?: string;
 };
 
 export type EngineDeliverMessageResult = {

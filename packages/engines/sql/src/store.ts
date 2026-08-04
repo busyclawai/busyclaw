@@ -292,8 +292,8 @@ export type SqlEngineStore = {
 		body: JsonObject;
 		mode: RunMessageMode;
 		sender: Principal;
-		containerScope?: string;
-		containerScopeId?: string;
+		containerKind?: string;
+		containerId?: string;
 	}) => Promise<
 		| { admitted: true; id: string; seq: number }
 		| { admitted: false; id: string; seq: number; bounced?: string }
@@ -1000,11 +1000,11 @@ export function createSqlEngineStore(
 							toRunId: input.toRunId,
 							mode: input.mode,
 							body: input.body,
-							...(input.containerScope !== undefined
-								? { containerScope: input.containerScope }
+							...(input.containerKind !== undefined
+								? { containerKind: input.containerKind }
 								: {}),
-							...(input.containerScopeId !== undefined
-								? { containerScopeId: input.containerScopeId }
+							...(input.containerId !== undefined
+								? { containerId: input.containerId }
 								: {}),
 							sender: input.sender,
 							seq,

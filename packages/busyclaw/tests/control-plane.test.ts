@@ -1440,8 +1440,8 @@ describe("run control plane — the doors", () => {
 		// …and the row records WHICH container holds the token, so erasure can find it later without
 		// having to guess which run minted it.
 		expect(rows[0]).toMatchObject({
-			containerScope: "run",
-			containerScopeId: run.id,
+			containerKind: "run",
+			containerId: run.id,
 			sender: userPrincipal("actor-1"),
 		});
 		void store;
@@ -1482,8 +1482,8 @@ describe("run control plane — the doors", () => {
 		expect(JSON.stringify(rows[0])).not.toContain("alice@personal.com");
 		// The container the recorded run actually reads from — not the one this door used to assume.
 		expect(rows[0]).toMatchObject({
-			containerScope: "claw",
-			containerScopeId: created.id,
+			containerKind: "claw",
+			containerId: created.id,
 		});
 	});
 

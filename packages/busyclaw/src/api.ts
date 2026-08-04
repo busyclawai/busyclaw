@@ -2037,8 +2037,8 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				mode: args.mode,
 				sender: caller?.principal ?? SYSTEM_ANONYMOUS,
 				idempotencyKey: args.idempotencyKey,
-				containerScope: container.containerKind,
-				containerScopeId: container.containerId,
+				containerKind: container.containerKind,
+				containerId: container.containerId,
 			});
 		},
 		controlRun: async (args, caller?: ClawApiCaller) =>

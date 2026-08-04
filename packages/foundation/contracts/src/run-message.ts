@@ -43,9 +43,11 @@ export const runMessageFields = {
 	// Tokenized at admit into the RECEIVING run's container — the drain never re-redacts, because the
 	// loop's one-redaction rule is what keeps a transcript's placeholders stable across a park.
 	body: field.jsonObject({ required: true, pii: "redacted", immutable: true }),
-	// Which container holds those tokens, so erasure can find them without guessing.
-	containerScope: field.string({ immutable: true }),
-	containerScopeId: field.string({ immutable: true }),
+	// WHICH CONTAINER holds those tokens, so erasure can find them without guessing. Named for the
+	// dimension it actually is: a PII container is an entity reference (`claw`, `run`, a plugin id),
+	// never a tenancy scope — see contracts/src/pii-container.ts.
+	containerKind: field.string({ immutable: true }),
+	containerId: field.string({ immutable: true }),
 	sender: field.principal({ required: true, index: true, immutable: true }),
 	// Per-run FIFO. Minted under the receiving run's `controlSeq` in the admit transaction — one
 	// counter doing two jobs (order, and the watermark the loop reads) because both are read together

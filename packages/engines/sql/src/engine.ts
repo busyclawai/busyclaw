@@ -345,11 +345,11 @@ function createSqlEngineHandle(input: {
 				body: messageInput.body,
 				mode: messageInput.mode,
 				sender: messageInput.sender,
-				...(messageInput.containerScope !== undefined
-					? { containerScope: messageInput.containerScope }
+				...(messageInput.containerKind !== undefined
+					? { containerKind: messageInput.containerKind }
 					: {}),
-				...(messageInput.containerScopeId !== undefined
-					? { containerScopeId: messageInput.containerScopeId }
+				...(messageInput.containerId !== undefined
+					? { containerId: messageInput.containerId }
 					: {}),
 			});
 			return admitted.admitted
