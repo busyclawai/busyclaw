@@ -1447,6 +1447,46 @@ describe("run control plane — the doors", () => {
 		void store;
 	});
 
+	/**
+	 * THE FORK, and why the container cannot simply be assumed. A RECORDED run's own placeholders are
+	 * minted under `("claw", clawId)`; hardcoding `("run", runId)` at this door would tokenize into a
+	 * namespace the run never reads, and the failure is silent the whole way — the lookup misses and
+	 * the tool receives the literal `{{pii:…}}` string with nothing thrown anywhere.
+	 */
+	it("tokenizes into the CLAW's container when the run has one", async () => {
+		const { db, claw } = await clawHarness();
+		const created = await claw.api.createClaw({ name: "recorded" });
+		const thread = await claw.api.createThread({ clawId: created.id });
+		// The principal is stamped explicitly because this goes through the ENGINE HANDLE rather than
+		// `claw.api.startRun`, whose door refuses a `recording` on purpose. Without it the run is owned
+		// by nobody and the PEP denies the delivery — which is not this test's subject, and is exactly
+		// the gap D12's claw rung closes: a claw-bound run should be reachable through its claw.
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: created.id, threadId: thread.id },
+			run: { principal: userPrincipal("actor-1") },
+		});
+		if (!run) throw new Error("expected an engine");
+
+		await claw.api.deliverMessage({
+			toRunId: run.id,
+			body: { text: "reply to alice@personal.com please" },
+			mode: "next_step",
+			idempotencyKey: "k-claw",
+		});
+
+		const rows = await db.findMany({
+			model: "run_message",
+			where: [{ field: "toRunId", value: run.id }],
+		});
+		expect(JSON.stringify(rows[0])).not.toContain("alice@personal.com");
+		// The container the recorded run actually reads from — not the one this door used to assume.
+		expect(rows[0]).toMatchObject({
+			containerScope: "claw",
+			containerScopeId: created.id,
+		});
+	});
+
 	it("bounces at the door too, not only inside the engine", async () => {
 		const { store, claw } = await clawHarness();
 		const run = await claw.api.startRun({ prompt: "go" });
@@ -1746,6 +1786,10 @@ describe("run control plane — two claims in one process", () => {
 
 		let sawAbort = false;
 		let secondTick: Promise<unknown> | undefined;
+		// Set when run A's SECOND call is genuinely in flight. The test waits on this rather than on a
+		// fixed sleep: under a loaded machine the whole suite runs 50 files at once, and any wall-clock
+		// guess about when a step starts is a coin flip.
+		let aSecondCallStarted = false;
 		// Counts calls of THIS run only. A counter shared across both runs is what made an earlier
 		// version of this test blame the wrong call — run B's step landed in the middle of run A's.
 		let aCalls = 0;
@@ -1792,12 +1836,13 @@ describe("run control plane — two claims in one process", () => {
 					};
 				}
 				// Run A's SECOND step: the call the interrupt has to tear down, with B's claim live.
+				aSecondCallStarted = true;
 				return new Promise((_resolve, reject) => {
 					options.abortSignal?.addEventListener("abort", () => {
 						sawAbort = true;
 						reject(new Error("aborted"));
 					});
-					setTimeout(() => reject(new Error("never interrupted")), 4_000);
+					setTimeout(() => reject(new Error("never interrupted")), 12_000);
 				});
 			},
 			doStream: async () => {
@@ -1841,7 +1886,11 @@ describe("run control plane — two claims in one process", () => {
 		await engine.startRun({ prompt: "run b" });
 
 		const tick = engine.work();
-		await new Promise((resolve) => setTimeout(resolve, 120));
+		// Wait for the ORDERING the test is about — A into its second call, with B's claim already
+		// taken from inside A's tool — rather than for a duration.
+		while (!aSecondCallStarted) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 		await engine.deliverMessage({
 			toRunId: a.id,
 			body: { text: "for run a only" },
@@ -2000,5 +2049,96 @@ describe("run control plane — a yield that lost its run", () => {
 				(t) => (t as { kind: string }).kind === RUNTIME_RESUME_RUN_TASK,
 			),
 		).toHaveLength(0);
+	}, 15_000);
+});
+
+describe("run control plane — where a run's output belongs", () => {
+	/**
+	 * `recording` rides COLUMNS on the run row, not the task payload. Two questions decide it: a
+	 * reader asking "which thread did this run answer" arrives long after the task is `completed` and
+	 * unindexed, and the `deliverMessage` door needs the claw BEFORE any task has been claimed. A
+	 * payload can answer neither.
+	 */
+	it("stamps the claw and thread onto the run row, readable before anything runs", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const { engine } = sqlEngine({ store, workerId: "worker-1" }).create(
+			createRuntime({ model: multiStepModel(0) }),
+		);
+
+		const run = await engine.startRun({
+			prompt: "go",
+			recording: {
+				clawId: "claw-1",
+				threadId: "thread-1",
+				originMessageId: "msg-1",
+			},
+		});
+
+		// BEFORE the first claim — which is the whole point of a column.
+		const row = await store.getRun(run.id);
+		expect(row?.status).toBe("queued");
+		expect(row?.clawId).toBe("claw-1");
+		expect(row?.threadId).toBe("thread-1");
+		expect(row?.originMessageId).toBe("msg-1");
+	});
+
+	it("leaves them absent for a run that records nothing", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const { engine } = sqlEngine({ store, workerId: "worker-1" }).create(
+			createRuntime({ model: multiStepModel(0) }),
+		);
+
+		const run = await engine.startRun({ prompt: "go" });
+
+		// A cron-started run answers nobody's message and belongs to no thread. Absent, not empty —
+		// the authz ladder branches on presence, so a "" here would be a claw nobody can grant on.
+		const row = await store.getRun(run.id);
+		expect(row?.clawId).toBeUndefined();
+		expect(row?.threadId).toBeUndefined();
+		expect(row?.originMessageId).toBeUndefined();
+	});
+});
+
+describe("run control plane — a durable run lands in its thread", () => {
+	/**
+	 * ACCEPTANCE (a) for the recording. Before this, `EngineStartRunInput` had no recording at all, so
+	 * a durable run appended to no transcript — it produced an answer nobody could read, which is
+	 * consequence B of the split this whole plan closes.
+	 *
+	 * The recording is applied on the FIRST slice only, from the run row. A resume recovers its own
+	 * from `checkpoint.recording`, and passing one there would win silently over the durable record.
+	 */
+	it("appends its answer to the named thread, from a row-stamped recording", async () => {
+		const { db, claw } = await clawHarness();
+
+		const created = await claw.api.createClaw({ name: "recorded" });
+		const thread = await claw.api.createThread({ clawId: created.id });
+		const run = await claw.$context.engine?.startRun?.({
+			prompt: "go",
+			recording: { clawId: created.id, threadId: thread.id },
+		});
+		if (!run) throw new Error("expected an engine");
+
+		expect(
+			(await claw.$context.engine?.work?.()) as { status: string },
+		).toEqual(expect.objectContaining({ status: "completed" }));
+
+		// The answer is IN THE TRANSCRIPT — reachable by a reader who has only a thread id, which is
+		// the only thing a reader ever has.
+		const messages = await claw.api.listMessages({ threadId: thread.id });
+		const assistant = messages.filter((m) => m.role === "assistant");
+		expect(assistant).toHaveLength(1);
+		expect(assistant[0]?.runId).toBe(run.id);
+
+		// …and the run row points back, so `listMessages → message.runId → getRun` closes the loop.
+		const row = await db.findOne({
+			model: "run",
+			where: [{ field: "id", value: run.id }],
+		});
+		expect(row).toMatchObject({ clawId: created.id, threadId: thread.id });
 	}, 15_000);
 });

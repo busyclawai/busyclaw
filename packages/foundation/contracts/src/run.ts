@@ -49,6 +49,27 @@ export const runFields = {
 	scope: field.string({ index: true, input: false }),
 	scopeId: field.string({ index: true, input: false }),
 
+	// ── THE CLAW this run belongs to, and the THREAD its answers land in.
+	//
+	// `clawId` does two jobs no other column can. It is the authz PARENT — the run loader climbs to
+	// the claw for `grantParents`, exactly as the approval and effect loaders already do, which is
+	// what lets a claw's owner reach a run started by somebody she granted `use` to. And it is the
+	// redaction CONTAINER a delivered message must tokenize into, which the door has to know before
+	// any task is claimed, so a payload could never have carried it.
+	//
+	// STAMPED BY THE DOOR from the recording it derived server-side. Never from a request body: a
+	// caller who could set this would be choosing their own authz parent and their own PII namespace.
+	//
+	// NO `references`. The migration emitter resolves a reference target through the schema it is
+	// given and falls back to the raw model name when absent — and an engine-only deployment
+	// materializes these tables without `claw`/`thread`, so an FK here would point at a table that
+	// does not exist. Plain indexed strings, following `scope`/`scopeId`'s proven shape.
+	clawId: field.string({ index: true, input: false, immutable: true }),
+	threadId: field.string({ index: true, input: false, immutable: true }),
+	// The user message this run answers, when it has one. Optional forever — a run started by cron
+	// answers nobody's message.
+	originMessageId: field.string({ input: false, immutable: true }),
+
 	// ── THE CONTROL LATCH. The PRESENCE of controlRequestedAt is the intent; `status === "running"
 	//    && controlRequestedAt !== undefined` IS the "stopping" state, derived, so runStatusValues
 	//    needs no new member. controlIntent may only be RAISED (suspend < stop < abort); the other

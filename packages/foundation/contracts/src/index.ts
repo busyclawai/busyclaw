@@ -225,6 +225,7 @@ export type {
 	EngineDeliverMessageResult,
 	EngineProceed,
 	EngineProceedRunInput,
+	EngineRecording,
 	EngineRunEvent,
 	EngineRunHandle,
 	EngineRunMetadata,

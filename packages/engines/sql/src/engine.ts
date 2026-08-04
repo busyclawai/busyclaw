@@ -131,6 +131,11 @@ function createSqlEngineHandle(input: {
 				const run = await store.createRun({
 					...startInput.run,
 					input: { prompt: startInput.prompt, ctx: startInput.ctx ?? {} },
+					// COLUMNS, not the task payload. The payload is `completed` and unindexed by the
+					// time a reader asks which thread a run answered, and the `deliverMessage` door
+					// needs the claw before any task has been claimed — neither question a payload can
+					// answer.
+					recording: startInput.recording,
 				});
 				await store.enqueueTask({
 					kind: RUNTIME_RUN_TASK,

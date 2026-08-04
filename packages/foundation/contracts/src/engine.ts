@@ -21,10 +21,32 @@ export type EngineRunMetadata = {
 	principal?: Principal;
 };
 
+/**
+ * WHERE a durable run's output belongs: which claw governs it, which thread its answers append to.
+ *
+ * Declared HERE rather than imported from `@busyclaw/runtime`, because contracts has near-zero deps
+ * and runtime imports contracts, never the reverse. engine-sql widens it with the run id where it
+ * builds runtime options.
+ *
+ * NO `runId`. The recording is not the identity carrier — identity rides `run.id`, in one place — and
+ * a second slot for one fact is a second thing to disagree with the first, which is the R-M10 fork
+ * the `EngineProceed` doc above memorializes.
+ *
+ * NOT CALLER-SETTABLE. `claw.api.startRun` enumerates what it forwards and its input schema rejects
+ * undeclared keys, both deliberately: this names the run's authz parent, its redaction container and
+ * the thread its answers land in, so a caller who could set it would be choosing all three.
+ */
+export type EngineRecording = {
+	clawId: string;
+	threadId: string;
+	originMessageId?: string;
+};
+
 export type EngineStartRunInput = {
 	prompt: string;
 	ctx?: JsonObject;
 	run?: EngineRunMetadata;
+	recording?: EngineRecording;
 };
 
 /**
@@ -135,6 +157,12 @@ export type EngineRunRecord = {
 	 */
 	scope?: string;
 	scopeId?: string;
+	/** Where this run's output belongs. Backed by real columns in the same commit, per the rule
+	 *  above — `clawId` is the authz parent the run loader climbs to and the redaction container
+	 *  `deliverMessage` tokenizes into, `threadId` is where the answers append. */
+	clawId?: string;
+	threadId?: string;
+	originMessageId?: string;
 	createdAt: string;
 	updatedAt: string;
 };

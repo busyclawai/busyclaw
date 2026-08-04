@@ -12,7 +12,12 @@
  * produced here is operational state, not compliance audit; compliance evidence stays in @busyclaw/core.
  */
 
-import type { Adapter, JsonObject, RunMessageMode } from "@busyclaw/contracts";
+import type {
+	Adapter,
+	EngineRecording,
+	JsonObject,
+	RunMessageMode,
+} from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	configurationError,
@@ -64,6 +69,10 @@ export const RunRecord = ark({
 	// The tenancy anchor, absent until a slice has resolved one.
 	"scope?": OptionalString,
 	"scopeId?": OptionalString,
+	// Where the run's output belongs — the authz parent and the redaction container.
+	"clawId?": OptionalString,
+	"threadId?": OptionalString,
+	"originMessageId?": OptionalString,
 	// The control latch. Absent on every row written before it existed, and on every run nobody has
 	// asked anything of — which is almost all of them.
 	"controlRequestedAt?": OptionalString,
@@ -163,6 +172,10 @@ export type CreateRunInput = {
 	id?: string;
 	input?: Record<string, unknown>;
 	principal?: Principal;
+	/** Where this run's output belongs — the claw that governs it and the thread its answers append
+	 *  to. Columns, not task payload: the payload is gone by the time a reader asks, and the
+	 *  `deliverMessage` door needs the claw before any task has been claimed. */
+	recording?: EngineRecording;
 };
 
 export type EnqueueTaskInput = {
@@ -654,6 +667,12 @@ export function createSqlEngineStore(
 						input.principal === undefined
 							? undefined
 							: asPrincipal(input.principal),
+					// WHERE this run's output belongs. Written HERE and nowhere else, because this
+					// function enumerates the columns it writes and drops everything it was not told
+					// about — the `team` failure the contracts comment turned into a review rule.
+					clawId: input.recording?.clawId,
+					threadId: input.recording?.threadId,
+					originMessageId: input.recording?.originMessageId,
 					createdAt: ts,
 					updatedAt: ts,
 				},

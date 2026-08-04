@@ -10,6 +10,7 @@
  * inside @busyclaw/core via @busyclaw/runtime.
  */
 
+import type { EngineRecording } from "@busyclaw/contracts";
 import {
 	errorMessage,
 	isReservedScope,
@@ -26,6 +27,7 @@ import {
 	type RuntimeResult,
 	RuntimeResult as RuntimeResultSchema,
 	runtimeRunOptionsWithCaller,
+	runtimeRunOptionsWithRecording,
 } from "@busyclaw/runtime";
 import { type } from "arktype";
 import type { ClaimedTask, RuntimeTask, SqlEngineStore } from "./store";
@@ -162,6 +164,7 @@ async function runTask(
 	abortSignal?: RuntimeAbortSignal,
 	deadlineAt?: string,
 	principal?: Principal,
+	recording?: EngineRecording,
 ): Promise<TaskExecution> {
 	// runId scopes effect ids and runtime events to the durable run, across attempts and slices;
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
@@ -221,10 +224,27 @@ async function runTask(
 				ctx: payload.ctx,
 			};
 		}
+		// THE RECORDING IS APPLIED HERE AND NOWHERE ELSE — on the FIRST slice of a run, from the row.
+		//
+		// Not on the resume above, and not on the continue below, because those recover the recording
+		// from their own durable record (`checkpoint.recording`, approval metadata) and both read
+		// `options?.[RUNTIME_RECORDING_OPTION] ?? record.recording` — so an option supplied there wins
+		// SILENTLY over the record. One writer per fact: the run row seeds the first slice, the
+		// records own every resume. Threading it onto all three kinds re-opens an R-M10-shaped fork
+		// with nothing testing it.
+		const withRecording =
+			recording === undefined
+				? withCaller
+				: runtimeRunOptionsWithRecording(withCaller, {
+						clawId: recording.clawId,
+						threadId: recording.threadId,
+						runId: claim.task.runId,
+						userMessageId: recording.originMessageId,
+					});
 		return {
 			outcome: "ran",
 			result: runtimeResult(
-				await runtime.generate(payload.prompt, payload.ctx, withCaller),
+				await runtime.generate(payload.prompt, payload.ctx, withRecording),
 				"runtime.generate result",
 			),
 			ctx: payload.ctx,
@@ -572,6 +592,16 @@ export async function driveClaim(input: {
 			heartbeat.abortSignal,
 			deadlineAt,
 			run?.principal,
+			// From the SAME row read that yielded the principal. The run row is the only record of
+			// where a durable run's output belongs that survives the process, and reading it twice
+			// would be two chances to disagree.
+			run?.clawId !== undefined && run.threadId !== undefined
+				? {
+						clawId: run.clawId,
+						threadId: run.threadId,
+						originMessageId: run.originMessageId,
+					}
+				: undefined,
 		);
 		void runtimeTask.catch(() => undefined);
 		const execution = await Promise.race([

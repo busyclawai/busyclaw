@@ -655,6 +655,12 @@ const listApprovalsInput = ark({
 	}),
 	"status?": approvalStatus.or("undefined"),
 });
+// THE FIRST DOOR IN THE REPO THAT REJECTS UNDECLARED KEYS, and the reason is specific to this one.
+// Everywhere else an unknown field is forwarded into a handler that ignores it. Here the handler
+// forwards its input to `ClawEngineHandle.startRun`, whose type grows as the engine grows — so a
+// field added to `EngineStartRunInput` becomes wire-reachable the moment it exists unless something
+// says otherwise. `recording` is exactly that field: it names the run's authz parent, its redaction
+// container, and the thread its answers are appended to.
 const startRunInput = ark({
 	"ctx?": jsonObjectOrUndefined,
 	prompt: ark("string").configure({
@@ -663,7 +669,7 @@ const startRunInput = ark({
 		},
 	}),
 	"run?": engineRunMetadataOrUndefined,
-});
+}).onUndeclaredKey("reject");
 const continueEngineRunInput = ark({
 	approvalId: ark("string").configure({
 		busyclaw: {
@@ -1974,10 +1980,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// to have asked for does not get to act.
 		startRun: (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
+			// ENUMERATED, never spread — and this is a security property, not a style one. arktype
+			// PRESERVES undeclared keys and `parseClawApiInput` returns its output verbatim, so
+			// `{ ...args }` forwards whatever the caller sent, including fields this input schema has
+			// never heard of. Harmless only while `EngineStartRunInput` has nothing worth forging; the
+			// moment it gains a `recording` (which names the run's authz parent, its redaction
+			// container, and the thread its answers land in) a spread hands all three to the caller
+			// with no schema change anywhere and nothing to notice. The schema rejects undeclared keys
+			// too, and the two are deliberately redundant: one of them is the door, the other survives
+			// somebody adding a field to the engine input without looking here.
 			return requireEngine(context.engine).startRun({
-				...args,
+				prompt: args.prompt,
+				ctx: args.ctx,
 				run: {
-					...args.run,
+					id: args.run?.id,
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
 				},
 			});
@@ -1986,15 +2002,27 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// `requestedBy` on the input at all, so "who stopped my run" cannot be answered wrongly — qm's
 		// sharpest hole is that its stop signal carries no principal, and its Slack path calls the
 		// internal client with no viewer, so anyone in the thread can kill anyone's run.
-		// The body is tokenized into the RECEIVING run's container before it is stored. An engine run's
-		// container is `("run", runId)`, derivable without the run having started — which is what makes
-		// it safe to admit a message to a run that has not been claimed yet.
+		// The body is tokenized into the RECEIVING run's container before it is stored, and which
+		// container that is now depends on the run rather than being assumed.
 		deliverMessage: async (args, caller?: ClawApiCaller) => {
-			// An engine run's container is `("run", runId)` — derivable WITHOUT the run having started,
-			// which is what makes it safe to admit a message to a run nobody has claimed yet. A
-			// deployment with no redaction configured stores the body as it arrived, which is the same
-			// posture every other write here has.
-			const container = { scope: "run", scopeId: args.toRunId };
+			// THE CONTAINER FOLLOWS THE CLAW, when the run has one.
+			//
+			// This used to hardcode `("run", toRunId)` and say so: derivable without the run having
+			// started, which is what made it safe to admit to a run nobody had claimed. True, and it
+			// stops being the right answer the moment a run can be RECORDED — because a recorded run's
+			// own placeholders are minted under `("claw", clawId)`, and the failure of a mismatch is
+			// silent end to end: the door tokenizes into one namespace, the drain hands the tool a
+			// placeholder minted in another, the lookup misses, and the tool receives the literal
+			// `{{pii:…}}` string with nothing thrown anywhere.
+			//
+			// The extra read is not new cost — `admitMessage` already loads this row inside its CAS
+			// loop and already refuses an unknown run. A run with no claw keeps the run container,
+			// which is still correct for it and still derivable before it starts.
+			const target = await context.runs?.get(args.toRunId);
+			const container =
+				target?.clawId !== undefined
+					? { scope: "claw", scopeId: target.clawId }
+					: { scope: "run", scopeId: args.toRunId };
 			const body = context.redaction
 				? await context.redaction.redact(args.body, container)
 				: args.body;
