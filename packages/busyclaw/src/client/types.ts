@@ -152,14 +152,14 @@ export type InferClientAtoms<Plugins extends readonly ClawClientPlugin[]> =
 	FoldPlugins<Plugins, AtomsOf<Plugins[number]>>;
 
 /**
- * Watch a conversation happen — the client half of `claw.api.watchThread`.
+ * Watch something happen — the client half of `watchThread` / `watchRun`.
  *
  * Declared here rather than inferred, because the inference above turns every api method into an RPC
  * call returning `ClawResult`, and this one is not an RPC call: it is an SSE subscription that yields
  * pages until you stop reading. Inferring it would hand callers a type for a method that cannot work.
  */
-export type ClawClientWatchThread = (
-	threadId: string,
+export type ClawClientWatch = (
+	id: string,
 	options?: { since?: string; signal?: AbortSignal },
 ) => AsyncIterable<RunStreamPage>;
 
@@ -172,7 +172,11 @@ export type ClawClientWatchThread = (
  * runtime against a route that does not exist. `watchThread` is then added back with the signature
  * it actually has.
  */
-type NonRoutedApiMethod = "stream" | "sendMessageAndStream" | "watchThread";
+type NonRoutedApiMethod =
+	| "stream"
+	| "sendMessageAndStream"
+	| "watchThread"
+	| "watchRun";
 
 /**
  * The client: the claw's api wrapped for the wire (base methods table-driven, plugin namespaces
@@ -186,7 +190,10 @@ export type ClawClient<
 	ClawLike extends ClawShape,
 	Options extends ClawClientOptions,
 > = Omit<InferClientApi<ClawLike["api"]>, NonRoutedApiMethod> & {
-	watchThread: ClawClientWatchThread;
+	/** Watch a conversation: every run in it, announced as it starts. */
+	watchThread: ClawClientWatch;
+	/** Watch one run — the only view for cron work and subagents, which have no conversation. */
+	watchRun: ClawClientWatch;
 } & InferServerPluginApi<PluginsOf<Options>> &
 	InferClientActions<PluginsOf<Options>> &
 	InferClientAtoms<PluginsOf<Options>> & {

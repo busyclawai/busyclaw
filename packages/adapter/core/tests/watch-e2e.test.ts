@@ -171,6 +171,34 @@ describe("end-to-end: watchThread over SSE", () => {
 	});
 
 	/**
+	 * `GET /runs/:runId/watch` — the same framing on the other subscription unit, and the ONLY wire
+	 * form for a run with no conversation behind it.
+	 */
+	it("frames a single run's chunks on the run endpoint", async () => {
+		const { claw, client, agent, thread } = await watchable();
+		const first = await claw.api.sendMessage(
+			{ clawId: agent.id, threadId: thread.id, message: "one" },
+			{ principal: ALICE },
+		);
+		const second = await claw.api.sendMessage(
+			{ clawId: agent.id, threadId: thread.id, message: "two" },
+			{ principal: ALICE },
+		);
+
+		const seen: RunStreamChunk[] = [];
+		for await (const page of client.watchRun(second.runId)) {
+			seen.push(...page.chunks);
+			if (seen.some((c) => c.kind === "lifecycle" && c.event === "completed")) {
+				break;
+			}
+		}
+		// Narrowed to the run that was asked for, across the wire — the thread's log carries both.
+		expect(seen.length).toBeGreaterThan(0);
+		expect(seen.every((c) => c.runId === second.runId)).toBe(true);
+		expect(seen.some((c) => c.runId === first.runId)).toBe(false);
+	});
+
+	/**
 	 * A DENIAL IS AN HTTP STATUS, not a 200 whose first event says "sorry".
 	 *
 	 * The route awaits `watchThread` before it starts framing precisely so the refusal still has a

@@ -61,10 +61,15 @@ function drainFrames(buffer: string): { frames: Frame[]; rest: string } {
 	return { frames, rest };
 }
 
-export function createWatchThread(options: ClawClientOptions) {
+/**
+ * One SSE reader, pointed at whichever watch endpoint. `watchThread` and `watchRun` differ only in
+ * the path they open — the framing, the cursor, the reconnect rule and the stale rule are identical,
+ * and duplicating them would be duplicating exactly the parts that are easy to get subtly wrong.
+ */
+function createWatch(options: ClawClientOptions, segment: "threads" | "runs") {
 	const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
-	return async function* watchThread(
-		threadId: string,
+	return async function* watch(
+		id: string,
 		watchOptions?: WatchThreadOptions,
 	): AsyncGenerator<RunStreamPage> {
 		let cursor = watchOptions?.since;
@@ -80,7 +85,7 @@ export function createWatchThread(options: ClawClientOptions) {
 				// `EventSource` reconnect and a server needs one code path for both.
 				if (cursor !== undefined) headers.set("last-event-id", cursor);
 				const response = await fetchImpl(
-					`${baseUrl}/threads/${encodeURIComponent(threadId)}/watch`,
+					`${baseUrl}/${segment}/${encodeURIComponent(id)}/watch`,
 					{
 						headers,
 						method: "GET",
@@ -153,4 +158,16 @@ function safeJson(raw: string): unknown {
 	} catch {
 		return null;
 	}
+}
+
+/** Watch a CONVERSATION — every run in it, whoever is driving. The entry point, because a watcher
+ *  knows which conversation they are looking at and does not know run ids. */
+export function createWatchThread(options: ClawClientOptions) {
+	return createWatch(options, "threads");
+}
+
+/** Watch ONE run: cron work and subagents, which have no conversation to subscribe to, plus the
+ *  narrower view of a single turn inside one. */
+export function createWatchRun(options: ClawClientOptions) {
+	return createWatch(options, "runs");
 }

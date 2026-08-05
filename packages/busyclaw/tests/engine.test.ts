@@ -206,6 +206,7 @@ describe("createClaw engine", () => {
 			"unshareResource",
 			"updateClaw",
 			"updateToolCallStatus",
+			"watchRun",
 			"watchThread",
 		]);
 	});

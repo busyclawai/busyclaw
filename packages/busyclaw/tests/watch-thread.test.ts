@@ -276,6 +276,80 @@ describe("watchThread", () => {
 		).toBe(true);
 	});
 
+	/**
+	 * THE CASE `watchThread` CANNOT SERVE. A run started through `startRun` has no thread — cron
+	 * work, a subagent — so there is no conversation to subscribe to and the run is its own
+	 * subscription. Without `watchRun` a scheduled job is unwatchable by construction.
+	 */
+	it("watches a run that has no thread at all", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = withPrincipal(
+			createClaw({
+				database: db,
+				model: textModel("the scheduled answer"),
+				redaction: { redactor },
+				secondaryStorage: memorySecondaryStorage(),
+			}),
+			OWNER,
+		);
+		// No claw, no thread — `startRun` is the door cron work comes through.
+		const started = await claw.api.startRun({ prompt: "nightly report" });
+		await claw.$context.engine?.work?.();
+
+		const chunks = await collectUntil(
+			await claw.api.watchRun({ runId: started.id }),
+			(c) => c.kind === "lifecycle" && c.event === "completed",
+		);
+		expect(chunks.some((c) => c.kind === "run.started")).toBe(true);
+		expect(
+			chunks.some(
+				(c) => c.kind === "text" && c.text.includes("the scheduled answer"),
+			),
+		).toBe(true);
+		expect(chunks.every((c) => c.runId === started.id)).toBe(true);
+	});
+
+	/**
+	 * A CONVERSATIONAL run writes into its THREAD's log — that is what lets a watcher who knows only
+	 * the conversation find it — so watching ONE such run means reading that log and keeping this
+	 * run's chunks. Not a privilege boundary (both climb to the same claw); it is what the method's
+	 * name promises.
+	 */
+	it("narrows a thread's log to one run when asked for that run", async () => {
+		const { claw, agent, thread } = await watchedClaw();
+		const owner = withPrincipal(claw, OWNER).api;
+		const first = await owner.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "one",
+		});
+		const second = await owner.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "two",
+		});
+
+		const chunks = await collectUntil(
+			await owner.watchRun({ runId: second.runId }),
+			(c) => c.kind === "lifecycle" && c.event === "completed",
+		);
+		expect(chunks.length).toBeGreaterThan(0);
+		expect(chunks.every((c) => c.runId === second.runId)).toBe(true);
+		expect(chunks.some((c) => c.runId === first.runId)).toBe(false);
+	});
+
+	it("denies a stranger a run they cannot read", async () => {
+		const { claw, agent, thread } = await watchedClaw();
+		const sent = await withPrincipal(claw, OWNER).api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		await expect(
+			claw.api.watchRun({ runId: sent.runId }, STRANGER),
+		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+	});
+
 	/** No stream configured is a CONFIGURATION answer, not an empty subscription — which would be
 	 *  indistinguishable from a conversation where nothing is happening. */
 	it("refuses loudly when the deployment has no run stream", async () => {

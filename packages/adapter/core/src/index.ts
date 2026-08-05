@@ -6,6 +6,7 @@ import type {
 	BusyclawRouteRequest,
 	ClawApiCaller,
 	ClawResponseEnvelope,
+	RunStreamPage,
 	ServerSentEvent,
 } from "@busyclaw/contracts";
 import {
@@ -678,37 +679,69 @@ function baseRoutes(
 					} satisfies ResolvedRoute,
 				]
 			: []),
-		watchThreadRoute(),
+		watchRoute({
+			id: "api:watchThread",
+			path: "/threads/:threadId/watch",
+			param: "threadId",
+			call: (claw, id, since, caller) =>
+				claw.api.watchThread(
+					{ threadId: id, ...(since ? { since } : {}) },
+					caller,
+				),
+		}),
+		// The no-thread case — cron work, a subagent — and the narrower view of one turn inside a
+		// conversation. Same framing, same cursor, different subscription unit.
+		watchRoute({
+			id: "api:watchRun",
+			path: "/runs/:runId/watch",
+			param: "runId",
+			call: (claw, id, since, caller) =>
+				claw.api.watchRun({ runId: id, ...(since ? { since } : {}) }, caller),
+		}),
 		...apiRoutes(),
 	];
 }
 
 /**
- * `GET /threads/:threadId/watch` — the wire form of `claw.api.watchThread`.
+ * The wire form of a watch: `GET …/watch` framing whatever the api method yields.
  *
- * A BRIDGE, not a second door. It resolves nothing and decides nothing: the api method runs the same
- * PEP check it runs in-process, so a stranger is denied here for exactly the reason they are denied
- * there, and every authorization property of watching stays testable with no server.
+ * A BRIDGE, not a second door. It resolves nothing and decides nothing — the api method runs the
+ * same PEP check it runs in-process, so a stranger is denied here for exactly the reason they are
+ * denied there, and every authorization property of watching stays testable with no server.
  *
  * `Last-Event-ID` is read from the request and passed as the cursor, which is what makes the
  * browser's own reconnect resume rather than replay. An explicit `?since=` wins over it, for a client
  * that tracks its own position (a mobile app, a poller, anything that is not an `EventSource`).
  *
- * Hand-written rather than generated from the route table because `watchThread` is deliberately
- * excluded from it — a live stream has no RPC envelope, which is the same reason `stream` and
- * `sendMessageAndStream` are excluded.
+ * Hand-written rather than generated from the route table because the watch methods are deliberately
+ * excluded from it — a live stream has no RPC envelope, the same reason `stream` and
+ * `sendMessageAndStream` are excluded. Parameterized so the thread and run forms cannot drift on the
+ * framing, which is the part that is easy to get subtly wrong and invisible when you do.
  */
-function watchThreadRoute(): ResolvedRoute {
+function watchRoute(spec: {
+	id: string;
+	path: string;
+	param: string;
+	call: (
+		claw: Claw,
+		id: string,
+		since: string | undefined,
+		caller: ClawApiCaller | undefined,
+	) => Promise<AsyncIterable<RunStreamPage>>;
+}): ResolvedRoute {
 	return {
-		id: "api:watchThread",
+		id: spec.id,
 		method: "GET",
-		path: "/threads/:threadId/watch",
+		path: spec.path,
 		handler: async ({ request, claw: routeClaw, caller, params }) => {
-			const threadId = params["threadId"];
-			if (threadId === undefined || threadId === "") {
+			const id = params[spec.param];
+			if (id === undefined || id === "") {
 				return {
 					status: 404,
-					body: { ok: false, error: { message: "no thread id in the path" } },
+					body: {
+						ok: false,
+						error: { message: `no ${spec.param} in the path` },
+					},
 				};
 			}
 			const url = new URL(request.url);
@@ -719,10 +752,7 @@ function watchThreadRoute(): ResolvedRoute {
 			// AWAITED HERE, OUTSIDE THE STREAM, so a denial is an HTTP 401/403 with a JSON body rather
 			// than a 200 whose first event happens to be an error. Once the status line is written the
 			// refusal can only be narrated, never returned.
-			const pages = await routeClaw.api.watchThread(
-				{ threadId, ...(since ? { since } : {}) },
-				caller,
-			);
+			const pages = await spec.call(routeClaw, id, since, caller);
 			return {
 				sse: (async function* frames() {
 					for await (const page of pages) {

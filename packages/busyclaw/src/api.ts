@@ -77,6 +77,7 @@ import {
 	jsonObject,
 	parsePrincipal,
 	RESERVED_CONTEXT_PREFIX,
+	runStreamKey,
 	SYSTEM_ANONYMOUS,
 	stateError,
 	threadStreamKey,
@@ -347,6 +348,25 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		since?: string;
 	}) => Promise<AsyncIterable<RunStreamPage>>;
 
+	/**
+	 * Watch ONE run — the case `watchThread` cannot serve, and the narrower view when it could.
+	 *
+	 * A run with no thread has no conversation to subscribe to: cron work, a subagent. Nobody is
+	 * looking at a chat window, so the run is its own subscription and this is the only way to see it
+	 * happen. An ops view watching a scheduled job is the shape.
+	 *
+	 * For a run that DOES have a thread it reads that thread's log and returns only this run's
+	 * chunks. Not a privilege boundary — a conversational run and its thread both climb to the same
+	 * claw, so anyone who can watch one can watch the other — but it is what the method's name
+	 * promises, and a caller asking for one turn should not have to filter a whole conversation.
+	 *
+	 * Authorized `read` on the RUN, whose loader climbs to the claw exactly as `getRun`'s does.
+	 */
+	watchRun: (input: {
+		runId: string;
+		since?: string;
+	}) => Promise<AsyncIterable<RunStreamPage>>;
+
 	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
 	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
 	 *  no redaction configured): a no-op "success" would be false comfort. */
@@ -536,7 +556,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
  *  adding a name here fails the build until that name is declared there. */
 export type ClawApiMethod = Exclude<
 	keyof ClawApi,
-	"stream" | "sendMessageAndStream" | "watchThread"
+	"stream" | "sendMessageAndStream" | "watchThread" | "watchRun"
 >;
 /** Alias of the shared {@link EndpointHttpMethod} so the flat api and plugin namespaces cannot
  *  disagree on what a verb may be. */
@@ -1325,6 +1345,10 @@ export const NON_ROUTED_API_AUTHZ = {
 	// after the fact. The thread loader inherits the claw's grants, so sharing a claw shares the
 	// ability to watch its threads — and a stranger is denied here exactly as they are there.
 	watchThread: on("read", "thread", "threadId"),
+	// `read` on the RUN, the same declaration `getRun` carries. The run loader climbs to `run.clawId`,
+	// so a claw's owner and its grantees reach it and a stranger does not — including for a cron run,
+	// which has no thread to have been shared through.
+	watchRun: on("read", "run", "runId"),
 } satisfies {
 	readonly [Method in Exclude<keyof ClawApi, ClawApiMethod>]: ApiRouteAuthz<
 		ClawApiMethodInput<Method & ClawApiMethod>
@@ -1675,6 +1699,74 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		}
 	};
 
+	/**
+	 * The one subscription body, shared by `watchThread` and `watchRun` so the two cannot drift on
+	 * the things that are easy to get subtly different: when to stop, when to sleep, and what a stale
+	 * page means.
+	 *
+	 * `onlyRun` filters to a single run's chunks — for `watchRun` over a conversational thread, whose
+	 * log carries every run in that conversation.
+	 */
+	const watchStreamKey = (
+		key: string,
+		since: string | undefined,
+		onlyRun?: string,
+	): AsyncIterable<RunStreamPage> => {
+		const stream = context.runStream;
+		if (stream === undefined) {
+			// LOUD. An empty stream is indistinguishable from a quiet conversation, so a deployment
+			// with no place to put deltas would look like one where nothing is happening — for as
+			// long as it took somebody to go and check the transcript.
+			throw configurationError(
+				"this deployment has no run stream, so nothing can be watched live",
+				{
+					reason:
+						"pass `runStream`, or a `secondaryStorage` for it to be defaulted from",
+				},
+			);
+		}
+		const keep = (page: RunStreamPage): RunStreamPage =>
+			onlyRun === undefined
+				? page
+				: { ...page, chunks: page.chunks.filter((c) => c.runId === onlyRun) };
+		return (async function* watch() {
+			// PUSH when the backend has it. `watch` is the member a real broker fills in; the poll
+			// below is the fallback for a substrate that can only be asked.
+			if (stream.watch !== undefined) {
+				for await (const page of stream.watch(key, since)) {
+					const kept = keep(page);
+					if (kept.chunks.length > 0 || kept.stale) yield kept;
+					if (kept.stale) return;
+				}
+				return;
+			}
+			let cursor = since;
+			while (true) {
+				const page = await stream.read(key, cursor);
+				// ADVANCED FROM THE UNFILTERED PAGE. Filtering decides what a caller SEES, never
+				// where the reader is — taking the cursor from the filtered copy would re-read the
+				// same offsets forever whenever this run had nothing in them.
+				cursor = page.cursor;
+				const kept = keep(page);
+				// A STALE page is the last thing this yields. Continuing would serve chunks whose
+				// offsets no longer mean what the client's cursor thinks — see `RunStreamPage`.
+				if (page.stale) {
+					yield kept;
+					return;
+				}
+				if (kept.chunks.length > 0) yield kept;
+				// An EMPTY page means the log is caught up; sleep. A page that had chunks — even ones
+				// this filter dropped — means there may be more waiting, so go straight back rather
+				// than sleeping through a backlog a late joiner is trying to catch up on.
+				if (page.chunks.length === 0) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, WATCH_POLL_INTERVAL_MS),
+					);
+				}
+			}
+		})();
+	};
+
 	const sendResultOf = (
 		outcome: EngineStartRunResult,
 		runId: string,
@@ -1923,12 +2015,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// ANNOUNCED BEFORE THE WORK, so a watcher already looking at this thread sees the turn
 			// begin rather than discovering it when the answer lands. This is also the chunk that
 			// makes discovery free: a watcher never has to learn run ids from anywhere else.
-			await emitChunk(args.threadId, {
-				kind: "run.started",
-				runId,
-				attempt: 1,
-				...(caller?.principal !== undefined ? { by: caller.principal } : {}),
-			});
 			// THROUGH THE ENGINE when there is one, which is every database-backed claw (D14). The
 			// turn becomes a durable run: `getRun` answers for it, `controlRun` from a second tab
 			// reaches it, and a driver that dies leaves a row a successor can claim — none of which
@@ -1987,12 +2073,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		async sendMessageAndStream(args, caller?: ClawApiCaller) {
 			const { runId, userMessage, runOptions, startInput } =
 				await openConversationalRun(args, caller);
-			await emitChunk(args.threadId, {
-				kind: "run.started",
-				runId,
-				attempt: 1,
-				...(caller?.principal !== undefined ? { by: caller.principal } : {}),
-			});
 			if (context.engine === undefined) {
 				const stream = context.runtime.stream(
 					args.message,
@@ -2060,44 +2140,25 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		async watchThread({ threadId, since }) {
-			const stream = context.runStream;
-			if (stream === undefined) {
-				// LOUD. An empty stream is indistinguishable from a quiet conversation, so a
-				// deployment with no place to put deltas would look like one where nothing is
-				// happening — for as long as it took somebody to go and check the transcript.
-				throw configurationError(
-					"this deployment has no run stream, so a conversation cannot be watched live",
-					{
-						reason:
-							"pass `runStream`, or a `secondaryStorage` for it to be defaulted from",
-					},
-				);
+			return watchStreamKey(threadStreamKey(threadId), since);
+		},
+
+		async watchRun({ runId, since }) {
+			// WHICH LOG this run's chunks are in, answered from the row rather than assumed. A
+			// conversational run writes into its THREAD's log — that is what lets a watcher who knows
+			// only the conversation see it — so watching one run means reading that log and keeping
+			// this run's chunks. A run with no thread has a log of its own and nothing to filter.
+			const run = await requireRuns(context.runs).get(runId);
+			if (!run) {
+				// The PEP already denies an unresolvable run, so reaching here means the row went
+				// away between the decision and this read. Say which run rather than returning an
+				// empty stream that reads like a quiet one.
+				throw stateError("no such run to watch", { runId });
 			}
-			const key = threadStreamKey(threadId);
-			// PUSH when the backend has it. `watch` is the member a real broker fills in; everything
-			// below is the fallback for a substrate that can only be asked.
-			if (stream.watch !== undefined) return stream.watch(key, since);
-			return (async function* poll() {
-				let cursor = since;
-				while (true) {
-					const page = await stream.read(key, cursor);
-					cursor = page.cursor;
-					// A STALE page is the last thing this yields. Continuing would serve chunks whose
-					// offsets no longer mean what the client's cursor thinks — see `RunStreamPage`.
-					if (page.stale) {
-						yield page;
-						return;
-					}
-					if (page.chunks.length > 0) yield page;
-					// A full page means there is more waiting; go straight back rather than sleeping
-					// through a backlog a late joiner is trying to catch up on.
-					if (page.chunks.length === 0) {
-						await new Promise((resolve) =>
-							setTimeout(resolve, WATCH_POLL_INTERVAL_MS),
-						);
-					}
-				}
-			})();
+			const threadId = run.threadId;
+			return threadId !== undefined
+				? watchStreamKey(threadStreamKey(threadId), since, runId)
+				: watchStreamKey(runStreamKey(runId), since);
 		},
 
 		async forgetSubject(

@@ -27,7 +27,7 @@ import type {
 	ClawShape,
 	DefaultClawShape,
 } from "./types";
-import { createWatchThread } from "./watch";
+import { createWatchRun, createWatchThread } from "./watch";
 
 export type {
 	ClawQueryAtomConfig,
@@ -216,6 +216,8 @@ export function createClawClient<
 	// `GET /watch-thread` for it. Claimed like any other key so a plugin cannot shadow it.
 	claim("watchThread", "claw.api");
 	known.watchThread = createWatchThread(resolved);
+	claim("watchRun", "claw.api");
+	known.watchRun = createWatchRun(resolved);
 
 	// Everything unresolved routes by convention: `client.secrets.set(...)` →
 	// `POST /secrets/set`, nested groups deepen the path, a plugin `pathMethods` entry overrides

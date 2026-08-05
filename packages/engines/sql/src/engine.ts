@@ -17,7 +17,9 @@ import type {
 import {
 	drainWork as drainEngineWork,
 	isConflict,
+	runStreamKey,
 	stateError,
+	threadStreamKey,
 } from "@busyclaw/contracts";
 import type { Runtime, RuntimeResult } from "@busyclaw/runtime";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -191,6 +193,31 @@ function createSqlEngineHandle(input: {
 							});
 				return { run, claim };
 			});
+			// ANNOUNCED HERE, not at the door, for the reason the text chunks moved: one writer per
+			// fact. The door only knows about conversational turns, so a run started through
+			// `startRun` — cron work, a subagent — would never be announced at all, and its watcher
+			// would see text arrive with nothing saying whose turn it was or when it began.
+			//
+			// Before the drive, so a watcher already attached sees the turn open rather than
+			// discovering it when the first delta lands. Advisory like every write to this buffer.
+			if (input.config.runStream !== undefined) {
+				const key =
+					startInput.recording?.threadId !== undefined
+						? threadStreamKey(startInput.recording.threadId)
+						: runStreamKey(opened.run.id);
+				try {
+					await input.config.runStream.append(key, {
+						kind: "run.started",
+						runId: opened.run.id,
+						attempt: 1,
+						...(startInput.run?.principal !== undefined
+							? { by: startInput.run.principal }
+							: {}),
+					});
+				} catch {
+					// A run whose start nobody could announce still runs.
+				}
+			}
 			if (startInput.drive === undefined) return { id: opened.run.id };
 			// Losing a claim on a task nobody else could see yet means the run went terminal between
 			// create and claim — a `controlRun` arriving in that window. Report the winner rather than
