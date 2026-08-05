@@ -7,6 +7,8 @@
 //   chunk.ts             how a chunk becomes bytes and back — shared, so two backends cannot
 //                        disagree about what an unreadable entry means
 //   polling.ts           `read` → a subscription, for the backends that cannot push
+//   database.ts          over the storage Adapter — the backing of last resort, so a claw with only
+//                        a `database` can still be watched
 //   kv.ts                over any `SecondaryStorage` — the default whenever a host has a KV
 //   redis.ts             over Redis Streams — the one that can actually push
 //
@@ -23,6 +25,7 @@ export {
 	DEFAULT_BATCH_MS,
 } from "./batch";
 export { decodeChunk, encodeChunk } from "./chunk";
+export { type DatabaseStreamOptions, databaseStream } from "./database";
 export { secondaryStorageStream } from "./kv";
 export {
 	DEFAULT_POLL_INTERVAL_MS,

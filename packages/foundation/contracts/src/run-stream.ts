@@ -16,6 +16,7 @@
 // discovery problem one level down: a watcher is looking at a CONVERSATION and does not know run
 // ids, and a `run.started` chunk cannot live in a log you need the run id to open.
 
+import { entity, field } from "./entity";
 import type { Principal } from "./governance/principal";
 
 /** What ended a run's participation in the stream. `superseded` is not terminal — it says a NEW
@@ -142,3 +143,55 @@ export function threadStreamKey(threadId: string): string {
 export function runStreamKey(runId: string): string {
 	return `run:${runId}`;
 }
+
+// ── THE DATABASE BACKING, for a deployment with no KV and no Redis ───────────────────────────────
+//
+// A CORE table rather than an engine's, for the same reason `run` is: whatever schedules the work,
+// somebody may be watching it. It is the only backing that needs a schema at all — the KV and Redis
+// implementations bring their own storage — and it exists so a claw configured with `{ model,
+// database }` and nothing else can still be watched, instead of live watching being a feature you
+// discover you cannot have.
+//
+// A TRANSPORT BUFFER IN A DURABLE STORE is a contradiction worth naming: rows here are swept by age,
+// never read after their run's turn lands in the transcript, and carry the same standing invariant
+// as every other backing — this must never become the read path for a finished run. It is a table
+// because that is the only storage this deployment has, not because these are records.
+
+export const runStreamChunkFields = {
+	// TIME-ORDERED and unique, so `id > cursor` is both the resume test and the sort — no second
+	// column to keep in step, and no clock comparison that two writers in one millisecond can tie.
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
+	/** `thread:<id>` or `run:<id>` — the subscription this chunk belongs to. */
+	streamKey: field.string({ required: true, index: true, immutable: true }),
+	/** Monotone WITHIN a key, allocated by a compare-and-set retry against the unique below. Two
+	 *  runs in one thread write concurrently, so an unfenced `max + 1` would collide. */
+	seq: field.number({ required: true, immutable: true }),
+	/**
+	 * The chunk, as the same JSON every other backing stores.
+	 *
+	 * `pii: "possible"` because it is: streamed text carries the transcript's placeholders, and the
+	 * residual `createStreamGuard` documents means a span split across a held boundary can arrive
+	 * untokenized. Declared so a reader of this schema is not told it is clean.
+	 */
+	chunk: field.string({ required: true, pii: "possible", immutable: true }),
+	/** Swept on, and filtered on at read — an unswept row is never served. */
+	createdAt: field.string({ required: true, index: true, immutable: true }),
+} as const;
+
+export const runStreamChunkEntity = entity(
+	"run_stream_chunk",
+	runStreamChunkFields,
+	{
+		// The CAS target. Without it two concurrent writers both read the same `max(seq)` and both
+		// insert it, and one chunk is silently lost — the failure the KV backing avoids by having
+		// `increment` and this one has to earn.
+		uniques: [["streamKey", "seq"]],
+	},
+);
+
+export const runStreamSchema = { ...runStreamChunkEntity.storage };

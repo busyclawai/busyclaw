@@ -439,24 +439,42 @@ describe("watchThread", () => {
 		expect(serialized).not.toContain("output");
 	});
 
-	/** No stream configured is a CONFIGURATION answer, not an empty subscription — which would be
-	 *  indistinguishable from a conversation where nothing is happening. */
-	it("refuses loudly when the deployment has no run stream", async () => {
+	/**
+	 * LIVE WATCHING IS THE DEFAULT, not something a deployment discovers it lacks.
+	 *
+	 * NO `secondaryStorage` here and no `runStream` — just `{ model, database }`, which is the shape
+	 * of almost every first deployment. This used to refuse: the right answer to "you configured
+	 * nothing" and the wrong one to "you configured a database". The run stream now falls back to
+	 * the storage already in hand.
+	 */
+	it("watches a claw configured with nothing but a model and a database", async () => {
 		const { db, redactor } = durableRedactor();
 		const claw = withPrincipal(
 			createClaw({
 				database: db,
-				model: textModel("hi"),
+				model: textModel("the answer"),
 				redaction: { redactor },
 			}),
 			OWNER,
 		);
-		const agent = await claw.api.createClaw({ name: "unwatched" });
+		const agent = await claw.api.createClaw({ name: "plain" });
 		const thread = await claw.api.createThread({ clawId: agent.id });
 
-		await expect(claw.api.watchThread({ threadId: thread.id })).rejects.toThrow(
-			/no run stream/,
+		const sent = await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+
+		const chunks = await collectUntil(
+			await claw.api.watchThread({ threadId: thread.id }),
+			(c) => c.kind === "lifecycle" && c.event === "completed",
 		);
+		expect(chunks.some((c) => c.kind === "run.started")).toBe(true);
+		expect(
+			chunks.some((c) => c.kind === "text" && c.text.includes("the answer")),
+		).toBe(true);
+		expect(chunks.every((c) => c.runId === sent.runId)).toBe(true);
 	});
 
 	/** The buffer is ADVISORY: a stream that throws on every write must not be able to fail a turn. */

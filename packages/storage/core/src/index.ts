@@ -377,9 +377,11 @@ export { asConflict, isUniqueViolation } from "./conflict";
 export {
 	type BatchedStreamOptions,
 	batchedStream,
+	type DatabaseStreamOptions,
 	DEFAULT_BATCH_CHARS,
 	DEFAULT_BATCH_MS,
 	DEFAULT_POLL_INTERVAL_MS,
+	databaseStream,
 	decodeChunk,
 	encodeChunk,
 	type PollingWatchOptions,

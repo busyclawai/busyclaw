@@ -43,6 +43,7 @@ import {
 import { buildSecrets, env } from "@busyclaw/secrets";
 import {
 	batchedStream,
+	databaseStream,
 	entityAdapter,
 	secondaryStorageStream,
 	verifiedAdapter,
@@ -703,11 +704,24 @@ export function createClaw<
 	// process holds the lease produces the chunks, and for the second slice of a parked turn that is
 	// the cron drain rather than any door. `secondaryStorageStream` refuses a KV with no `increment`
 	// loudly here at assembly, rather than by dropping chunks under two concurrent runs much later.
+	// EXPLICIT, then the KV, then the database this claw already has. The last rung is what makes
+	// live watching the DEFAULT rather than something a deployment discovers it lacks: a claw
+	// configured with `{ model, database }` and nothing else used to get no stream at all, and
+	// `watchThread` refused — the right answer to "you configured nothing" and the wrong one to "you
+	// configured a database", which is the shape of almost every first deployment.
+	//
+	// NOT A PUBLIC KNOB. There is nothing to choose: it is the storage already in hand, and a host
+	// that wants better hands over a `secondaryStorage` or a `runStream` and is served by the rung
+	// above. The database backing pays a read and sometimes a retry per write, where a KV allocates
+	// its offset atomically and Redis allocates its own ids — which is the honest reason to upgrade,
+	// stated where the fallback is chosen.
 	const resolvedRunStream =
 		config.runStream ??
 		(config.secondaryStorage
 			? secondaryStorageStream(config.secondaryStorage)
-			: undefined);
+			: adapter
+				? databaseStream(adapter)
+				: undefined);
 	// BATCHED BY DEFAULT, and wrapping is the right layer for it: every producer already writes
 	// through `append`, so all of them coalesce and none of them learn about it. A model emits
 	// 200-500 deltas a turn and one write each is ten times what the design budgets (D17). Applied to

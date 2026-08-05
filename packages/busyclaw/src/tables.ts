@@ -35,6 +35,7 @@ import {
 	runEventFields,
 	runFields,
 	runMessageFields,
+	runStreamChunkFields,
 	specRegistrationEntity,
 	specRegistrationFields,
 	threadFields,
@@ -126,6 +127,11 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	// `ClawEngineFactory.models` instead — see `getBusyclawModels`.
 	run: runFields,
 	run_event: runEventFields,
+	// The live-delta buffer, for a deployment whose only storage is this database. A transport
+	// buffer in a durable store — swept by age, never the read path for a finished run — and core
+	// rather than an engine's for the same reason `run` is: whatever schedules the work, somebody
+	// may be watching it.
+	run_stream_chunk: runStreamChunkFields,
 	// The run inbox. CORE, not the engine's: the drain lives inside the runtime loop, and two
 	// plugin-owned mailboxes would mean two drains at one site.
 	run_message: runMessageFields,

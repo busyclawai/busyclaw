@@ -510,7 +510,13 @@ export type {
 	RunStreamPage,
 	RunStreamPort,
 } from "./run-stream";
-export { runStreamKey, threadStreamKey } from "./run-stream";
+export {
+	runStreamChunkEntity,
+	runStreamChunkFields,
+	runStreamKey,
+	runStreamSchema,
+	threadStreamKey,
+} from "./run-stream";
 // ── the opaque access boundary every scope-keyed core row carries ──
 export type { ScopeRef } from "./scope";
 export {

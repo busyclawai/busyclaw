@@ -1707,6 +1707,11 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// LOUD. An empty stream is indistinguishable from a quiet conversation, so a deployment
 			// with no place to put deltas would look like one where nothing is happening — for as
 			// long as it took somebody to go and check the transcript.
+			//
+			// NEARLY UNREACHABLE NOW, and kept anyway. The stream falls back to the claw's own
+			// database, so reaching here means a claw with no database at all — which has no threads
+			// and no durable runs either, so the PEP denies before this. It stays as the honest
+			// answer if that ever stops being true.
 			throw configurationError(
 				"this deployment has no run stream, so nothing can be watched live",
 				{
