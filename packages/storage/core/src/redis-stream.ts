@@ -7,33 +7,72 @@
 // which is the one capability `SecondaryStorage` cannot express and the reason a host would reach
 // for Redis at all.
 //
-// NO REDIS CLIENT DEPENDENCY, on purpose. It takes a function that sends one command and returns the
-// raw reply, which every client already has — ioredis `call`, node-redis `sendCommand`, Upstash's
-// REST client. That keeps this package free of a dependency it would then have to version against
-// three ecosystems, and it means a host on a client nobody here has heard of still works:
+// NO REDIS CLIENT DEPENDENCY, on purpose — so hand it the client you already have:
 //
 //   import Redis from "ioredis";
 //   const redis = new Redis(process.env.REDIS_URL);
-//   const blocking = redis.duplicate();            // see `blockingSend` — this one is REQUIRED for push
+//
 //   createClaw({
 //     runStream: redisStream({
-//       send: (args) => redis.call(...(args as [string, ...string[]])),
-//       blockingSend: (args) => blocking.call(...(args as [string, ...string[]])),
+//       client: redis,
+//       blocking: redis.duplicate(),   // required for PUSH; see `blocking`
 //     }),
 //   });
 //
-//   // node-redis v4+
-//   runStream: redisStream({ send: (args) => client.sendCommand([...args]) })
+// node-redis, Upstash and anything else with `call` or `sendCommand` work the same way. This package
+// does not depend on any of them: it duck-types the one method it needs, which keeps it from having
+// to version against three ecosystems and means a client nobody here has heard of still works. If
+// yours is stranger than that, pass a function instead of an object — `client` accepts either.
 
 import type {
 	RunStreamChunk,
 	RunStreamPage,
 	RunStreamPort,
 } from "@busyclaw/contracts";
+import { configurationError } from "@busyclaw/contracts";
 
 /** Send one Redis command and return its raw reply. Arrays and bulk strings come back as this
  *  client's own representation; the parsing below accepts strings, Buffers and nested arrays. */
 export type RedisCommand = (args: readonly string[]) => Promise<unknown>;
+
+/**
+ * Any Redis client, structurally: ioredis exposes `call(command, ...args)`, node-redis and Upstash
+ * expose `sendCommand(args)`. Typed with `never[]` parameters deliberately — this is somebody else's
+ * client and its real signatures involve branded argument arrays and Buffer unions that would not
+ * match a hand-written shape. Pinning it loosely here means ONE cast, inside this file, instead of
+ * every caller writing their own at the boundary.
+ */
+export type RedisLike = {
+	call?: (...args: never[]) => unknown;
+	sendCommand?: (...args: never[]) => unknown;
+};
+
+/** Reduce whatever the host handed over to the single operation this port needs. */
+function resolveSender(source: RedisLike | RedisCommand): RedisCommand {
+	if (typeof source === "function") return source;
+	if (typeof source.call === "function") {
+		const call = source.call.bind(source) as (
+			...args: string[]
+		) => Promise<unknown>;
+		return (args) => call(...args);
+	}
+	if (typeof source.sendCommand === "function") {
+		const sendCommand = source.sendCommand.bind(source) as (
+			args: string[],
+		) => Promise<unknown>;
+		return (args) => sendCommand([...args]);
+	}
+	// LOUD, at assembly. A client this cannot drive would otherwise fail on the first delta — which
+	// is to say inside an advisory write that swallows its own errors, so the symptom would be a
+	// watcher that silently sees nothing rather than a deployment that refuses to start.
+	throw configurationError(
+		"this redis client has neither `call` nor `sendCommand`",
+		{
+			reason:
+				"pass an ioredis/node-redis client, or a function taking a string[] command and returning its reply",
+		},
+	);
+}
 
 /** The field XADD stores the chunk under. One field, one JSON document: the chunk is read whole or
  *  not at all, so splitting it across fields would buy nothing and cost a schema. */
@@ -44,18 +83,20 @@ const FIELD = "c";
 const FROM_START = "0";
 
 export type RedisStreamOptions = {
-	send: RedisCommand;
+	/** Your Redis client — ioredis, node-redis, Upstash, anything with `call` or `sendCommand`. A
+	 *  function taking a `string[]` command works too, for a client shaped like none of those. */
+	client: RedisLike | RedisCommand;
 	/**
-	 * A SECOND connection, for blocking reads. Present ⇒ this port exposes `watch` and a subscriber
-	 * gets push; absent ⇒ no `watch`, and callers fall back to polling `read`.
+	 * A SECOND client, for blocking reads. Present ⇒ this port exposes `watch` and subscribers get
+	 * PUSH; absent ⇒ no `watch`, and `watchThread` falls back to polling.
 	 *
 	 * SEPARATE BY NECESSITY, not by preference. `XREAD BLOCK` holds the connection until something
 	 * arrives, so issuing it on the connection the rest of the app shares would stall every other
 	 * command behind it — a stall that looks like the database being slow and has nothing to do with
-	 * the database. Requiring a distinct sender makes that a decision the host takes on purpose
-	 * (`redis.duplicate()`) rather than a production incident it discovers.
+	 * the database. Requiring a distinct client makes `redis.duplicate()` a decision the host takes
+	 * on purpose rather than a production incident it discovers.
 	 */
-	blockingSend?: RedisCommand;
+	blocking?: RedisLike | RedisCommand;
 	/** How long a stream key lives after its last write, in seconds. Refreshed on every append —
 	 *  unlike the KV counter, whose window has to be born-once, there is nothing here that restarts
 	 *  numbering, so keeping a live conversation's log alive is safe. */
@@ -153,7 +194,7 @@ function parseXRead(reply: unknown): {
  * scheme of its own.
  */
 export function redisStream(options: RedisStreamOptions): RunStreamPort {
-	const send = options.send;
+	const send = resolveSender(options.client);
 	const ttl = options.ttlSeconds ?? DEFAULTS.ttlSeconds;
 	const maxLen = options.maxLen ?? DEFAULTS.maxLen;
 	const count = options.maxChunksPerRead ?? DEFAULTS.maxChunksPerRead;
@@ -230,8 +271,8 @@ export function redisStream(options: RedisStreamOptions): RunStreamPort {
 	// PUSH, only when the host gave this port a connection it may block. Without one the member is
 	// absent, and `watchThread` falls back to polling — a documented degradation rather than a
 	// blocking command quietly issued on the connection the rest of the app is using.
-	if (options.blockingSend !== undefined) {
-		const blocking = options.blockingSend;
+	if (options.blocking !== undefined) {
+		const blocking = resolveSender(options.blocking);
 		port.watch = async function* watch(key, cursor) {
 			let at = cursor ?? FROM_START;
 			while (true) {

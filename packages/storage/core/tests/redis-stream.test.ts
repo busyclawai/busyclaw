@@ -69,7 +69,7 @@ function fakeRedis() {
 describe("redisStream", () => {
 	it("reads back what was appended, and a cursor resumes rather than replays", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send });
+		const stream = redisStream({ client: redis.send });
 		await stream.append("thread:t1", text("r1", "one "));
 		await stream.append("thread:t1", text("r1", "two"));
 
@@ -92,7 +92,7 @@ describe("redisStream", () => {
 	 *  right for free because XADD allocates the id. */
 	it("keeps every chunk when two runs write the same log concurrently", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send });
+		const stream = redisStream({ client: redis.send });
 		await Promise.all([
 			...Array.from({ length: 15 }, () =>
 				stream.append("thread:t1", text("alice", "a")),
@@ -114,7 +114,7 @@ describe("redisStream", () => {
 	 */
 	it("extends the key's life on each write", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send, ttlSeconds: 60 });
+		const stream = redisStream({ client: redis.send, ttlSeconds: 60 });
 		await stream.append("thread:t1", text("r1", "one"));
 		await stream.append("thread:t1", text("r1", "two"));
 
@@ -126,7 +126,7 @@ describe("redisStream", () => {
 	 *  do not serve whatever appears next under numbers that no longer mean the same thing. */
 	it("reports stale when the stream is gone from under a cursor", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send });
+		const stream = redisStream({ client: redis.send });
 		await stream.append("thread:t1", text("r1", "one"));
 		const page = await stream.read("thread:t1");
 
@@ -141,7 +141,7 @@ describe("redisStream", () => {
 	 *  end every idle watcher. */
 	it("does not call a caught-up reader stale", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send });
+		const stream = redisStream({ client: redis.send });
 		await stream.append("thread:t1", text("r1", "one"));
 		const page = await stream.read("thread:t1");
 		const idle = await stream.read("thread:t1", page.cursor);
@@ -150,7 +150,7 @@ describe("redisStream", () => {
 
 	it("pages a long answer rather than returning all of it at once", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send, maxChunksPerRead: 4 });
+		const stream = redisStream({ client: redis.send, maxChunksPerRead: 4 });
 		for (let i = 0; i < 10; i++) {
 			await stream.append("thread:t1", text("r1", `d${i}`));
 		}
@@ -170,17 +170,17 @@ describe("redisStream", () => {
 	 */
 	it("offers push only when given a connection that may block", async () => {
 		const redis = fakeRedis();
-		expect(redisStream({ send: redis.send }).watch).toBeUndefined();
+		expect(redisStream({ client: redis.send }).watch).toBeUndefined();
 		expect(
-			redisStream({ send: redis.send, blockingSend: redis.send }).watch,
+			redisStream({ client: redis.send, blocking: redis.send }).watch,
 		).toBeTypeOf("function");
 	});
 
 	it("pushes new chunks over watch, and skips empty block timeouts", async () => {
 		const redis = fakeRedis();
 		const stream = redisStream({
-			send: redis.send,
-			blockingSend: redis.send,
+			client: redis.send,
+			blocking: redis.send,
 			blockMs: 1,
 		});
 		await stream.append("thread:t1", text("r1", "one"));
@@ -202,9 +202,56 @@ describe("redisStream", () => {
 		]);
 	});
 
+	/**
+	 * THE DX CLAIM, tested rather than asserted in a comment: hand it the client you already have.
+	 *
+	 * ioredis spreads its command (`call(cmd, ...args)`), node-redis takes an array
+	 * (`sendCommand(args)`). Both are duck-typed here, so a host writes `{ client: redis }` and no
+	 * glue — the version of this that made every caller spread and cast at the boundary was the
+	 * reason this test exists.
+	 */
+	it("drives an ioredis-shaped client and a node-redis-shaped one, unchanged", async () => {
+		const seenByIoredis: string[][] = [];
+		const ioredisLike = {
+			call: (...args: string[]) => {
+				seenByIoredis.push(args);
+				return Promise.resolve(null);
+			},
+		};
+		const seenByNodeRedis: string[][] = [];
+		const nodeRedisLike = {
+			sendCommand: (args: string[]) => {
+				seenByNodeRedis.push(args);
+				return Promise.resolve(null);
+			},
+		};
+
+		await redisStream({ client: ioredisLike }).append(
+			"thread:t1",
+			text("r1", "hi"),
+		);
+		await redisStream({ client: nodeRedisLike }).append(
+			"thread:t1",
+			text("r1", "hi"),
+		);
+
+		// Same command either way — the difference is only how it reaches the client.
+		expect(seenByIoredis[0]?.slice(0, 2)).toEqual(["XADD", "thread:t1"]);
+		expect(seenByNodeRedis[0]?.slice(0, 2)).toEqual(["XADD", "thread:t1"]);
+	});
+
+	/** A client this cannot drive fails at ASSEMBLY. Deferring it would surface inside an advisory
+	 *  write that swallows its own errors — a watcher silently seeing nothing, rather than a
+	 *  deployment refusing to start. */
+	it("refuses a client it cannot speak to, at construction", () => {
+		expect(() => redisStream({ client: {} })).toThrow(
+			/neither `call` nor `sendCommand`/,
+		);
+	});
+
 	it("drops an entry it cannot read instead of ending the stream", async () => {
 		const redis = fakeRedis();
-		const stream = redisStream({ send: redis.send });
+		const stream = redisStream({ client: redis.send });
 		await stream.append("thread:t1", text("r1", "one"));
 		const entries = redis.streams.get("thread:t1");
 		entries?.push({ id: "999-0", json: "{not json" });
