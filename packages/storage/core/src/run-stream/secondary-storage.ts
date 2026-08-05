@@ -23,6 +23,7 @@ import type {
 	SecondaryStorage,
 } from "@busyclaw/contracts";
 import { configurationError } from "@busyclaw/contracts";
+import { decodeChunk, encodeChunk } from "./chunk";
 
 /**
  * How long a chunk and its counter live, in seconds.
@@ -83,7 +84,7 @@ export function secondaryStorageStream(
 	return {
 		append: async (key, chunk) => {
 			const offset = await increment(counterKey(key), ttl);
-			await kv.set(chunkKey(key, offset), JSON.stringify(chunk), ttl);
+			await kv.set(chunkKey(key, offset), encodeChunk(chunk), ttl);
 		},
 
 		read: async (key, cursor): Promise<RunStreamPage> => {
@@ -107,27 +108,10 @@ export function secondaryStorageStream(
 				// than treated as the end: stopping here would strand the reader below a `max` that
 				// will never come back down, and they would sit on a dead cursor forever.
 				if (raw === null || raw === undefined) continue;
-				const parsed = safeParse(raw);
+				const parsed = decodeChunk(raw);
 				if (parsed !== null) chunks.push(parsed);
 			}
 			return { chunks, cursor: String(at), stale: false };
 		},
 	};
-}
-
-/** A chunk this port did not write, or wrote in an older shape, is DROPPED rather than thrown on. A
- *  buffer is not a record: one unreadable entry must not take down a live view of everything else. */
-function safeParse(raw: unknown): RunStreamChunk | null {
-	if (typeof raw !== "string") return null;
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed === null || typeof parsed !== "object") return null;
-		const kind = (parsed as { kind?: unknown }).kind;
-		if (kind !== "text" && kind !== "lifecycle" && kind !== "run.started") {
-			return null;
-		}
-		return parsed as RunStreamChunk;
-	} catch {
-		return null;
-	}
 }

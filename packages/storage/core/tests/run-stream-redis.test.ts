@@ -63,7 +63,10 @@ function fakeRedis() {
 				throw new Error(`fake redis got an unexpected command: ${command}`);
 		}
 	};
-	return { send, streams, ttls, calls };
+	// A SECOND connection over the same server — what `redis.duplicate()` gives you. A distinct
+	// function object, because that is exactly what the same-connection guard checks for.
+	const duplicate = (): RedisCommand => (args) => send(args);
+	return { send, duplicate, streams, ttls, calls };
 }
 
 describe("redisStream", () => {
@@ -172,15 +175,28 @@ describe("redisStream", () => {
 		const redis = fakeRedis();
 		expect(redisStream({ client: redis.send }).watch).toBeUndefined();
 		expect(
-			redisStream({ client: redis.send, blocking: redis.send }).watch,
+			redisStream({ client: redis.send, blocking: redis.duplicate() }).watch,
 		).toBeTypeOf("function");
+	});
+
+	/**
+	 * `blocking: redis` READS AS CORRECT and is the one mistake this option exists to prevent: it
+	 * parks the app's own connection inside `XREAD BLOCK`, stalling every command queued behind it,
+	 * and presents as Redis being slow while Redis sits idle. A silent version of that is a
+	 * production incident with a misleading symptom, so it is refused at construction.
+	 */
+	it("refuses the app's own connection as the blocking one", () => {
+		const redis = fakeRedis();
+		expect(() =>
+			redisStream({ client: redis.send, blocking: redis.send }),
+		).toThrow(/must be a SECOND redis connection/);
 	});
 
 	it("pushes new chunks over watch, and skips empty block timeouts", async () => {
 		const redis = fakeRedis();
 		const stream = redisStream({
 			client: redis.send,
-			blocking: redis.send,
+			blocking: redis.duplicate(),
 			blockMs: 1,
 		});
 		await stream.append("thread:t1", text("r1", "one"));

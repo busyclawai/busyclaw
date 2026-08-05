@@ -104,22 +104,12 @@ import {
 	runtimeRunOptionsWithRecording,
 	type SpecRegistrationReport,
 } from "@busyclaw/runtime";
+import { pollingWatch } from "@busyclaw/storage-core";
 import type { RegistryStores } from "@busyclaw/storage-durable";
 import { type as ark } from "arktype";
 import type { ClawRecordOf, CreateClawInputOf } from "./models";
 import type { ClawRedactionHandle } from "./redaction";
 import { type ActionView, assembleOrgActions } from "./registry";
-
-/**
- * How long a polling watcher waits before asking again.
- *
- * Not a knob, for now, and the number matters less than it looks: it bounds how far a WATCHER lags
- * the driver, never how fast the answer is produced. Small enough to feel live beside a batch window
- * of 50–200ms, large enough that ten watchers on one conversation are ten cheap reads a second and
- * not a hot loop. A backend with a real subscription fills in `RunStreamPort.watch` and this is never
- * reached at all — which is the intended way to get lower latency, rather than tuning this down.
- */
-const WATCH_POLL_INTERVAL_MS = 120;
 
 /** How a read presents stored message content: `"redacted"` (default) returns it as persisted —
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
@@ -1725,44 +1715,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				},
 			);
 		}
-		const keep = (page: RunStreamPage): RunStreamPage =>
-			onlyRun === undefined
-				? page
-				: { ...page, chunks: page.chunks.filter((c) => c.runId === onlyRun) };
-		return (async function* watch() {
-			// PUSH when the backend has it. `watch` is the member a real broker fills in; the poll
-			// below is the fallback for a substrate that can only be asked.
-			if (stream.watch !== undefined) {
-				for await (const page of stream.watch(key, since)) {
-					const kept = keep(page);
-					if (kept.chunks.length > 0 || kept.stale) yield kept;
-					if (kept.stale) return;
-				}
-				return;
-			}
-			let cursor = since;
-			while (true) {
-				const page = await stream.read(key, cursor);
-				// ADVANCED FROM THE UNFILTERED PAGE. Filtering decides what a caller SEES, never
-				// where the reader is — taking the cursor from the filtered copy would re-read the
-				// same offsets forever whenever this run had nothing in them.
-				cursor = page.cursor;
-				const kept = keep(page);
-				// A STALE page is the last thing this yields. Continuing would serve chunks whose
-				// offsets no longer mean what the client's cursor thinks — see `RunStreamPage`.
-				if (page.stale) {
-					yield kept;
-					return;
-				}
-				if (kept.chunks.length > 0) yield kept;
-				// An EMPTY page means the log is caught up; sleep. A page that had chunks — even ones
-				// this filter dropped — means there may be more waiting, so go straight back rather
-				// than sleeping through a backlog a late joiner is trying to catch up on.
-				if (page.chunks.length === 0) {
-					await new Promise((resolve) =>
-						setTimeout(resolve, WATCH_POLL_INTERVAL_MS),
-					);
-				}
+		// The subscription itself belongs to the PORT — `pollingWatch` uses `watch` when the backend
+		// has one and falls back to asking when it does not, so this door never learns which it got.
+		// What is left here is the only part that IS this door's business: showing one run's chunks.
+		const pages: AsyncIterable<RunStreamPage> = pollingWatch(stream, key, {
+			...(since !== undefined ? { since } : {}),
+		});
+		if (onlyRun === undefined) return pages;
+		return (async function* narrowed() {
+			for await (const page of pages) {
+				// FILTERED FOR DISPLAY, never for position: the page's own cursor is yielded unchanged,
+				// because dropping this run's absence from a page must not stop the reader advancing
+				// past it.
+				const chunks = page.chunks.filter((c) => c.runId === onlyRun);
+				if (chunks.length > 0 || page.stale) yield { ...page, chunks };
 			}
 		})();
 	};

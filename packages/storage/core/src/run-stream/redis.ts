@@ -41,6 +41,7 @@ import type {
 	RunStreamPort,
 } from "@busyclaw/contracts";
 import { configurationError } from "@busyclaw/contracts";
+import { decodeChunk, encodeChunk } from "./chunk";
 
 /** Send one Redis command and return its raw reply. Arrays and bulk strings come back as this
  *  client's own representation; the parsing below accepts strings, Buffers and nested arrays. */
@@ -129,6 +130,15 @@ export type RedisStreamOptions = {
 	 * command behind it — a stall that looks like the database being slow and has nothing to do with
 	 * the database. Requiring a distinct client makes `redis.duplicate()` a decision the host takes
 	 * on purpose rather than a production incident it discovers.
+	 *
+	 * MIND `commandTimeout`. `duplicate()` INHERITS its parent's options, so a client configured with
+	 * one — a common and sensible default — hands this a connection that aborts any command lasting
+	 * longer than it, which is exactly what a blocking read is for. Push would then appear to work
+	 * while quietly degrading into a poll at the timeout's interval. Clear it on the duplicate:
+	 *
+	 *   blocking: redis.duplicate({ commandTimeout: undefined })
+	 *
+	 * The same rule Redis pub/sub already forces on anyone who has set up a subscriber.
 	 */
 	blocking?: RedisLike | RedisCommand;
 	/** How long a stream key lives after its last write, in seconds. Refreshed on every append —
@@ -204,16 +214,11 @@ function parseXRead(reply: unknown): {
 			// written by a future version with extra fields still reads.
 			for (let i = 0; i + 1 < fields.length; i += 2) {
 				if (asText(fields[i]) !== FIELD) continue;
-				const raw = asText(fields[i + 1]);
-				if (raw === undefined) continue;
-				try {
-					const parsed: unknown = JSON.parse(raw);
-					if (parsed && typeof parsed === "object" && "kind" in parsed) {
-						chunks.push(parsed as RunStreamChunk);
-					}
-				} catch {
-					// Unreadable entry: skipped, and the cursor still advances past it.
-				}
+				// Unreadable entries are skipped, and the cursor still advances past them — the
+				// shared rule, so this backend cannot drift from the KV one about what a bad entry
+				// means.
+				const parsed = decodeChunk(asText(fields[i + 1]));
+				if (parsed !== null) chunks.push(parsed);
 			}
 		}
 	}
@@ -290,7 +295,7 @@ export function redisStream(options: RedisStreamOptions): RunStreamPort {
 				String(maxLen),
 				"*",
 				FIELD,
-				JSON.stringify(chunk),
+				encodeChunk(chunk),
 			]);
 			// REFRESHED on every append, not set once. There is no counter here to restart numbering,
 			// so a long conversation keeps its live log for as long as it is live — and a dead one
@@ -306,6 +311,20 @@ export function redisStream(options: RedisStreamOptions): RunStreamPort {
 	// absent, and `watchThread` falls back to polling — a documented degradation rather than a
 	// blocking command quietly issued on the connection the rest of the app is using.
 	if (options.blocking !== undefined) {
+		// THE SAME CONNECTION IS THE ONE MISTAKE THIS OPTION EXISTS TO PREVENT, and it reads as
+		// correct — `blocking: redis` looks like it is enabling a feature. It would instead park the
+		// app's own connection inside `XREAD BLOCK` for the block window, stalling every command
+		// queued behind it, and present as Redis being slow while Redis sits idle. Refused loudly,
+		// because a silent version of this is a production incident with a misleading symptom.
+		if (options.blocking === options.client) {
+			throw configurationError(
+				"`blocking` must be a SECOND redis connection, not the one passed as `client`",
+				{
+					reason:
+						"XREAD BLOCK holds a connection until data arrives; sharing it stalls every other command behind it. Use `redis.duplicate()`, or a second client instance.",
+				},
+			);
+		}
 		const blocking = resolveSender(options.blocking);
 		port.watch = async function* watch(key, cursor) {
 			let at = cursor ?? FROM_START;

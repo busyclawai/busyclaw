@@ -372,12 +372,20 @@ export function memoryAdapter(): Adapter {
 // Uniqueness-violation normalization — one typed conflict, whichever driver raised it. What makes
 // try-create → on-conflict-re-read writable without knowing the backend.
 export { asConflict, isUniqueViolation } from "./conflict";
+// The run stream — live deltas of work in flight. Protocol in @busyclaw/contracts, implementations
+// in ./run-stream (shared codec, the polling subscription, and one module per backend).
 export {
+	DEFAULT_POLL_INTERVAL_MS,
+	decodeChunk,
+	encodeChunk,
+	type PollingWatchOptions,
+	pollingWatch,
 	type RedisCommand,
+	type RedisLike,
 	type RedisStreamOptions,
 	redisStream,
-} from "./redis-stream";
-export { secondaryStorageStream } from "./run-stream";
+	secondaryStorageStream,
+} from "./run-stream/index";
 
 export { verifiedAdapter } from "./verified-adapter";
 
