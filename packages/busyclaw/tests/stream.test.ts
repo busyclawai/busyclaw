@@ -15,6 +15,7 @@ import { createMemoryAudit } from "@busyclaw/core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
+	drivenResult,
 	durableRedactor,
 	type MockModel,
 	owned,
@@ -157,7 +158,7 @@ describe("claw.api.sendMessageAndStream", () => {
 
 		const deltas: string[] = [];
 		for await (const delta of textStream) deltas.push(delta);
-		const final = await result;
+		const final = drivenResult(await result);
 
 		expect(final.status).toBe("completed");
 		expect(deltas.length).toBeGreaterThan(1);
@@ -182,7 +183,7 @@ describe("claw.api.sendMessageAndStream", () => {
 		for await (const _delta of textStream) break; // the tab closes after one delta
 
 		// Not rejected — finished.
-		const final = await result;
+		const final = drivenResult(await result);
 		expect(final.status).toBe("completed");
 		expect(final.text).toBe("one two three four");
 

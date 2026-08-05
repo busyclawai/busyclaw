@@ -18,7 +18,7 @@ import {
 	isConflict,
 	stateError,
 } from "@busyclaw/contracts";
-import type { Runtime } from "@busyclaw/runtime";
+import type { Runtime, RuntimeResult } from "@busyclaw/runtime";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { sqlEngineModels } from "./schema";
@@ -132,6 +132,11 @@ function createSqlEngineHandle(input: {
 	} satisfies SqlEngineWorkerConfig);
 	return {
 		kind: "sql",
+		// Surfaced so a door can derive its own `drive.deadlineAt` from the same budget the cron
+		// drain uses. One number, one source.
+		...(input.config.softDeadlineMs !== undefined
+			? { softDeadlineMs: input.config.softDeadlineMs }
+			: {}),
 		async startRun(
 			startInput: EngineStartRunInput,
 		): Promise<EngineStartRunResult> {
@@ -184,16 +189,27 @@ function createSqlEngineHandle(input: {
 				return { id: opened.run.id, notDriven: "already-terminal" };
 			}
 			// OUTSIDE the transaction. One that spans a model call is not a design.
+			//
+			// `runtimeResult` is what a door waiting on its own turn gets back — the model's answer,
+			// not the task's obituary. `EngineStartRunResult.result` is documented as the shape
+			// busyclaw parses against `RuntimeResult`, so this is the field honouring that contract.
+			let runtimeResult: RuntimeResult | undefined;
 			const result = await driveClaim({
 				claim: opened.claim,
 				runtime: input.runtime,
 				store: input.config.store,
 				workerId,
+				onResult: (produced) => {
+					runtimeResult = produced;
+				},
 				...(input.config.leaseTtlMs !== undefined
 					? { leaseTtlMs: input.config.leaseTtlMs }
 					: {}),
 				...(startInput.drive.deadlineAt !== undefined
 					? { deadlineAt: startInput.drive.deadlineAt }
+					: {}),
+				...(startInput.drive.onDelta !== undefined
+					? { onDelta: startInput.drive.onDelta }
 					: {}),
 			});
 			// A driver that lost its lease mid-slice cannot claim to know how the run ended — a
@@ -201,7 +217,13 @@ function createSqlEngineHandle(input: {
 			if (result.status === "failed" && result.task === null) {
 				return { id: opened.run.id, notDriven: "driver-lost" };
 			}
-			return { id: opened.run.id, result };
+			// A slice that produced no result produced nothing to report. `skipped` is the reachable
+			// case: the resume state this task named was already claimed, so somebody else is driving
+			// and it is THEIR result that will land in the thread.
+			if (runtimeResult === undefined) {
+				return { id: opened.run.id, notDriven: "running-elsewhere" };
+			}
+			return { id: opened.run.id, result: runtimeResult };
 		},
 		async proceedRun(
 			proceedInput: EngineProceedRunInput,

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
+	drivenResult,
 	durableRedactor,
 	emailTool,
 	floorPermitsWrites,
@@ -68,11 +69,13 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
-			runId: "run-1",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		expect(sent.userMessage).toMatchObject({ role: "user", sequence: 1 });
 		const messages = await api.listMessages({
 			threadId: thread.id,
@@ -82,7 +85,6 @@ describe("createClaw send", () => {
 			{
 				content: { text: "done" },
 				role: "assistant",
-				runId: "run-1",
 				sequence: 2,
 			},
 		]);
@@ -107,11 +109,10 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
-			runId: "run-approval",
 			threadId: thread.id,
 		});
 
-		expect(sent.result.status).toBe("waiting_approval");
+		expect(drivenResult(sent).status).toBe("waiting_approval");
 		const messages = await api.listMessages({
 			threadId: thread.id,
 		});
@@ -125,9 +126,7 @@ describe("createClaw send", () => {
 				sequence: 1,
 			},
 		]);
-		const checkpoint = await api.getLatestCheckpoint({
-			runId: "run-approval",
-		});
+		const checkpoint = await api.getLatestCheckpoint({ runId: sent.runId });
 		expect(checkpoint).toMatchObject({
 			clawId: agent.id,
 			kind: "approval_wait",
@@ -135,7 +134,7 @@ describe("createClaw send", () => {
 			threadId: thread.id,
 		});
 		const toolCall = await api.getToolCallByProviderId({
-			runId: "run-approval",
+			runId: sent.runId,
 			toolCallId: "c1",
 		});
 		expect(toolCall).toMatchObject({
@@ -147,7 +146,7 @@ describe("createClaw send", () => {
 		const approvals = await api.listApprovals({ status: "pending" });
 		expect(JSON.stringify(approvals)).not.toContain("alice@personal.com");
 		expect(
-			JSON.stringify(await api.getLatestCheckpoint({ runId: "run-approval" })),
+			JSON.stringify(await api.getLatestCheckpoint({ runId: sent.runId })),
 		).not.toContain("alice@personal.com");
 	});
 
@@ -172,13 +171,13 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
-			runId: "run-resume",
 			threadId: thread.id,
 		});
-		if (sent.result.status !== "waiting_approval") {
+		const sentResult = drivenResult(sent);
+		if (sentResult.status !== "waiting_approval") {
 			throw new Error("expected approval wait");
 		}
-		const approvalId = sent.result.approvalIds?.[0];
+		const approvalId = sentResult.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
 		await api.grantApproval({ approvalId });
@@ -195,18 +194,17 @@ describe("createClaw send", () => {
 		]);
 		expect(messages[1]).toMatchObject({
 			content: { text: "done" },
-			runId: "run-resume",
 			sequence: 2,
 		});
 		expect(
 			await api.getToolCallByProviderId({
-				runId: "run-resume",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toMatchObject({ status: "completed" });
 		expect(
 			await api.listToolResults({
-				runId: "run-resume",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toMatchObject([
@@ -232,13 +230,13 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
-			runId: "run-denied",
 			threadId: thread.id,
 		});
-		if (sent.result.status !== "waiting_approval") {
+		const sentResult = drivenResult(sent);
+		if (sentResult.status !== "waiting_approval") {
 			throw new Error("expected approval wait");
 		}
-		const approvalId = sent.result.approvalIds?.[0];
+		const approvalId = sentResult.approvalIds?.[0];
 		if (!approvalId) throw new Error("missing approval id");
 
 		// Alice is an ASSIGNED approver — deciding is a permission now, held on the approval itself.
@@ -267,13 +265,13 @@ describe("createClaw send", () => {
 		expect(messages.map((message) => message.role)).toEqual(["user"]);
 		expect(
 			await api.getToolCallByProviderId({
-				runId: "run-denied",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toMatchObject({ status: "denied" });
 		expect(
 			await api.listToolResults({
-				runId: "run-denied",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toMatchObject([
@@ -285,7 +283,7 @@ describe("createClaw send", () => {
 		await api.continueRun({ approvalId });
 		expect(
 			await api.listToolResults({
-				runId: "run-denied",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toHaveLength(1);
@@ -316,15 +314,17 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
-			runId: "run-tools",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		expect(toolSaw).toBe("alice@personal.com");
 		expect(
 			await api.getToolCallByProviderId({
-				runId: "run-tools",
+				runId: sent.runId,
 				toolCallId: "c1",
 			}),
 		).toMatchObject({
@@ -333,7 +333,7 @@ describe("createClaw send", () => {
 			toolName: "send_email",
 		});
 		const results = await api.listToolResults({
-			runId: "run-tools",
+			runId: sent.runId,
 			toolCallId: "c1",
 		});
 		expect(results).toMatchObject([
@@ -345,6 +345,73 @@ describe("createClaw send", () => {
 				status: "completed",
 			},
 		]);
+	});
+
+	/**
+	 * SLICE 6's POINT, in one assertion: a chat turn is a durable run.
+	 *
+	 * Before this, `sendMessage` called `runtime.generate` and wrote no engine row — so the entire
+	 * run control plane (`getRun`, `controlRun` from a second tab, a successor claiming a dead
+	 * driver's work) governed cron work and nothing a user could touch. The claw here is configured
+	 * with `{ model, database }` and NOTHING else: no engine, no cron, no plugins. The engine is
+	 * defaulted from the adapter (D14), which is what makes the durable path the DEFAULT rather than
+	 * something a deployment opts into.
+	 */
+	it("a chat turn is a durable run — getRun answers for it, on a claw with no engine configured", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: { redactor },
+		});
+		const { api, agent, thread } = await createAgentThread(claw);
+
+		const sent = await api.sendMessage({
+			clawId: agent.id,
+			message: "hello",
+			threadId: thread.id,
+		});
+		expect(drivenResult(sent)).toMatchObject({ status: "completed" });
+
+		// The row exists, it is terminal, and it knows where it belongs — the claw is the authz
+		// parent and the thread is where the answer landed.
+		const run = await api.getRun({ id: sent.runId });
+		expect(run).toMatchObject({
+			id: sent.runId,
+			status: "completed",
+			clawId: agent.id,
+			threadId: thread.id,
+		});
+	});
+
+	/**
+	 * `runMode` survives the trip through the engine, and this is the one that fails SILENTLY.
+	 *
+	 * The worker is the entry point now, and it defaults to `autonomous`. A chat turn that lost
+	 * `interactive` would lose the human-presence exemption `system-posture.ts` grants — writes that
+	 * used to pass would start demanding confirmation, which fails closed and therefore announces
+	 * nothing. Asserted on the ROW because that is what a slice claimed later reads.
+	 */
+	it("stamps runMode interactive on the run, so a chat turn keeps its human-presence exemption", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: textModel("done"),
+			redaction: { redactor },
+		});
+		const { api, agent, thread } = await createAgentThread(claw);
+
+		const sent = await api.sendMessage({
+			clawId: agent.id,
+			message: "hello",
+			threadId: thread.id,
+		});
+
+		const rows = await db.findMany({
+			model: "run",
+			where: [{ field: "id", value: sent.runId }],
+		});
+		expect(rows[0]).toMatchObject({ runMode: "interactive" });
 	});
 
 	it("requires a ClawsStore", async () => {
@@ -383,11 +450,13 @@ describe("createClaw send", () => {
 		const sent = await api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
-			runId: "run-observer",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		// The recording sink still persisted the transcript — only the observer failed.
 		const messages = await api.listMessages({ threadId: thread.id });
 		expect(messages.map((message) => message.role)).toEqual([
@@ -467,7 +536,6 @@ describe("createClaw send", () => {
 		await api.sendMessage({
 			clawId: agent.id,
 			message: "who should I contact?",
-			runId: "run-volunteered",
 			threadId: thread.id,
 		});
 
@@ -513,10 +581,9 @@ describe("createClaw send", () => {
 			clawId: agentA.id,
 			title: "A",
 		});
-		await apiA.sendMessage({
+		const sentA = await apiA.sendMessage({
 			clawId: agentA.id,
 			message: "who is the contact?",
-			runId: "run-a",
 			threadId: threadA.id,
 		});
 
@@ -524,7 +591,10 @@ describe("createClaw send", () => {
 		// minted by the runtime (the address never passed through the api), so it is the one that used
 		// to land in the global containerKind.
 		const persistedA = JSON.stringify(
-			await apiA.listToolResults({ runId: "run-a", toolCallId: "lookup-1" }),
+			await apiA.listToolResults({
+				runId: sentA.runId,
+				toolCallId: "lookup-1",
+			}),
 		);
 		expect(persistedA).not.toContain("bob@corp.example");
 		const token = persistedA.match(/\{\{pii:[a-z]+:[a-z0-9-]+\}\}/)?.[0];

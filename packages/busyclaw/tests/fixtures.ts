@@ -16,6 +16,7 @@ import {
 	createRunCheckpointStore,
 } from "@busyclaw/storage-durable";
 import { jsonSchema, tool, type wrapLanguageModel } from "ai";
+import type { ClawSendResult, RuntimeResult } from "../src/index";
 import { createClaw } from "../src/index";
 
 export type V2Model = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -357,3 +358,20 @@ export const floorPermitsWrites = {
 		},
 	],
 } satisfies BusyclawPlugin;
+
+/**
+ * The RESULT arm of a `sendMessage` outcome, or a failure naming what came back instead.
+ *
+ * `ClawSendResult` became a union when a chat turn became a durable run: a concurrent replica may
+ * own the task, or this driver may have lost its lease, and neither of those has a result to report.
+ * A test that wants the answer is asserting the driven arm, so it should say so — and fail loudly
+ * naming the other arm rather than reading `undefined` off it and reporting some later mismatch.
+ */
+export function drivenResult(sent: ClawSendResult): RuntimeResult {
+	if (!("result" in sent)) {
+		throw new Error(
+			`expected a driven send, got the accepted arm for run ${sent.runId} — somebody else is driving it`,
+		);
+	}
+	return sent.result;
+}

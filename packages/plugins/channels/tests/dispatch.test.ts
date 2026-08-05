@@ -24,6 +24,7 @@ function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }) {
 			sendMessage: async (input: { message: string }) => {
 				recorded.relayed.push(input.message);
 				return {
+					runId: "run-1",
 					result: { status: "completed", text: `echo:${input.message}` },
 					userMessage: { id: "message-1" },
 				};
@@ -120,6 +121,48 @@ describe("dispatch engine", () => {
 			},
 		]);
 		expect(events).toEqual([{ kind: "received" }]);
+	});
+
+	/**
+	 * A turn whose run somebody ELSE is driving posts nothing.
+	 *
+	 * `sendMessage` returns a union now: on the `accepted` arm the words are in the transcript and a
+	 * different invocation will produce the reply. Reading `result.text` off that arm yields
+	 * `undefined`, and a channel that pushed it anyway would post an empty message into a user's chat
+	 * — an answer this process never received, attributed to the assistant.
+	 */
+	it("says nothing when the run is being driven elsewhere", async () => {
+		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
+		const replies: string[] = [];
+		const events: EndpointEvent[] = [];
+		const claw = fakeClaw(recorded);
+		const acceptedClaw = {
+			api: {
+				...claw.api,
+				sendMessage: async (input: { message: string }) => {
+					recorded.relayed.push(input.message);
+					return { runId: "run-1", accepted: true as const };
+				},
+			},
+		};
+
+		const result = await dispatchWebhook({
+			claw: acceptedClaw,
+			channel: fakeChannel({
+				send: async ({ message }) => {
+					replies.push(message.text);
+				},
+			}),
+			endpoint: endpoint(),
+			request: { headers: { get: () => null }, rawBody: "hello" },
+			persist: eventSink(events),
+		});
+
+		// The message was relayed and accepted — this is not an error path.
+		expect(result.status).toBe(200);
+		expect(recorded.relayed).toEqual(["hello"]);
+		// But nothing was posted back, because this invocation produced no answer.
+		expect(replies).toEqual([]);
 	});
 
 	it("returns 401 and reports nothing when verify fails", async () => {

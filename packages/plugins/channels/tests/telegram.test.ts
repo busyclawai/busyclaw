@@ -402,6 +402,7 @@ describe("telegram channel", () => {
 					created: true,
 				}),
 				sendMessage: async () => ({
+					runId: "run-1",
 					result: { status: "completed", text: "pong" },
 					userMessage: { id: "m" },
 				}),

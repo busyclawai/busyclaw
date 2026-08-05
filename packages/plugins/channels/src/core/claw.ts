@@ -21,6 +21,12 @@ export type ClawLike = {
 			input: BindConversationInput,
 			caller?: Caller,
 		) => Promise<{ claw: { id: string }; thread: { id: string } }>;
+		/**
+		 * A UNION result, because a chat turn is a durable run: a concurrent replica may own the
+		 * task, or the driver may have lost its lease, and neither of those has a result to report.
+		 * A channel that assumed `result` was always there would print an empty reply into somebody's
+		 * chat and call it an answer — see `dispatch.ts`, which now says nothing instead.
+		 */
 		sendMessage: (
 			input: {
 				clawId: string;
@@ -28,7 +34,10 @@ export type ClawLike = {
 				message: string;
 			},
 			caller?: Caller,
-		) => Promise<{ result: { status: string; text?: string | undefined } }>;
+		) => Promise<
+			| { runId: string; result: { status: string; text?: string | undefined } }
+			| { runId: string; accepted: true }
+		>;
 	};
 };
 

@@ -49,7 +49,6 @@ describe("createClaw conversation binding", () => {
 			clawId: first.claw.id,
 			threadId: first.thread.id,
 			message: "hello from telegram",
-			runId: "run-1",
 		});
 
 		await expect(

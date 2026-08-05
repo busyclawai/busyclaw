@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
+	drivenResult,
 	durableRedactor,
 	emailTool,
 	owned,
@@ -267,7 +268,7 @@ describe("createClaw effects", () => {
 			threadId: thread.id,
 			message: "email alice@x.com",
 		});
-		const result = waiting.result;
+		const result = drivenResult(waiting);
 		if (result.status !== "waiting_approval" || !result.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
@@ -334,13 +335,14 @@ describe("an approver's borrowed authority does not move the conversation", () =
 			{ clawId: agent.id, threadId: thread.id, message: "email x@y.com" },
 			alice,
 		);
+		const sentResult = drivenResult(sent);
 		if (
-			sent.result.status !== "waiting_approval" ||
-			!sent.result.approvalIds?.[0]
+			sentResult.status !== "waiting_approval" ||
+			!sentResult.approvalIds?.[0]
 		) {
 			throw new Error("expected approval wait");
 		}
-		const approvalId = sent.result.approvalIds[0];
+		const approvalId = sentResult.approvalIds[0];
 
 		// Alice shares the claw so Bob can reach the approval to decide it at all.
 		await claw.api.shareResource(

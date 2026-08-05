@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
+	drivenResult,
 	durableRedactor,
 	emailDetector,
 	emailTool,
@@ -88,11 +89,13 @@ describe("plugin.eventSinks", () => {
 		const sent = await claw.api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
-			runId: "run-plugin-sink",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		// Another plugin's configure-time door emit reached the sink…
 		expect(seen).toContain("emitter.ready");
 		// …and so did the runtime's own lifecycle events.
@@ -126,11 +129,13 @@ describe("plugin.eventSinks", () => {
 		const sent = await claw.api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
-			runId: "run-broken-sink",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		// The recording sink still persisted the transcript — only the plugin observer failed.
 		const messages = await claw.api.listMessages({ threadId: thread.id });
 		expect(messages.map((message) => message.role)).toEqual([
@@ -176,7 +181,6 @@ describe("plugin.eventSinks", () => {
 		await claw.api.sendMessage({
 			clawId: agent.id,
 			message: "hello",
-			runId: "run-closure",
 			threadId: thread.id,
 		});
 
@@ -224,11 +228,13 @@ describe("plugin.eventSinks", () => {
 		const sent = await claw.api.sendMessage({
 			clawId: agent.id,
 			message: "email alice@personal.com",
-			runId: "run-both-pipelines",
 			threadId: thread.id,
 		});
 
-		expect(sent.result).toMatchObject({ status: "completed", text: "done" });
+		expect(drivenResult(sent)).toMatchObject({
+			status: "completed",
+			text: "done",
+		});
 		// Both pipelines reached the SAME sink instance within one run: the runtime's own emit path…
 		expect(seen).toContain("run.started");
 		expect(seen).toContain("tool.called");
@@ -320,7 +326,6 @@ describe("door redaction", () => {
 		const recording = {
 			clawId: "claw-1",
 			threadId: "thread-1",
-			runId: "run-door",
 		};
 		createClaw({
 			database: memoryAdapter(),
@@ -335,7 +340,6 @@ describe("door redaction", () => {
 								type: "notifier.pinged",
 								id: "evt-1",
 								createdAt: "2026-07-14T00:00:00.000Z",
-								runId: "run-door",
 								recording,
 								note: "reach alice@personal.com",
 							}),
@@ -353,7 +357,6 @@ describe("door redaction", () => {
 			type: "notifier.pinged",
 			id: "evt-1",
 			createdAt: "2026-07-14T00:00:00.000Z",
-			runId: "run-door",
 			recording,
 		});
 		expect(host.received[0]?.["note"]).toMatch(TOKEN);

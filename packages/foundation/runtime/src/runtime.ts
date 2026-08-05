@@ -923,7 +923,10 @@ function createModelSelector(
  * transcript is waiting when the reader returns — closing a tab does not throw away the answer. An
  * **ad-hoc** run has nowhere to put it, so it aborts and `result` rejects.
  */
-export type RuntimeStream = TextDeltaStream & {
+/** `Omit` on `result`, not a plain intersection: `TextDeltaStream.result` is `Promise<unknown>`, and
+ *  intersecting the two leaves the property `Promise<unknown> & Promise<RuntimeResult>` — which
+ *  `.then` reads back as `unknown`, so every consumer has to cast to see the type this declares. */
+export type RuntimeStream = Omit<TextDeltaStream, "result"> & {
 	readonly result: Promise<RuntimeResult>;
 };
 
@@ -954,7 +957,7 @@ const STREAM_DELTA_BUFFER = 512;
  * run and aborts an ad-hoc one. Either way the channel stops holding deltas from that moment: a
  * `push` after departure discards, so a detached run's output costs nothing to ignore.
  */
-function createDeltaChannel(options: { onCancel: () => void }): {
+export function createDeltaChannel(options: { onCancel: () => void }): {
 	push: (value: string) => void | Promise<void>;
 	close: () => void;
 	iterable: AsyncIterable<string>;

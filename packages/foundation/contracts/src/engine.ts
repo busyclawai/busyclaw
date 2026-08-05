@@ -75,8 +75,20 @@ export type EngineStartRunInput = {
 	 *
 	 * NOT caller-settable over the wire. `deadlineAt` is a caller-chosen YIELD, which is exactly what
 	 * a door mints from its own budget and never reads from a request body.
+	 *
+	 * `onDelta` is what makes the STREAMING door routable through here at all: with it the engine
+	 * drives the first slice through `runtime.stream` instead of `runtime.generate` and pushes the
+	 * reader-facing deltas back out. A function in a contract is normally a smell, and it is sound
+	 * here for the reason `drive` exists at all — this whole option means "in THIS invocation", so
+	 * the callback never crosses a process, a wire, or a serialization boundary. An engine whose
+	 * backend cannot drive in-process ignores `drive` entirely and this with it.
+	 *
+	 * Deltas arrive already REDACTED (R-M04) — the same placeholders the transcript will hold.
 	 */
-	drive?: { deadlineAt?: string };
+	drive?: {
+		deadlineAt?: string;
+		onDelta?: (text: string) => void | Promise<void>;
+	};
 };
 
 /**
@@ -245,6 +257,15 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	 * answer to "stop this run", and one nobody would notice until they needed it.
 	 */
 	controlRun: (input: EngineControlRunInput) => Promise<EngineControlRunResult>;
+	/**
+	 * The invocation budget, in ms, that a DOOR derives a `drive.deadlineAt` from — so a turn driven
+	 * inside a request parks a checkpoint before the platform kills it, instead of dying mid-step.
+	 *
+	 * Only the cron plugin could compute this before; a door driving its own turn needs the same
+	 * number, and it is the engine that knows it. Absent means never yield: a daemon host with no
+	 * invocation limit has nothing to park against.
+	 */
+	softDeadlineMs?: number;
 	/**
 	 * Admit a message into a run's inbox. Admission only — nothing is delivered here; the receiving
 	 * run drains it at its next control point.

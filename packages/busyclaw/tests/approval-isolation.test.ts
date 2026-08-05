@@ -10,6 +10,7 @@ import { userPrincipal } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	approvalToolModel,
+	drivenResult,
 	durableRedactor,
 	emailTool,
 	owned,
@@ -39,13 +40,11 @@ async function parked() {
 		threadId: thread.id,
 		message: "email alice@personal.com",
 	});
-	if (
-		sent.result.status !== "waiting_approval" ||
-		!sent.result.approvalIds?.[0]
-	) {
+	const result = drivenResult(sent);
+	if (result.status !== "waiting_approval" || !result.approvalIds?.[0]) {
 		throw new Error("expected the write to park for approval");
 	}
-	return { claw, approvalId: sent.result.approvalIds[0] };
+	return { claw, approvalId: result.approvalIds[0] };
 }
 
 describe("approval isolation", () => {

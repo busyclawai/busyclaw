@@ -45,6 +45,10 @@ export type {
 	RuntimeYieldMetadata,
 } from "./runtime";
 export {
+	/** The bounded push→async-iterate channel behind every streamed run. Exported so a DOOR that
+	 *  drives its stream through the engine gets the same backpressure and departure semantics as
+	 *  `runtime.stream` rather than a second, subtly different one. */
+	createDeltaChannel,
 	createRuntime,
 	defaultRuntimeNewId,
 	parseRuntimeApprovalMetadata,

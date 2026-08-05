@@ -181,6 +181,7 @@ async function runTask(
 	recording?: EngineRecording,
 	model?: string,
 	runMode?: RunMode,
+	onDelta?: (text: string) => void | Promise<void>,
 ): Promise<TaskExecution> {
 	// runId scopes effect ids and runtime events to the durable run, across attempts and slices;
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
@@ -265,6 +266,28 @@ async function runTask(
 						runId: claim.task.runId,
 						userMessageId: recording.originMessageId,
 					});
+		// STREAMING IS THE SAME SLICE, driven through a different door. Everything above — the
+		// recording, the caller, the control port, the checkpoint recovery — is identical; only the
+		// runtime method differs, which is the point: a streamed turn must be governed and persisted
+		// exactly like a generated one, not by a parallel path that can drift.
+		//
+		// The stream MUST be consumed. Its channel is bounded (`STREAM_DELTA_BUFFER`), so a producer
+		// whose deltas nobody reads blocks and the run parks — "ignore the stream" is not an option
+		// available here, only "read it and drop it", which is what happens when the door's own reader
+		// has already left.
+		if (onDelta !== undefined) {
+			const streamed = runtime.stream(
+				payload.prompt,
+				payload.ctx,
+				withRecording,
+			);
+			for await (const delta of streamed.textStream) await onDelta(delta);
+			return {
+				outcome: "ran",
+				result: runtimeResult(await streamed.result, "runtime.stream result"),
+				ctx: payload.ctx,
+			};
+		}
 		return {
 			outcome: "ran",
 			result: runtimeResult(
@@ -536,8 +559,30 @@ export async function driveClaim(input: {
 	workerId: string;
 	leaseTtlMs?: number;
 	deadlineAt?: string;
+	/** Present only when a DOOR is driving its own turn and streaming it. The cron drain never sets
+	 *  it — nobody is waiting on the other end of a scheduled run. */
+	onDelta?: (text: string) => void | Promise<void>;
+	/**
+	 * The runtime's OWN result, handed over the moment the slice produces one.
+	 *
+	 * `WorkerTickResult` answers "what happened to the task"; a caller waiting on its own turn needs
+	 * "what did the model say", and those are different objects. A callback rather than a return
+	 * field because the terminal switch has twenty exits and threading a value through every one of
+	 * them is twenty chances to forget — this fires once, at the single point where the result
+	 * exists, before any of them run.
+	 */
+	onResult?: (result: RuntimeResult) => void;
 }): Promise<WorkerTickResult> {
-	const { claim, deadlineAt, leaseTtlMs, runtime, store, workerId } = input;
+	const {
+		claim,
+		deadlineAt,
+		leaseTtlMs,
+		onDelta,
+		onResult,
+		runtime,
+		store,
+		workerId,
+	} = input;
 	const heartbeat = startHeartbeat(store, claim, leaseTtlMs);
 	// WHO THIS SLICE EXECUTES AS, and who it must hand over to. Recorded here rather than returned
 	// through the loop because the loop is deliberately principal-blind: it is told to stop, not told
@@ -650,6 +695,7 @@ export async function driveClaim(input: {
 				: undefined,
 			run?.model,
 			run?.runMode,
+			onDelta,
 		);
 		void runtimeTask.catch(() => undefined);
 		const execution = await Promise.race([
@@ -714,6 +760,9 @@ export async function driveClaim(input: {
 		}
 
 		const result = execution.result;
+		// ONE point, before the terminal switch, where "what the model said" is known. Every branch
+		// below narrates what happened to the TASK; a door waiting on its own turn needs this.
+		onResult?.(result);
 
 		if (result.status === "yielded") {
 			// Self-continuation: park is already durable (the runtime persisted the checkpoint);

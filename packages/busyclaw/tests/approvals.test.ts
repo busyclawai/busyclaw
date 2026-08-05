@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
 	approvalToolModel,
+	drivenResult,
 	durableRedactor,
 	emailTool,
 	owned,
@@ -190,13 +191,11 @@ describe("createClaw approvals", () => {
 			threadId: thread.id,
 			message: "email alice@personal.com",
 		});
-		if (
-			sent.result.status !== "waiting_approval" ||
-			!sent.result.approvalIds?.[0]
-		) {
+		const result = drivenResult(sent);
+		if (result.status !== "waiting_approval" || !result.approvalIds?.[0]) {
 			throw new Error("expected approval wait");
 		}
-		const approvalId = sent.result.approvalIds[0];
+		const approvalId = result.approvalIds[0];
 
 		// A machine may not decide — approval exists to put a HUMAN in front of an unattended action.
 		// This floor is an ACTOR check and runs on top of the ownership one, never instead of it.

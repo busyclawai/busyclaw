@@ -31,6 +31,7 @@ import type {
 	EngineRunHandle,
 	EngineRunRecord,
 	EngineStartRunInput,
+	EngineStartRunResult,
 	JsonObject,
 	MessageRecord,
 	PolicySliceRecord,
@@ -78,6 +79,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import {
+	createDeltaChannel,
 	createSpecRegistry,
 	type ModelName,
 	type ModelSelection,
@@ -88,6 +90,7 @@ import {
 	type Runtime,
 	type RuntimeConfig,
 	type RuntimeResult,
+	RuntimeResult as RuntimeResultSchema,
 	type RuntimeStream,
 	recordingFromRuntimeApprovalMetadata,
 	runtimeRunOptionsWithCaller,
@@ -115,23 +118,49 @@ export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
 	threadId: string;
 	message: string;
 	ctx?: RunContext<Config>;
-	runId?: string;
+	// No `runId` (D1). It named the run's redaction container and its authz anchor, so a caller who
+	// could pin it could pin somebody else's. The server mints it; read it back off the result.
 	view?: MessageView;
 } /** `model` names the pool entry that answers this message — REQUIRED when the pool has ≥2 entries
  *  and no default, optional when a default exists, and absent for a single-`model` claw. */ & ModelSelection<Config>;
 
-export type ClawSendResult = {
-	result: RuntimeResult;
-	userMessage: MessageRecord;
-};
+/**
+ * What `sendMessage` hands back — a UNION, because once a turn is a durable run there are outcomes
+ * that are neither a result nor an error.
+ *
+ * `runId` is on both arms: it is the handle for `getRun`, for `controlRun` from a second tab, and for
+ * watching the turn from anywhere else. A caller cannot supply it (D1) precisely so that the server
+ * can mint it, so handing it back is the only way anyone learns it.
+ *
+ * The `accepted` arm means **the words landed and somebody else is finishing them**: a concurrent
+ * replica took the task, or this driver lost its lease mid-slice and cannot honestly say how the run
+ * ended. Both are 200, not errors — the user's message is in the transcript and the reply will appear
+ * in the thread. Reporting a failure there would be a lie about durable state, and reporting a result
+ * would be a guess.
+ */
+export type ClawSendResult =
+	| { runId: string; result: RuntimeResult; userMessage: MessageRecord }
+	| { runId: string; accepted: true; userMessage: MessageRecord };
 
 /**
  * What `sendMessageAndStream` hands back: a `RuntimeStream` — so it drops straight into the AI SDK
  * response bridges, which accept any `{ textStream }` — plus the user message persisted before the
  * run started, because a chat UI has to render that beside the reply it is streaming.
  */
-export type ClawStreamResult = RuntimeStream & {
+export type ClawStreamResult = Omit<RuntimeStream, "result"> & {
 	userMessage: MessageRecord;
+	/**
+	 * The run these deltas belong to. Without it a caller who streams her own turn has no way to tell
+	 * anyone else what to watch, so multiplayer streaming would be unreachable from the streaming
+	 * method — and a client whose connection drops has nothing to reconnect against.
+	 */
+	runId: string;
+	/**
+	 * Resolves to the same union `sendMessage` returns, for the same reason: a driver that lost its
+	 * claim has no result to give. On that arm `textStream` closes EMPTY — no deltas, because this
+	 * invocation produced none, not because the answer was empty.
+	 */
+	result: Promise<ClawSendResult>;
 };
 
 export const clawCronHandlerSecretConfig = ark({
@@ -587,11 +616,10 @@ const sendMessageInput = ark({
 			doc: "Persisted tokenized as a `role: 'user'` message before the run, then passed verbatim to the runtime as the prompt.",
 		},
 	}),
-	"runId?": ark("string | undefined").configure({
-		busyclaw: {
-			doc: "Optional caller-supplied run id; when omitted a fresh `run`-prefixed id is minted, and it ties the persisted user message to the run recording.",
-		},
-	}),
+	// `runId` REMOVED (D1). A chat turn is a durable run now, so a caller-chosen id is a
+	// caller-chosen REDACTION CONTAINER and a caller-chosen AUTHZ ANCHOR — pin a stranger's run id
+	// and your write attaches to their container. The server mints it and hands it back on
+	// `ClawSendResult.runId`, which is the only place anyone learns it.
 	threadId: ark("string").configure({
 		busyclaw: {
 			doc: "The thread the message belongs to; recorded on the run recording metadata.",
@@ -1454,9 +1482,17 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		runId: string;
 		userMessage: MessageRecord;
 		runOptions: RunOptionsFor<RuntimeConfig>;
+		/** Everything the engine needs to mint the run, minus `drive` — which each door supplies for
+		 *  itself, because only the door knows whether it is streaming. Undefined on a claw with no
+		 *  engine, where the door still drives the runtime directly. */
+		startInput: EngineStartRunInput;
 	}> => {
 		assertNoReservedContext(args.ctx);
-		const runId = args.runId ?? newId("run");
+		// MINTED HERE, not by the engine, because the user's message must be appended BEFORE the run
+		// is created (G5) and the append needs the id. Ordering append → create+enqueue+claim leaves
+		// exactly one strandable failure — a user message whose run never started — which is visible
+		// in the thread. The reverse order strands a run with no visible cause.
+		const runId = newId("run");
 		// Write-side ingress for the product transcript: the persisted user message is
 		// tokenized like everything else durable (posture-aware per claw row).
 		const userContent = context.redaction
@@ -1491,7 +1527,69 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			),
 			model: args.model,
 		};
-		return { runId, userMessage, runOptions };
+		// The same three facts the options carry, in the shape the ENGINE stores them: columns on the
+		// run row rather than options on an invocation. `runMode` is stamped here and is never read
+		// from `args` — a caller who could set it would be satisfying the very policy that exists to
+		// detect their absence (see the field comment in contracts/src/run.ts).
+		const startInput: EngineStartRunInput = {
+			prompt: args.message,
+			...(args.ctx !== undefined ? { ctx: forRuntimeCtx(args.ctx) } : {}),
+			run: {
+				id: runId,
+				...(caller?.principal !== undefined
+					? { principal: caller.principal }
+					: {}),
+			},
+			recording: {
+				clawId: args.clawId,
+				threadId: args.threadId,
+				originMessageId: userMessage.id,
+			},
+			...(args.model !== undefined ? { model: args.model } : {}),
+			runMode: "interactive",
+		};
+		return { runId, userMessage, runOptions, startInput };
+	};
+
+	/**
+	 * The invocation budget a driven turn yields against, so a long answer parks a checkpoint instead
+	 * of being killed mid-step by the platform. Absent when the engine has no deadline (a daemon
+	 * host), in which case nothing yields and nothing needs to.
+	 */
+	const driveBudget = (): { deadlineAt: string } | Record<string, never> => {
+		const ms = context.engine?.softDeadlineMs;
+		if (ms === undefined) return {};
+		return { deadlineAt: new Date(Date.now() + ms).toISOString() };
+	};
+
+	/**
+	 * One outcome map for both doors, so the streaming twin cannot drift from `sendMessage`.
+	 *
+	 * Every arm is a 200. `apiRoutes` hardcodes its envelope with no status field, and both clients
+	 * discard a well-formed success body on any non-2xx — so a 202 carrying a runId would be thrown
+	 * away by every first-party caller. The distinction lives in the RESPONSE, where a client can
+	 * actually read it.
+	 */
+	const sendResultOf = (
+		outcome: EngineStartRunResult,
+		runId: string,
+		userMessage: MessageRecord,
+	): ClawSendResult => {
+		if (outcome.result === undefined) {
+			return { runId, accepted: true, userMessage };
+		}
+		// PARSED, not cast. `EngineWorkResult` is `unknown` on purpose — contracts does not import
+		// `RuntimeResult` — so this boundary is where an engine's opaque payload becomes the shape
+		// this door promises its callers. An engine returning something else is a configuration
+		// error to say out loud, not a value to hand onward and let fail somewhere less obvious.
+		const valid = RuntimeResultSchema(outcome.result);
+		if (valid instanceof ark.errors) {
+			throw validationError(
+				`engine "${context.engine?.kind ?? "unknown"}" returned a result this door cannot read`,
+				valid.summary,
+			);
+		}
+		return { runId, result: valid, userMessage };
 	};
 
 	const redactArtifact = async <T>(
@@ -1707,16 +1805,35 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		},
 
 		async sendMessage(args, caller?: ClawApiCaller) {
-			const { runId, userMessage, runOptions } = await openConversationalRun(
-				args,
-				caller,
-			);
-			const result = await context.runtime.generate(
-				args.message,
-				forRuntimeCtx(args.ctx),
-				runOptions,
-			);
-			const response = { result, userMessage };
+			const { runId, userMessage, runOptions, startInput } =
+				await openConversationalRun(args, caller);
+			// THROUGH THE ENGINE when there is one, which is every database-backed claw (D14). The
+			// turn becomes a durable run: `getRun` answers for it, `controlRun` from a second tab
+			// reaches it, and a driver that dies leaves a row a successor can claim — none of which
+			// is true of a bare `runtime.generate`.
+			//
+			// Directly when there is not. A claw configured with `{ model }` and no database has
+			// nowhere to put a run row, and refusing to answer would be a worse answer than
+			// answering without durability.
+			const response: ClawSendResult =
+				context.engine === undefined
+					? {
+							runId,
+							result: await context.runtime.generate(
+								args.message,
+								forRuntimeCtx(args.ctx),
+								runOptions,
+							),
+							userMessage,
+						}
+					: sendResultOf(
+							await context.engine.startRun({
+								...startInput,
+								drive: driveBudget(),
+							}),
+							runId,
+							userMessage,
+						);
 			if (args.view !== "original" || context.redaction === undefined) {
 				return response;
 			}
@@ -1736,16 +1853,49 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// would put raw PII on the wire under a flag meant for one audited read. A caller who wants
 		// the original reads the transcript back through `listMessages` once the run has landed.
 		async sendMessageAndStream(args, caller?: ClawApiCaller) {
-			const { userMessage, runOptions } = await openConversationalRun(
-				args,
-				caller,
-			);
-			const stream = context.runtime.stream(
-				args.message,
-				forRuntimeCtx(args.ctx),
-				runOptions,
-			);
-			return { ...stream, userMessage };
+			const { runId, userMessage, runOptions, startInput } =
+				await openConversationalRun(args, caller);
+			if (context.engine === undefined) {
+				const stream = context.runtime.stream(
+					args.message,
+					forRuntimeCtx(args.ctx),
+					runOptions,
+				);
+				return {
+					textStream: stream.textStream,
+					result: stream.result.then(
+						(result): ClawSendResult => ({ runId, result, userMessage }),
+					),
+					userMessage,
+					runId,
+				};
+			}
+			// THE SAME CHANNEL `runtime.stream` uses, not a second one. Its backpressure (a full
+			// buffer makes `push` return a promise the engine awaits, which stops the read from the
+			// provider) and its departure semantics are both load-bearing, and a reimplementation
+			// here would be a place for them to quietly diverge.
+			//
+			// `onCancel` does NOTHING, deliberately. A departing reader must not abort a run that has
+			// somewhere to put its answer: the turn is durable, the reply lands in the thread, and
+			// closing a tab is not a request to throw away the tokens already paid for. The channel
+			// discards pushes after cancellation, so a detached run costs nothing to ignore.
+			const channel = createDeltaChannel({ onCancel: () => {} });
+			// NOT awaited — `startRun` resolves when the whole run does, and the deltas have to be
+			// readable long before that. The promise is handed back as `result` instead.
+			const driven = context.engine
+				.startRun({
+					...startInput,
+					drive: { ...driveBudget(), onDelta: (text) => channel.push(text) },
+				})
+				.finally(() => channel.close());
+			return {
+				textStream: channel.iterable,
+				result: driven.then((outcome) =>
+					sendResultOf(outcome, runId, userMessage),
+				),
+				userMessage,
+				runId,
+			};
 		},
 
 		async forgetSubject(
