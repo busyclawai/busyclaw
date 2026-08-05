@@ -447,8 +447,9 @@ export type Runtime<Config extends RuntimeConfig = RuntimeConfig> = {
 		ctx?: RunContext<Config>,
 		options?: RunOptionsFor<Config>,
 	) => Promise<RuntimeResult>;
-	/** Stream the model's text to the reader while the run happens — deltas are rehydrated
-	 *  (reader-facing), the transcript still persists placeholders. Requires a streaming loop vendor. */
+	/** Stream the model's text to the reader while the run happens. Deltas carry what the TRANSCRIPT
+	 *  carries — redacted, placeholders intact (R-M04); originals come from one audited `listMessages`
+	 *  read of the finished value. Requires a streaming loop vendor. */
 	stream: (
 		prompt: string,
 		ctx?: RunContext<Config>,

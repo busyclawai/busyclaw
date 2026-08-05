@@ -129,7 +129,7 @@ export function modelMiddleware(
 		},
 		wrapStream: async ({ doStream, params }) => {
 			// The before-gates decide permit/deny on the request, then the real stream passes through
-			// (the loop consumes it and emits rehydrated deltas).
+			// (the loop consumes it and emits redacted deltas — see `createStreamGuard`).
 			const call = buildModelCall(model, params);
 			const gate = await core.checkModelBoundary(call, ctx);
 			if (gate.status !== "ok") {

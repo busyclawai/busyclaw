@@ -106,17 +106,18 @@ export type AiSdkLoopInput = {
 	 *  EMIT PII it was never shown, and an untokenized value is one erasure can never reach. */
 	redactValue?: <T>(value: T) => Promise<T>;
 	/** Stream the model instead of generating it whole — each step uses `streamText` and pushes
-	 *  rehydrated text deltas to `onDelta` as they arrive. The transcript still persists placeholders. */
+	 *  REDACTED text deltas to `onDelta` as they arrive: the stream carries exactly what the transcript
+	 *  persists, placeholders and all. See {@link createStreamGuard} for why (R-M04). */
 	streaming?: boolean;
-	/** Called with each rehydrated text delta while `streaming`. AWAITED: a consumer whose buffer is
+	/** Called with each redacted text delta while `streaming`. AWAITED: a consumer whose buffer is
 	 *  full answers with a promise, and awaiting it here is what stops the read from the provider —
 	 *  backpressure only exists if the producer is willing to wait. */
 	onDelta?: (text: string) => void | Promise<void>;
-	/** placeholder → original, for turning streamed deltas into the reader-facing text. Identity when
-	 *  there is no redactor. Buffered so a `{{pii:…}}` token split across deltas is never mangled. */
-	/** REMOVED — see {@link createStreamGuard}. Streamed deltas are redacted, never re-identified:
-	 *  the stream carries what the transcript carries. Kept out of the input rather than left unused,
-	 *  so nothing can quietly start rehydrating again. */
+	/** A `rehydrate` (placeholder → original, for turning streamed deltas into reader-facing text) was
+	 *  REMOVED — see {@link createStreamGuard}. Streamed deltas are redacted, never re-identified: the
+	 *  stream carries what the transcript carries, and a caller who wants originals reads them back
+	 *  through `listMessages`. Kept named here rather than left unused, so nothing can quietly start
+	 *  rehydrating again. */
 };
 
 /**
@@ -321,7 +322,7 @@ export type AiSdkLoopResult = RuntimeResult & {
 export type ModelLoopVendor = {
 	readonly streaming: boolean;
 	generate: (input: AiSdkLoopInput) => Promise<AiSdkLoopResult>;
-	/** Present iff `streaming`. Same contract as generate, but it pushes rehydrated text deltas to
+	/** Present iff `streaming`. Same contract as generate, but it pushes redacted text deltas to
 	 *  `input.onDelta` while it runs, and resolves to the final result. */
 	stream?: (input: AiSdkLoopInput) => Promise<AiSdkLoopResult>;
 };
@@ -357,6 +358,12 @@ export const aiSdkLoop: ModelLoopVendor = {
  * boundary — a two-word name whose halves land in different emitted chunks — is not caught, because
  * catching it would mean buffering the whole stream and streaming nothing. The final result is
  * redacted whole, so what is persisted is complete either way; it is the wire that is best-effort.
+ *
+ * THAT LAST CLAUSE IS A PREMISE, not a throwaway. It holds only while the wire is ephemeral. Anything
+ * that STORES these deltas — a run-stream buffer for live watchers is the live proposal, see D17 in
+ * docs/plans/one-run.md — turns a best-effort redaction into a stored artifact that erasure cannot
+ * repair, because an uncaught span was never mapped and so has nothing to shred. Such a store must be
+ * short-lived by construction and must never become the read path for a finished run.
  */
 function createStreamGuard(redact?: (text: string) => Promise<string>): {
 	push: (delta: string) => Promise<string>;
@@ -518,7 +525,7 @@ export async function runAiSdkLoop(
 		};
 		// Streaming and non-streaming converge on the same normalized result (usage / finishReason /
 		// response.messages / toolCalls / text) — so the whole tool-governance loop below is shared.
-		// Streaming additionally pushes rehydrated text deltas to `onDelta` as the model produces them.
+		// Streaming additionally pushes redacted text deltas to `onDelta` as the model produces them.
 		const callModel = async () => {
 			if (!input.streaming) {
 				// Projected onto the same PLAIN shape the streaming branch returns, so the convergence
