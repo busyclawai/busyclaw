@@ -233,6 +233,7 @@ export type {
 	EngineRunMetadata,
 	EngineRunRecord,
 	EngineStartRunInput,
+	EngineStartRunResult,
 	EngineWorkResult,
 	RunControlIntent,
 	RunWaitReason,

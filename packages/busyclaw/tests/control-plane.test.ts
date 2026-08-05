@@ -2379,3 +2379,80 @@ describe("run control plane — a slice runs as whoever's message drives it", ()
 		expect((messages[0] as { status: string }).status).toBe("delivered");
 	}, 20_000);
 });
+
+describe("run control plane — the caller drives its own run", () => {
+	/**
+	 * THE SPINE. `sendMessage` has always called the model in-process and written no engine row, while
+	 * `startRun` wrote a row a worker picked up later — two entities, and the control plane only ever
+	 * governed the one nobody's users touch.
+	 *
+	 * There is no caller-driven versus worker-driven. There is only who holds the lease right now: the
+	 * caller creates the run, enqueues its task, CLAIMS that task itself, and drives it with the same
+	 * claim, lease, heartbeat and terminal transitions the cron worker uses.
+	 */
+	it("creates, claims and drives the first slice without any worker tick", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const { engine } = sqlEngine({ store, workerId: "caller-1" }).create(
+			createRuntime({ model: multiStepModel(0) }),
+		);
+
+		const started = await engine.startRun({ prompt: "go", drive: {} });
+
+		// Driven HERE. Nothing called `work()`, and the run is already finished.
+		expect(started.result).toMatchObject({ status: "completed" });
+		expect(started.notDriven).toBeUndefined();
+		expect((await store.getRun(started.id))?.status).toBe("completed");
+		// …and the task it claimed is spent, not left for a replica to pick up.
+		const tasks = await adapter.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: started.id }],
+		});
+		expect(tasks).toHaveLength(1);
+		expect((tasks[0] as { status: string }).status).toBe("completed");
+	}, 15_000);
+
+	it("leaves the task for cron when nobody asked to drive it", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const { engine } = sqlEngine({ store, workerId: "worker-1" }).create(
+			createRuntime({ model: multiStepModel(0) }),
+		);
+
+		// No `drive` — the shape every existing `claw.api.startRun` caller has.
+		const started = await engine.startRun({ prompt: "go" });
+
+		expect(started.result).toBeUndefined();
+		expect((await store.getRun(started.id))?.status).toBe("queued");
+		const tasks = await adapter.findMany({
+			model: "runtime_task",
+			where: [{ field: "runId", value: started.id }],
+		});
+		expect((tasks[0] as { status: string }).status).toBe("pending");
+	}, 15_000);
+
+	it("reports the winner instead of driving a run somebody already stopped", async () => {
+		const { adapter, close } = await sqliteDb(RUN_TABLES);
+		openDatabases.push(close);
+		const store = createSqlEngineStore(adapter);
+		const { engine } = sqlEngine({ store, workerId: "caller-1" }).create(
+			createRuntime({ model: multiStepModel(0) }),
+		);
+
+		// A run whose task is already dead — what a `controlRun` landing in the create/claim window
+		// leaves behind. The claim finds nothing to take, and the caller must say so rather than
+		// pretend it drove anything.
+		const run = await store.createRun({ input: { prompt: "go" } });
+		await store.updateRun(run.id, { status: "cancelled" });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "go" },
+		});
+
+		expect(await store.claimTask(task.id, { workerId: "caller-1" })).toBeNull();
+		expect((await store.getRun(run.id))?.status).toBe("cancelled");
+	}, 15_000);
+});

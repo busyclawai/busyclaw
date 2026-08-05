@@ -10,6 +10,7 @@ import type {
 	EngineProceedRunInput,
 	EngineRunHandle,
 	EngineStartRunInput,
+	EngineStartRunResult,
 	RunControlIntent,
 } from "@busyclaw/contracts";
 import {
@@ -29,6 +30,7 @@ import type {
 } from "./worker";
 import {
 	createSqlEngineWorker,
+	driveClaim,
 	RESUME_MAX_ATTEMPTS,
 	RUNTIME_CONTINUE_RUN_TASK,
 	RUNTIME_RESUME_RUN_TASK,
@@ -118,16 +120,31 @@ function createSqlEngineHandle(input: {
 	config: SqlEngineConfig;
 	runtime: Runtime;
 }): SqlEngineHandle {
+	// ONE resolved id for both drivers. `workerId` is forensic — the lease is fenced on
+	// `leaseId`/`tokenHash`, never on this — but a caller driving its own run and the cron drain must
+	// not disagree about what to record, so the default is resolved once here rather than twice.
+	const workerId = input.config.workerId ?? "busyclaw-worker";
 	const worker = createSqlEngineWorker({
 		leaseTtlMs: input.config.leaseTtlMs,
 		runtime: input.runtime,
 		store: input.config.store,
-		workerId: input.config.workerId ?? "busyclaw-worker",
+		workerId,
 	} satisfies SqlEngineWorkerConfig);
 	return {
 		kind: "sql",
-		async startRun(startInput: EngineStartRunInput): Promise<EngineRunHandle> {
-			const run = await input.config.store.transaction(async (store) => {
+		async startRun(
+			startInput: EngineStartRunInput,
+		): Promise<EngineStartRunResult> {
+			// ONE TRANSACTION for create + enqueue + claim, and that is what makes the first slice
+			// race-free rather than race-resolved: an uncommitted INSERT is invisible to another
+			// connection's `findMany`, so no cron replica can see this task before this caller already
+			// holds its lease. The caller wins by construction, not by luck.
+			//
+			// The CLAIM is targeted (`claimTask`), never `claimDueTask`. A caller running the candidate
+			// scan would take the OLDEST due task — driving somebody else's run under that run's
+			// principal and handing back their result — which is a cross-tenant disclosure, not a
+			// latency question.
+			const opened = await input.config.store.transaction(async (store) => {
 				const run = await store.createRun({
 					...startInput.run,
 					input: { prompt: startInput.prompt, ctx: startInput.ctx ?? {} },
@@ -137,7 +154,7 @@ function createSqlEngineHandle(input: {
 					// answer.
 					recording: startInput.recording,
 				});
-				await store.enqueueTask({
+				const task = await store.enqueueTask({
 					kind: RUNTIME_RUN_TASK,
 					payload: {
 						prompt: startInput.prompt,
@@ -145,9 +162,43 @@ function createSqlEngineHandle(input: {
 					},
 					runId: run.id,
 				});
-				return run;
+				const claim =
+					startInput.drive === undefined
+						? null
+						: await store.claimTask(task.id, {
+								workerId,
+								...(input.config.leaseTtlMs !== undefined
+									? { leaseTtlMs: input.config.leaseTtlMs }
+									: {}),
+							});
+				return { run, claim };
 			});
-			return { id: run.id };
+			if (startInput.drive === undefined) return { id: opened.run.id };
+			// Losing a claim on a task nobody else could see yet means the run went terminal between
+			// create and claim — a `controlRun` arriving in that window. Report the winner rather than
+			// driving a corpse.
+			if (!opened.claim) {
+				return { id: opened.run.id, notDriven: "already-terminal" };
+			}
+			// OUTSIDE the transaction. One that spans a model call is not a design.
+			const result = await driveClaim({
+				claim: opened.claim,
+				runtime: input.runtime,
+				store: input.config.store,
+				workerId,
+				...(input.config.leaseTtlMs !== undefined
+					? { leaseTtlMs: input.config.leaseTtlMs }
+					: {}),
+				...(startInput.drive.deadlineAt !== undefined
+					? { deadlineAt: startInput.drive.deadlineAt }
+					: {}),
+			});
+			// A driver that lost its lease mid-slice cannot claim to know how the run ended — a
+			// successor may already own it. Reported, never guessed at.
+			if (result.status === "failed" && result.task === null) {
+				return { id: opened.run.id, notDriven: "driver-lost" };
+			}
+			return { id: opened.run.id, result };
 		},
 		async proceedRun(
 			proceedInput: EngineProceedRunInput,

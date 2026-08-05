@@ -47,6 +47,35 @@ export type EngineStartRunInput = {
 	ctx?: JsonObject;
 	run?: EngineRunMetadata;
 	recording?: EngineRecording;
+	/**
+	 * Drive the first slice HERE, in this caller's invocation, instead of leaving it for cron.
+	 *
+	 * Takes NO task id: the engine claims the task it just enqueued, in the same transaction that
+	 * created it. That is what makes the first slice race-free rather than race-resolved — an
+	 * uncommitted insert is invisible to another connection, so no replica can see the task before
+	 * this caller already holds its lease. The caller wins by construction.
+	 *
+	 * NOT caller-settable over the wire. `deadlineAt` is a caller-chosen YIELD, which is exactly what
+	 * a door mints from its own budget and never reads from a request body.
+	 */
+	drive?: { deadlineAt?: string };
+};
+
+/**
+ * What starting a run produced — and whether THIS invocation is the one that ran it.
+ *
+ * `driven: false` is not a failure. The run exists, its user message is in the transcript, and the
+ * reply will land in the thread; this caller simply is not the one producing it. The reasons are
+ * BACKEND-NEUTRAL on purpose: `driver-lost` is engine-sql's frozen-past-the-lease case, but a
+ * Temporal or Durable-Objects engine has the same three outcomes under its own mechanics, and naming
+ * them after one engine's lease vocabulary would leak it into a contract the others implement.
+ */
+export type EngineStartRunResult = {
+	id: string;
+	/** Absent when this invocation did not drive the run. Shaped by the engine — busyclaw parses it
+	 *  against `RuntimeResult`, which contracts deliberately does not import. */
+	result?: EngineWorkResult;
+	notDriven?: "running-elsewhere" | "already-terminal" | "driver-lost";
 };
 
 /**
@@ -182,7 +211,10 @@ export type ClawRunReadModel = {
 
 export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	kind: string;
-	startRun: (input: EngineStartRunInput) => Promise<EngineRunHandle>;
+	/** Create the run and enqueue its first slice. With `drive`, also CLAIM that slice and run it
+	 *  here — same claim, lease and terminal transitions a worker uses, because there is no
+	 *  caller-driven versus worker-driven, only who holds the lease right now. */
+	startRun: (input: EngineStartRunInput) => Promise<EngineStartRunResult>;
 	/**
 	 * Advance an EXISTING parked run. Admits one durable work item and returns; nothing executes
 	 * here. Idempotent per (runId, proceed) — a duplicate loses the insert and gets the same handle.
