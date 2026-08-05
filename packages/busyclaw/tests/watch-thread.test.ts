@@ -202,6 +202,59 @@ describe("watchThread", () => {
 	});
 
 	/**
+	 * SEVERAL PEOPLE WATCHING ONE CONVERSATION — the premise the whole design rests on, and until
+	 * this test the only thing exercised was one subscriber at a time.
+	 *
+	 * Each gets the WHOLE turn independently: no subscriber consumes chunks another needed, and
+	 * neither waits on the other. A backing that served one reader by taking chunks off a queue, or
+	 * that serialised its readers behind one connection, would pass every earlier test and fail here.
+	 */
+	it("serves three concurrent subscribers the same turn, independently", async () => {
+		const { claw, api, agent, thread } = await watchedClaw();
+		const bob = withPrincipal(claw, userPrincipal("bob")).api;
+		await api.shareResource({
+			resourceKind: "claw",
+			resourceId: agent.id,
+			principalRef: userPrincipal("bob"),
+			permission: "use",
+		});
+
+		// All three attached BEFORE the turn starts, so none is a late joiner reading history.
+		const watchers = await Promise.all([
+			api.watchThread({ threadId: thread.id }),
+			api.watchThread({ threadId: thread.id }),
+			bob.watchThread({ threadId: thread.id }),
+		]);
+		const drains = watchers.map((pages) =>
+			collectUntil(
+				pages,
+				(c) => c.kind === "lifecycle" && c.event === "completed",
+			),
+		);
+
+		const sent = await api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		const seen = await Promise.all(drains);
+
+		for (const chunks of seen) {
+			expect(chunks.some((c) => c.kind === "run.started")).toBe(true);
+			expect(chunks.every((c) => c.runId === sent.runId)).toBe(true);
+			expect(
+				chunks
+					.filter((c) => c.kind === "text")
+					.map((c) => (c.kind === "text" ? c.text : ""))
+					.join(""),
+			).toBe("the answer");
+		}
+		// Identical views: a reader is not consuming from a queue the others draw on.
+		expect(JSON.stringify(seen[0])).toBe(JSON.stringify(seen[1]));
+		expect(JSON.stringify(seen[0])).toBe(JSON.stringify(seen[2]));
+	});
+
+	/**
 	 * THE CRON SLICE REACHES THE SAME WATCHER — the reason the sink lives in the worker rather than
 	 * at the door.
 	 *

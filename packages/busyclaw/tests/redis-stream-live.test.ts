@@ -139,7 +139,8 @@ describe.skipIf(!live)(
 		let main: ReturnType<typeof createConnection>;
 		let blocking: ReturnType<typeof createConnection>;
 		// Namespaced per run so a re-run never reads the previous one's entries.
-		const key = `busyclaw-test:run-stream:${Date.now()}`;
+		const keyBase = `busyclaw-test:run-stream:${Date.now()}`;
+		const key = keyBase;
 
 		beforeAll(async () => {
 			main = createConnection();
@@ -217,6 +218,95 @@ describe.skipIf(!live)(
 			expect(Date.now() - started).toBeLessThan(4_000);
 			await iterator.return?.(undefined);
 			await main.send(["DEL", pushKey]);
+		});
+
+		/**
+		 * TWO WATCHERS ON ONE STREAM — the multiplayer premise, against a real server.
+		 *
+		 * `XREAD BLOCK` occupies its connection until it returns, so two subscribers sharing one
+		 * blocking client would SERIALISE: the second's read cannot even be issued until the first's
+		 * has come back. Nothing in the polling backings can show this, because nothing there holds a
+		 * connection.
+		 */
+		it("delivers to two concurrent watchers without one waiting on the other", async () => {
+			const key = `${keyBase}:multi`;
+			const stream = redisStream({
+				client: main.send,
+				blocking: blocking.send,
+				blockMs: 4_000,
+			});
+			const watch = stream.watch;
+			if (!watch) throw new Error("expected a watch member");
+
+			const first = watch(key)[Symbol.asyncIterator]();
+			const second = watch(key)[Symbol.asyncIterator]();
+			const both = Promise.all([first.next(), second.next()]);
+
+			// Written once, after both blocking reads are parked. Both must see it.
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			const started = Date.now();
+			await stream.append(key, text("r1", "for both"));
+
+			const [a, b] = await both;
+			expect(a.value?.chunks).toMatchObject([{ text: "for both" }]);
+			expect(b.value?.chunks).toMatchObject([{ text: "for both" }]);
+			// Neither waited out a block window, which is what serialising on one connection costs.
+			expect(Date.now() - started).toBeLessThan(3_000);
+
+			await first.return?.(undefined);
+			await second.return?.(undefined);
+			await main.send(["DEL", key]);
+		});
+
+		/**
+		 * A NEW SUBSCRIBER WAITS BEHIND AN IN-FLIGHT BLOCK — the cost the previous test masks.
+		 *
+		 * A queued `XREAD` from an older cursor returns as soon as it is processed, so a second
+		 * watcher usually looks instant. It is not: its FIRST read cannot even be issued while
+		 * another watcher's block occupies the connection. So somebody joining a quiet conversation
+		 * waits out that block before seeing text that is already there.
+		 */
+		it("makes a joining watcher wait out another's block, on one shared connection", async () => {
+			const key = `${keyBase}:join`;
+			const blockMs = 1_500;
+			const stream = redisStream({
+				client: main.send,
+				blocking: blocking.send,
+				blockMs,
+			});
+			const watch = stream.watch;
+			if (!watch) throw new Error("expected a watch member");
+
+			// One chunk exists, and the first watcher is caught up and now blocking for the next.
+			await stream.append(key, text("r1", "already here"));
+			const settled = watch(key)[Symbol.asyncIterator]();
+			expect((await settled.next()).value?.chunks).toHaveLength(1);
+			const parked = settled.next();
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
+			// A second watcher attaches from the start. What it wants is already in the stream.
+			const started = Date.now();
+			const joining = watch(key)[Symbol.asyncIterator]();
+			const first = await joining.next();
+			const waited = Date.now() - started;
+
+			// WHAT IS ASSERTED is that the joiner is served at all, and within a bound that holds
+			// whether or not the sharing below ever gets built. Measured at the time of writing: it
+			// waits out most of the block window, because its first read cannot be issued while
+			// another watcher occupies the connection.
+			//
+			// NOT asserted as a floor, deliberately. Pinning "this is slow" would make the fix D17
+			// calls for — one shared reader per process per key, fanned out in memory — break this
+			// test, and a test that has to be deleted to improve the system is a test that was
+			// measuring the wrong thing.
+			expect(first.value?.chunks).toMatchObject([{ text: "already here" }]);
+			expect(waited).toBeLessThan(blockMs * 2);
+
+			await joining.return?.(undefined);
+			await stream.append(key, text("r1", "release"));
+			await parked;
+			await settled.return?.(undefined);
+			await main.send(["DEL", key]);
 		});
 
 		/** The TTL is real: a key written with a one-second window is gone a moment later, which is what
