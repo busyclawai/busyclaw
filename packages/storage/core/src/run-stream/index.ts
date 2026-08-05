@@ -3,6 +3,7 @@
 // The protocol (`RunStreamPort`, `RunStreamChunk`, the key helpers) lives in @busyclaw/contracts; the
 // implementations live here. Three files, and the split is by what varies:
 //
+//   batch.ts             coalesce text before it reaches a backend — wraps any of the below
 //   chunk.ts             how a chunk becomes bytes and back — shared, so two backends cannot
 //                        disagree about what an unreadable entry means
 //   polling.ts           `read` → a subscription, for the backends that cannot push
@@ -15,6 +16,12 @@
 //
 // See docs/plans/one-run.md D17 for why this exists and what it may never become (a record).
 
+export {
+	type BatchedStreamOptions,
+	batchedStream,
+	DEFAULT_BATCH_CHARS,
+	DEFAULT_BATCH_MS,
+} from "./batch";
 export { decodeChunk, encodeChunk } from "./chunk";
 export { secondaryStorageStream } from "./kv";
 export {

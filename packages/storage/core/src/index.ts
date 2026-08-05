@@ -375,6 +375,10 @@ export { asConflict, isUniqueViolation } from "./conflict";
 // The run stream — live deltas of work in flight. Protocol in @busyclaw/contracts, implementations
 // in ./run-stream (shared codec, the polling subscription, and one module per backend).
 export {
+	type BatchedStreamOptions,
+	batchedStream,
+	DEFAULT_BATCH_CHARS,
+	DEFAULT_BATCH_MS,
 	DEFAULT_POLL_INTERVAL_MS,
 	decodeChunk,
 	encodeChunk,

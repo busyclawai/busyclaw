@@ -42,6 +42,7 @@ import {
 } from "@busyclaw/runtime";
 import { buildSecrets, env } from "@busyclaw/secrets";
 import {
+	batchedStream,
 	entityAdapter,
 	secondaryStorageStream,
 	verifiedAdapter,
@@ -701,11 +702,19 @@ export function createClaw<
 	// process holds the lease produces the chunks, and for the second slice of a parked turn that is
 	// the cron drain rather than any door. `secondaryStorageStream` refuses a KV with no `increment`
 	// loudly here at assembly, rather than by dropping chunks under two concurrent runs much later.
-	const runStream =
+	const resolvedRunStream =
 		config.runStream ??
 		(config.secondaryStorage
 			? secondaryStorageStream(config.secondaryStorage)
 			: undefined);
+	// BATCHED BY DEFAULT, and wrapping is the right layer for it: every producer already writes
+	// through `append`, so all of them coalesce and none of them learn about it. A model emits
+	// 200-500 deltas a turn and one write each is ten times what the design budgets (D17). Applied to
+	// a host-supplied port too — batching is about how we WRITE, not about which backend.
+	const runStream =
+		resolvedRunStream === undefined
+			? undefined
+			: batchedStream(resolvedRunStream);
 	// THE ENGINE, RESOLVED ONCE — as a FACTORY, here, before anything reads schema off it.
 	//
 	// A claw with a database gets one whether or not the host configured it, because `sendMessage`
