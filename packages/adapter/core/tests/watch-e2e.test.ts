@@ -201,20 +201,20 @@ describe("end-to-end: watchThread over SSE", () => {
 	});
 
 	/**
-	 * `?protocol=ui` — the SAME route, framed as the stream `useChat` consumes by default. A host
-	 * mounts nothing extra and a client writes no adapter code: `useChat({ api })` pointed here.
+	 * THE DEFAULT on a run watch, so `useChat({ api })` pointed straight at the mounted route works
+	 * with no parameter, no endpoint and no adapter code. A chat client that had to opt in would
+	 * otherwise receive chunk JSON it does not recognise and render nothing, silently.
 	 */
-	it("serves a run as the AI SDK UI message stream on request", async () => {
+	it("serves a run as the AI SDK UI message stream by default", async () => {
 		const { claw, handler, agent, thread } = await watchable();
 		const sent = await claw.api.sendMessage(
 			{ clawId: agent.id, threadId: thread.id, message: "hello" },
 			{ principal: ALICE },
 		);
 
+		// NO PARAMETER: the UI protocol is what this endpoint serves by default.
 		const response = await handler(
-			new Request(
-				`https://app.test/api/busyclaw/runs/${sent.runId}/watch?protocol=ui`,
-			),
+			new Request(`https://app.test/api/busyclaw/runs/${sent.runId}/watch`),
 		);
 		expect(response.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
 
@@ -229,6 +229,28 @@ describe("end-to-end: watchThread over SSE", () => {
 		expect(parts[0]).toMatchObject({ type: "start", messageId: sent.runId });
 		expect(parts.map((p) => p["type"])).toContain("text-delta");
 		expect(parts.at(-1)).toMatchObject({ type: "finish" });
+	});
+
+	/** The chunk view is still reachable on the same route, which is what the first-party client
+	 *  asks for — the default serves the protocol that cannot ask for itself. */
+	it("still serves chunks on the run route when asked", async () => {
+		const { claw, handler, agent, thread } = await watchable();
+		const sent = await claw.api.sendMessage(
+			{ clawId: agent.id, threadId: thread.id, message: "hello" },
+			{ principal: ALICE },
+		);
+
+		const response = await handler(
+			new Request(
+				`https://app.test/api/busyclaw/runs/${sent.runId}/watch?protocol=chunks`,
+			),
+		);
+		expect(response.headers.get("x-vercel-ai-ui-message-stream")).toBeNull();
+		// Terminates on its own, because the run is terminal — see `watchRun`.
+		const body = await response.text();
+		expect(body).toContain("run.started");
+		// Our framing carries the cursor as an `id:` line; the UI protocol carries none.
+		expect(body).toMatch(/^id: /m);
 	});
 
 	/**

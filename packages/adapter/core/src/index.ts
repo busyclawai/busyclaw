@@ -739,8 +739,12 @@ function watchRoute(spec: {
 	id: string;
 	path: string;
 	param: string;
-	/** Whether `?protocol=ui` is offered here. Only a single-run watch may be: the UI message stream
-	 *  holds ONE assistant message, so a conversation cannot be sent down it. */
+	/**
+	 * Whether this watch serves the AI SDK UI message stream, and serves it BY DEFAULT.
+	 *
+	 * Only a single-run watch may: that protocol holds ONE assistant message, so a conversation
+	 * cannot be sent down it.
+	 */
 	uiMessageStream?: boolean;
 	call: (
 		claw: Claw,
@@ -772,8 +776,18 @@ function watchRoute(spec: {
 			// ONE ROUTE, TWO ENCODINGS. The subscription, its authorization and its cursor are
 			// identical either way — only the framing differs — so this is a parameter rather than a
 			// second endpoint that would have to keep all three in step.
-			const wantsUi = url.searchParams.get("protocol") === "ui";
-			if (wantsUi && spec.uiMessageStream !== true) {
+			//
+			// THE UI PROTOCOL IS THE DEFAULT where it is offered, and the reason is which mistake is
+			// reachable. A chat client that forgot an opt-in would receive chunk JSON it does not
+			// recognise and render NOTHING, silently, in somebody else's codebase. A first-party
+			// client that needs chunks asks for them once, here, in code we own. Eliminate the
+			// failure you cannot reach.
+			const protocol = url.searchParams.get("protocol");
+			const wantsUi =
+				spec.uiMessageStream === true
+					? protocol !== "chunks"
+					: protocol === "ui";
+			if (protocol === "ui" && spec.uiMessageStream !== true) {
 				// REFUSED rather than silently served as chunks. A conversation cannot be a UI message
 				// stream — its consumer keeps one `state.message`, and a second `start` renames that
 				// message instead of opening another — so honouring this would merge every turn in the

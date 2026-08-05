@@ -2122,9 +2122,31 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				throw stateError("no such run to watch", { runId });
 			}
 			const threadId = run.threadId;
-			return threadId !== undefined
-				? watchStreamKey(threadStreamKey(threadId), since, runId)
-				: watchStreamKey(runStreamKey(runId), since);
+			const pages =
+				threadId !== undefined
+					? watchStreamKey(threadStreamKey(threadId), since, runId)
+					: watchStreamKey(runStreamKey(runId), since);
+			// AND IT ENDS WHEN THE RUN DOES. A terminal run will never produce another chunk, so a
+			// subscription that kept polling would hold an HTTP connection open forever for a turn
+			// that finished — which `watchThread` must do (more turns may come) and this must not.
+			// `superseded` and `parked` are NOT terminal: a new attempt or an approval continues it.
+			return (async function* untilTerminal() {
+				for await (const page of pages) {
+					yield page;
+					if (page.stale) return;
+					if (
+						page.chunks.some(
+							(c) =>
+								c.kind === "lifecycle" &&
+								(c.event === "completed" ||
+									c.event === "failed" ||
+									c.event === "cancelled"),
+						)
+					) {
+						return;
+					}
+				}
+			})();
 		},
 
 		async forgetSubject(

@@ -67,6 +67,10 @@ function drainFrames(buffer: string): { frames: Frame[]; rest: string } {
  * and duplicating them would be duplicating exactly the parts that are easy to get subtly wrong.
  */
 function createWatch(options: ClawClientOptions, segment: "threads" | "runs") {
+	// ASKED FOR EXPLICITLY, because the run endpoint serves the AI SDK UI message stream by default.
+	// That default exists so a chat client cannot forget an opt-in and silently render nothing; the
+	// cost is that THIS client — which parses chunks — must say so. It says so once, here.
+	const query = segment === "runs" ? "?protocol=chunks" : "";
 	const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
 	return async function* watch(
 		id: string,
@@ -85,7 +89,7 @@ function createWatch(options: ClawClientOptions, segment: "threads" | "runs") {
 				// `EventSource` reconnect and a server needs one code path for both.
 				if (cursor !== undefined) headers.set("last-event-id", cursor);
 				const response = await fetchImpl(
-					`${baseUrl}/${segment}/${encodeURIComponent(id)}/watch`,
+					`${baseUrl}/${segment}/${encodeURIComponent(id)}/watch${query}`,
 					{
 						headers,
 						method: "GET",

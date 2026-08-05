@@ -339,6 +339,40 @@ describe("watchThread", () => {
 		expect(chunks.some((c) => c.runId === first.runId)).toBe(false);
 	});
 
+	/**
+	 * A RUN WATCH ENDS WHEN THE RUN DOES, and a THREAD watch does not. A terminal run will never
+	 * produce another chunk, so a subscription that kept polling would hold an HTTP connection open
+	 * forever for a turn that finished — which is what the chunk encoding did until an e2e test
+	 * hung on `response.text()`. A thread must keep waiting: the next turn is still to come.
+	 */
+	it("ends a run watch at the terminal chunk, and keeps a thread watch open", async () => {
+		const { claw, agent, thread } = await watchedClaw();
+		const api = withPrincipal(claw, OWNER).api;
+		const sent = await api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+
+		// Drains to completion on its own — no break, no timeout.
+		const seen: RunStreamChunk[] = [];
+		for await (const page of await api.watchRun({ runId: sent.runId })) {
+			seen.push(...page.chunks);
+		}
+		expect(
+			seen.some((c) => c.kind === "lifecycle" && c.event === "completed"),
+		).toBe(true);
+
+		// The thread's own watch is still live after the same turn ended: bounded here only because
+		// the test must stop, which is the point — nothing else stops it.
+		const threadPages = await api.watchThread({ threadId: thread.id });
+		let pagesSeen = 0;
+		for await (const _page of threadPages) {
+			if (++pagesSeen >= 1) break;
+		}
+		expect(pagesSeen).toBe(1);
+	});
+
 	it("denies a stranger a run they cannot read", async () => {
 		const { claw, agent, thread } = await watchedClaw();
 		const sent = await withPrincipal(claw, OWNER).api.sendMessage({
