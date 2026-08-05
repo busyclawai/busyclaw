@@ -86,13 +86,15 @@ function buildClawAndClient() {
 		baseUrl: "https://app.test/api/busyclaw",
 		fetch: (input, init) => handler(new Request(input, init)),
 	});
-	return { claw, client };
+	// The handler rides along for the cases that need the raw HTTP response rather than the client's
+	// parsed view — built here, where the claw's concrete type is already in hand.
+	return { claw, client, handler };
 }
 
 /** A claw, a client, and a conversation to watch — all three, because typing a standalone seeding
  *  helper against a CONCRETE `Claw<…>` means restating its api, and restating it is what drifts. */
 async function watchable() {
-	const { claw, client } = buildClawAndClient();
+	const { claw, client, handler } = buildClawAndClient();
 	const agent = await claw.api.createClaw(
 		{ name: "watched" },
 		{ principal: ALICE },
@@ -101,7 +103,7 @@ async function watchable() {
 		{ clawId: agent.id },
 		{ principal: ALICE },
 	);
-	return { claw, client, agent, thread };
+	return { claw, client, handler, agent, thread };
 }
 
 describe("end-to-end: watchThread over SSE", () => {
@@ -196,6 +198,53 @@ describe("end-to-end: watchThread over SSE", () => {
 		expect(seen.length).toBeGreaterThan(0);
 		expect(seen.every((c) => c.runId === second.runId)).toBe(true);
 		expect(seen.some((c) => c.runId === first.runId)).toBe(false);
+	});
+
+	/**
+	 * `?protocol=ui` — the SAME route, framed as the stream `useChat` consumes by default. A host
+	 * mounts nothing extra and a client writes no adapter code: `useChat({ api })` pointed here.
+	 */
+	it("serves a run as the AI SDK UI message stream on request", async () => {
+		const { claw, handler, agent, thread } = await watchable();
+		const sent = await claw.api.sendMessage(
+			{ clawId: agent.id, threadId: thread.id, message: "hello" },
+			{ principal: ALICE },
+		);
+
+		const response = await handler(
+			new Request(
+				`https://app.test/api/busyclaw/runs/${sent.runId}/watch?protocol=ui`,
+			),
+		);
+		expect(response.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
+
+		const parts = (await response.text())
+			.split("\n")
+			.filter((line) => line.startsWith("data:"))
+			.map((line) => line.slice(5).trim())
+			.filter((payload) => payload !== "" && payload !== "[DONE]")
+			.map((payload) => JSON.parse(payload) as Record<string, unknown>);
+
+		// The run id IS the message id — which is what lets a client speak only of messages.
+		expect(parts[0]).toMatchObject({ type: "start", messageId: sent.runId });
+		expect(parts.map((p) => p["type"])).toContain("text-delta");
+		expect(parts.at(-1)).toMatchObject({ type: "finish" });
+	});
+
+	/**
+	 * A CONVERSATION CANNOT BE ONE MESSAGE, so asking for it is refused rather than quietly served
+	 * as chunks. The protocol's consumer keeps a single `state.message` and a second `start` renames
+	 * it — honouring this would merge every turn in the thread into one.
+	 */
+	it("refuses the UI protocol on a thread, and says which endpoint has it", async () => {
+		const { handler, thread } = await watchable();
+		const response = await handler(
+			new Request(
+				`https://app.test/api/busyclaw/threads/${thread.id}/watch?protocol=ui`,
+			),
+		);
+		expect(response.status).toBe(400);
+		expect(JSON.stringify(await response.json())).toMatch(/watch a run/);
 	});
 
 	/**

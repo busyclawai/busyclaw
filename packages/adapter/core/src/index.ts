@@ -4,6 +4,7 @@ import type {
 	BusyclawPlugin,
 	BusyclawRoute,
 	BusyclawRouteRequest,
+	BusyclawRouteResult,
 	ClawApiCaller,
 	ClawResponseEnvelope,
 	RunStreamPage,
@@ -19,6 +20,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import { MAX_REQUEST_BODY_BYTES, readRequestBody } from "@busyclaw/core";
+import { watchToUIMessageStreamResponse } from "@busyclaw/vendors/ai-sdk";
 import { type } from "arktype";
 import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "busyclaw";
 import { clawApiRouteList, parseClawApiInput } from "busyclaw";
@@ -241,7 +243,21 @@ function stripBasePath(pathname: string, basePath: string): string | null {
 	return null;
 }
 
-type ResolvedRoute = BusyclawRoute<Claw> & { id: string };
+/**
+ * A mounted route.
+ *
+ * The handler may also return a platform `Response` directly, which `BusyclawRoute` cannot say:
+ * @busyclaw/contracts compiles with no DOM lib — deliberately, so it stays importable from anywhere
+ * — and therefore cannot name the type. Widened HERE, where `Response` exists and where the
+ * pass-through in `resultToResponse` already handles it. Plugin routes keep the narrow contract;
+ * this is for the handful of routes this package mounts itself and hands a vendor-built body.
+ */
+type ResolvedRoute = Omit<BusyclawRoute<Claw>, "handler"> & {
+	id: string;
+	handler: (
+		ctx: Parameters<BusyclawRoute<Claw>["handler"]>[0],
+	) => BusyclawRouteResult | Response | Promise<BusyclawRouteResult | Response>;
+};
 
 function routeKey(route: Pick<ResolvedRoute, "method" | "path">): string {
 	return `${route.method} ${normalizePath(route.path)}`;
@@ -695,6 +711,7 @@ function baseRoutes(
 			id: "api:watchRun",
 			path: "/runs/:runId/watch",
 			param: "runId",
+			uiMessageStream: true,
 			call: (claw, id, since, caller) =>
 				claw.api.watchRun({ runId: id, ...(since ? { since } : {}) }, caller),
 		}),
@@ -722,6 +739,9 @@ function watchRoute(spec: {
 	id: string;
 	path: string;
 	param: string;
+	/** Whether `?protocol=ui` is offered here. Only a single-run watch may be: the UI message stream
+	 *  holds ONE assistant message, so a conversation cannot be sent down it. */
+	uiMessageStream?: boolean;
 	call: (
 		claw: Claw,
 		id: string,
@@ -749,10 +769,35 @@ function watchRoute(spec: {
 				url.searchParams.get("since") ??
 				request.headers.get("last-event-id") ??
 				undefined;
+			// ONE ROUTE, TWO ENCODINGS. The subscription, its authorization and its cursor are
+			// identical either way — only the framing differs — so this is a parameter rather than a
+			// second endpoint that would have to keep all three in step.
+			const wantsUi = url.searchParams.get("protocol") === "ui";
+			if (wantsUi && spec.uiMessageStream !== true) {
+				// REFUSED rather than silently served as chunks. A conversation cannot be a UI message
+				// stream — its consumer keeps one `state.message`, and a second `start` renames that
+				// message instead of opening another — so honouring this would merge every turn in the
+				// thread into one. Say which endpoint does what.
+				return {
+					status: 400,
+					body: {
+						ok: false,
+						error: {
+							message:
+								"protocol=ui serves ONE assistant message; watch a run rather than a thread",
+						},
+					},
+				};
+			}
 			// AWAITED HERE, OUTSIDE THE STREAM, so a denial is an HTTP 401/403 with a JSON body rather
 			// than a 200 whose first event happens to be an error. Once the status line is written the
 			// refusal can only be narrated, never returned.
 			const pages = await spec.call(routeClaw, id, since, caller);
+			// The AI SDK's own writer builds this — headers, framing and terminator included — so a
+			// protocol we do not own cannot drift from a copy of it kept here.
+			if (wantsUi) {
+				return watchToUIMessageStreamResponse({ runId: id, pages });
+			}
 			return {
 				sse: (async function* frames() {
 					for await (const page of pages) {
