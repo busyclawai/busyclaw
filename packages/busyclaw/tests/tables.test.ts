@@ -1,5 +1,5 @@
 import { type BusyclawPlugin, field } from "@busyclaw/contracts";
-import { memoryAdapter } from "@busyclaw/storage-core";
+import { memoryAdapter, memorySecondaryStorage } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import {
 	assertUniquesRepresentable,
@@ -285,5 +285,24 @@ describe("the defaulted engine", () => {
 				redaction: { redactor },
 			}),
 		).not.toThrow();
+	});
+});
+
+describe("secondaryStorage", () => {
+	it("reaches the api context when the host configures one", () => {
+		const kv = memorySecondaryStorage();
+		const claw = createClaw({ model: textModel("hi"), secondaryStorage: kv });
+
+		expect(claw.$context.secondaryStorage).toBe(kv);
+	});
+
+	it("is absent when nobody configured one, rather than defaulted", () => {
+		// NOT defaulted to an in-memory instance. This port exists so several readers can see one
+		// run's live stream, and two serverless invocations share no memory — so a silent in-process
+		// default would work on a laptop and quietly do nothing in production. Absent means absent,
+		// and a consumer decides what it does without one.
+		const claw = createClaw({ model: textModel("hi") });
+
+		expect(claw.$context.secondaryStorage).toBeUndefined();
 	});
 });

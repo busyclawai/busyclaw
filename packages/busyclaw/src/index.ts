@@ -22,6 +22,7 @@ import {
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
 	type RunCheckpointStore,
+	type SecondaryStorage,
 	type Secrets,
 	type ToolDefinitionSet,
 	toolModelName,
@@ -185,6 +186,19 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	) => readonly PrincipalScope[] | Promise<readonly PrincipalScope[]>;
 	cronHandler?: ClawCronHandlerConfig;
 	database?: ClawDatabase;
+	/**
+	 * The fast, expiring key-value store beside `database` — a BUFFER, never a record.
+	 *
+	 * Same shape as better-auth's, so a host that already has a Redis adapter for one can hand the
+	 * same object to the other. Nothing durable may live here alone: the test is not "is it
+	 * important" but "if this were wiped mid-flight, would anything be unrecoverable", and the answer
+	 * has to be no.
+	 *
+	 * Its first consumer is the run stream (docs/plans/one-run.md D17) — live deltas several people
+	 * may watch, worthless the moment the turn lands in the transcript. Absent, live watching falls
+	 * back to whatever the stream port's database implementation does.
+	 */
+	secondaryStorage?: SecondaryStorage;
 	engine?: ClawEngineFactory<
 		Runtime<Config>,
 		ClawEngineHandle,
@@ -999,6 +1013,9 @@ export function createClaw<
 		registry: registryStores,
 		runs: engine?.runs,
 		runtime,
+		...(config.secondaryStorage
+			? { secondaryStorage: config.secondaryStorage }
+			: {}),
 		secrets,
 		secretDeclarations,
 	};

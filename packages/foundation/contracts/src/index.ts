@@ -511,6 +511,8 @@ export {
 	scopeFields,
 	UNSCOPED,
 } from "./scope";
+// ── the fast expiring KV beside the durable Adapter ──────────────────────────────────────────
+export type { Awaitable, SecondaryStorage } from "./secondary-storage";
 // ── standard-schema interop: accept any standard-schema library without depending on one ──────
 export type {
 	JsonSchemaSource,

@@ -41,6 +41,7 @@ import type {
 	RunControlIntent,
 	RunMessageMode,
 	ScopeRef,
+	SecondaryStorage,
 	SecretDeclaration,
 	Secrets,
 	ThreadRecord,
@@ -192,6 +193,8 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	/** The one-door reader (the full provider chain) — exposed so hosts and plugin api namespaces
 	 *  resolve credentials the same way the runtime does. */
 	readonly secrets?: Secrets;
+	/** The fast expiring KV, when the host configured one. A BUFFER — see `ClawConfig`. */
+	readonly secondaryStorage?: SecondaryStorage;
 	/** The collected required-secret-name declarations across plugins (feeds boot coverage). */
 	readonly secretDeclarations?: readonly SecretDeclaration[];
 	/** The governed redaction read-path (original view + erasure) — present when a `redaction`

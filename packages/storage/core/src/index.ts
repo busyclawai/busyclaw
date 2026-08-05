@@ -12,7 +12,13 @@
  * Bereket Engida. See THIRD_PARTY_NOTICES.md.
  */
 
-import type { Adapter, SortBy, Where, WhereClause } from "@busyclaw/contracts";
+import type {
+	Adapter,
+	SecondaryStorage,
+	SortBy,
+	Where,
+	WhereClause,
+} from "@busyclaw/contracts";
 import {
 	configurationError,
 	isWhereGroup,
@@ -368,3 +374,71 @@ export function memoryAdapter(): Adapter {
 export { asConflict, isUniqueViolation } from "./conflict";
 
 export { verifiedAdapter } from "./verified-adapter";
+
+/**
+ * A zero-dependency in-memory {@link SecondaryStorage} — the dev/test default, and the honest floor
+ * for what the port promises.
+ *
+ * SINGLE PROCESS, which matters more here than it does for `memoryAdapter`: this port exists so
+ * several readers can see one run's live stream, and two serverless invocations share no memory. A
+ * host that wants live watching across replicas needs Redis or the database, and this implementation
+ * is the reason that sentence has somewhere to point.
+ *
+ * Expiry is checked on READ rather than swept on a timer. A timer would keep the process alive and
+ * would still have to handle a key read after its deadline but before its sweep, so the check has to
+ * exist either way — and once it exists the sweep only saves memory, which a Map of expiring buffers
+ * does not need saved.
+ */
+export function memorySecondaryStorage(options?: {
+	now?: () => number;
+}): Required<SecondaryStorage> {
+	const now = options?.now ?? (() => Date.now());
+	const state = new Map<string, { value: string; expiresAt?: number }>();
+
+	const live = (key: string): string | null => {
+		const row = state.get(key);
+		if (!row) return null;
+		if (row.expiresAt !== undefined && row.expiresAt <= now()) {
+			state.delete(key);
+			return null;
+		}
+		return row.value;
+	};
+
+	return {
+		get: async (key: string) => live(key),
+		getAndDelete: async (key: string) => {
+			const value = live(key);
+			state.delete(key);
+			return value;
+		},
+		increment: async (key: string, ttl: number) => {
+			const current = live(key);
+			const next = current === null ? 1 : Number(current) + 1;
+			// THE TTL IS SET ONLY WHEN THE COUNTER IS BORN. Refreshing it on every increment would
+			// make a busy counter immortal, which is the one behaviour the window exists to prevent —
+			// so an existing key keeps whatever deadline it already had.
+			const existing = state.get(key)?.expiresAt;
+			const expiresAt =
+				current === null
+					? ttl > 0
+						? now() + ttl * 1000
+						: undefined
+					: existing;
+			state.set(key, {
+				value: String(next),
+				...(expiresAt !== undefined ? { expiresAt } : {}),
+			});
+			return next;
+		},
+		set: async (key: string, value: string, ttl?: number) => {
+			state.set(key, {
+				value,
+				...(ttl !== undefined && ttl > 0
+					? { expiresAt: now() + ttl * 1000 }
+					: {}),
+			});
+		},
+		delete: async (key: string) => void state.delete(key),
+	};
+}
