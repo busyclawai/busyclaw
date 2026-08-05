@@ -7,6 +7,7 @@
 //   chunk.ts             how a chunk becomes bytes and back — shared, so two backends cannot
 //                        disagree about what an unreadable entry means
 //   polling.ts           `read` → a subscription, for the backends that cannot push
+//   shared.ts            one reader per key per process, fanned out — wraps any of the below
 //   database.ts          over the storage Adapter — the backing of last resort, so a claw with only
 //                        a `database` can still be watched
 //   kv.ts                over any `SecondaryStorage` — the default whenever a host has a KV
@@ -38,3 +39,4 @@ export {
 	type RedisStreamOptions,
 	redisStream,
 } from "./redis";
+export { sharedStream } from "./shared";

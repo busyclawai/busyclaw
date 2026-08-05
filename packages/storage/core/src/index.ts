@@ -391,6 +391,7 @@ export {
 	type RedisStreamOptions,
 	redisStream,
 	secondaryStorageStream,
+	sharedStream,
 } from "./run-stream/index";
 
 export { verifiedAdapter } from "./verified-adapter";

@@ -46,6 +46,7 @@ import {
 	databaseStream,
 	entityAdapter,
 	secondaryStorageStream,
+	sharedStream,
 	verifiedAdapter,
 } from "@busyclaw/storage-core";
 import {
@@ -726,10 +727,14 @@ export function createClaw<
 	// through `append`, so all of them coalesce and none of them learn about it. A model emits
 	// 200-500 deltas a turn and one write each is ten times what the design budgets (D17). Applied to
 	// a host-supplied port too — batching is about how we WRITE, not about which backend.
+	// TWO WRAPPERS, and the order says what each is for. `sharedStream` is about READING — one
+	// underlying watcher per key per process, so a second person opening a conversation is caught up
+	// from memory instead of queueing behind somebody else's blocking read. `batchedStream` is about
+	// WRITING — coalescing 200-500 deltas a turn into 20-50. Neither sees the other's concern.
 	const runStream =
 		resolvedRunStream === undefined
 			? undefined
-			: batchedStream(resolvedRunStream);
+			: batchedStream(sharedStream(resolvedRunStream));
 	// THE ENGINE, RESOLVED ONCE — as a FACTORY, here, before anything reads schema off it.
 	//
 	// A claw with a database gets one whether or not the host configured it, because `sendMessage`
