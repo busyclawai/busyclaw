@@ -298,7 +298,39 @@ export const conversationBindingFields = {
 	updatedAt: field.string({ required: true }),
 } as const;
 
+/**
+ * THE REPLAY FENCE for a run's assistant message — one row per `(threadId, runId)`, and the INSERT is
+ * the fence.
+ *
+ * The transcript write happens INSIDE `runTask`, before `completeTask`. So a lease that lapses in
+ * that window leaves the append committed and the task un-completed, and the re-claim replays the
+ * slice and appends the reply a second time. The reader sees the same question answered twice, in
+ * two different ways, because a nondeterministic model does not repeat itself.
+ *
+ * A UNIQUE on `message` cannot express this. A partial one (`role = "assistant"` only) has no
+ * predicate to hang on — `uniques` is a table-level composite — and the full three-column version
+ * would forbid two USER messages in one run, which the inbox append needs. And a guard inside
+ * `append` is not a fence at all: it would be a SELECT-then-INSERT whose only atomic neighbour is the
+ * thread cursor CAS, which is role- and run-blind, so two drivers of one run both see nothing and
+ * both insert.
+ *
+ * A dedicated row with a composite primary key is the version the DATABASE arbitrates. The loser of
+ * the insert did not append, and knows it.
+ */
+export const assistantReplyFields = {
+	threadId: field.string({ required: true, primaryKey: true, immutable: true }),
+	runId: field.string({ required: true, primaryKey: true, immutable: true }),
+	/** The message the winning append wrote — so a replay can return the reply that DID land rather
+	 *  than a null the caller has to interpret. */
+	messageId: field.string({ required: true, immutable: true }),
+	createdAt: field.string({ required: true, immutable: true }),
+} as const;
+
 export const clawEntity = entity("claw", clawFields);
+export const assistantReplyEntity = entity(
+	"assistant_reply",
+	assistantReplyFields,
+);
 export const threadEntity = entity("thread", threadFields);
 export const messageEntity = entity("message", messageFields);
 export const toolCallEntity = entity("tool_call", toolCallFields);
@@ -489,6 +521,7 @@ export const bindConversationResult = type({
 });
 
 export const clawsSchema = {
+	...assistantReplyEntity.storage,
 	...clawEntity.storage,
 	...threadEntity.storage,
 	...messageEntity.storage,

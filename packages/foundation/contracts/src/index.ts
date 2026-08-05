@@ -133,6 +133,8 @@ export type {
 } from "./claws/contracts";
 export {
 	appendMessageInput,
+	assistantReplyEntity,
+	assistantReplyFields,
 	bindConversationClawInput,
 	bindConversationInput,
 	bindConversationResult,

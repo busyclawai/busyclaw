@@ -10,6 +10,7 @@
 import {
 	accessGrantFields,
 	approvalFields,
+	assistantReplyFields,
 	authzChangeFields,
 	type BusyclawPlugin,
 	type ClawEngineFactory,
@@ -105,6 +106,9 @@ const CORE_MODELS: Record<string, Record<string, EntityField>> = {
 	claw: clawFields,
 	thread: threadFields,
 	message: messageFields,
+	// The replay fence for a run's assistant reply — see the field map for why a unique on `message`
+	// cannot express it.
+	assistant_reply: assistantReplyFields,
 	tool_call: toolCallFields,
 	tool_result: toolResultFields,
 	checkpoint: checkpointFields,

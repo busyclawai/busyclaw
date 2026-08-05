@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { Kysely, SqliteDialect } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalStore } from "../src/approval";
+import { createClawsStore } from "../src/claws";
 import { createEffectStore } from "../src/effect";
 import { createPiiMappingStore } from "../src/pii";
 
@@ -494,3 +495,102 @@ suite(
 	},
 	() => sqlite?.close(),
 );
+
+describe("messages.append — the assistant replay fence", () => {
+	/**
+	 * The transcript write happens INSIDE `runTask`, before `completeTask`. A lease lapsing in that
+	 * window leaves the reply committed and the task un-completed, so the re-claim replays the slice
+	 * and appends again — and the reader sees one question answered twice, in two different ways,
+	 * because a nondeterministic model does not repeat itself.
+	 *
+	 * Which is exactly why the old guard could not work: it compared CONTENT. These tests use
+	 * different text on the replay for that reason.
+	 */
+	async function thread(adapter: ReturnType<typeof memoryAdapter>) {
+		const store = createClawsStore(adapter);
+		const claw = await store.claws.create({
+			name: "c",
+			createdBy: userPrincipal("alice"),
+			scope: "personal",
+			scopeId: userPrincipal("alice"),
+		});
+		const t = await store.threads.create({ clawId: claw.id });
+		return { store, clawId: claw.id, threadId: t.id };
+	}
+
+	it("appends ONCE for a run, whatever the replay says", async () => {
+		const { store, clawId, threadId } = await thread(memoryAdapter());
+
+		const first = await store.messages.append({
+			clawId,
+			threadId,
+			role: "assistant",
+			content: { text: "the answer" },
+			runId: "run-1",
+			once: true,
+		});
+		// The replay: same run, DIFFERENT words — the case content-equality de-dup misses.
+		const replay = await store.messages.append({
+			clawId,
+			threadId,
+			role: "assistant",
+			content: { text: "a differently worded answer" },
+			runId: "run-1",
+			once: true,
+		});
+
+		// The loser gets the reply that DID land, not a null it has to interpret.
+		expect(replay.id).toBe(first.id);
+		expect(replay.content).toEqual({ text: "the answer" });
+		const all = await store.messages.listForThread({ threadId });
+		expect(all.filter((m) => m.role === "assistant")).toHaveLength(1);
+		// …and the thread cursor did not advance for a message nobody wrote.
+		expect(all).toHaveLength(1);
+	});
+
+	it("fences per RUN, so a second run still answers", async () => {
+		const { store, clawId, threadId } = await thread(memoryAdapter());
+
+		await store.messages.append({
+			clawId,
+			threadId,
+			role: "assistant",
+			content: { text: "one" },
+			runId: "run-1",
+			once: true,
+		});
+		await store.messages.append({
+			clawId,
+			threadId,
+			role: "assistant",
+			content: { text: "two" },
+			runId: "run-2",
+			once: true,
+		});
+
+		expect(await store.messages.listForThread({ threadId })).toHaveLength(2);
+	});
+
+	it("leaves an unfenced append alone — two user messages in one run are legal", async () => {
+		const { store, clawId, threadId } = await thread(memoryAdapter());
+
+		// The reason a full `(threadId, runId, role)` unique could not be the fence: the inbox appends
+		// more than one user message under a single run.
+		await store.messages.append({
+			clawId,
+			threadId,
+			role: "user",
+			content: { text: "first" },
+			runId: "run-1",
+		});
+		await store.messages.append({
+			clawId,
+			threadId,
+			role: "user",
+			content: { text: "second" },
+			runId: "run-1",
+		});
+
+		expect(await store.messages.listForThread({ threadId })).toHaveLength(2);
+	});
+});

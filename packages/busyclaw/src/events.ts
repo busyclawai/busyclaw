@@ -140,26 +140,22 @@ export function createClawRuntimeEventSink(
 			}
 
 			if (event.type === "run.completed") {
-				if (event.runId) {
-					const existing = await store.messages.listForThread({
-						threadId: recording.threadId,
-					});
-					const textContent = { text: event.text };
-					if (
-						existing.some(
-							(message) =>
-								message.role === "assistant" &&
-								message.runId === event.runId &&
-								JSON.stringify(message.content) === JSON.stringify(textContent),
-						)
-					) {
-						return;
-					}
-				}
+				// AT MOST ONCE per run, fenced by an insert the database arbitrates.
+				//
+				// This used to scan the thread and compare content: if an assistant message for this run
+				// already carried the same text, skip. Two things wrong with it. It cannot survive a
+				// NONDETERMINISTIC model — the replay produces different words, the comparison misses,
+				// and the reader gets one question answered twice in two ways. And it was a
+				// read-then-write with nothing atomic between the halves, so two drivers of one run both
+				// saw nothing and both appended.
+				//
+				// The window is real: this append runs INSIDE `runTask`, before `completeTask`, so a
+				// lease lapsing in between leaves the reply committed and the task un-completed, and the
+				// re-claim replays the slice.
 				await store.messages.append({
 					clawId: recording.clawId,
 					content: { text: event.text },
-					...(event.runId ? { runId: event.runId } : {}),
+					...(event.runId ? { runId: event.runId, once: true } : {}),
 					role: "assistant",
 					threadId: recording.threadId,
 					visibility: "user",

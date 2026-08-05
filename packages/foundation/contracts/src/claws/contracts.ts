@@ -113,7 +113,16 @@ export type ThreadStore = {
 };
 
 export type MessageStore = {
-	append: (input: AppendMessageInput) => Promise<MessageRecord>;
+	/**
+	 * `once: true` makes the append AT MOST ONCE for this `(threadId, runId)`, arbitrated by an insert
+	 * into `assistant_reply` in the same transaction. A replay loses that insert and gets back the
+	 * message that DID land, so the caller's shape never changes and nobody has to interpret a null.
+	 *
+	 * Requires a `runId`, because the fence has nothing to key on without one.
+	 */
+	append: (
+		input: AppendMessageInput & { once?: boolean },
+	) => Promise<MessageRecord>;
 	get: (id: string) => Promise<MessageRecord | null>;
 	listForThread: (input: {
 		threadId: string;

@@ -2,6 +2,7 @@ import type { Adapter } from "@busyclaw/contracts";
 import {
 	type AppendMessageInput,
 	appendMessageInput,
+	assistantReplyFields,
 	type ClawsStore,
 	type CreateCheckpointInput,
 	type CreateConversationBindingInput,
@@ -20,6 +21,8 @@ import {
 	createToolResultInput,
 	type EntityField,
 	entity,
+	isConflict,
+	type MessageRecord,
 	messageFields,
 	stateError,
 	threadFields,
@@ -262,7 +265,23 @@ export function createClawsStore(
 
 		messages: {
 			async append(input) {
-				const valid = assertAppendMessageInput(input);
+				// SPLIT OFF before validation, not read alongside it. arktype preserves undeclared keys
+				// and `valid` is spread straight into the message row, so leaving `once` in the object
+				// writes it as a column and the entity layer rejects the whole append. The same property
+				// that made `startRun`'s blind spread a security hole makes this one a runtime error —
+				// louder, and only because a schema happened to be watching.
+				const { once: onceFlag, ...appendInput } =
+					input as AppendMessageInput & {
+						once?: boolean;
+					};
+				const once = onceFlag === true;
+				const valid = assertAppendMessageInput(appendInput);
+				if (once && valid.runId === undefined) {
+					throw validationError(
+						"append message input invalid",
+						"`once` needs a runId to fence on",
+					);
+				}
 				if (!adapter.transaction) {
 					throw configurationError(
 						"ClawsStore message append requires a transactional adapter",
@@ -274,6 +293,7 @@ export function createClawsStore(
 					const txDb = entityDb(tx, {
 						thread: { fields: threadFields },
 						message: { fields: messageFields },
+						assistant_reply: { fields: assistantReplyFields },
 					});
 					const thread = await txDb.findOne({
 						model: "thread",
@@ -303,11 +323,60 @@ export function createClawsStore(
 					}
 
 					const ts = now();
+					const messageId = valid.id ?? newId();
+					// THE FENCE, and it is the insert rather than a check. Claimed BEFORE the message is
+					// written, so the loser never appends at all — a check afterwards would already have
+					// committed the duplicate it was meant to prevent. Same transaction as the append,
+					// so a crash between them cannot leave a claim with no reply behind it.
+					if (once && valid.runId !== undefined) {
+						const key = [
+							{ field: "threadId" as const, value: valid.threadId },
+							{
+								field: "runId" as const,
+								value: valid.runId,
+								connector: "AND" as const,
+							},
+						];
+						// The reply this run already wrote, if any. `null` from the lookup means either no
+						// claim or a claim whose message vanished — both say "append", which is the safe
+						// direction: a missing reply is worse than a duplicated one.
+						const alreadyWritten = async (): Promise<MessageRecord | null> => {
+							const claim = await txDb.findOne({
+								model: "assistant_reply",
+								where: key,
+							});
+							if (!claim) return null;
+							return txDb.findOne({
+								model: "message",
+								where: [{ field: "id", value: claim.messageId }],
+							});
+						};
+						const existing = await alreadyWritten();
+						// Returned rather than thrown: a replay finding the reply already written is the
+						// fence WORKING, and the caller gets the same shape it would have got by winning.
+						if (existing) return existing;
+						try {
+							await txDb.create({
+								model: "assistant_reply",
+								data: {
+									threadId: valid.threadId,
+									runId: valid.runId,
+									messageId,
+									createdAt: ts,
+								},
+							});
+						} catch (error) {
+							if (!isConflict(error)) throw error;
+							const winner = await alreadyWritten();
+							if (winner) return winner;
+							throw error;
+						}
+					}
 					const record = await txDb.create({
 						model: "message",
 						data: {
 							...valid,
-							id: valid.id ?? newId(),
+							id: messageId,
 							parentMessageId: valid.parentMessageId ?? thread.currentMessageId,
 							sequence,
 							visibility: valid.visibility ?? "user",
