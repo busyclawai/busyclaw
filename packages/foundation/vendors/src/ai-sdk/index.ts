@@ -190,3 +190,4 @@ export type {
 } from "@busyclaw/contracts";
 export { govern, hasToJsonSchema, isStandardSchema } from "@busyclaw/contracts";
 export { toTextStreamResponse, toUIMessageStreamResponse } from "./stream";
+export { watchToUIMessageStreamResponse } from "./watch";
