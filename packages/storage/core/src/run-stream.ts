@@ -84,7 +84,6 @@ export function secondaryStorageStream(
 		append: async (key, chunk) => {
 			const offset = await increment(counterKey(key), ttl);
 			await kv.set(chunkKey(key, offset), JSON.stringify(chunk), ttl);
-			return offset;
 		},
 
 		read: async (key, cursor): Promise<RunStreamPage> => {

@@ -87,9 +87,16 @@ export type RunStreamPage = {
  * that can push fill it in, everyone else gets the polling default and the same `watchThread`.
  */
 export type RunStreamPort = {
-	/** Append one chunk and return its offset. Writes are ADVISORY — a caller must be able to drop a
-	 *  failure on the floor, because the stream may never fail a run. */
-	append: (key: string, chunk: RunStreamChunk) => Promise<number>;
+	/**
+	 * Append one chunk. Writes are ADVISORY — a caller must be able to drop a failure on the floor,
+	 * because the stream may never fail a run.
+	 *
+	 * Returns NOTHING, deliberately. It used to hand back the offset it wrote at, which read as
+	 * useful and was not: no caller has ever used it, and it cannot be honoured by a backend whose
+	 * ids are not numbers — a Redis stream id is `<ms>-<seq>`. A return value nobody consumes is not
+	 * free when it constrains which implementations can exist.
+	 */
+	append: (key: string, chunk: RunStreamChunk) => Promise<void>;
 	/** Everything after `cursor` (from the start when absent). */
 	read: (key: string, cursor?: string) => Promise<RunStreamPage>;
 	/**

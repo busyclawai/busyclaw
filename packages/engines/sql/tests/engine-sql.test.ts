@@ -603,7 +603,6 @@ describe("@busyclaw/engine-sql", () => {
 		const runStream: RunStreamPort = {
 			append: async (key, chunk) => {
 				appended.push({ key, chunk });
-				return appended.length;
 			},
 			read: async () => ({ chunks: [], cursor: "0", stale: false }),
 		};
