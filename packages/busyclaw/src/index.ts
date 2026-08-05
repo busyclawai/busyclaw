@@ -85,6 +85,7 @@ import {
 	resolveRedaction,
 	withImmutableRedaction,
 } from "./redaction";
+import { createRunStreamEventSink } from "./run-stream-events";
 import { collectSecretDeclarations, validateSecretsAtBoot } from "./secrets";
 import {
 	collectModelFields,
@@ -936,6 +937,10 @@ export function createClaw<
 		? createClawRuntimeEventSink(clawsStore)
 		: undefined;
 	const observerSinks: readonly RuntimeEventSink[] = [
+		// TOOL VISIBILITY for watchers, when there is anywhere to put it. An OBSERVER rather than a
+		// recording sink: it writes to a transport buffer, so its failures are dropped exactly like
+		// every other write there, and it can be present unconditionally.
+		...(runStream !== undefined ? [createRunStreamEventSink(runStream)] : []),
 		...eventSinksFrom(config.events),
 		...pluginList.flatMap((plugin) => plugin.eventSinks ?? []),
 	];

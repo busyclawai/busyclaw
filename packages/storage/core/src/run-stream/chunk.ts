@@ -7,9 +7,25 @@
 
 import type { RunStreamChunk } from "@busyclaw/contracts";
 
-/** The chunk kinds this codec will hand back. Anything else is treated as unreadable rather than
- *  passed through — a chunk written by a newer version is not a chunk this reader understands. */
-const KINDS = new Set(["text", "lifecycle", "run.started"]);
+/**
+ * The chunk kinds this codec will hand back. Anything else is treated as unreadable rather than
+ * passed through — a chunk written by a newer version is not a chunk this reader understands.
+ *
+ * ADDING A KIND TO `RunStreamChunk` AND NOT TO THIS LIST is a silent bug, and the drop rule below is
+ * what hides it: the chunk is written, accepted by the backend, and vanishes on read with no error
+ * anywhere. `kindsAreExhaustive` below turns that into a compile error instead.
+ */
+const KINDS = new Set(["text", "lifecycle", "run.started", "tool"]);
+
+// Every member of the union must appear in KINDS. A new variant that nobody adds fails HERE, at
+// build time, rather than by disappearing from a live view weeks later.
+const _kindsAreExhaustive: Record<RunStreamChunk["kind"], true> = {
+	text: true,
+	lifecycle: true,
+	"run.started": true,
+	tool: true,
+};
+void _kindsAreExhaustive;
 
 export function encodeChunk(chunk: RunStreamChunk): string {
 	return JSON.stringify(chunk);

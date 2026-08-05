@@ -51,6 +51,30 @@ export type RunStreamChunk =
 			by?: Principal;
 	  }
 	| { kind: "text"; runId: string; attempt: number; text: string }
+	/**
+	 * WHICH TOOL a run is on, so a watcher can render "running send_email…" instead of a stall
+	 * during a call that takes ten seconds and produces no text.
+	 *
+	 * NO ARGUMENTS AND NO OUTPUT, deliberately. A watcher needs to know which tool is running, not
+	 * what it was passed — and tool arguments are the single richest source of PII in a run. Adding
+	 * them would be a disclosure decision, and one that should be taken on purpose rather than
+	 * inherited from "the event already had them".
+	 *
+	 * `attempt` is OPTIONAL here and required on the others, because this chunk comes from the
+	 * runtime's EVENT stream, which observes a run without knowing which claim is driving it. That
+	 * is a real gap and a tolerable one: `attempt` exists to stop two generations of TEXT being
+	 * spliced into one sentence, and a stale "running send_email" is a cosmetic blip rather than a
+	 * corrupted answer.
+	 */
+	| {
+			kind: "tool";
+			runId: string;
+			attempt?: number;
+			step: number;
+			toolCallId: string;
+			toolName: string;
+			status: "called" | "completed" | "waiting_approval" | "denied" | "failed";
+	  }
 	| {
 			kind: "lifecycle";
 			runId: string;

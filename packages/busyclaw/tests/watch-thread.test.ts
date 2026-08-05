@@ -10,6 +10,7 @@ import {
 	approvalToolModel,
 	durableRedactor,
 	emailTool,
+	floorPermitsWrites,
 	streamingModel,
 	textModel,
 	withPrincipal,
@@ -348,6 +349,60 @@ describe("watchThread", () => {
 		await expect(
 			claw.api.watchRun({ runId: sent.runId }, STRANGER),
 		).rejects.toThrow(/BUSYCLAW_AUTHORIZATION_DENIED/);
+	});
+
+	/**
+	 * A TOOL CALL IS WHERE A TURN GOES QUIET — ten seconds of no text while something runs. Without
+	 * these chunks a watcher cannot tell a working turn from a hung one.
+	 *
+	 * Sourced from the runtime's own event stream rather than from the delta path, which is why
+	 * `textStream` stays `AsyncIterable<string>` and the AI SDK response bridges keep working.
+	 */
+	it("shows which tool a run is on, and what became of it", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = withPrincipal(
+			createClaw({
+				database: db,
+				model: approvalToolModel(),
+				plugins: [floorPermitsWrites],
+				redaction: { redactor },
+				secondaryStorage: memorySecondaryStorage(),
+				tools: {
+					send_email: emailTool({ onExecute: (to) => ({ sent: true, to }) }),
+				},
+			}),
+			OWNER,
+		);
+		const agent = await claw.api.createClaw({ name: "tools" });
+		const thread = await claw.api.createThread({ clawId: agent.id });
+
+		const sent = await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "email alice@personal.com",
+		});
+
+		const chunks = await collectUntil(
+			await claw.api.watchThread({ threadId: thread.id }),
+			(c) => c.kind === "lifecycle" && c.event === "completed",
+		);
+		const tools = chunks.filter((c) => c.kind === "tool");
+		expect(tools.map((c) => (c.kind === "tool" ? c.status : ""))).toEqual([
+			"called",
+			"completed",
+		]);
+		expect(tools[0]).toMatchObject({
+			toolName: "send_email",
+			runId: sent.runId,
+		});
+
+		// NO ARGUMENTS AND NO OUTPUT ride along. A watcher needs to know which tool is running, not
+		// what it was handed — and tool arguments are the richest source of PII in a run, so the
+		// address here must not appear anywhere in the stream.
+		const serialized = JSON.stringify(chunks);
+		expect(serialized).not.toContain("alice@personal.com");
+		expect(serialized).not.toContain("args");
+		expect(serialized).not.toContain("output");
 	});
 
 	/** No stream configured is a CONFIGURATION answer, not an empty subscription — which would be
