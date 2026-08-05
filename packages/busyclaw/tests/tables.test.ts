@@ -1,6 +1,12 @@
 import { type BusyclawPlugin, field } from "@busyclaw/contracts";
+import { memoryAdapter } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
-import { assertUniquesRepresentable, getBusyclawTables } from "../src/index";
+import {
+	assertUniquesRepresentable,
+	createClaw,
+	getBusyclawTables,
+} from "../src/index";
+import { durableRedactor, textModel } from "./fixtures";
 
 describe("getBusyclawTables", () => {
 	it("includes busyclaw's core durable tables", () => {
@@ -226,5 +232,58 @@ describe("getBusyclawTables — the engine split", () => {
 				},
 			}),
 		).toThrow(/core model/);
+	});
+});
+
+describe("the defaulted engine", () => {
+	/**
+	 * A claw with a database gets an engine whether or not the host configured one — because a
+	 * conversational turn cannot become a durable run without a `run` row, and a host should not have
+	 * to know that to get one. The flagship example is `{ model, database, redaction }` and is
+	 * migrated by this exact function; before the default it had no `runtime_task` table, so the first
+	 * durable run would have thrown on enqueue.
+	 */
+	it("gives a database-backed claw the engine's own tables too", () => {
+		const { db, redactor } = durableRedactor();
+		const claw = createClaw({
+			database: db,
+			model: textModel("hi"),
+			redaction: { redactor },
+		});
+
+		expect(claw.$context.engine?.kind).toBe("sql");
+		// `run`/`run_event` are core and would be here regardless; these three are the engine's, and
+		// they arrive only because the factory was resolved and asked.
+		for (const table of ["runtime_task", "lease", "idempotency_key"]) {
+			expect(claw.$tables[table]).toBeDefined();
+		}
+	});
+
+	it("gives a claw with NO database no engine, and no scheduler tables", () => {
+		const claw = createClaw({ model: textModel("hi") });
+
+		expect(claw.$context.engine).toBeUndefined();
+		expect(claw.$tables.runtime_task).toBeUndefined();
+		expect(claw.$tables.lease).toBeUndefined();
+		// `run` IS declared — it is core, the governance record every engine needs. A claw with no
+		// database migrates nothing anyway, so declaring it costs nothing and keeps one answer to
+		// "what is a run row" rather than two.
+		expect(claw.$tables.run).toBeDefined();
+	});
+
+	it("contributes no cron task unless a cronHandler exists to reach it", () => {
+		const { db, redactor } = durableRedactor();
+
+		// THE ASSERTION IS THAT THIS CONSTRUCTS. `assertCronHandler` throws at boot when anything
+		// contributes a cron task and no handler is declared, so a defaulted engine that contributed
+		// one would make every existing `{ model, database }` claw fail to build. A task nothing can
+		// reach is a lie, and this is where that lie would surface.
+		expect(() =>
+			createClaw({
+				database: db,
+				model: textModel("hi"),
+				redaction: { redactor },
+			}),
+		).not.toThrow();
 	});
 });

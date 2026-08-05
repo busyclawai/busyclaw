@@ -26,6 +26,7 @@ import {
 	type ToolDefinitionSet,
 	toolModelName,
 } from "@busyclaw/contracts";
+import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import {
 	createRegisteredToolProvider,
 	createRuntime,
@@ -113,6 +114,31 @@ export {
 	parseClawApiInput,
 } from "./api";
 export type { AppAuthzConfig, WithCaller } from "./authz-pep";
+
+/**
+ * The engine a database-backed claw gets when the host configured none.
+ *
+ * `@busyclaw/engine-sql` is already a dependency here and depends only on contracts, runtime and
+ * storage-core, so the import costs nothing structural. What it buys is the thing this whole design
+ * turns on: a conversational turn cannot be a durable run without a `run` row, and a host should not
+ * have to know that to get one.
+ *
+ * CRON POSTURE is decided by `cronHandler` and nothing new. Undefined or `false` ⇒ `cron: false`, so
+ * the engine contributes no cron task and the compile gate — which reads `Config["engine"]` and
+ * therefore never sees this default — stays quiet. A declared handler ⇒ the drain is contributed.
+ *
+ * And the honest cost, per the plan: with `cron: false` a caller drives the slice it is waiting on
+ * and nothing continues a yielded or parked run afterwards.
+ */
+function defaultSqlEngine(input: {
+	adapter: Adapter;
+	cron: boolean;
+}): ReturnType<typeof sqlEngine> {
+	return sqlEngine({
+		store: createSqlEngineStore(input.adapter),
+		...(input.cron ? { cron: false as const } : {}),
+	});
+}
 
 export type ClawStores = {
 	claws?: ClawsStore;
@@ -638,6 +664,28 @@ export function createClaw<
 	const adapter = config.database
 		? resolveDatabase(config.database)
 		: undefined;
+	// THE ENGINE, RESOLVED ONCE — as a FACTORY, here, before anything reads schema off it.
+	//
+	// A claw with a database gets one whether or not the host configured it, because `sendMessage`
+	// becoming engine-required is what makes a chat turn a row at all, and an engine-less fallback
+	// would reinstate exactly the two-kinds-of-run split this replaces, with a conditional in front of
+	// it. Guarded on a transactional adapter because `createSqlEngineStore` throws at construction
+	// otherwise, and a boot-time throw is the one thing a silent default may never do. That guard
+	// costs nothing real: `messages.append` already refuses a non-transactional adapter, so no claw
+	// that can call `sendMessage` today has one.
+	//
+	// Resolved BEFORE `getBusyclawModels` because the engine contributes its own tables through
+	// `ClawEngineFactory.models`, and the collectors run long before `create()` — reading
+	// `config.engine` there would silently migrate nothing for a defaulted engine.
+	const engineFactory =
+		config.engine ??
+		(adapter !== undefined && typeof adapter.transaction === "function"
+			? (defaultSqlEngine({
+					adapter,
+					cron:
+						config.cronHandler === undefined || config.cronHandler === false,
+				}) as unknown as NonNullable<Config["engine"]>)
+			: undefined);
 	const pluginList = (config.plugins ?? []) as readonly BusyclawPlugin[];
 	// A plugin that owns a table (channels registrations) marks itself $RequiresDatabase — its table has
 	// nowhere to live without one. Runtime backstop for the compile-time RequireDatabaseForPlugins guard.
@@ -707,7 +755,7 @@ export function createClaw<
 		redaction: config.redaction,
 		// The FACTORY, read before `create()` — the engine does not exist yet at this point in the
 		// assembly, which is the whole reason its tables ride the factory rather than its plugins.
-		...(config.engine ? { engine: config.engine } : {}),
+		...(engineFactory ? { engine: engineFactory } : {}),
 	});
 	const modelFields = collectModelFields(
 		pluginList,
@@ -928,7 +976,7 @@ export function createClaw<
 		...(redaction.redactor ? { redactor: redaction.redactor } : {}),
 		...(system !== undefined ? { system } : {}),
 	} as ResolvedConfig<Config>);
-	const engine = config.engine?.create(runtime);
+	const engine = engineFactory?.create(runtime);
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const plugins: BusyclawPlugin<BusyclawCronFlag>[] = [
 		...configuredPlugins,
@@ -1019,7 +1067,7 @@ export function createClaw<
 				schema: config.schema,
 				plugins: pluginList,
 				redaction: config.redaction,
-				...(config.engine ? { engine: config.engine } : {}),
+				...(engineFactory ? { engine: engineFactory } : {}),
 			});
 			return tables;
 		},
