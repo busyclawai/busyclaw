@@ -13,6 +13,7 @@ import type {
 	ClawFetchOptions,
 	ClawResult,
 	EndpointHttpMethod,
+	RunStreamPage,
 	UnionToIntersection,
 } from "@busyclaw/contracts";
 import type { ReadableAtom } from "nanostores";
@@ -151,6 +152,29 @@ export type InferClientAtoms<Plugins extends readonly ClawClientPlugin[]> =
 	FoldPlugins<Plugins, AtomsOf<Plugins[number]>>;
 
 /**
+ * Watch a conversation happen — the client half of `claw.api.watchThread`.
+ *
+ * Declared here rather than inferred, because the inference above turns every api method into an RPC
+ * call returning `ClawResult`, and this one is not an RPC call: it is an SSE subscription that yields
+ * pages until you stop reading. Inferring it would hand callers a type for a method that cannot work.
+ */
+export type ClawClientWatchThread = (
+	threadId: string,
+	options?: { since?: string; signal?: AbortSignal },
+) => AsyncIterable<RunStreamPage>;
+
+/**
+ * The api methods that have NO wire route, and therefore no proxy-routed client method.
+ *
+ * They are on `ClawApi` — they are real, in-process, governed methods — but a live stream has no RPC
+ * envelope, so the client cannot call them the way it calls the rest. Removed from the inferred
+ * surface because leaving them there types a call that would derive `POST /stream` and fail at
+ * runtime against a route that does not exist. `watchThread` is then added back with the signature
+ * it actually has.
+ */
+type NonRoutedApiMethod = "stream" | "sendMessageAndStream" | "watchThread";
+
+/**
  * The client: the claw's api wrapped for the wire (base methods table-driven, plugin namespaces
  * proxy-routed — one call shape either way), plus what client plugins contribute. HONEST TYPING
  * LIMIT: TypeScript cannot infer the second generic when the first is explicit, so a
@@ -161,8 +185,9 @@ export type InferClientAtoms<Plugins extends readonly ClawClientPlugin[]> =
 export type ClawClient<
 	ClawLike extends ClawShape,
 	Options extends ClawClientOptions,
-> = InferClientApi<ClawLike["api"]> &
-	InferServerPluginApi<PluginsOf<Options>> &
+> = Omit<InferClientApi<ClawLike["api"]>, NonRoutedApiMethod> & {
+	watchThread: ClawClientWatchThread;
+} & InferServerPluginApi<PluginsOf<Options>> &
 	InferClientActions<PluginsOf<Options>> &
 	InferClientAtoms<PluginsOf<Options>> & {
 		$fetch: ClawClientFetch;

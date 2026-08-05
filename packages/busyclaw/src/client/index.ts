@@ -27,6 +27,7 @@ import type {
 	ClawShape,
 	DefaultClawShape,
 } from "./types";
+import { createWatchThread } from "./watch";
 
 export type {
 	ClawQueryAtomConfig,
@@ -211,6 +212,10 @@ export function createClawClient<
 	}
 	known.$fetch = $fetch;
 	known.$store = $store;
+	// NOT an RPC route, so it is not in `CLAW_API_METHOD_NAMES` and the proxy would otherwise derive
+	// `GET /watch-thread` for it. Claimed like any other key so a plugin cannot shadow it.
+	claim("watchThread", "claw.api");
+	known.watchThread = createWatchThread(resolved);
 
 	// Everything unresolved routes by convention: `client.secrets.set(...)` →
 	// `POST /secrets/set`, nested groups deepen the path, a plugin `pathMethods` entry overrides

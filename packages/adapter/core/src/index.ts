@@ -6,6 +6,7 @@ import type {
 	BusyclawRouteRequest,
 	ClawApiCaller,
 	ClawResponseEnvelope,
+	ServerSentEvent,
 } from "@busyclaw/contracts";
 import {
 	BusyclawError,
@@ -501,8 +502,60 @@ async function readInput(
 	return text ? (JSON.parse(text) as unknown) : {};
 }
 
+/**
+ * Frame an async iterable of events as `text/event-stream`.
+ *
+ * The headers are not decoration. `no-cache` stops a CDN or the browser serving a replay of a live
+ * stream; `X-Accel-Buffering: no` is what keeps nginx from holding the response until it has enough
+ * bytes to be worth forwarding, which turns a live stream into a batch delivered at the end.
+ *
+ * `id:` carries the producer's cursor, so the browser's automatic reconnect arrives with
+ * `Last-Event-ID` and the route can resume exactly where it stopped. Without it SSE is just a slow
+ * download.
+ */
+function sseResponse(events: AsyncIterable<ServerSentEvent>): Response {
+	const encoder = new TextEncoder();
+	const body = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			try {
+				for await (const event of events) {
+					let frame = "";
+					if (event.id !== undefined) frame += `id: ${event.id}\n`;
+					if (event.event !== undefined) frame += `event: ${event.event}\n`;
+					frame += `data: ${JSON.stringify(event.data)}\n\n`;
+					controller.enqueue(encoder.encode(frame));
+				}
+			} catch (error) {
+				// The stream is already open, so the status line is long gone — an error can only be
+				// DELIVERED, never returned. A named event lets a client tell "the server gave up" from
+				// "the connection dropped", which decide different things: the first is not worth an
+				// automatic retry, the second is exactly what reconnect is for.
+				controller.enqueue(
+					encoder.encode(
+						`event: error\ndata: ${JSON.stringify({ message: errorMessage(error) })}\n\n`,
+					),
+				);
+			} finally {
+				controller.close();
+			}
+		},
+	});
+	return new Response(body, {
+		headers: {
+			"Cache-Control": "no-cache, no-transform",
+			Connection: "keep-alive",
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"X-Accel-Buffering": "no",
+		},
+	});
+}
+
 function resultToResponse(result: unknown): Response {
 	if (result instanceof Response) return result;
+	if (result && typeof result === "object" && "sse" in result) {
+		const streamed = (result as { sse?: AsyncIterable<ServerSentEvent> }).sse;
+		if (streamed !== undefined) return sseResponse(streamed);
+	}
 	if (
 		result &&
 		typeof result === "object" &&
@@ -625,8 +678,70 @@ function baseRoutes(
 					} satisfies ResolvedRoute,
 				]
 			: []),
+		watchThreadRoute(),
 		...apiRoutes(),
 	];
+}
+
+/**
+ * `GET /threads/:threadId/watch` — the wire form of `claw.api.watchThread`.
+ *
+ * A BRIDGE, not a second door. It resolves nothing and decides nothing: the api method runs the same
+ * PEP check it runs in-process, so a stranger is denied here for exactly the reason they are denied
+ * there, and every authorization property of watching stays testable with no server.
+ *
+ * `Last-Event-ID` is read from the request and passed as the cursor, which is what makes the
+ * browser's own reconnect resume rather than replay. An explicit `?since=` wins over it, for a client
+ * that tracks its own position (a mobile app, a poller, anything that is not an `EventSource`).
+ *
+ * Hand-written rather than generated from the route table because `watchThread` is deliberately
+ * excluded from it — a live stream has no RPC envelope, which is the same reason `stream` and
+ * `sendMessageAndStream` are excluded.
+ */
+function watchThreadRoute(): ResolvedRoute {
+	return {
+		id: "api:watchThread",
+		method: "GET",
+		path: "/threads/:threadId/watch",
+		handler: async ({ request, claw: routeClaw, caller, params }) => {
+			const threadId = params["threadId"];
+			if (threadId === undefined || threadId === "") {
+				return {
+					status: 404,
+					body: { ok: false, error: { message: "no thread id in the path" } },
+				};
+			}
+			const url = new URL(request.url);
+			const since =
+				url.searchParams.get("since") ??
+				request.headers.get("last-event-id") ??
+				undefined;
+			// AWAITED HERE, OUTSIDE THE STREAM, so a denial is an HTTP 401/403 with a JSON body rather
+			// than a 200 whose first event happens to be an error. Once the status line is written the
+			// refusal can only be narrated, never returned.
+			const pages = await routeClaw.api.watchThread(
+				{ threadId, ...(since ? { since } : {}) },
+				caller,
+			);
+			return {
+				sse: (async function* frames() {
+					for await (const page of pages) {
+						// ONE EVENT PER PAGE, carrying the cursor that page ended at. Per-chunk events
+						// would need a per-chunk cursor, and the port's cursor is per read — so a client
+						// resuming mid-page would either lose chunks or see them twice.
+						yield {
+							id: page.cursor,
+							event: page.stale ? "stale" : "chunks",
+							data: page.chunks,
+						};
+						// A stale page is terminal: the client's cursor points past the log, so the
+						// honest instruction is "reload the transcript", not more frames.
+						if (page.stale) return;
+					}
+				})(),
+			};
+		},
+	};
 }
 
 export type ClawClientFetch = (

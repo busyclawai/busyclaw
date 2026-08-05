@@ -47,7 +47,7 @@ export type Transport = (
 	request: TransportRequest,
 ) => Promise<ClawResult<unknown>>;
 
-function normalizeBaseUrl(baseUrl: string | URL | undefined): string {
+export function normalizeBaseUrl(baseUrl: string | URL | undefined): string {
 	return String(baseUrl ?? "/api/busyclaw").replace(/\/+$/, "");
 }
 
@@ -60,7 +60,7 @@ function withEncodedInput(url: string, input: unknown): string {
 	return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
-async function resolveHeaders(
+export async function resolveHeaders(
 	headers: ClawClientOptions["headers"],
 ): Promise<Headers> {
 	return new Headers(typeof headers === "function" ? await headers() : headers);

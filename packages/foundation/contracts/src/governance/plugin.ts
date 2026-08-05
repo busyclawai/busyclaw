@@ -67,10 +67,31 @@ export type RequestBodyStream = {
 	cancel: () => Promise<void>;
 };
 
+/**
+ * One server-sent event. `id` is what the browser stores and replays as `Last-Event-ID` after a
+ * dropped connection — which is the entire reason SSE is worth preferring here, so a producer that
+ * has a cursor should always set it.
+ */
+export type ServerSentEvent = {
+	id?: string;
+	event?: string;
+	data: unknown;
+};
+
 export type BusyclawRouteResult = {
 	body?: unknown;
 	headers?: Record<string, string>;
 	status?: number;
+	/**
+	 * Stream this route's response as `text/event-stream` instead of a JSON envelope.
+	 *
+	 * An ASYNC ITERABLE rather than a platform `Response`, because this package compiles with no DOM
+	 * lib — which is what keeps it importable from anywhere — and because the encoding is the
+	 * adapter's business, not a route's. A handler yields events; the adapter frames them.
+	 *
+	 * Takes precedence over `body` when both are set.
+	 */
+	sse?: AsyncIterable<ServerSentEvent>;
 };
 
 export type BusyclawRouteContext<ClawLike = unknown> = {

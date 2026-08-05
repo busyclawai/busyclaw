@@ -389,6 +389,7 @@ export type {
 	PolicySourceSlice,
 	RequestBodyStream,
 	SecretProviderPlugin,
+	ServerSentEvent,
 	ShareableKind,
 	ShareableLoaderContext,
 	ShareableResource,

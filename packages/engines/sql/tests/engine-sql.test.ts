@@ -1,3 +1,4 @@
+import type { RunStreamChunk, RunStreamPort } from "@busyclaw/contracts";
 import { userPrincipal } from "@busyclaw/contracts";
 import {
 	createRuntime,
@@ -581,6 +582,75 @@ describe("@busyclaw/engine-sql", () => {
 			model: "fast",
 			runMode: "interactive",
 		});
+	});
+
+	/**
+	 * A ZOMBIE AND ITS SUCCESSOR WRITE THE SAME LOG, and the watcher can still tell them apart.
+	 *
+	 * The stream buffer sits OUTSIDE the lease fence — every durable write is fenced by
+	 * `validateLease`, a KV handle is not — so a driver whose lease lapsed keeps appending its own
+	 * generation while the replica that took the run appends the real one. Without a discriminator
+	 * those interleave into one visible sentence built from two different answers.
+	 *
+	 * The fix is a tag, not a partition: `{runId, attempt}` on every chunk plus a `superseded`
+	 * lifecycle from the successor. A client keeps the highest attempt per run and drops the rest,
+	 * which is also the honest rendering — the answer really did restart.
+	 */
+	it("marks a second attempt superseded so a lapsed driver's chunks can be dropped", async () => {
+		let current = "2026-01-01T00:00:00.000Z";
+		const store = createSqlEngineStore(memoryAdapter(), { now: () => current });
+		const appended: Array<{ key: string; chunk: RunStreamChunk }> = [];
+		const runStream: RunStreamPort = {
+			append: async (key, chunk) => {
+				appended.push({ key, chunk });
+				return appended.length;
+			},
+			read: async () => ({ chunks: [], cursor: "0", stale: false }),
+		};
+		const worker = createSqlEngineWorker({
+			store,
+			runtime: engineRuntime({
+				generate: async () => ({
+					status: "completed",
+					text: "the real answer",
+					steps: 1,
+				}),
+			}),
+			workerId: "worker-2",
+			runStream,
+		});
+
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+			maxAttempts: 3,
+		});
+		// Driver one takes it and then freezes past its lease — the case the heartbeat cannot see.
+		await store.claimDueTask({ workerId: "worker-1", leaseTtlMs: 1_000 });
+		current = "2026-01-01T00:00:02.000Z";
+		await store.reapExpiredLeases();
+		current = "2026-01-01T00:00:03.000Z";
+
+		// The SUCCESSOR drives it, on attempt 2.
+		await worker.tick();
+
+		// It announced the restart BEFORE any of its own text, which is the ordering a client needs:
+		// drop everything below this attempt for this run, then render forward.
+		const superseded = appended.findIndex(
+			(entry) =>
+				entry.chunk.kind === "lifecycle" && entry.chunk.event === "superseded",
+		);
+		const firstText = appended.findIndex(
+			(entry) => entry.chunk.kind === "text",
+		);
+		expect(superseded).toBeGreaterThanOrEqual(0);
+		expect(firstText).toBeGreaterThan(superseded);
+		// And every chunk it wrote is tagged with the attempt that produced it, so a zombie still
+		// appending as attempt 1 is separable rather than spliced.
+		expect(appended.every((entry) => entry.chunk.attempt === 2)).toBe(true);
+		expect(appended.every((entry) => entry.chunk.runId === run.id)).toBe(true);
 	});
 
 	it("worker validates runtime results before persisting them", async () => {
