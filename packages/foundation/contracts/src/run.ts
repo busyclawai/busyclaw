@@ -1,5 +1,22 @@
 // The RUN and its execution history — the governance record, not scheduling state.
 //
+// WHAT A RUN IS, because the name does not teach it on its own:
+//
+//   claw     the agent.
+//   thread     the conversation.                       many runs
+//   RUN          ONE THING SOMEBODY ASKED FOR,         many slices
+//                carried to completion.
+//   slice          one claimed execution of it.        many steps
+//   step             one model call + at most one governed tool call.
+//
+// In a conversation a run IS a turn — and that is the projection, not the definition. A run started
+// by cron answers nobody's message; a subagent spawn is a run; a scheduled job is a run. None of
+// those is a turn, which is why this is not called one. A run becomes a turn exactly when it carries
+// a `recording`: a claw, a thread, and a human at the other end.
+//
+// Durability is what lets ONE run span several slices — it checkpoints, a later replica claims it,
+// and the transcript continues. That never makes a run the conversation; the thread is.
+//
 // These two live in contracts, and their siblings `runtime_task` / `lease` / `idempotency_key` do
 // not, because the line is "does a second engine need this?". `run` carries `clawId` (the authz
 // parent), `scope`/`scopeId` (the tenancy anchor), the control latch, and the id that
