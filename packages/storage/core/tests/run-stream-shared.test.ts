@@ -1,6 +1,10 @@
 import type { RunStreamPage, RunStreamPort } from "@busyclaw/contracts";
 import { describe, expect, it } from "vitest";
-import { sharedStream } from "../src/index";
+import {
+	memorySecondaryStorage,
+	secondaryStorageStream,
+	sharedStream,
+} from "../src/index";
 
 declare const setTimeout: (callback: () => void, ms: number) => unknown;
 const settle = () =>
@@ -247,5 +251,75 @@ describe("sharedStream", () => {
 		backing.emit({ chunks: [], cursor: "9", stale: true });
 		expect(await take(a, 5)).toMatchObject([{ stale: true }]);
 		expect(await take(b, 5)).toMatchObject([{ stale: true }]);
+	});
+
+	/**
+	 * AGAINST A REAL BACKING, because everything above runs on a fake whose semantics I wrote to
+	 * match my own expectations. That is how the `memoryAdapter` uniques gap and the `decodeChunk`
+	 * allowlist both hid — a double that agrees with the code proves the code agrees with itself.
+	 *
+	 * The KV backing has real cursors, real paging and a real `read`, and no `watch` at all — so this
+	 * also exercises the path where the shared loop drives `pollingWatch` rather than a push.
+	 */
+	it("shares one loop over a real KV backing, and every subscriber gets the whole log", async () => {
+		const backing = secondaryStorageStream(memorySecondaryStorage());
+		const stream = sharedStream(backing);
+		const chunk = (text: string) =>
+			({ kind: "text", runId: "r1", attempt: 1, text }) as const;
+
+		const a = stream.watch?.("thread:t1")[Symbol.asyncIterator]();
+		const b = stream.watch?.("thread:t1")[Symbol.asyncIterator]();
+		if (!a || !b) throw new Error("expected watch");
+
+		await backing.append("thread:t1", chunk("one "));
+		await backing.append("thread:t1", chunk("two"));
+
+		const textOf = (pages: RunStreamPage[]) =>
+			pages
+				.flatMap((p) => p.chunks)
+				.map((c) => (c.kind === "text" ? c.text : ""))
+				.join("");
+
+		// Both see everything, whatever page boundaries the poller happened to produce.
+		const seenA: RunStreamPage[] = [];
+		while (textOf(seenA) !== "one two") seenA.push(...(await take(a, 1)));
+		const seenB: RunStreamPage[] = [];
+		while (textOf(seenB) !== "one two") seenB.push(...(await take(b, 1)));
+
+		expect(textOf(seenA)).toBe("one two");
+		expect(textOf(seenB)).toBe("one two");
+		await a.return?.(undefined);
+		await b.return?.(undefined);
+	});
+
+	/**
+	 * A LIVE PAGE ARRIVING WHILE A JOINER IS BEING SET UP must not overtake its replay.
+	 *
+	 * Safe today only because the tail snapshot, the subscriber's registration and the replay push
+	 * all happen in ONE synchronous block — no await for the loop to interleave into. That is
+	 * load-bearing and invisible, so it is asserted rather than trusted: a refactor that awaits
+	 * anything between them reorders a watcher's text.
+	 */
+	it("replays before live pages, with no gap for the loop to cut in", async () => {
+		const backing = countingPort();
+		const stream = sharedStream(backing.port);
+
+		const first = stream.watch?.("thread:t1")[Symbol.asyncIterator]();
+		if (!first) throw new Error("expected watch");
+		await settle();
+		backing.emit(page("1", "one "));
+		backing.emit(page("2", "two "));
+		await take(first, 2);
+
+		// Joined and immediately fed a live page, with no await in between on this side either.
+		const joiner = stream.watch?.("thread:t1")[Symbol.asyncIterator]();
+		if (!joiner) throw new Error("expected watch");
+		backing.emit(page("3", "three"));
+
+		expect((await take(joiner, 3)).map((p) => p.cursor)).toEqual([
+			"1",
+			"2",
+			"3",
+		]);
 	});
 });

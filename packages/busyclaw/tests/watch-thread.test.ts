@@ -1,9 +1,17 @@
 // Slice 11 — live watching. A person looking at a conversation sees a turn somebody ELSE is driving,
 // as it arrives, with no way to have learned the run id beforehand.
 
-import type { RunStreamChunk, RunStreamPage } from "@busyclaw/contracts";
+import type {
+	RunStreamChunk,
+	RunStreamPage,
+	RunStreamPort,
+} from "@busyclaw/contracts";
 import { userPrincipal } from "@busyclaw/contracts";
-import { memorySecondaryStorage } from "@busyclaw/storage-core";
+import {
+	memorySecondaryStorage,
+	pollingWatch,
+	secondaryStorageStream,
+} from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
@@ -252,6 +260,67 @@ describe("watchThread", () => {
 		// Identical views: a reader is not consuming from a queue the others draw on.
 		expect(JSON.stringify(seen[0])).toBe(JSON.stringify(seen[1]));
 		expect(JSON.stringify(seen[0])).toBe(JSON.stringify(seen[2]));
+	});
+
+	/**
+	 * THE ASSEMBLED CLAW ACTUALLY SHARES, which the test above cannot show: it passes whether or not
+	 * `sharedStream` is wired, because correctness is preserved either way. The only visible
+	 * difference is how many readers reach the BACKING, so that is what this counts.
+	 *
+	 * Given a port of its own, `createClaw` wraps it — and the wrapping is the subject. Three
+	 * subscribers, one underlying watcher.
+	 */
+	it("opens one backing reader for several subscribers on one conversation", async () => {
+		const { db, redactor } = durableRedactor();
+		const kv = memorySecondaryStorage();
+		const inner = secondaryStorageStream(kv);
+		let watchers = 0;
+		const counted: RunStreamPort = {
+			append: (key, chunk) => inner.append(key, chunk),
+			read: (key, cursor) => inner.read(key, cursor),
+			watch: (key, cursor) => {
+				watchers += 1;
+				return pollingWatch(inner, key, {
+					...(cursor !== undefined ? { since: cursor } : {}),
+				});
+			},
+		};
+		const claw = withPrincipal(
+			createClaw({
+				database: db,
+				model: streamingModel("the answer"),
+				redaction: { redactor },
+				runStream: counted,
+			}),
+			OWNER,
+		);
+		const agent = await claw.api.createClaw({ name: "shared" });
+		const thread = await claw.api.createThread({ clawId: agent.id });
+
+		const watching = await Promise.all([
+			claw.api.watchThread({ threadId: thread.id }),
+			claw.api.watchThread({ threadId: thread.id }),
+			claw.api.watchThread({ threadId: thread.id }),
+		]);
+		const drains = watching.map((pages) =>
+			collectUntil(
+				pages,
+				(c) => c.kind === "lifecycle" && c.event === "completed",
+			),
+		);
+		await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		const seen = await Promise.all(drains);
+
+		// All three got the turn...
+		for (const chunks of seen) {
+			expect(chunks.some((c) => c.kind === "lifecycle")).toBe(true);
+		}
+		// ...from ONE reader. Without the wrapper this is three.
+		expect(watchers).toBe(1);
 	});
 
 	/**
