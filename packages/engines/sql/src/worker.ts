@@ -10,14 +10,22 @@
  * inside @busyclaw/core via @busyclaw/runtime.
  */
 
-import type { EngineRecording, RunMode } from "@busyclaw/contracts";
+import type {
+	EngineRecording,
+	RunMode,
+	RunStreamChunk,
+	RunStreamLifecycle,
+	RunStreamPort,
+} from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	errorMessage,
 	isReservedScope,
 	type Principal,
+	runStreamKey,
 	safeFailureMessage,
 	stateError,
+	threadStreamKey,
 	unsupportedOperationError,
 	validationError,
 } from "@busyclaw/contracts";
@@ -80,6 +88,18 @@ export type SqlEngineWorkerConfig = {
 	runtime: Runtime;
 	workerId: string;
 	leaseTtlMs?: number;
+	/**
+	 * Live deltas, for whoever is watching the conversation this run belongs to.
+	 *
+	 * WIRED HERE RATHER THAN AT THE DOOR, and that is the whole point: a run is sliced across
+	 * invocations, so the second slice of a parked turn is driven by CRON — under a different
+	 * process, minutes later — and a watcher who saw the first half must see the rest. Wherever the
+	 * lease is, the chunks come from there.
+	 *
+	 * It also makes the writes single-sourced. The door briefly emitted its own text chunks beside
+	 * this, which double-wrote every delta for the one path that has both.
+	 */
+	runStream?: RunStreamPort;
 };
 
 export type WorkerTickOptions = {
@@ -512,7 +532,7 @@ function startHeartbeat(
 export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	tick: (options?: WorkerTickOptions) => Promise<WorkerTickResult>;
 } {
-	const { store, runtime, workerId, leaseTtlMs } = config;
+	const { store, runtime, workerId, leaseTtlMs, runStream } = config;
 	const now = store.now;
 	return {
 		async tick(options?: WorkerTickOptions) {
@@ -526,16 +546,73 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 			// oldest due task, which for a caller would mean driving somebody else's run.
 			const claim = await store.claimDueTask({ workerId, leaseTtlMs });
 			if (!claim) return { status: "idle" };
-			return driveClaim({
+			const result = await driveClaim({
 				claim,
 				runtime,
 				store,
 				workerId,
 				...(leaseTtlMs !== undefined ? { leaseTtlMs } : {}),
 				...(deadlineAt !== undefined ? { deadlineAt } : {}),
+				...(runStream !== undefined ? { runStream } : {}),
 			});
+			// HOW THIS SLICE ENDED, told to whoever is watching the conversation.
+			//
+			// Emitted HERE rather than inside `driveClaim` because that function has twenty exits and
+			// one entry; a caller driving its own turn announces its own ending from the result it
+			// hands back. One writer per SLICE either way — the door and the drain never drive the
+			// same claim — which is the unit that matters, since a parked turn's second slice belongs
+			// to whichever process resumed it.
+			await emitSliceEnd({
+				runStream,
+				store,
+				runId: claim.task.runId,
+				attempt: claim.task.attempt,
+				result,
+			});
+			return result;
 		},
 	};
+}
+
+/**
+ * What a WATCHER is told when a slice ends, mapped from what the drain got back.
+ *
+ * `skipped` and `idle` emit NOTHING, deliberately: a duplicate task that found its resume state
+ * already claimed did not end anything, and saying "completed" on its behalf would close a watcher's
+ * view of a turn that is still going under somebody else's lease.
+ */
+async function emitSliceEnd(input: {
+	runStream: RunStreamPort | undefined;
+	store: SqlEngineStore;
+	runId: string;
+	attempt: number;
+	result: WorkerTickResult;
+}): Promise<void> {
+	const { runStream, store, runId, attempt, result } = input;
+	if (runStream === undefined) return;
+	const event: RunStreamLifecycle | undefined =
+		result.status === "completed"
+			? "completed"
+			: result.status === "failed"
+				? "failed"
+				: result.status === "cancelled"
+					? "cancelled"
+					: result.status === "parked" ||
+							result.status === "yielded" ||
+							result.status === "waiting_approval"
+						? "parked"
+						: undefined;
+	if (event === undefined) return;
+	try {
+		const run = await store.getRun(runId);
+		const key =
+			run?.threadId !== undefined
+				? threadStreamKey(run.threadId)
+				: runStreamKey(runId);
+		await runStream.append(key, { kind: "lifecycle", runId, attempt, event });
+	} catch {
+		// Advisory, like every other write to this buffer.
+	}
 }
 
 /**
@@ -559,6 +636,9 @@ export async function driveClaim(input: {
 	workerId: string;
 	leaseTtlMs?: number;
 	deadlineAt?: string;
+	/** Live deltas for whoever is watching. Threaded from the worker config so the cron path — which
+	 *  drives the second slice of a parked turn — writes the same log the door does. */
+	runStream?: RunStreamPort;
 	/** Present only when a DOOR is driving its own turn and streaming it. The cron drain never sets
 	 *  it — nobody is waiting on the other end of a scheduled run. */
 	onDelta?: (text: string) => void | Promise<void>;
@@ -579,6 +659,7 @@ export async function driveClaim(input: {
 		leaseTtlMs,
 		onDelta,
 		onResult,
+		runStream,
 		runtime,
 		store,
 		workerId,
@@ -668,6 +749,37 @@ export async function driveClaim(input: {
 		// One resolution, before anything can act, so the drain and the tool floor agree by
 		// construction rather than by both reading the row and hoping.
 		sliceAs = slicePrincipalOf(claim.task) ?? run?.principal;
+		// WHERE THIS SLICE'S DELTAS GO — the thread when the run has one (a watcher subscribes to a
+		// conversation), the run itself when it does not (cron, a subagent: nobody is watching a
+		// conversation because there is not one). Resolved from the SAME row read that gave the
+		// principal, so a slice cannot disagree with itself about which log it is writing to.
+		const streamKey =
+			run?.threadId !== undefined
+				? threadStreamKey(run.threadId)
+				: runStreamKey(claim.task.runId);
+		const attempt = claim.task.attempt;
+		const emit = async (chunk: RunStreamChunk): Promise<void> => {
+			if (runStream === undefined) return;
+			try {
+				await runStream.append(streamKey, chunk);
+			} catch {
+				// ADVISORY. A run whose deltas nobody could persist still completes and still lands in
+				// the transcript; only the live view degrades. Propagating here would let a broken
+				// buffer fail work that was otherwise perfect.
+			}
+		};
+		// A SECOND ATTEMPT MEANS THE ANSWER RESTARTED, and a watcher has to be told before the new
+		// text arrives. The buffer sits outside the lease fence, so a driver whose lease lapsed may
+		// still be appending its own generation; this is what lets a client drop everything below
+		// this attempt for this run rather than splice two answers into one sentence.
+		if (attempt > 1) {
+			await emit({
+				kind: "lifecycle",
+				runId: claim.task.runId,
+				attempt,
+				event: "superseded",
+			});
+		}
 		// The boundary this slice resolves, recorded once the slice ends. A run started by a
 		// system principal on behalf of a tenant is otherwise owned by nobody a tenant admin
 		// can name — the PEP isolates by the run's own principal, and that principal is the
@@ -695,7 +807,27 @@ export async function driveClaim(input: {
 				: undefined,
 			run?.model,
 			run?.runMode,
-			onDelta,
+			// STREAMING IS THE CALLER'S REQUEST, NEVER IMPLIED BY HAVING A SINK — and that distinction
+			// is load-bearing rather than stylistic. `onDelta` is what makes `runTask` drive through
+			// `runtime.stream`, which needs a vendor that supports it and REFUSES a `noPiiRedaction`
+			// model outright. Turning it on merely because a run stream is configured would make
+			// enabling live watching change how every ordinary `sendMessage` executes, and break the
+			// ones whose model cannot stream at all.
+			//
+			// So: when a caller asked for deltas, they also feed the log. When nobody did, the log
+			// gets the answer in one piece after the fact (below) — a watcher sees it arrive whole,
+			// which is honest, because the pieces genuinely never existed.
+			onDelta === undefined
+				? undefined
+				: async (text: string) => {
+						await emit({
+							kind: "text",
+							runId: claim.task.runId,
+							attempt,
+							text,
+						});
+						await onDelta(text);
+					},
 		);
 		void runtimeTask.catch(() => undefined);
 		const execution = await Promise.race([
@@ -763,6 +895,19 @@ export async function driveClaim(input: {
 		// ONE point, before the terminal switch, where "what the model said" is known. Every branch
 		// below narrates what happened to the TASK; a door waiting on its own turn needs this.
 		onResult?.(result);
+		// A SLICE NOBODY STREAMED still owes its watchers the answer — cron driving the second half
+		// of a parked turn is the case that matters, since the person who saw the first half is
+		// watching a conversation nothing else will write to. One chunk, after the fact, because the
+		// deltas were never produced: pretending otherwise by splitting the text here would invent a
+		// timeline the run did not have.
+		if (onDelta === undefined && result.text !== "") {
+			await emit({
+				kind: "text",
+				runId: claim.task.runId,
+				attempt,
+				text: result.text,
+			});
+		}
 
 		if (result.status === "yielded") {
 			// Self-continuation: park is already durable (the runtime persisted the checkpoint);

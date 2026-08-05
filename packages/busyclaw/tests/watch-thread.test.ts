@@ -7,7 +7,9 @@ import { memorySecondaryStorage } from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 import { createClaw } from "../src/index";
 import {
+	approvalToolModel,
 	durableRedactor,
+	emailTool,
 	streamingModel,
 	textModel,
 	withPrincipal,
@@ -196,6 +198,82 @@ describe("watchThread", () => {
 		expect(runs.has(b.runId)).toBe(true);
 		// Two distinct turns, each announced — not one merged stream.
 		expect(chunks.filter((c) => c.kind === "run.started")).toHaveLength(2);
+	});
+
+	/**
+	 * THE CRON SLICE REACHES THE SAME WATCHER — the reason the sink lives in the worker rather than
+	 * at the door.
+	 *
+	 * A turn that parks for approval ends its first slice there. The SECOND slice is driven by the
+	 * drain: another process, minutes later, with no door and no reader attached. A watcher who saw
+	 * the first half would simply stop receiving if only the door wrote chunks — the conversation
+	 * would appear to hang at "waiting for approval" forever while the answer quietly landed in the
+	 * transcript.
+	 */
+	it("keeps writing when the drain finishes a parked turn, not just when a door drives it", async () => {
+		const { db, redactor } = durableRedactor();
+		const claw = withPrincipal(
+			createClaw({
+				database: db,
+				model: approvalToolModel(),
+				redaction: { redactor },
+				secondaryStorage: memorySecondaryStorage(),
+				tools: {
+					send_email: emailTool({ onExecute: (to) => ({ sent: true, to }) }),
+				},
+			}),
+			OWNER,
+		);
+		const agent = await claw.api.createClaw({ name: "parks" });
+		const thread = await claw.api.createThread({ clawId: agent.id });
+
+		const sent = await claw.api.sendMessage({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "email alice@personal.com",
+		});
+		if (!sent.driven)
+			throw new Error("expected the door to drive the first slice");
+		if (
+			sent.result.status !== "waiting_approval" ||
+			!sent.result.approvalIds?.[0]
+		) {
+			throw new Error("expected the turn to park for approval");
+		}
+
+		// Everything the DOOR wrote: the turn began and then parked.
+		const beforeResume = await collectUntil(
+			await claw.api.watchThread({ threadId: thread.id }),
+			(c) => c.kind === "lifecycle" && c.event === "parked",
+		);
+		expect(beforeResume.some((c) => c.kind === "run.started")).toBe(true);
+		expect(beforeResume.some((c) => c.kind === "text")).toBe(false);
+
+		// Approve, enqueue the continuation, and let the DRAIN drive it — no door involved.
+		await claw.api.grantApproval({ approvalId: sent.result.approvalIds[0] });
+		await claw.api.proceedRun({
+			runId: sent.runId,
+			proceed: { kind: "approval", approvalId: sent.result.approvalIds[0] },
+		});
+		await claw.$context.engine?.work?.();
+
+		const after = await collectUntil(
+			await claw.api.watchThread({ threadId: thread.id }),
+			(c) => c.kind === "lifecycle" && c.event === "completed",
+		);
+		// The drain's slice announced its ending on the SAME run, in the SAME thread log...
+		expect(
+			after.some(
+				(c) =>
+					c.kind === "lifecycle" &&
+					c.event === "completed" &&
+					c.runId === sent.runId,
+			),
+		).toBe(true);
+		// ...and carried the answer, which nothing streamed because nobody was reading.
+		expect(
+			after.some((c) => c.kind === "text" && c.text.includes("done")),
+		).toBe(true);
 	});
 
 	/** No stream configured is a CONFIGURATION answer, not an empty subscription — which would be

@@ -2023,26 +2023,21 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// closing a tab is not a request to throw away the tokens already paid for. The channel
 			// discards pushes after cancellation, so a detached run costs nothing to ignore.
 			const channel = createDeltaChannel({ onCancel: () => {} });
-			// TWO SINKS, ONE DATA. The reader in this invocation is served from memory; everybody else
-			// reads the same chunks back out of the stream. Both get exactly what `onDelta` produced —
-			// already redacted (R-M04), the same placeholders the transcript will hold.
+			// TWO SINKS, ONE DATA — and only ONE of them is this door's business. The reader in this
+			// invocation is served from memory, here; everybody else reads the stream, which the
+			// ENGINE writes because it is the thing that holds the lease. This used to write text
+			// chunks too, which double-wrote every delta on the one path that has both sinks.
 			//
-			// The store write is AWAITED inside the push, which is what keeps a watcher's view ordered
-			// with the driver's; `emitChunk` swallows its own failures, so a broken stream slows this
-			// turn by one call and cannot fail it.
-			const onDelta = async (text: string) => {
-				await emitChunk(args.threadId, {
-					kind: "text",
-					runId,
-					attempt: 1,
-					text,
-				});
-				await channel.push(text);
-			};
 			// NOT awaited — `startRun` resolves when the whole run does, and the deltas have to be
 			// readable long before that. The promise is handed back as `result` instead.
 			const driven = context.engine
-				.startRun({ ...startInput, drive: { ...driveBudget(), onDelta } })
+				.startRun({
+					...startInput,
+					drive: {
+						...driveBudget(),
+						onDelta: (text: string) => channel.push(text),
+					},
+				})
 				.finally(() => channel.close());
 			return {
 				textStream: channel.iterable,

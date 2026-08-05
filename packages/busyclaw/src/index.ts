@@ -139,10 +139,12 @@ export type { AppAuthzConfig, WithCaller } from "./authz-pep";
 function defaultSqlEngine(input: {
 	adapter: Adapter;
 	cron: boolean;
+	runStream?: RunStreamPort;
 }): ReturnType<typeof sqlEngine> {
 	return sqlEngine({
 		store: createSqlEngineStore(input.adapter),
 		...(input.cron ? { cron: false as const } : {}),
+		...(input.runStream !== undefined ? { runStream: input.runStream } : {}),
 	});
 }
 
@@ -695,6 +697,15 @@ export function createClaw<
 	const adapter = config.database
 		? resolveDatabase(config.database)
 		: undefined;
+	// LIVE DELTAS, resolved BEFORE the engine because the engine is what writes them: whichever
+	// process holds the lease produces the chunks, and for the second slice of a parked turn that is
+	// the cron drain rather than any door. `secondaryStorageStream` refuses a KV with no `increment`
+	// loudly here at assembly, rather than by dropping chunks under two concurrent runs much later.
+	const runStream =
+		config.runStream ??
+		(config.secondaryStorage
+			? secondaryStorageStream(config.secondaryStorage)
+			: undefined);
 	// THE ENGINE, RESOLVED ONCE — as a FACTORY, here, before anything reads schema off it.
 	//
 	// A claw with a database gets one whether or not the host configured it, because `sendMessage`
@@ -715,6 +726,7 @@ export function createClaw<
 					adapter,
 					cron:
 						config.cronHandler === undefined || config.cronHandler === false,
+					...(runStream !== undefined ? { runStream } : {}),
 				}) as unknown as NonNullable<Config["engine"]>)
 			: undefined);
 	const pluginList = (config.plugins ?? []) as readonly BusyclawPlugin[];
@@ -864,11 +876,6 @@ export function createClaw<
 	const grantStore = adapter ? createAccessGrantStore(adapter) : undefined;
 	// LIVE DELTAS, if anywhere. `secondaryStorageStream` refuses a KV with no `increment` — loudly,
 	// here at assembly, rather than by dropping chunks under two concurrent runs much later.
-	const runStream =
-		config.runStream ??
-		(config.secondaryStorage
-			? secondaryStorageStream(config.secondaryStorage)
-			: undefined);
 	// The adapter wrapped ONCE with the merged models — the entity-validating lens plugins get through
 	// `configure`. Built here so the PEP's plugin `shareable` loaders bind against the SAME adapter a
 	// plugin's `configure` builds its store from (a skills loader `entityView`s over it, just like its

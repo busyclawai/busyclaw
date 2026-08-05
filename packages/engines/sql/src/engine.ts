@@ -12,6 +12,7 @@ import type {
 	EngineStartRunInput,
 	EngineStartRunResult,
 	RunControlIntent,
+	RunStreamPort,
 } from "@busyclaw/contracts";
 import {
 	drainWork as drainEngineWork,
@@ -103,6 +104,12 @@ export type SqlEngineConfig = {
 	 */
 	softDeadlineMs?: number;
 	cron?: false | { limit?: number };
+	/**
+	 * Live deltas for whoever is watching. Threaded to the worker so the CRON path writes them too —
+	 * the second slice of a parked turn is driven here, minutes later and in another process, and a
+	 * watcher who saw the first half must see the rest.
+	 */
+	runStream?: RunStreamPort;
 };
 
 type SqlEngineCronFlag<Config extends SqlEngineConfig> = Config extends {
@@ -129,6 +136,9 @@ function createSqlEngineHandle(input: {
 		runtime: input.runtime,
 		store: input.config.store,
 		workerId,
+		...(input.config.runStream !== undefined
+			? { runStream: input.config.runStream }
+			: {}),
 	} satisfies SqlEngineWorkerConfig);
 	return {
 		kind: "sql",
@@ -210,6 +220,12 @@ function createSqlEngineHandle(input: {
 					: {}),
 				...(startInput.drive.onDelta !== undefined
 					? { onDelta: startInput.drive.onDelta }
+					: {}),
+				// The SAME sink the cron drain uses. `onDelta` above is the door's own in-memory tee
+				// for the reader in this invocation; this is the log everybody else reads, and the
+				// two must not both write it or every delta lands twice.
+				...(input.config.runStream !== undefined
+					? { runStream: input.config.runStream }
 					: {}),
 			});
 			// A driver that lost its lease mid-slice cannot claim to know how the run ended — a
