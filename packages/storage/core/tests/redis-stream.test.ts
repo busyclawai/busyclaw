@@ -240,12 +240,64 @@ describe("redisStream", () => {
 		expect(seenByNodeRedis[0]?.slice(0, 2)).toEqual(["XADD", "thread:t1"]);
 	});
 
+	/** Bun ships a Redis client in the runtime, and its raw-command method splits the command from
+	 *  its arguments — a third shape, which neither of the other two use. */
+	it("drives Bun's built-in client, whose send(command, args) splits the two", async () => {
+		const seen: Array<{ command: string; args: string[] }> = [];
+		const bunLike = {
+			send: (command: string, args: string[]) => {
+				seen.push({ command, args });
+				return Promise.resolve(null);
+			},
+		};
+
+		await redisStream({ client: bunLike }).append(
+			"thread:t1",
+			text("r1", "hi"),
+		);
+
+		expect(seen[0]?.command).toBe("XADD");
+		expect(seen[0]?.args[0]).toBe("thread:t1");
+		// The command must NOT be repeated inside the argument array — Redis would read it as a key.
+		expect(seen[0]?.args).not.toContain("XADD");
+	});
+
+	/**
+	 * THE ORDERING TRAP, pinned. **ioredis exposes BOTH `call` and `sendCommand`**, and its
+	 * `sendCommand` takes an ioredis `Command` instance rather than a string array — so a resolver
+	 * that checked `sendCommand` first would hand ioredis an array it cannot parse, and every write
+	 * would fail. This asserts `call` wins, so a tidy-looking reorder cannot pass review.
+	 */
+	it("prefers `call` on a client that has both, because ioredis does", async () => {
+		const viaCall: string[][] = [];
+		let sendCommandCalls = 0;
+		const ioredisLike = {
+			call: (...args: string[]) => {
+				viaCall.push(args);
+				return Promise.resolve(null);
+			},
+			sendCommand: () => {
+				sendCommandCalls += 1;
+				return Promise.resolve(null);
+			},
+		};
+
+		await redisStream({ client: ioredisLike }).append(
+			"thread:t1",
+			text("r1", "hi"),
+		);
+
+		// Everything went through `call` — XADD then EXPIRE — and `sendCommand` was never reached.
+		expect(viaCall.map((args) => args[0])).toEqual(["XADD", "EXPIRE"]);
+		expect(sendCommandCalls).toBe(0);
+	});
+
 	/** A client this cannot drive fails at ASSEMBLY. Deferring it would surface inside an advisory
 	 *  write that swallows its own errors — a watcher silently seeing nothing, rather than a
 	 *  deployment refusing to start. */
 	it("refuses a client it cannot speak to, at construction", () => {
 		expect(() => redisStream({ client: {} })).toThrow(
-			/neither `call` nor `sendCommand`/,
+			/none of `call`, `send` or `sendCommand`/,
 		);
 	});
 

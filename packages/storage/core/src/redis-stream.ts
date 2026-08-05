@@ -19,9 +19,20 @@
 //     }),
 //   });
 //
-// node-redis, Upstash and anything else with `call` or `sendCommand` work the same way. This package
-// does not depend on any of them: it duck-types the one method it needs, which keeps it from having
-// to version against three ecosystems and means a client nobody here has heard of still works. If
+// On Bun, whose Redis client is built in — no package to install at all:
+//
+//   import { RedisClient, redis } from "bun";
+//
+//   createClaw({
+//     runStream: redisStream({
+//       client: redis,                          // the default client, from REDIS_URL
+//       blocking: new RedisClient(),            // a second one, for the same reason as everywhere
+//     }),
+//   });
+//
+// node-redis, Upstash and anything else with `call`, `send` or `sendCommand` work the same way. This
+// package does not depend on any of them: it duck-types the one method it needs, which keeps it from
+// versioning against four ecosystems and means a client nobody here has heard of still works. If
 // yours is stranger than that, pass a function instead of an object — `client` accepts either.
 
 import type {
@@ -36,18 +47,31 @@ import { configurationError } from "@busyclaw/contracts";
 export type RedisCommand = (args: readonly string[]) => Promise<unknown>;
 
 /**
- * Any Redis client, structurally: ioredis exposes `call(command, ...args)`, node-redis and Upstash
- * expose `sendCommand(args)`. Typed with `never[]` parameters deliberately — this is somebody else's
- * client and its real signatures involve branded argument arrays and Buffer unions that would not
- * match a hand-written shape. Pinning it loosely here means ONE cast, inside this file, instead of
- * every caller writing their own at the boundary.
+ * Any Redis client, structurally. Three raw-command shapes exist in the wild and this accepts all of
+ * them:
+ *
+ *   ioredis     `call(command, ...args)`      — command and arguments spread
+ *   Bun         `send(command, args)`         — command, then an array
+ *   node-redis  `sendCommand(args)`           — one array, command first
+ *
+ * Typed with `never[]` parameters deliberately: these are somebody else's signatures, involving
+ * branded argument arrays and Buffer unions that no hand-written shape would match. Pinning it
+ * loosely means ONE cast, inside this file, instead of every caller writing their own.
  */
 export type RedisLike = {
 	call?: (...args: never[]) => unknown;
+	send?: (...args: never[]) => unknown;
 	sendCommand?: (...args: never[]) => unknown;
 };
 
-/** Reduce whatever the host handed over to the single operation this port needs. */
+/**
+ * Reduce whatever the host handed over to the single operation this port needs.
+ *
+ * THE ORDER IS LOAD-BEARING, and not obviously so. **ioredis has BOTH `call` and `sendCommand`** —
+ * and its `sendCommand` takes an ioredis `Command` INSTANCE, not a string array, so reaching that
+ * branch first would hand it an array it cannot parse and every write would fail. `call` is checked
+ * first for exactly that reason; do not reorder these to taste.
+ */
 function resolveSender(source: RedisLike | RedisCommand): RedisCommand {
 	if (typeof source === "function") return source;
 	if (typeof source.call === "function") {
@@ -55,6 +79,15 @@ function resolveSender(source: RedisLike | RedisCommand): RedisCommand {
 			...args: string[]
 		) => Promise<unknown>;
 		return (args) => call(...args);
+	}
+	// Bun's built-in client (`Bun.redis`, `new RedisClient(url)`). Its `send` splits the command from
+	// its arguments, which neither of the other two do.
+	if (typeof source.send === "function") {
+		const send = source.send.bind(source) as (
+			command: string,
+			args: string[],
+		) => Promise<unknown>;
+		return (args) => send(String(args[0]), args.slice(1).map(String));
 	}
 	if (typeof source.sendCommand === "function") {
 		const sendCommand = source.sendCommand.bind(source) as (
@@ -66,10 +99,10 @@ function resolveSender(source: RedisLike | RedisCommand): RedisCommand {
 	// is to say inside an advisory write that swallows its own errors, so the symptom would be a
 	// watcher that silently sees nothing rather than a deployment that refuses to start.
 	throw configurationError(
-		"this redis client has neither `call` nor `sendCommand`",
+		"this redis client has none of `call`, `send` or `sendCommand`",
 		{
 			reason:
-				"pass an ioredis/node-redis client, or a function taking a string[] command and returning its reply",
+				"pass an ioredis, Bun, node-redis or Upstash client, or a function taking a string[] command and returning its reply",
 		},
 	);
 }
@@ -83,8 +116,9 @@ const FIELD = "c";
 const FROM_START = "0";
 
 export type RedisStreamOptions = {
-	/** Your Redis client — ioredis, node-redis, Upstash, anything with `call` or `sendCommand`. A
-	 *  function taking a `string[]` command works too, for a client shaped like none of those. */
+	/** Your Redis client — ioredis, Bun's built-in, node-redis, Upstash: anything with `call`, `send`
+	 *  or `sendCommand`. A function taking a `string[]` command works too, for a client shaped like
+	 *  none of those. */
 	client: RedisLike | RedisCommand;
 	/**
 	 * A SECOND client, for blocking reads. Present ⇒ this port exposes `watch` and subscribers get
