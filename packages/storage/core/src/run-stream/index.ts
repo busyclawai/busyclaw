@@ -6,12 +6,17 @@
 //   chunk.ts             how a chunk becomes bytes and back — shared, so two backends cannot
 //                        disagree about what an unreadable entry means
 //   polling.ts           `read` → a subscription, for the backends that cannot push
-//   secondary-storage.ts over any `SecondaryStorage` — the default whenever a host has a KV
+//   kv.ts                over any `SecondaryStorage` — the default whenever a host has a KV
 //   redis.ts             over Redis Streams — the one that can actually push
+//
+// The backend files are named for WHAT BACKS THEM, not for what they return: both return a
+// `RunStreamPort`. `kv.ts` is not the in-memory one — it runs over whatever `SecondaryStorage` the
+// host configured, which in production is usually a real server.
 //
 // See docs/plans/one-run.md D17 for why this exists and what it may never become (a record).
 
 export { decodeChunk, encodeChunk } from "./chunk";
+export { secondaryStorageStream } from "./kv";
 export {
 	DEFAULT_POLL_INTERVAL_MS,
 	type PollingWatchOptions,
@@ -23,4 +28,3 @@ export {
 	type RedisStreamOptions,
 	redisStream,
 } from "./redis";
-export { secondaryStorageStream } from "./secondary-storage";
