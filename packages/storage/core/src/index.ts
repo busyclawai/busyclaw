@@ -126,19 +126,145 @@ export function matchWhere(
 	return result;
 }
 
+/**
+ * ONE LAYER of storage — the live map, or a transaction's uncommitted overlay on top of one.
+ *
+ * The adapter is built over this rather than over a `Map` directly, so a transaction is a layer that
+ * records what it did instead of a snapshot that replaces everything at the end. That distinction is
+ * the whole point: the snapshot version committed with `state.clear()` + refill, which annihilated
+ * every concurrent write that landed while the body ran — including another run's heartbeat renewal,
+ * which then read as a lost lease and aborted healthy work.
+ */
+type StorageLayer = {
+	/** The effective rows for a model. A fresh array; the ROW objects are stable, so identity is a
+	 *  usable handle for update/delete. */
+	rows: (model: string) => Record<string, unknown>[];
+	insert: (model: string, row: Record<string, unknown>) => void;
+	patch: (
+		model: string,
+		row: Record<string, unknown>,
+		update: Record<string, unknown>,
+	) => void;
+	remove: (model: string, row: Record<string, unknown>) => void;
+};
+
 /** A zero-dependency in-memory Adapter — the dev/test default. Rows are stored per model. */
 export function memoryAdapter(): Adapter {
 	const db = new Map<string, Record<string, unknown>[]>();
-	let transactionQueue = Promise.resolve();
-	const make = (state: Map<string, Record<string, unknown>[]>): Adapter => {
-		const table = (model: string): Record<string, unknown>[] => {
-			let t = state.get(model);
+	const liveTable = (model: string): Record<string, unknown>[] => {
+		let t = db.get(model);
+		if (!t) {
+			t = [];
+			db.set(model, t);
+		}
+		return t;
+	};
+	const base: StorageLayer = {
+		rows: (model) => liveTable(model),
+		insert: (model, row) => void liveTable(model).push(row),
+		patch: (_model, row, update) => void Object.assign(row, update),
+		remove: (model, row) => {
+			const t = liveTable(model);
+			const i = t.indexOf(row);
+			if (i !== -1) t.splice(i, 1);
+		},
+	};
+
+	/**
+	 * COPY-ON-WRITE. Reads see the parent plus this layer's own writes; writes are recorded here and
+	 * applied to the parent only on commit, and only the FIELDS this layer actually touched.
+	 *
+	 * Field-level merge rather than whole-row, because whole-row would reintroduce the bug one scope
+	 * smaller: a concurrent write to a different column of the same row would be clobbered by a
+	 * transaction that never looked at that column. Two writers to the SAME field is genuinely
+	 * last-write-wins, which is the honest answer for an adapter with no engine to arbitrate — and it
+	 * is what `enforcesUnique: false` already says about this adapter's limits.
+	 */
+	const overlay = (
+		parent: StorageLayer,
+	): { layer: StorageLayer; commit: () => void } => {
+		const added = new Map<string, Record<string, unknown>[]>();
+		// parent row → the model it lives in, so commit can remove it from the right table.
+		const removed = new Map<Record<string, unknown>, string>();
+		// parent row → the stable working copy this layer reads and mutates.
+		const working = new Map<Record<string, unknown>, Record<string, unknown>>();
+		// working copy → where it came from, and which fields this layer wrote.
+		const origin = new Map<
+			Record<string, unknown>,
+			{ model: string; row: Record<string, unknown>; touched: Set<string> }
+		>();
+
+		const addedRows = (model: string): Record<string, unknown>[] => {
+			let t = added.get(model);
 			if (!t) {
 				t = [];
-				state.set(model, t);
+				added.set(model, t);
 			}
 			return t;
 		};
+		const workingOf = (
+			model: string,
+			row: Record<string, unknown>,
+		): Record<string, unknown> => {
+			let w = working.get(row);
+			if (w === undefined) {
+				w = { ...row };
+				working.set(row, w);
+				origin.set(w, { model, row, touched: new Set() });
+			}
+			return w;
+		};
+
+		const layer: StorageLayer = {
+			rows: (model) => [
+				...parent
+					.rows(model)
+					.filter((r) => !removed.has(r))
+					.map((r) => workingOf(model, r)),
+				...addedRows(model),
+			],
+			insert: (model, row) => void addedRows(model).push(row),
+			patch: (_model, row, update) => {
+				Object.assign(row, update);
+				const from = origin.get(row);
+				// No origin ⇒ this layer created the row, so there is nothing to merge later.
+				if (from) for (const key of Object.keys(update)) from.touched.add(key);
+			},
+			remove: (model, row) => {
+				const from = origin.get(row);
+				if (from) {
+					removed.set(from.row, from.model);
+					working.delete(from.row);
+					origin.delete(row);
+					return;
+				}
+				const t = addedRows(model);
+				const i = t.indexOf(row);
+				if (i !== -1) t.splice(i, 1);
+			},
+		};
+
+		// PATCH, then REMOVE, then INSERT. Patches first because a row this layer both edited and
+		// deleted must end up deleted, and `removed` has already dropped it from `origin`. Inserts last
+		// so a row created and then deleted inside the transaction never reaches the parent at all.
+		const commit = (): void => {
+			for (const [w, from] of origin) {
+				if (from.touched.size === 0) continue;
+				const update: Record<string, unknown> = {};
+				for (const key of from.touched) update[key] = w[key];
+				parent.patch(from.model, from.row, update);
+			}
+			for (const [row, model] of removed) parent.remove(model, row);
+			for (const [model, rows] of added) {
+				for (const row of rows) parent.insert(model, row);
+			}
+		};
+		return { layer, commit };
+	};
+
+	const make = (state: StorageLayer): Adapter => {
+		const table = (model: string): Record<string, unknown>[] =>
+			state.rows(model);
 		const out = (row: Record<string, unknown>): Record<string, unknown> => ({
 			...row,
 		});
@@ -152,7 +278,7 @@ export function memoryAdapter(): Adapter {
 
 			async create({ model, data }) {
 				const row = { ...data } as Record<string, unknown>;
-				table(model).push(row);
+				state.insert(model, row);
 				return out(row);
 			},
 			async findOne({ model, where }) {
@@ -184,65 +310,57 @@ export function memoryAdapter(): Adapter {
 			async update({ model, where, update }) {
 				const row = table(model).find((r) => matchWhere(r, where));
 				if (!row) return null;
-				Object.assign(row, update);
+				state.patch(model, row, update as Record<string, unknown>);
 				return out(row);
 			},
 			async updateMany({ model, where, update }) {
 				const rows = table(model).filter((r) => matchWhere(r, where));
-				for (const r of rows) Object.assign(r, update);
+				for (const r of rows)
+					state.patch(model, r, update as Record<string, unknown>);
 				return rows.length;
 			},
 			async delete({ model, where }) {
-				const t = table(model);
-				const i = t.findIndex((r) => matchWhere(r, where));
-				if (i !== -1) t.splice(i, 1);
+				const row = table(model).find((r) => matchWhere(r, where));
+				if (row) state.remove(model, row);
 			},
 			async deleteMany({ model, where }) {
-				const t = table(model);
-				let n = 0;
-				for (let i = t.length - 1; i >= 0; i--) {
-					const r = t[i];
-					if (r && matchWhere(r, where)) {
-						t.splice(i, 1);
-						n++;
-					}
-				}
-				return n;
+				const rows = table(model).filter((r) => matchWhere(r, where));
+				for (const r of rows) state.remove(model, r);
+				return rows.length;
 			},
 			async consumeOne({ model, where }) {
-				// Single-threaded JS → the find+splice is atomic; concurrent callers can't double-consume.
-				const t = table(model);
-				const i = t.findIndex((r) => matchWhere(r, where));
-				if (i === -1) return null;
-				const removed = t.splice(i, 1)[0];
-				return removed ? out(removed) : null;
+				// Single-threaded JS → the find+remove is atomic; concurrent callers can't
+				// double-consume.
+				const row = table(model).find((r) => matchWhere(r, where));
+				if (!row) return null;
+				state.remove(model, row);
+				return out(row);
 			},
+			/**
+			 * A copy-on-write layer, committed on success and discarded on throw.
+			 *
+			 * NO GLOBAL MUTEX any more, and that removes a second defect with the first. Serialization
+			 * was load-bearing for the snapshot version — two snapshot-and-replace transactions would
+			 * each obliterate the other — but it also made a NESTED transaction deadlock: the inner call
+			 * awaited a promise only its own caller could resolve, which is why `reapExpiredLeases`
+			 * could not be called from inside `claimDueTask`'s transaction. An overlay over an overlay
+			 * is just a savepoint, so nesting composes.
+			 *
+			 * What this still is NOT is isolation. Two overlays over the same base both see the base as
+			 * it was when they read it, and the later commit wins per field. This adapter says so
+			 * already (`enforcesUnique: false`): it is the dev/test default, and anything that turns on
+			 * a real race belongs on a real database.
+			 */
 			async transaction(fn) {
-				const previous = transactionQueue;
-				let release = () => {};
-				transactionQueue = new Promise<void>((resolve) => {
-					release = resolve;
-				});
-				await previous;
-				const snapshot = new Map<string, Record<string, unknown>[]>(
-					[...state.entries()].map(([model, rows]) => [
-						model,
-						rows.map((row) => ({ ...row })),
-					]),
-				);
-				try {
-					const result = await fn(make(snapshot));
-					state.clear();
-					for (const [model, rows] of snapshot) state.set(model, rows);
-					return result;
-				} finally {
-					release();
-				}
+				const { layer, commit } = overlay(state);
+				const result = await fn(make(layer));
+				commit();
+				return result;
 			},
 		};
 	};
 
-	return make(db);
+	return make(base);
 }
 
 // Uniqueness-violation normalization — one typed conflict, whichever driver raised it. What makes
