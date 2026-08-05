@@ -8,6 +8,7 @@
 import { configurationError } from "@busyclaw/errors";
 import type { JsonObject } from "./common";
 import type { EntityField } from "./entity";
+import type { RunMode } from "./governance/boundary";
 import type { BusyclawCronFlag, BusyclawPlugin } from "./governance/plugin";
 import type { Principal } from "./governance/principal";
 import type { RunMessageMode } from "./run-message";
@@ -47,6 +48,23 @@ export type EngineStartRunInput = {
 	ctx?: JsonObject;
 	run?: EngineRunMetadata;
 	recording?: EngineRecording;
+	/**
+	 * The model pool entry that answers this run, resolved by the door from the caller's validated
+	 * selection. Rides the RUN rather than the invocation because a continuation claimed months later
+	 * must reach the model the caller picked, not whichever is default by then. Absent on a
+	 * single-`model` claw.
+	 */
+	model?: string;
+	/**
+	 * How this run was triggered — STAMPED BY THE DOOR, never accepted from a request body, and the
+	 * wire schema drops it for the same reason it drops `recording`.
+	 *
+	 * A system-posture write is permitted only when confirmed OR `runMode == "interactive"`
+	 * (`authz/src/system-posture.ts`), so a caller who could set this would be satisfying the policy
+	 * that exists to detect their absence. Absent means `autonomous`, which is the fail-closed
+	 * direction and the right default for anything cron reaches.
+	 */
+	runMode?: RunMode;
 	/**
 	 * Drive the first slice HERE, in this caller's invocation, instead of leaving it for cron.
 	 *

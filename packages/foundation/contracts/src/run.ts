@@ -87,6 +87,36 @@ export const runFields = {
 	// answers nobody's message.
 	originMessageId: field.string({ input: false, immutable: true }),
 
+	// ── WHICH MODEL ANSWERS, fixed when the run is created.
+	//
+	// It rides the RUN because a run outlives the invocation that chose it: a continuation claimed
+	// months later has to reach the model the caller actually picked, not whichever is default by
+	// then. Absent on a single-`model` claw, where there is nothing to choose.
+	//
+	// `input: false` for the usual reason — the wire schema already drops it and the door resolves it
+	// from the caller's validated selection.
+	model: field.string({ input: false, immutable: true }),
+
+	// ── HOW THIS RUN WAS TRIGGERED, and it is a SECURITY fact rather than a preference.
+	//
+	// `authz/src/system-posture.ts` permits a system-posture write only when it was confirmed OR
+	// `context.runMode == "interactive"`. So a caller who could set this would be satisfying the very
+	// policy that exists to detect their absence — the same class of hole as the `startRun` blind
+	// spread. STAMPED BY THE DOOR, never a parameter, never on the wire.
+	//
+	// It has to be a COLUMN once the conversational door routes through the engine: today
+	// `sendMessage` stamps `interactive` inline because it IS the interactive entry point, but through
+	// the engine the WORKER becomes the entry point and defaults to `autonomous`. A chat turn would
+	// silently lose the human-presence exemption and writes that used to pass would start demanding
+	// confirmation — a behaviour change that fails CLOSED and therefore would never announce itself.
+	//
+	// PER RUN, not per slice: a handover does not create a new turn, and a delivered message is also a
+	// live human. Absent means `autonomous`, which is the fail-closed direction.
+	runMode: field.enum(["interactive", "autonomous"], {
+		input: false,
+		immutable: true,
+	}),
+
 	// ── THE CONTROL LATCH. The PRESENCE of controlRequestedAt is the intent; `status === "running"
 	//    && controlRequestedAt !== undefined` IS the "stopping" state, derived, so runStatusValues
 	//    needs no new member. controlIntent may only be RAISED (suspend < stop < abort); the other

@@ -10,7 +10,7 @@
  * inside @busyclaw/core via @busyclaw/runtime.
  */
 
-import type { EngineRecording } from "@busyclaw/contracts";
+import type { EngineRecording, RunMode } from "@busyclaw/contracts";
 import {
 	asPrincipal,
 	errorMessage,
@@ -179,6 +179,8 @@ async function runTask(
 	deadlineAt?: string,
 	principal?: Principal,
 	recording?: EngineRecording,
+	model?: string,
+	runMode?: RunMode,
 ): Promise<TaskExecution> {
 	// runId scopes effect ids and runtime events to the durable run, across attempts and slices;
 	// deadlineAt lets the runtime park a yield checkpoint before the invocation's budget runs out.
@@ -190,9 +192,17 @@ async function runTask(
 	// survives the process. It went unnoticed while unstamped tools skipped the floor; with every tool
 	// gated, a worker that omits it cannot execute ANY tool: the floor fails closed on an absent
 	// identity rather than authorize a modeled action for nobody.
+	// BOTH READ FROM THE RUN ROW, for the same reason the principal is. A run is sliced across
+	// invocations, not re-authored by each one, so the invocation that chose the model and observed
+	// the human is long gone by the time a continuation is claimed. `runMode` matters most on the
+	// conversational path: leaving it unset here would default a chat turn to `autonomous` and
+	// silently withdraw the human-presence exemption `authz/src/system-posture.ts` grants — a
+	// fail-CLOSED behaviour change, which is the kind that ships unnoticed.
 	const options = {
 		abortSignal,
 		runId: claim.task.runId,
+		...(model !== undefined ? { model } : {}),
+		...(runMode !== undefined ? { runMode } : {}),
 		...(deadlineAt !== undefined ? { deadlineAt } : {}),
 		// The engine, not the ingress, binds this — the intent outlives whichever process received it,
 		// so every slice including a resumed one has to be able to see it.
@@ -638,6 +648,8 @@ export async function driveClaim(input: {
 						originMessageId: run.originMessageId,
 					}
 				: undefined,
+			run?.model,
+			run?.runMode,
 		);
 		void runtimeTask.catch(() => undefined);
 		const execution = await Promise.race([

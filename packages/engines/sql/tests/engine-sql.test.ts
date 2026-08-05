@@ -531,6 +531,58 @@ describe("@busyclaw/engine-sql", () => {
 		);
 	});
 
+	/**
+	 * `model` and `runMode` ride the RUN ROW, and the worker reads them back on every claim.
+	 *
+	 * `runMode` is the one that fails silently if this regresses, which is why it is asserted here
+	 * rather than left to the door's tests. `authz/src/system-posture.ts` grants a system-posture
+	 * write an exemption when `runMode == "interactive"`; the worker leaving it unset defaults the
+	 * run to `autonomous`, so a chat turn routed through the engine would quietly lose that exemption
+	 * and writes that used to pass would begin demanding confirmation. That fails CLOSED, so nothing
+	 * would report it — the turn would just start behaving differently.
+	 */
+	it("worker drives a run with the model and runMode from its row", async () => {
+		const store = createSqlEngineStore(memoryAdapter(), {
+			now: () => "2026-01-01T00:00:00.000Z",
+		});
+		let seen: { model?: unknown; runMode?: unknown } | undefined;
+		const runtime = engineRuntime({
+			generate: async (_prompt, _ctx, options) => {
+				seen = {
+					model: (options as { model?: unknown } | undefined)?.model,
+					runMode: (options as { runMode?: unknown } | undefined)?.runMode,
+				};
+				return { status: "completed", text: "ok", steps: 1 };
+			},
+		});
+		const worker = createSqlEngineWorker({
+			store,
+			runtime,
+			workerId: "worker-1",
+		});
+		const run = await store.createRun({
+			input: { prompt: "hello" },
+			model: "fast",
+			runMode: "interactive",
+		});
+		await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+			maxAttempts: 1,
+		});
+
+		await worker.tick();
+
+		// Without the row→options wiring both read `undefined`, and the runtime defaults runMode to
+		// "autonomous" — the silent downgrade this test exists to catch.
+		expect(seen).toEqual({ model: "fast", runMode: "interactive" });
+		expect(await store.getRun(run.id)).toMatchObject({
+			model: "fast",
+			runMode: "interactive",
+		});
+	});
+
 	it("worker validates runtime results before persisting them", async () => {
 		const store = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",

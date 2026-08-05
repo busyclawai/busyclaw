@@ -17,6 +17,7 @@ import type {
 	EngineRecording,
 	JsonObject,
 	RunMessageMode,
+	RunMode,
 } from "@busyclaw/contracts";
 import {
 	asPrincipal,
@@ -73,6 +74,10 @@ export const RunRecord = ark({
 	"clawId?": OptionalString,
 	"threadId?": OptionalString,
 	"originMessageId?": OptionalString,
+	// Which model answers, and whether a human was present when it was asked. Both fixed at create
+	// and read back on every claim — see the field comments in contracts/src/run.ts.
+	"model?": OptionalString,
+	"runMode?": ark("'interactive' | 'autonomous' | undefined"),
 	// The control latch. Absent on every row written before it existed, and on every run nobody has
 	// asked anything of — which is almost all of them.
 	"controlRequestedAt?": OptionalString,
@@ -176,6 +181,13 @@ export type CreateRunInput = {
 	 *  to. Columns, not task payload: the payload is gone by the time a reader asks, and the
 	 *  `deliverMessage` door needs the claw before any task has been claimed. */
 	recording?: EngineRecording;
+	/** Which model answers this run. Columns for the same reason as `recording`: a continuation
+	 *  claimed months later reads the row, and a payload cannot answer it. */
+	model?: string;
+	/** Whether a human was present when this run was asked for. STAMPED BY THE DOOR — a caller who
+	 *  could set it would satisfy the policy that exists to detect their absence. Absent means
+	 *  `autonomous`, the fail-closed direction. */
+	runMode?: RunMode;
 };
 
 export type EnqueueTaskInput = {
@@ -682,6 +694,10 @@ export function createSqlEngineStore(
 					clawId: input.recording?.clawId,
 					threadId: input.recording?.threadId,
 					originMessageId: input.recording?.originMessageId,
+					// Fixed at birth: the run must be able to answer "which model, and was anyone there"
+					// on a slice claimed long after the invocation that decided both is gone.
+					model: input.model,
+					runMode: input.runMode,
 					createdAt: ts,
 					updatedAt: ts,
 				},

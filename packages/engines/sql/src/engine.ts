@@ -151,8 +151,11 @@ function createSqlEngineHandle(input: {
 					// COLUMNS, not the task payload. The payload is `completed` and unindexed by the
 					// time a reader asks which thread a run answered, and the `deliverMessage` door
 					// needs the claw before any task has been claimed — neither question a payload can
-					// answer.
+					// answer. `model` and `runMode` join them for the same reason one rung out: a
+					// continuation claimed months later reads the row, not the invocation that is gone.
 					recording: startInput.recording,
+					model: startInput.model,
+					runMode: startInput.runMode,
 				});
 				const task = await store.enqueueTask({
 					kind: RUNTIME_RUN_TASK,
