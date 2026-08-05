@@ -86,10 +86,10 @@ export async function handleInbound(input: {
 		},
 		caller,
 	);
-	// SAY NOTHING unless this call produced the answer. On the `accepted` arm somebody else is
+	// SAY NOTHING unless this call produced the answer. On the `driven: false` arm somebody else is
 	// driving the run, so its reply will land in the thread under their invocation — posting an
 	// empty message here would be this channel inventing an answer it never received.
-	if (!("result" in sent)) return;
+	if (!sent.driven) return;
 	if (sent.result.status !== "completed" || !sent.result.text) return;
 	const reply = {
 		externalConversationId: message.externalConversationId,
@@ -474,7 +474,7 @@ async function runTurn(input: {
 	);
 	// Same rule as the inbound path: no result means this invocation did not produce the answer, so
 	// there is nothing to deliver and nothing to claim credit for.
-	if (!("result" in sent)) return null;
+	if (!sent.driven) return null;
 	if (sent.result.status !== "completed" || !sent.result.text) return null;
 	return sent.result.text;
 }

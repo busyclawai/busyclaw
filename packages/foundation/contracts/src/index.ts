@@ -225,6 +225,7 @@ export type {
 	EngineControlRunResult,
 	EngineDeliverMessageInput,
 	EngineDeliverMessageResult,
+	EngineNotDrivenReason,
 	EngineProceed,
 	EngineProceedRunInput,
 	EngineRecording,
@@ -501,6 +502,14 @@ export {
 	runMessageSchema,
 	runMessageStatus,
 } from "./run-message";
+// ── live deltas of work in flight — a transport buffer, never a record ────────────────────────
+export type {
+	RunStreamChunk,
+	RunStreamLifecycle,
+	RunStreamPage,
+	RunStreamPort,
+} from "./run-stream";
+export { runStreamKey, threadStreamKey } from "./run-stream";
 // ── the opaque access boundary every scope-keyed core row carries ──
 export type { ScopeRef } from "./scope";
 export {

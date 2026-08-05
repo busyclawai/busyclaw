@@ -100,12 +100,19 @@ export type EngineStartRunInput = {
  * Temporal or Durable-Objects engine has the same three outcomes under its own mechanics, and naming
  * them after one engine's lease vocabulary would leak it into a contract the others implement.
  */
+/** Why an invocation that asked to drive did not produce the answer. Named separately so the door can
+ *  pass it through to its caller verbatim instead of flattening three distinct outcomes into one. */
+export type EngineNotDrivenReason =
+	| "running-elsewhere"
+	| "already-terminal"
+	| "driver-lost";
+
 export type EngineStartRunResult = {
 	id: string;
 	/** Absent when this invocation did not drive the run. Shaped by the engine — busyclaw parses it
 	 *  against `RuntimeResult`, which contracts deliberately does not import. */
 	result?: EngineWorkResult;
-	notDriven?: "running-elsewhere" | "already-terminal" | "driver-lost";
+	notDriven?: EngineNotDrivenReason;
 };
 
 /**

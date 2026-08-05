@@ -24,6 +24,7 @@ function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }) {
 			sendMessage: async (input: { message: string }) => {
 				recorded.relayed.push(input.message);
 				return {
+					driven: true as const,
 					runId: "run-1",
 					result: { status: "completed", text: `echo:${input.message}` },
 					userMessage: { id: "message-1" },
@@ -126,7 +127,7 @@ describe("dispatch engine", () => {
 	/**
 	 * A turn whose run somebody ELSE is driving posts nothing.
 	 *
-	 * `sendMessage` returns a union now: on the `accepted` arm the words are in the transcript and a
+	 * `sendMessage` returns a tagged union now: on the `driven: false` arm the words are in the transcript and a
 	 * different invocation will produce the reply. Reading `result.text` off that arm yields
 	 * `undefined`, and a channel that pushed it anyway would post an empty message into a user's chat
 	 * — an answer this process never received, attributed to the assistant.
@@ -141,7 +142,7 @@ describe("dispatch engine", () => {
 				...claw.api,
 				sendMessage: async (input: { message: string }) => {
 					recorded.relayed.push(input.message);
-					return { runId: "run-1", accepted: true as const };
+					return { driven: false as const, runId: "run-1" };
 				},
 			},
 		};

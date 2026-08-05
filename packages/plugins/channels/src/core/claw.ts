@@ -35,8 +35,12 @@ export type ClawLike = {
 			},
 			caller?: Caller,
 		) => Promise<
-			| { runId: string; result: { status: string; text?: string | undefined } }
-			| { runId: string; accepted: true }
+			| {
+					driven: true;
+					runId: string;
+					result: { status: string; text?: string | undefined };
+			  }
+			| { driven: false; runId: string }
 		>;
 	};
 };

@@ -322,7 +322,7 @@ describe("escalations() — the escalate annotation reaches the host", () => {
 			{ clawId: record.id, threadId: thread.id, message: "write" },
 			caller,
 		);
-		if (!("result" in result)) throw new Error("expected a driven send");
+		if (!result.driven) throw new Error("expected a driven send");
 		expect(result.result.status).toBe("waiting_approval");
 		expect(pending).toHaveLength(1);
 		expect(pending[0]?.toolName).toBe("write_doc");

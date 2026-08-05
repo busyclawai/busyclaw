@@ -58,6 +58,12 @@ function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }) {
 			sendMessage: async (input: { message: string }) => {
 				recorded.relayed.push(input.message);
 				return {
+					// `driven` is the TAG, and a double that omits it reads as "somebody else is
+					// driving this" — so the channel correctly says nothing and every reply assertion
+					// here silently passes for the wrong reason. It is required by `ClawLike`; this
+					// route takes `claw: unknown`, so only the runtime behaviour catches it.
+					driven: true as const,
+					runId: "run-1",
 					result: { status: "completed", text: `echo:${input.message}` },
 					userMessage: { id: "message-1" },
 				};

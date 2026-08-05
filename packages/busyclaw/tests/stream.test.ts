@@ -19,57 +19,10 @@ import {
 	durableRedactor,
 	type MockModel,
 	owned,
+	streamingModel,
 	type V2Model,
 	withPrincipal,
 } from "./fixtures";
-
-/** A v4 model that really streams: one chunk per word, then a finish. */
-function streamingModel(text: string): MockModel {
-	const usage = {
-		inputTokens: {
-			total: 1,
-			noCache: undefined,
-			cacheRead: undefined,
-			cacheWrite: undefined,
-		},
-		outputTokens: { total: 1, text: undefined, reasoning: undefined },
-	};
-	const words = text.split(" ");
-	return {
-		specificationVersion: "v4",
-		provider: "mock",
-		modelId: "mock-streaming",
-		supportedUrls: {},
-		doGenerate: async () => ({
-			content: [{ type: "text" as const, text }],
-			finishReason: { unified: "stop" as const, raw: undefined },
-			usage,
-			warnings: [],
-		}),
-		doStream: async () => ({
-			stream: new ReadableStream({
-				start(controller) {
-					controller.enqueue({ type: "text-start", id: "0" });
-					words.forEach((word, index) => {
-						controller.enqueue({
-							type: "text-delta",
-							id: "0",
-							delta: index === 0 ? word : ` ${word}`,
-						});
-					});
-					controller.enqueue({ type: "text-end", id: "0" });
-					controller.enqueue({
-						type: "finish",
-						finishReason: { unified: "stop", raw: undefined },
-						usage,
-					});
-					controller.close();
-				},
-			}),
-			warnings: [],
-		}),
-	} as unknown as MockModel;
-}
 
 describe("claw.api.stream", () => {
 	it("returns a PROMISE of the stream — the PEP wraps every method, so it cannot be synchronous", async () => {

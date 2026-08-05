@@ -20,6 +20,8 @@ function fakeClaw(binds: unknown[]) {
 				};
 			},
 			sendMessage: async () => ({
+				driven: true as const,
+				runId: "run-1",
 				result: { status: "completed" },
 				userMessage: { id: "m" },
 			}),

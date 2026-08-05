@@ -26,6 +26,7 @@ import type {
 	EndpointHttpMethod,
 	EngineControlRunResult,
 	EngineDeliverMessageResult,
+	EngineNotDrivenReason,
 	EngineProceed,
 	EngineRunEvent,
 	EngineRunHandle,
@@ -41,6 +42,10 @@ import type {
 	RouteLevel,
 	RunControlIntent,
 	RunMessageMode,
+	RunStreamChunk,
+	RunStreamLifecycle,
+	RunStreamPage,
+	RunStreamPort,
 	ScopeRef,
 	SecondaryStorage,
 	SecretDeclaration,
@@ -74,6 +79,7 @@ import {
 	RESERVED_CONTEXT_PREFIX,
 	SYSTEM_ANONYMOUS,
 	stateError,
+	threadStreamKey,
 	toKebabCase,
 	toolCallEntity,
 	validationError,
@@ -102,6 +108,17 @@ import { type as ark } from "arktype";
 import type { ClawRecordOf, CreateClawInputOf } from "./models";
 import type { ClawRedactionHandle } from "./redaction";
 import { type ActionView, assembleOrgActions } from "./registry";
+
+/**
+ * How long a polling watcher waits before asking again.
+ *
+ * Not a knob, for now, and the number matters less than it looks: it bounds how far a WATCHER lags
+ * the driver, never how fast the answer is produced. Small enough to feel live beside a batch window
+ * of 50–200ms, large enough that ten watchers on one conversation are ten cheap reads a second and
+ * not a hot loop. A backend with a real subscription fills in `RunStreamPort.watch` and this is never
+ * reached at all — which is the intended way to get lower latency, rather than tuning this down.
+ */
+const WATCH_POLL_INTERVAL_MS = 120;
 
 /** How a read presents stored message content: `"redacted"` (default) returns it as persisted —
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
@@ -139,8 +156,24 @@ export type ClawSendInput<Config extends RuntimeConfig = RuntimeConfig> = {
  * would be a guess.
  */
 export type ClawSendResult =
-	| { runId: string; result: RuntimeResult; userMessage: MessageRecord }
-	| { runId: string; accepted: true; userMessage: MessageRecord };
+	| {
+			driven: true;
+			runId: string;
+			result: RuntimeResult;
+			userMessage: MessageRecord;
+	  }
+	| {
+			driven: false;
+			runId: string;
+			userMessage: MessageRecord;
+			/**
+			 * WHY this invocation has no answer, passed through from the engine unchanged. Worth
+			 * surfacing rather than flattening: "somebody else is still working on it" and "that run
+			 * was already stopped" are different things to show a person, and only the engine knows
+			 * which happened.
+			 */
+			reason: EngineNotDrivenReason;
+	  };
 
 /**
  * What `sendMessageAndStream` hands back: a `RuntimeStream` — so it drops straight into the AI SDK
@@ -224,6 +257,9 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	readonly secrets?: Secrets;
 	/** The fast expiring KV, when the host configured one. A BUFFER — see `ClawConfig`. */
 	readonly secondaryStorage?: SecondaryStorage;
+	/** Where live deltas go, when live watching is configured at all. Absent ⇒ `watchThread` refuses
+	 *  rather than returning an empty stream that reads like a quiet conversation. */
+	readonly runStream?: RunStreamPort;
 	/** The collected required-secret-name declarations across plugins (feeds boot coverage). */
 	readonly secretDeclarations?: readonly SecretDeclaration[];
 	/** The governed redaction read-path (original view + erasure) — present when a `redaction`
@@ -287,6 +323,29 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	sendMessageAndStream: (
 		input: ClawSendInput<Config>,
 	) => Promise<ClawStreamResult>;
+
+	/**
+	 * WATCH A CONVERSATION happen — every run in it, whoever is driving, as it arrives.
+	 *
+	 * Keyed by THREAD rather than run, because a watcher does not know run ids: they are looking at a
+	 * conversation, and the run they want was created a moment ago by somebody else. "A run started"
+	 * is simply a chunk in the log they are already reading, so discovery costs no second mechanism.
+	 *
+	 * `since` is an opaque cursor — the one this returns, which an SSE bridge puts in `id:` and gets
+	 * back as `Last-Event-ID`. It belongs to the core rather than to a transport, which is what lets a
+	 * client start on one transport, lose it, and resume on another without losing its place.
+	 *
+	 * IN-PROCESS, like the other streaming methods, and authorized exactly like `listMessages`:
+	 * `read` on the thread. If you can read the conversation, you can watch it happen.
+	 *
+	 * A page whose `stale` is set means the cursor points past the end of the log — the buffer's
+	 * window expired while the client was away. Reload the transcript; do NOT keep reading, because
+	 * the offsets no longer mean what the cursor thinks they do.
+	 */
+	watchThread: (input: {
+		threadId: string;
+		since?: string;
+	}) => Promise<AsyncIterable<RunStreamPage>>;
 
 	/** Crypto-shred every PII mapping this data-subject appears on — audited ("pii.erasure").
 	 *  Fails loud when the deployment cannot honor erasure (posture "raw", custom redactor, or
@@ -477,7 +536,7 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
  *  adding a name here fails the build until that name is declared there. */
 export type ClawApiMethod = Exclude<
 	keyof ClawApi,
-	"stream" | "sendMessageAndStream"
+	"stream" | "sendMessageAndStream" | "watchThread"
 >;
 /** Alias of the shared {@link EndpointHttpMethod} so the flat api and plugin namespaces cannot
  *  disagree on what a verb may be. */
@@ -1261,6 +1320,11 @@ export const NON_ROUTED_API_AUTHZ = {
 	// sealed baseline permits for any authenticated principal, which is indistinguishable from
 	// having no check at all on a method that writes to a shared row.
 	sendMessageAndStream: on("use", "claw", "clawId"),
+	// The SAME declaration `listMessages` carries, and deliberately so: watching a conversation
+	// happen and reading it back are the same permission over the same resource, one live and one
+	// after the fact. The thread loader inherits the claw's grants, so sharing a claw shares the
+	// ability to watch its threads — and a stranger is denied here exactly as they are there.
+	watchThread: on("read", "thread", "threadId"),
 } satisfies {
 	readonly [Method in Exclude<keyof ClawApi, ClawApiMethod>]: ApiRouteAuthz<
 		ClawApiMethodInput<Method & ClawApiMethod>
@@ -1570,13 +1634,62 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * away by every first-party caller. The distinction lives in the RESPONSE, where a client can
 	 * actually read it.
 	 */
+	/**
+	 * Append one chunk to a thread's live stream, and NEVER let it matter if that fails.
+	 *
+	 * The stream is a transport buffer: a run whose deltas nobody could persist still completes and
+	 * still lands in the transcript. Propagating an error from here would let a slow or broken KV
+	 * fail a turn that was otherwise perfect — which is the one thing an advisory sink must not do.
+	 */
+	const emitChunk = async (
+		threadId: string,
+		chunk: RunStreamChunk,
+	): Promise<void> => {
+		const stream = context.runStream;
+		if (stream === undefined) return;
+		try {
+			await stream.append(threadStreamKey(threadId), chunk);
+		} catch {
+			// Deliberately silent. A warn per delta would be a log flood at 20-50 chunks a turn, and
+			// the condition is already visible to a watcher as a stream that stops moving.
+		}
+	};
+
+	/** What a watcher is told when a turn ends, from what the door got back. A run somebody else is
+	 *  driving emits NOTHING here — their invocation owns that announcement, and two `completed`
+	 *  chunks for one run would have a client render the answer twice. */
+	const lifecycleOf = (
+		sent: ClawSendResult,
+	): RunStreamLifecycle | undefined => {
+		if (!sent.driven) return undefined;
+		switch (sent.result.status) {
+			case "completed":
+			case "denied":
+				return "completed";
+			case "waiting_approval":
+			case "yielded":
+			case "parked":
+				return "parked";
+			default:
+				return "failed";
+		}
+	};
+
 	const sendResultOf = (
 		outcome: EngineStartRunResult,
 		runId: string,
 		userMessage: MessageRecord,
 	): ClawSendResult => {
 		if (outcome.result === undefined) {
-			return { runId, accepted: true, userMessage };
+			return {
+				driven: false,
+				runId,
+				userMessage,
+				// An engine that drove nothing and said why keeps its word; one that returned neither
+				// a result nor a reason is reported as the commonest cause rather than as a gap the
+				// caller has to interpret.
+				reason: outcome.notDriven ?? "running-elsewhere",
+			};
 		}
 		// PARSED, not cast. `EngineWorkResult` is `unknown` on purpose — contracts does not import
 		// `RuntimeResult` — so this boundary is where an engine's opaque payload becomes the shape
@@ -1589,7 +1702,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				valid.summary,
 			);
 		}
-		return { runId, result: valid, userMessage };
+		return { driven: true, runId, result: valid, userMessage };
 	};
 
 	const redactArtifact = async <T>(
@@ -1807,6 +1920,15 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		async sendMessage(args, caller?: ClawApiCaller) {
 			const { runId, userMessage, runOptions, startInput } =
 				await openConversationalRun(args, caller);
+			// ANNOUNCED BEFORE THE WORK, so a watcher already looking at this thread sees the turn
+			// begin rather than discovering it when the answer lands. This is also the chunk that
+			// makes discovery free: a watcher never has to learn run ids from anywhere else.
+			await emitChunk(args.threadId, {
+				kind: "run.started",
+				runId,
+				attempt: 1,
+				...(caller?.principal !== undefined ? { by: caller.principal } : {}),
+			});
 			// THROUGH THE ENGINE when there is one, which is every database-backed claw (D14). The
 			// turn becomes a durable run: `getRun` answers for it, `controlRun` from a second tab
 			// reaches it, and a driver that dies leaves a row a successor can claim — none of which
@@ -1818,6 +1940,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			const response: ClawSendResult =
 				context.engine === undefined
 					? {
+							driven: true,
 							runId,
 							result: await context.runtime.generate(
 								args.message,
@@ -1834,6 +1957,15 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 							runId,
 							userMessage,
 						);
+			const ended = lifecycleOf(response);
+			if (ended !== undefined) {
+				await emitChunk(args.threadId, {
+					kind: "lifecycle",
+					runId,
+					attempt: 1,
+					event: ended,
+				});
+			}
 			if (args.view !== "original" || context.redaction === undefined) {
 				return response;
 			}
@@ -1855,6 +1987,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		async sendMessageAndStream(args, caller?: ClawApiCaller) {
 			const { runId, userMessage, runOptions, startInput } =
 				await openConversationalRun(args, caller);
+			await emitChunk(args.threadId, {
+				kind: "run.started",
+				runId,
+				attempt: 1,
+				...(caller?.principal !== undefined ? { by: caller.principal } : {}),
+			});
 			if (context.engine === undefined) {
 				const stream = context.runtime.stream(
 					args.message,
@@ -1864,7 +2002,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				return {
 					textStream: stream.textStream,
 					result: stream.result.then(
-						(result): ClawSendResult => ({ runId, result, userMessage }),
+						(result): ClawSendResult => ({
+							driven: true,
+							runId,
+							result,
+							userMessage,
+						}),
 					),
 					userMessage,
 					runId,
@@ -1880,22 +2023,86 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// closing a tab is not a request to throw away the tokens already paid for. The channel
 			// discards pushes after cancellation, so a detached run costs nothing to ignore.
 			const channel = createDeltaChannel({ onCancel: () => {} });
+			// TWO SINKS, ONE DATA. The reader in this invocation is served from memory; everybody else
+			// reads the same chunks back out of the stream. Both get exactly what `onDelta` produced —
+			// already redacted (R-M04), the same placeholders the transcript will hold.
+			//
+			// The store write is AWAITED inside the push, which is what keeps a watcher's view ordered
+			// with the driver's; `emitChunk` swallows its own failures, so a broken stream slows this
+			// turn by one call and cannot fail it.
+			const onDelta = async (text: string) => {
+				await emitChunk(args.threadId, {
+					kind: "text",
+					runId,
+					attempt: 1,
+					text,
+				});
+				await channel.push(text);
+			};
 			// NOT awaited — `startRun` resolves when the whole run does, and the deltas have to be
 			// readable long before that. The promise is handed back as `result` instead.
 			const driven = context.engine
-				.startRun({
-					...startInput,
-					drive: { ...driveBudget(), onDelta: (text) => channel.push(text) },
-				})
+				.startRun({ ...startInput, drive: { ...driveBudget(), onDelta } })
 				.finally(() => channel.close());
 			return {
 				textStream: channel.iterable,
-				result: driven.then((outcome) =>
-					sendResultOf(outcome, runId, userMessage),
-				),
+				result: driven.then(async (outcome) => {
+					const sent = sendResultOf(outcome, runId, userMessage);
+					const ended = lifecycleOf(sent);
+					if (ended !== undefined) {
+						await emitChunk(args.threadId, {
+							kind: "lifecycle",
+							runId,
+							attempt: 1,
+							event: ended,
+						});
+					}
+					return sent;
+				}),
 				userMessage,
 				runId,
 			};
+		},
+
+		async watchThread({ threadId, since }) {
+			const stream = context.runStream;
+			if (stream === undefined) {
+				// LOUD. An empty stream is indistinguishable from a quiet conversation, so a
+				// deployment with no place to put deltas would look like one where nothing is
+				// happening — for as long as it took somebody to go and check the transcript.
+				throw configurationError(
+					"this deployment has no run stream, so a conversation cannot be watched live",
+					{
+						reason:
+							"pass `runStream`, or a `secondaryStorage` for it to be defaulted from",
+					},
+				);
+			}
+			const key = threadStreamKey(threadId);
+			// PUSH when the backend has it. `watch` is the member a real broker fills in; everything
+			// below is the fallback for a substrate that can only be asked.
+			if (stream.watch !== undefined) return stream.watch(key, since);
+			return (async function* poll() {
+				let cursor = since;
+				while (true) {
+					const page = await stream.read(key, cursor);
+					cursor = page.cursor;
+					// A STALE page is the last thing this yields. Continuing would serve chunks whose
+					// offsets no longer mean what the client's cursor thinks — see `RunStreamPage`.
+					if (page.stale) {
+						yield page;
+						return;
+					}
+					if (page.chunks.length > 0) yield page;
+					// A full page means there is more waiting; go straight back rather than sleeping
+					// through a backlog a late joiner is trying to catch up on.
+					if (page.chunks.length === 0) {
+						await new Promise((resolve) =>
+							setTimeout(resolve, WATCH_POLL_INTERVAL_MS),
+						);
+					}
+				}
+			})();
 		},
 
 		async forgetSubject(

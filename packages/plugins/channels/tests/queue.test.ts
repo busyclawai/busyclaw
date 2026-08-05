@@ -121,6 +121,7 @@ describe("a delivery that already owes a reply is left to the drain", () => {
 			sendMessage: async (input: { message: string }) => {
 				relayed.push(input.message);
 				return {
+					driven: true as const,
 					runId: "run-1",
 					result: { status: "completed", text: "the SECOND answer" },
 				};
@@ -244,6 +245,7 @@ describe("the enqueue contract", () => {
 						thread: { id: "thread-1" },
 					}),
 					sendMessage: async () => ({
+						driven: true as const,
 						runId: "run-1",
 						result: { status: "completed", text: "answer" },
 					}),
@@ -452,6 +454,7 @@ describe("the dispatch carries the lease it was given", () => {
 			sendMessage: async () => {
 				await onTurn?.();
 				return {
+					driven: true as const,
 					runId: "run-1",
 					result: { status: "completed", text: "answer" },
 				};
@@ -690,6 +693,7 @@ describe("a delivery survives the process that received it", () => {
 						thread: { id: "thread-7" },
 					}),
 					sendMessage: async () => ({
+						driven: true as const,
 						runId: "run-1",
 						result: { status: "completed", text: "answer" },
 					}),
@@ -964,6 +968,7 @@ describe("the drains are reachable, and divide their work", () => {
 					sendMessage: async (input: { message: string }) => {
 						relayed.push(input.message);
 						return {
+							driven: true as const,
 							runId: "run-1",
 							result: { status: "completed", text: "recovered" },
 						};
@@ -996,6 +1001,7 @@ describe("the drains are reachable, and divide their work", () => {
 						thread: { id: "thread-1" },
 					}),
 					sendMessage: async () => ({
+						driven: true as const,
 						runId: "run-1",
 						result: { status: "completed", text: "never" },
 					}),
@@ -1053,6 +1059,7 @@ describe("the drains are reachable, and divide their work", () => {
 					sendMessage: async (input: { message: string }) => {
 						if (input.message === "poison") throw new Error("boom");
 						return {
+							driven: true as const,
 							runId: "run-1",
 							result: { status: "completed", text: "ok" },
 						};
@@ -1120,7 +1127,11 @@ describe("each endpoint relays as its own service principal", () => {
 			},
 			sendMessage: async (_input: unknown, caller?: { principal?: string }) => {
 				seen.send = caller?.principal;
-				return { runId: "run-1", result: { status: "completed", text: "ok" } };
+				return {
+					driven: true as const,
+					runId: "run-1",
+					result: { status: "completed", text: "ok" },
+				};
 			},
 		},
 	};

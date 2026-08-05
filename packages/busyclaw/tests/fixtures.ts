@@ -368,10 +368,61 @@ export const floorPermitsWrites = {
  * naming the other arm rather than reading `undefined` off it and reporting some later mismatch.
  */
 export function drivenResult(sent: ClawSendResult): RuntimeResult {
-	if (!("result" in sent)) {
+	if (!sent.driven) {
 		throw new Error(
-			`expected a driven send, got the accepted arm for run ${sent.runId} — somebody else is driving it`,
+			`expected a driven send, got driven:false (${sent.reason}) for run ${sent.runId}`,
 		);
 	}
 	return sent.result;
+}
+
+/**
+ * A model that really streams: one `text-delta` per word. `textModel` throws on `doStream`, so any
+ * suite exercising the streaming door — or the run stream behind it — needs this instead.
+ */
+export function streamingModel(text: string): MockModel {
+	const usage = {
+		inputTokens: {
+			total: 1,
+			noCache: undefined,
+			cacheRead: undefined,
+			cacheWrite: undefined,
+		},
+		outputTokens: { total: 1, text: undefined, reasoning: undefined },
+	};
+	const words = text.split(" ");
+	return {
+		specificationVersion: "v4",
+		provider: "mock",
+		modelId: "mock-streaming",
+		supportedUrls: {},
+		doGenerate: async () => ({
+			content: [{ type: "text" as const, text }],
+			finishReason: { unified: "stop" as const, raw: undefined },
+			usage,
+			warnings: [],
+		}),
+		doStream: async () => ({
+			stream: new ReadableStream({
+				start(controller) {
+					controller.enqueue({ type: "text-start", id: "0" });
+					words.forEach((word, index) => {
+						controller.enqueue({
+							type: "text-delta",
+							id: "0",
+							delta: index === 0 ? word : ` ${word}`,
+						});
+					});
+					controller.enqueue({ type: "text-end", id: "0" });
+					controller.enqueue({
+						type: "finish",
+						finishReason: { unified: "stop", raw: undefined },
+						usage,
+					});
+					controller.close();
+				},
+			}),
+			warnings: [],
+		}),
+	} as unknown as MockModel;
 }

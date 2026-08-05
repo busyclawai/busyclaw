@@ -22,6 +22,7 @@ import {
 	PRINCIPAL_CONTEXT_KEY,
 	type Redactor,
 	type RunCheckpointStore,
+	type RunStreamPort,
 	type SecondaryStorage,
 	type Secrets,
 	type ToolDefinitionSet,
@@ -40,7 +41,11 @@ import {
 	type RuntimeModel,
 } from "@busyclaw/runtime";
 import { buildSecrets, env } from "@busyclaw/secrets";
-import { entityAdapter, verifiedAdapter } from "@busyclaw/storage-core";
+import {
+	entityAdapter,
+	secondaryStorageStream,
+	verifiedAdapter,
+} from "@busyclaw/storage-core";
 import {
 	createAccessGrantStore,
 	createApprovalStore,
@@ -199,6 +204,18 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	 * back to whatever the stream port's database implementation does.
 	 */
 	secondaryStorage?: SecondaryStorage;
+	/**
+	 * Where live deltas go so a watcher can follow a turn somebody else is driving.
+	 *
+	 * Defaulted from `secondaryStorage` when that is present, because a host who supplied a KV has
+	 * already answered the only question this needs. Supply one directly to put the stream somewhere
+	 * else — Redis Streams, LISTEN/NOTIFY, a Durable Object — which is also how a deployment gets
+	 * PUSH instead of polling, since `RunStreamPort.watch` is the member a real broker fills in.
+	 *
+	 * Absent entirely means no live watching: `watchThread` says so rather than returning an empty
+	 * stream that looks like a quiet conversation.
+	 */
+	runStream?: RunStreamPort;
 	engine?: ClawEngineFactory<
 		Runtime<Config>,
 		ClawEngineHandle,
@@ -845,6 +862,13 @@ export function createClaw<
 	// stores. Takes the RAW adapter and wraps internally (like the other durable stores); feeds real
 	// grants into the product-api PEP and backs the share/unshare api. Absent on a no-database claw.
 	const grantStore = adapter ? createAccessGrantStore(adapter) : undefined;
+	// LIVE DELTAS, if anywhere. `secondaryStorageStream` refuses a KV with no `increment` — loudly,
+	// here at assembly, rather than by dropping chunks under two concurrent runs much later.
+	const runStream =
+		config.runStream ??
+		(config.secondaryStorage
+			? secondaryStorageStream(config.secondaryStorage)
+			: undefined);
 	// The adapter wrapped ONCE with the merged models — the entity-validating lens plugins get through
 	// `configure`. Built here so the PEP's plugin `shareable` loaders bind against the SAME adapter a
 	// plugin's `configure` builds its store from (a skills loader `entityView`s over it, just like its
@@ -1016,6 +1040,11 @@ export function createClaw<
 		...(config.secondaryStorage
 			? { secondaryStorage: config.secondaryStorage }
 			: {}),
+		// EXPLICIT WINS, then the KV, then nothing. A host with a `secondaryStorage` gets live
+		// watching without asking for it — the substrate is the only decision that mattered, and
+		// requiring a second knob to turn on a feature the ingredients are already present for is a
+		// knob nobody would thank us for.
+		...(runStream !== undefined ? { runStream } : {}),
 		secrets,
 		secretDeclarations,
 	};
