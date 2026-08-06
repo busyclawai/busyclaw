@@ -128,6 +128,15 @@ export type MessageStore = {
 		threadId: string;
 		afterSequence?: number;
 		limit?: number;
+		/**
+		 * Which visibilities to return. Absent means all of them — this is the full transcript door,
+		 * and a default that quietly hid rows would be the wrong kind of convenient.
+		 *
+		 * It exists because run notices (`parked`, `waiting_approval`, `denied`) are written
+		 * `internal`: a chat client wants `["user"]` and an operator wants everything, and both need to
+		 * say so BEFORE `limit` pages the rows.
+		 */
+		visibility?: readonly MessageVisibility[];
 	}) => Promise<MessageRecord[]>;
 };
 

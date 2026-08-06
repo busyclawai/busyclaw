@@ -151,6 +151,10 @@ describe("createClaw engine", () => {
 			"deliverMessage",
 			"kind",
 			"proceedRun",
+			// Declared even when false — a door deciding what a departing reader means has to be able
+			// to read "nothing will resume this", and an absent property and a false one would have to
+			// be treated identically anyway.
+			"resumesPendingWork",
 			"startRun",
 			"work",
 		]);

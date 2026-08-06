@@ -222,6 +222,21 @@ export type ClawConfig<Config extends RuntimeConfig = RuntimeConfig> = Omit<
 	 * stream that looks like a quiet conversation.
 	 */
 	runStream?: RunStreamPort;
+	/**
+	 * KEEP THIS INVOCATION ALIVE past the response, the way the platform spells it.
+	 *
+	 * A streamed turn hands back its deltas and finishes the run behind them, so the work outlives the
+	 * response body. On a daemon that is free. On serverless the isolate is torn down when the response
+	 * completes, and everything after the reader hangs up — the last steps of the answer, the yield
+	 * checkpoint, the transcript append — is simply killed. Nothing in this library can grant itself
+	 * that time; only the host can, and each platform names it differently (`waitUntil` from
+	 * `@vercel/functions`, `ctx.waitUntil` on Cloudflare, nothing at all on a long-lived server).
+	 *
+	 * So it is asked for rather than assumed. Absent on a daemon is correct and costs nothing. Absent
+	 * on serverless is the configuration where a departing reader loses the tail of their answer, which
+	 * is why this exists as a named dependency instead of an unstated one (docs/plans/one-run.md D6).
+	 */
+	waitUntil?: (work: Promise<unknown>) => void;
 	engine?: ClawEngineFactory<
 		Runtime<Config>,
 		ClawEngineHandle,
@@ -1085,6 +1100,7 @@ export function createClaw<
 		// requiring a second knob to turn on a feature the ingredients are already present for is a
 		// knob nobody would thank us for.
 		...(runStream !== undefined ? { runStream } : {}),
+		...(config.waitUntil !== undefined ? { waitUntil: config.waitUntil } : {}),
 		secrets,
 		secretDeclarations,
 	};

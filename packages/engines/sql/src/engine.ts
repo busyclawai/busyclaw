@@ -149,6 +149,11 @@ function createSqlEngineHandle(input: {
 		...(input.config.softDeadlineMs !== undefined
 			? { softDeadlineMs: input.config.softDeadlineMs }
 			: {}),
+		// WHO CLAIMS A CONTINUATION. A yield enqueues a `pending` task, and `claimDueTask` — the only
+		// thing that takes one — has exactly one caller: the cron drain. So with `cron: false` a
+		// yielded run is a stopped run, and a door that yields on it turns a turn that would have
+		// finished into one that never lands.
+		resumesPendingWork: input.config.cron !== false,
 		async startRun(
 			startInput: EngineStartRunInput,
 		): Promise<EngineStartRunResult> {

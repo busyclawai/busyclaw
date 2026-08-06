@@ -64,8 +64,16 @@ export type AiSdkLoopInput = {
 	maxSteps: number;
 	now: () => string;
 	abortSignal?: RuntimeAbortSignal;
-	/** Invocation soft deadline (ISO). Past it, the loop parks a yield checkpoint and stops. */
-	deadlineAt?: string;
+	/**
+	 * Invocation soft deadline (ISO). Past it, the loop parks a yield checkpoint and stops.
+	 *
+	 * RE-READABLE as a function, and that is what lets a departing reader end a slice: the caller
+	 * hands a getter that returns the invocation budget until the transport hangs up and `now()`
+	 * afterwards, so the next control point yields instead of running on for a reader who has gone.
+	 * Read once per step rather than captured, because the whole point is that it can change while
+	 * the loop is inside a model call.
+	 */
+	deadlineAt?: string | (() => string | undefined);
 	/** Persists the resume state at a yield point; returns the checkpoint id. The transcript is
 	 *  placeholder-clean by construction (redact-at-ingress), so it persists as-is. */
 	persistYieldCheckpoint?: (input: {
@@ -424,6 +432,18 @@ export async function runAiSdkLoop(
 	// has reached: a latch write bumps `controlSeq` without producing a message at all.
 	let deliveredThrough = input.deliveredThrough ?? -1;
 
+	// WHAT THE ASSISTANT SAID IN THIS SLICE, kept because a slice that ends early used to report `''`
+	// and lose it. Only a non-terminal end reads this: `completed` returns the final step's text, which
+	// is what the transcript has always held.
+	//
+	// ACCUMULATED across steps rather than "the last step's", because a slice that parks after three
+	// steps said something in each of them, and the steps are separated by tool calls — so they read as
+	// paragraphs, which is why they join that way. This is deliberately MORE than the completed path
+	// persists (only its final step's text): a park is exactly the case where the alternative is
+	// nothing at all.
+	const sliceText: string[] = [];
+	const textSoFar = () => sliceText.join("\n\n");
+
 	// Park the run HERE: every tool result of the previous step is already in `messages` and no call
 	// is pending, so the transcript is a legal resume point by construction. The transcript is also
 	// placeholder-clean (ingress redaction), so it persists as-is — pre- and post-park transcripts
@@ -454,14 +474,14 @@ export async function runAiSdkLoop(
 		return reason === "deadline" || reason === "handover"
 			? {
 					status: "yielded",
-					text: "",
+					text: textSoFar(),
 					steps: step,
 					checkpointId,
 					usage: runUsage,
 				}
 			: {
 					status: "parked",
-					text: "",
+					text: textSoFar(),
 					steps: step,
 					checkpointId,
 					reason,
@@ -503,10 +523,19 @@ export async function runAiSdkLoop(
 		// PROGRESS: without `step > startStep` a run resumed at its deadline parks again immediately at
 		// the same step, forever, burning a task per round. The intent arm above has no such rule on
 		// purpose — "stop before you start" is exactly what a suspend must be able to say.
+		//
+		// RESOLVED HERE, every step, not captured before the loop: a caller may bring the deadline
+		// forward mid-run (a reader walking away does exactly that), and a captured scalar could not
+		// see it. A departure therefore costs at most one further model step, which the progress guard
+		// above already bounds.
+		const deadlineAt =
+			typeof input.deadlineAt === "function"
+				? input.deadlineAt()
+				: input.deadlineAt;
 		if (
-			input.deadlineAt !== undefined &&
+			deadlineAt !== undefined &&
 			step > startStep &&
-			input.now() >= input.deadlineAt
+			input.now() >= deadlineAt
 		) {
 			return parkHere(step, "deadline");
 		}
@@ -615,6 +644,9 @@ export async function runAiSdkLoop(
 		});
 		abortIfNeeded(input.abortSignal);
 		messages.push(...res.response.messages);
+		// Recorded AFTER the redaction above, so a slice that ends early carries placeholders like
+		// every other persisted string — never the raw text the model emitted (R-M04).
+		if (res.text !== "") sliceText.push(res.text);
 
 		if (res.toolCalls.length === 0) {
 			return {

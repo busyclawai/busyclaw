@@ -94,7 +94,7 @@ describe("createClaw send", () => {
 		});
 	});
 
-	it("persists approval waits as checkpoints without assistant messages", async () => {
+	it("tells the thread it is waiting on an approval, without answering", async () => {
 		const { db, redactor } = durableRedactor();
 		const claw = createClaw({
 			database: db,
@@ -113,10 +113,11 @@ describe("createClaw send", () => {
 		});
 
 		expect(drivenResult(sent).status).toBe("waiting_approval");
-		const messages = await api.listMessages({
-			threadId: thread.id,
-		});
-		expect(messages).toMatchObject([
+		// WHAT A CHAT UI RENDERS — and it is still just the question, because a run waiting on somebody
+		// is not an answer.
+		expect(
+			await api.listMessages({ threadId: thread.id, visibility: ["user"] }),
+		).toMatchObject([
 			{
 				// The product transcript is tokenized at rest too — same rule as the tool args below.
 				content: {
@@ -124,6 +125,21 @@ describe("createClaw send", () => {
 				},
 				role: "user",
 				sequence: 1,
+			},
+		]);
+		// AND WHAT THE THREAD ACTUALLY KNOWS. Before this there was a checkpoint and nothing else, and
+		// a checkpoint answers nobody — there is no `listCheckpoints` and no thread→runs listing, so
+		// "waiting for your approval" was indistinguishable from "still working" and from "dead" (D10).
+		const messages = await api.listMessages({ threadId: thread.id });
+		expect(messages).toMatchObject([
+			{ role: "user", sequence: 1 },
+			{
+				content: {
+					run: { state: "waiting_approval", approvalIds: expect.any(Array) },
+				},
+				role: "assistant",
+				sequence: 2,
+				visibility: "internal",
 			},
 		]);
 		const checkpoint = await api.getLatestCheckpoint({ runId: sent.runId });
@@ -185,17 +201,25 @@ describe("createClaw send", () => {
 
 		expect(resumed).toMatchObject({ status: "completed", text: "done" });
 		expect(toolSaw).toBe("alice@personal.com");
-		const messages = await api.listMessages({
+		// THE ANSWER IS STILL EXACTLY ONE MESSAGE. The wait left an `internal` notice behind it, and
+		// that notice must not become a second reply — the `once` fence is keyed on `(threadId, runId)`
+		// and belongs to the run's one assistant reply, so a notice claiming it would leave the real
+		// answer with nowhere to land.
+		const visible = await api.listMessages({
 			threadId: thread.id,
+			visibility: ["user"],
 		});
-		expect(messages.map((message) => message.role)).toEqual([
+		expect(visible.map((message) => message.role)).toEqual([
 			"user",
 			"assistant",
 		]);
-		expect(messages[1]).toMatchObject({
-			content: { text: "done" },
-			sequence: 2,
-		});
+		expect(visible[1]).toMatchObject({ content: { text: "done" } });
+		const messages = await api.listMessages({ threadId: thread.id });
+		expect(messages.map((message) => message.visibility)).toEqual([
+			"user",
+			"internal",
+			"user",
+		]);
 		expect(
 			await api.getToolCallByProviderId({
 				runId: sent.runId,
@@ -259,10 +283,31 @@ describe("createClaw send", () => {
 			status: "denied",
 		});
 
-		const messages = await api.listMessages({
-			threadId: thread.id,
-		});
-		expect(messages.map((message) => message.role)).toEqual(["user"]);
+		// NO ANSWER, because there was none — and a record of WHY, which a denied run used to leave
+		// nowhere but in a join of two tool tables by run id (D10).
+		expect(
+			await api.listMessages({ threadId: thread.id, visibility: ["user"] }),
+		).toMatchObject([{ role: "user" }]);
+		// TWO notices, because two things happened to this run and each is its own record: it stopped
+		// to ask, and then it was refused. Collapsing them would lose the wait.
+		const messages = await api.listMessages({ threadId: thread.id });
+		expect(messages).toMatchObject([
+			{ role: "user" },
+			{
+				content: { run: { state: "waiting_approval" } },
+				visibility: "internal",
+			},
+			{
+				content: {
+					run: {
+						state: "denied",
+						approvalId,
+						decidedBy: userPrincipal("alice"),
+					},
+				},
+				visibility: "internal",
+			},
+		]);
 		expect(
 			await api.getToolCallByProviderId({
 				runId: sent.runId,

@@ -35,6 +35,7 @@ import type {
 	EngineStartRunResult,
 	JsonObject,
 	MessageRecord,
+	MessageVisibility,
 	PolicySliceRecord,
 	Principal,
 	RegisteredToolRecord,
@@ -251,6 +252,10 @@ export type ClawContext<Config extends RuntimeConfig = RuntimeConfig> = {
 	/** Where live deltas go, when live watching is configured at all. Absent ⇒ `watchThread` refuses
 	 *  rather than returning an empty stream that reads like a quiet conversation. */
 	readonly runStream?: RunStreamPort;
+	/** The host's post-response execution grant, if it has one — see `ClawConfig.waitUntil`. The
+	 *  streaming door hands its drive promise here so a serverless isolate is not torn down while the
+	 *  answer is still being written. */
+	readonly waitUntil?: (work: Promise<unknown>) => void;
 	/** The collected required-secret-name declarations across plugins (feeds boot coverage). */
 	readonly secretDeclarations?: readonly SecretDeclaration[];
 	/** The governed redaction read-path (original view + erasure) — present when a `redaction`
@@ -295,6 +300,9 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		threadId: string;
 		afterSequence?: number;
 		limit?: number;
+		/** Omit for the whole transcript; `["user"]` for what a chat UI should render. Run notices are
+		 *  written `internal`, so this is how a client stops seeing them. */
+		visibility?: readonly MessageVisibility[];
 		view?: MessageView;
 	}) => Promise<MessageRecord[]>;
 	sendMessage: (input: ClawSendInput<Config>) => Promise<ClawSendResult>;
@@ -665,6 +673,13 @@ const listMessagesInput = ark({
 	threadId: ark("string").configure({
 		busyclaw: {
 			doc: "The thread to list; also resolves the claw scope when `view: 'original'` re-identifies the returned rows.",
+		},
+	}),
+	"visibility?": ark(
+		"('user' | 'internal' | 'audit-only')[] | undefined",
+	).configure({
+		busyclaw: {
+			doc: "Which visibilities to return; omit for the whole transcript. A chat UI wants `['user']` — run notices (parked, waiting on approval, denied) are written `internal`, and filtering here rather than after the call is what keeps `limit` paging honest.",
 		},
 	}),
 	"view?": ark("'redacted' | 'original' | undefined").configure({
@@ -1634,10 +1649,15 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * of being killed mid-step by the platform. Absent when the engine has no deadline (a daemon
 	 * host), in which case nothing yields and nothing needs to.
 	 */
-	const driveBudget = (): { deadlineAt: string } | Record<string, never> => {
+	const driveDeadline = (): string | undefined => {
 		const ms = context.engine?.softDeadlineMs;
-		if (ms === undefined) return {};
-		return { deadlineAt: new Date(Date.now() + ms).toISOString() };
+		return ms === undefined
+			? undefined
+			: new Date(Date.now() + ms).toISOString();
+	};
+	const driveBudget = (): { deadlineAt: string } | Record<string, never> => {
+		const at = driveDeadline();
+		return at === undefined ? {} : { deadlineAt: at };
 	};
 
 	/**
@@ -2064,16 +2084,34 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					runId,
 				};
 			}
+			// WHAT A DEPARTING READER MEANS, and it is not one answer — it is two, and which one is
+			// right depends on whether anything will pick the run up again (D6).
+			//
+			// A reader leaves mid-answer constantly: the tab closes, the transport cancels, the
+			// consumer `break`s. What must NEVER happen is losing the answer, because the turn is
+			// durable and the reply belongs in the thread whether or not anyone is watching it arrive.
+			//
+			// WITH a continuation path, departure brings the deadline forward to now: the slice reaches
+			// its next control point, writes a checkpoint, enqueues its resume, and the drain finishes
+			// the turn. That bounds what this invocation still owes to at most one more model step —
+			// which matters because on serverless the invocation is living on borrowed time already.
+			//
+			// WITHOUT one — `cron: false`, where a pending task is claimed by nobody — the same move
+			// would convert a turn that finishes into a turn that never lands. So the run detaches and
+			// finishes here, exactly as it does today. The channel discards pushes after cancellation,
+			// so a detached run costs nothing to ignore.
+			const budgetAt = driveDeadline();
+			const handOff = context.engine?.resumesPendingWork === true;
+			let departedAt: string | undefined;
 			// THE SAME CHANNEL `runtime.stream` uses, not a second one. Its backpressure (a full
 			// buffer makes `push` return a promise the engine awaits, which stops the read from the
-			// provider) and its departure semantics are both load-bearing, and a reimplementation
-			// here would be a place for them to quietly diverge.
-			//
-			// `onCancel` does NOTHING, deliberately. A departing reader must not abort a run that has
-			// somewhere to put its answer: the turn is durable, the reply lands in the thread, and
-			// closing a tab is not a request to throw away the tokens already paid for. The channel
-			// discards pushes after cancellation, so a detached run costs nothing to ignore.
-			const channel = createDeltaChannel({ onCancel: () => {} });
+			// provider) is load-bearing, and a reimplementation here would be a place for it to
+			// quietly diverge.
+			const channel = createDeltaChannel({
+				onCancel: () => {
+					if (handOff) departedAt = new Date().toISOString();
+				},
+			});
 			// TWO SINKS, ONE DATA — and only ONE of them is this door's business. The reader in this
 			// invocation is served from memory, here; everybody else reads the stream, which the
 			// ENGINE writes because it is the thing that holds the lease. This used to write text
@@ -2085,11 +2123,22 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				.startRun({
 					...startInput,
 					drive: {
-						...driveBudget(),
+						// RE-READ EACH STEP when a handoff is possible, so `departedAt` — set after this
+						// object was built, from inside a model call — is visible at all. A scalar could
+						// only ever carry the budget this invocation started with.
+						...(handOff
+							? { deadlineAt: () => departedAt ?? budgetAt }
+							: budgetAt !== undefined
+								? { deadlineAt: budgetAt }
+								: {}),
 						onDelta: (text: string) => channel.push(text),
 					},
 				})
 				.finally(() => channel.close());
+			// THE TIME THE REST OF THIS RUN NEEDS, asked for from the only party who can grant it. On a
+			// daemon this is absent and nothing is lost; on serverless, without it, every branch above
+			// is decided correctly and then killed with the isolate the moment the response completes.
+			context.waitUntil?.(driven);
 			return {
 				textStream: channel.iterable,
 				result: driven.then(async (outcome) => {

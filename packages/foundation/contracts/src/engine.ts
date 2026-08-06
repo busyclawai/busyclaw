@@ -86,7 +86,14 @@ export type EngineStartRunInput = {
 	 * Deltas arrive already REDACTED (R-M04) — the same placeholders the transcript will hold.
 	 */
 	drive?: {
-		deadlineAt?: string;
+		/**
+		 * A FUNCTION means "ask again each step", which is how a door tells a run in flight that its
+		 * reader walked away: it returns the invocation budget while somebody is reading and `now()`
+		 * once nobody is, so the slice yields at its next control point instead of running on for an
+		 * audience of none. In-process only, like `onDelta` and for the same reason — `drive` means
+		 * "in THIS invocation", so nothing here crosses a wire.
+		 */
+		deadlineAt?: string | (() => string | undefined);
 		onDelta?: (text: string) => void | Promise<void>;
 	};
 };
@@ -273,6 +280,20 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	 * invocation limit has nothing to park against.
 	 */
 	softDeadlineMs?: number;
+	/**
+	 * Whether anything OTHER than this caller will pick up work this run leaves behind.
+	 *
+	 * A yield writes a checkpoint and enqueues a continuation; on engine-sql that continuation is a
+	 * pending task, and pending tasks are claimed only by the cron drain. So on a deployment with no
+	 * cron, yielding is not "park and continue later" — it is "stop forever", and a door that yields
+	 * on it converts a turn that would have finished into a turn that never lands.
+	 *
+	 * Which is why this is on the HANDLE rather than inferred: only the engine knows whether its
+	 * continuations get claimed, and the door has to know before it decides what a departing reader
+	 * means. Absent is read as false — the fail-safe direction, since guessing "yes" strands runs and
+	 * guessing "no" merely costs a few tokens finishing one nobody is watching.
+	 */
+	resumesPendingWork?: boolean;
 	/**
 	 * Admit a message into a run's inbox. Admission only — nothing is delivered here; the receiving
 	 * run drains it at its next control point.

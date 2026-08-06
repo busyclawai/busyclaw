@@ -427,6 +427,17 @@ export function createClawsStore(
 						connector: "AND",
 					});
 				}
+				// FILTERED IN THE QUERY, not by the caller, because `limit` pages the rows: dropping
+				// internal rows client-side would silently shrink a page and make the next cursor skip
+				// what the filter removed.
+				if (input.visibility !== undefined) {
+					where.push({
+						field: "visibility",
+						operator: "in",
+						value: [...input.visibility],
+						connector: "AND",
+					});
+				}
 				return db.findMany({
 					model: "message",
 					where,

@@ -196,7 +196,7 @@ async function runTask(
 	control: RunControlPort,
 	onBoundary: (boundary: { scope: string; scopeId: string }) => void,
 	abortSignal?: RuntimeAbortSignal,
-	deadlineAt?: string,
+	deadlineAt?: string | (() => string | undefined),
 	principal?: Principal,
 	recording?: EngineRecording,
 	model?: string,
@@ -635,7 +635,9 @@ export async function driveClaim(input: {
 	claim: ClaimedTask;
 	workerId: string;
 	leaseTtlMs?: number;
-	deadlineAt?: string;
+	/** A FUNCTION is a deadline that can move: a door hands one so a reader walking away brings the
+	 *  yield forward to now. The cron drain hands a scalar — its budget is fixed at the firing. */
+	deadlineAt?: string | (() => string | undefined);
 	/** Live deltas for whoever is watching. Threaded from the worker config so the cron path — which
 	 *  drives the second slice of a parked turn — writes the same log the door does. */
 	runStream?: RunStreamPort;

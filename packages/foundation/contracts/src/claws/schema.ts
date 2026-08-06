@@ -32,6 +32,10 @@ export const checkpointKindValues = [
 	"compaction",
 	"replay",
 	"fork",
+	// A run stopped because somebody OUTSIDE it asked. Distinct from `step`, which marks a boundary
+	// the run chose and comes back from on its own — this one does not come back until a verb says so,
+	// and a reader who cannot tell them apart cannot tell "working" from "waiting for you".
+	"park",
 ] as const;
 
 export const clawStatus = type("'active' | 'paused' | 'archived'");

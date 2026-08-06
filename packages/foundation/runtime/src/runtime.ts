@@ -235,8 +235,14 @@ export type RuntimeRunOptions = {
 	 * Invocation soft deadline (ISO timestamp). Past it, the loop parks a yield checkpoint at the
 	 * next end-of-tool-result and returns `yielded` instead of continuing. Requires a
 	 * database-backed run checkpoint store.
+	 *
+	 * A FUNCTION means "ask me again each step", which is how a departing reader ends a slice: the
+	 * caller returns its invocation budget while somebody is reading and `now()` once nobody is. A
+	 * captured scalar cannot express that, because departure happens while the loop is inside a model
+	 * call. Server-side only, like the rest of these — a caller-chosen deadline is a caller-chosen
+	 * yield, so the api's serialized option schema omits it either way.
 	 */
-	deadlineAt?: string;
+	deadlineAt?: string | (() => string | undefined);
 	/** How this run was triggered — set by the ENTRY POINT (busyclaw's sendMessage/continueRun stamp
 	 *  "interactive"; the engine worker and direct calls leave it unset). Stamped into every gated
 	 *  call as the spoof-proof `busyclaw__runMode` fact. Default "autonomous" — fail-closed, so an
@@ -403,6 +409,14 @@ export type RuntimeDeniedResult = typeof RuntimeDeniedResult.infer;
 
 export const RuntimeYieldedResult = ark({
 	status: "'yielded'",
+	/**
+	 * WHAT THE ASSISTANT SAID IN THIS SLICE, and it is the whole reason this field is not `''`.
+	 *
+	 * A turn that yields mid-answer used to report nothing, so the transcript ended in mid-air and a
+	 * reader watching the stream saw text arrive and then a `finish` that meant "gone", not "done".
+	 * The words were produced, paid for, and shown — dropping them at the slice boundary loses the
+	 * only record that they happened.
+	 */
 	text: "string",
 	steps: "number",
 	checkpointId: "string",
@@ -424,7 +438,10 @@ export type RunParkReason = typeof RunParkReason.infer;
 
 export const RuntimeParkedResult = ark({
 	status: "'parked'",
-	text: "''",
+	/** Same as the yield's, for the same reason — see `RuntimeYieldedResult.text`. This was the
+	 *  literal `''`, which made "the assistant said nothing" and "we threw away what it said"
+	 *  indistinguishable at the type level. */
+	text: "string",
 	steps: "number",
 	checkpointId: "string",
 	reason: RunParkReason,
@@ -1197,6 +1214,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				await emitEvent(context, {
 					checkpointId: result.checkpointId,
 					steps: result.steps,
+					text: result.text,
 					type: "run.yielded",
 					usage,
 				});
@@ -1206,6 +1224,7 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					checkpointId: result.checkpointId,
 					reason: result.reason,
 					steps: result.steps,
+					text: result.text,
 					type: "run.parked",
 					usage,
 				});

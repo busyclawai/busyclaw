@@ -82,11 +82,15 @@ export const runWaitingApprovalEvent = ark({
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 
+// `text` is what the assistant produced in the slice that just ended, and it is OPTIONAL only so a
+// stored event written before this field existed still parses. A yield with no text is a slice that
+// called tools and said nothing — which happens — so absent and empty mean the same thing here.
 export const runYieldedEvent = ark({
 	...runtimeEventBaseShape,
 	type: "'run.yielded'",
 	steps: "number",
 	checkpointId: "string",
+	"text?": "string | undefined",
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 
@@ -99,6 +103,7 @@ export const runParkedEvent = ark({
 	steps: "number",
 	checkpointId: "string",
 	reason: "'suspended' | 'stopped'",
+	"text?": "string | undefined",
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 
