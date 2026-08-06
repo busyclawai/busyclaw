@@ -12,6 +12,7 @@ import type { RunMode } from "./governance/boundary";
 import type { BusyclawCronFlag, BusyclawPlugin } from "./governance/plugin";
 import type { Principal } from "./governance/principal";
 import type { RunMessageMode } from "./run-message";
+import type { RunStreamPort } from "./run-stream";
 
 export type EngineRunHandle = {
 	id: string;
@@ -406,13 +407,38 @@ export type ClawEngineInstance<
 	$HasCron?: HasCron;
 };
 
+/**
+ * What the ASSEMBLY resolved and the engine cannot: infrastructure chosen by `createClaw` after the
+ * factory was already constructed.
+ *
+ * A host writes `engine: sqlEngine({ store })` at config time, long before `createClaw` decides where
+ * live deltas go — so before this existed, a host-supplied engine simply never received the claw's
+ * `runStream` and NOTHING reached a watcher. Not a degraded stream: an empty one, in the exact
+ * configuration the README documents.
+ *
+ * Optional and additive, so an engine that ignores it compiles and behaves as it always did. An
+ * engine given the same thing explicitly should prefer the explicit one — the host said it out loud.
+ */
+export type ClawEngineServices = {
+	/** Where live deltas go, resolved by the assembly (explicit config → secondary storage → the
+	 *  claw's own database). Absent when the deployment has no stream at all. */
+	runStream?: RunStreamPort;
+};
+
 export type ClawEngineFactory<
 	RuntimeLike = unknown,
 	Handle extends ClawEngineHandle = ClawEngineHandle,
 	HasCron extends BusyclawCronFlag = "unknown-cron",
 > = {
 	kind: Handle["kind"];
-	create: (runtime: RuntimeLike) => ClawEngineInstance<Handle, HasCron>;
+	/**
+	 * Build the engine. `services` carries what the assembly resolved and the factory could not know
+	 * at config time — see {@link ClawEngineServices}. Optional so an engine may ignore it entirely.
+	 */
+	create: (
+		runtime: RuntimeLike,
+		services?: ClawEngineServices,
+	) => ClawEngineInstance<Handle, HasCron>;
 	/**
 	 * The tables THIS engine needs, readable without constructing it.
 	 *

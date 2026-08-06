@@ -1,12 +1,16 @@
 import type { ClawEngineFactory } from "@busyclaw/contracts";
-import { userPrincipal } from "@busyclaw/contracts";
+import { threadStreamKey, userPrincipal } from "@busyclaw/contracts";
 import { createMemoryAudit } from "@busyclaw/core";
 import {
 	createSqlEngineStore,
 	sqlEngine,
 	type WorkerTickResult,
 } from "@busyclaw/engine-sql";
-import { memoryAdapter } from "@busyclaw/storage-core";
+import {
+	memoryAdapter,
+	memorySecondaryStorage,
+	secondaryStorageStream,
+} from "@busyclaw/storage-core";
 import { describe, expect, it } from "vitest";
 
 /** The principal `owned()` binds onto every api call — and now what a durable run is stamped with. */
@@ -134,6 +138,44 @@ describe("createClaw engine", () => {
 		expect(run).toEqual({ id: "fake-1" });
 		expect(result).toEqual({ status: "completed", steps: 1, text: "done" });
 		expect(events).toEqual(["start:hello:acme", "work:run:fake-1"]);
+	});
+
+	it("hands a host-supplied engine the runStream the claw resolved", async () => {
+		// THE README'S OWN LINE. A host writes `sqlEngine({ store })` at config time, before
+		// `createClaw` has decided where live deltas go — so the factory could not have been given it,
+		// and before `ClawEngineFactory.create` took services the engine simply had none. The result
+		// was not a degraded stream but an EMPTY one: no text, no `run.started`, no terminal
+		// lifecycle, in the configuration the docs recommend. The defaulted engine received it
+		// directly and looked fine, which is what hid it.
+		const db = memoryAdapter();
+		const runStream = secondaryStorageStream(memorySecondaryStorage());
+		const claw = owned({
+			cronHandler: false,
+			database: db,
+			engine: sqlEngine({
+				store: createSqlEngineStore(db),
+				workerId: "worker-1",
+				cron: false,
+			}),
+			runStream,
+			model: textModel("done"),
+			redaction: { posture: "raw" },
+		});
+		const agent = await claw.api.createClaw({ id: "claw-1", name: "A" });
+		const thread = await claw.api.createThread({
+			id: "thread-1",
+			clawId: agent.id,
+		});
+
+		await claw.api.sendMessage({
+			clawId: agent.id,
+			message: "hello",
+			threadId: thread.id,
+		});
+
+		const page = await runStream.read(threadStreamKey(thread.id));
+		expect(page.chunks.map((chunk) => chunk.kind)).toContain("run.started");
+		expect(page.chunks.map((chunk) => chunk.kind)).toContain("lifecycle");
 	});
 
 	it("exposes only the generic engine surface", () => {

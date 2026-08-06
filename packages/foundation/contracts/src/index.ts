@@ -217,6 +217,7 @@ export type {
 	ClawEngineFactory,
 	ClawEngineHandle,
 	ClawEngineInstance,
+	ClawEngineServices,
 	ClawRunReadModel,
 	DrainWorkInput,
 	DrainWorkResult,

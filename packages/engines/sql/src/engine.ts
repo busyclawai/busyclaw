@@ -601,15 +601,24 @@ export function sqlEngine<const Config extends SqlEngineConfig>(
 		models: sqlEngineModels,
 		create: (
 			runtime,
+			services,
 		): ClawEngineInstance<SqlEngineHandle, SqlEngineCronFlag<Config>> => {
-			const engine = createSqlEngineHandle({ config, runtime });
+			// EXPLICIT WINS, then what the assembly resolved. A host writes `sqlEngine({ store })` at
+			// config time, before `createClaw` has decided where live deltas go — so without this the
+			// engine had no stream and NOTHING reached a watcher: not text, not `run.started`, not a
+			// terminal lifecycle. An empty subscription, in the configuration the README documents.
+			const resolved: Config =
+				config.runStream === undefined && services?.runStream !== undefined
+					? { ...config, runStream: services.runStream }
+					: config;
+			const engine = createSqlEngineHandle({ config: resolved, runtime });
 			return {
 				engine,
-				plugins: [sqlCronPlugin(config, engine)],
+				plugins: [sqlCronPlugin(resolved, engine)],
 				runs: {
-					get: (id) => config.store.getRun(id),
-					events: (runId) => config.store.events(runId),
-					listActiveForClaw: (input) => config.store.listActiveForClaw(input),
+					get: (id) => resolved.store.getRun(id),
+					events: (runId) => resolved.store.events(runId),
+					listActiveForClaw: (input) => resolved.store.listActiveForClaw(input),
 				},
 			};
 		},

@@ -170,13 +170,13 @@ async function conversation(input: {
 		// which decides `resumesPendingWork`, which decides what a departure means.
 		cronHandler: input.cron ? { secret: "cron-secret" } : false,
 		database: adapter,
-		// `runStream` is threaded EXPLICITLY, because a host-supplied engine does not receive the one
-		// the claw resolves — the assembly warns about it, and without this the cron drain's slices
-		// reach no watcher while the door's do.
+		// NOT threaded into the engine, deliberately: the assembly hands it over through
+		// `ClawEngineFactory.create`'s services now, and these tests read the stream, so they would
+		// fail if it stopped doing that.
 		engine: sqlEngine(
 			input.cron
-				? { store, workerId: "w1", runStream }
-				: { store, workerId: "w1", cron: false, runStream },
+				? { store, workerId: "w1" }
+				: { store, workerId: "w1", cron: false },
 		),
 		runStream,
 		model: streamingToolModel(input.toolSteps),
