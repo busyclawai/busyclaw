@@ -597,6 +597,15 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 	/** The run WITHOUT its input — see the handler. Status, scope, wait reason and timestamps; never
 	 *  content, which `listMessages` serves under a `view` gate and an audit line. */
 	getRun: (input: { id: string }) => Promise<ClawRunView | null>;
+	/**
+	 * The unfinished runs on one conversation, newest first.
+	 *
+	 * "Is somebody already answering this?" — the question a router has to ask before starting a
+	 * second turn beside a live one, and the question a UI asks to show "still working". Several is a
+	 * legitimate answer: two people sending into one thread is two runs (G8), which is why every
+	 * stream chunk carries a `runId`.
+	 */
+	listActiveRuns: (input: { threadId: string }) => Promise<ClawRunView[]>;
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
 
 	// The generic share/unshare api (slice 5) — write/revoke an access_grant on ANY shareable resource.
@@ -772,6 +781,13 @@ const pruneRunsInput = ark({
 	"limit?": ark("number | undefined").configure({
 		busyclaw: {
 			doc: "How many finished runs to sweep in this call (default 500). Loop until `runs` comes back 0.",
+		},
+	}),
+}).onUndeclaredKey("reject");
+const listActiveRunsInput = ark({
+	threadId: ark("string").configure({
+		busyclaw: {
+			doc: "The conversation to ask about. Answers with every run on it that has not finished, newest first — several is legitimate, not an error.",
 		},
 	}),
 }).onUndeclaredKey("reject");
@@ -1106,6 +1122,7 @@ export const clawApiInputSchemas = {
 	appendMessage: appendMessageInput.and(subjectLineageInput),
 	archiveClaw: idInput,
 	pruneRuns: pruneRunsInput,
+	listActiveRuns: listActiveRunsInput,
 	archiveThread: idInput,
 	controlRun: controlRunInput,
 	deliverMessage: deliverMessageInput,
@@ -1251,6 +1268,10 @@ export const clawApiRoutes = {
 	// level at which a guest drives a turn, and a guest must not be able to delete the history of
 	// everybody else's.
 	pruneRuns: apiRoute("pruneRuns", on("manage", "claw", "clawId")),
+	// READ, on the THREAD — the same level and the same resource `listMessages` uses. Seeing which
+	// runs are working on a conversation you can already read tells you nothing the transcript will
+	// not, and a router needs it before it can avoid starting a second turn.
+	listActiveRuns: apiRoute("listActiveRuns", on("read", "thread", "threadId")),
 	// thread — a method reaching a claw via one of its threads/messages anchors on that claw (its grants
 	// inherit down); a method acting on the thread row itself anchors on the thread.
 	createThread: apiRoute("createThread", on("use", "claw", "clawId")),
@@ -2791,6 +2812,18 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// `ClawRunReadModel` knows a run id and nothing else, so the claw container a re-identification
 		// needs would have to be plumbed in for a feature the control plane does not want. Status,
 		// wait reason, scope and timestamps are what "how is my run doing" actually asks.
+		listActiveRuns: async ({ threadId }) => {
+			const list = context.runs?.listActiveForThread;
+			// An engine that cannot index runs by thread answers "none". Honest rather than a throw:
+			// the caller's next move — start a turn — is the right one either way, and refusing would
+			// take down a channel over a query the backend simply does not have.
+			if (list === undefined) return [];
+			return (await list({ threadId })).map((run) => {
+				const { input: _input, ...view } = run;
+				return view;
+			});
+		},
+
 		getRun: async ({ id }) => {
 			const run = await requireRuns(context.runs).get(id);
 			if (!run) return null;

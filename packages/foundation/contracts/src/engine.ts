@@ -314,6 +314,19 @@ export type ClawRunReadModel = {
 		clawId: string;
 		principal: string;
 	}) => Promise<EngineRunRecord[]>;
+	/**
+	 * The unfinished runs on one conversation, newest first — "is somebody already answering this?".
+	 *
+	 * A router asks this to steer a live turn instead of starting a second one beside it. Deliberately
+	 * NOT filtered to a single run: two people sending into one thread is two legitimate runs (G8),
+	 * so the caller picks, and a caller that assumed one would be wrong exactly when multiplayer is.
+	 *
+	 * OPTIONAL for the same reason as its sibling — an engine that cannot index runs by thread should
+	 * say so rather than grow a table scan.
+	 */
+	listActiveForThread?: (input: {
+		threadId: string;
+	}) => Promise<EngineRunRecord[]>;
 };
 
 export type ClawEngineHandle<WorkResult = EngineWorkResult> = {

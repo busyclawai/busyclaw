@@ -18,6 +18,7 @@ import type {
 	DeliveryKey,
 	DeliveryOutbox,
 	DeliveryWork,
+	ReplyKey,
 } from "./inbox";
 
 export type ChannelDispatchResult = {
@@ -94,16 +95,24 @@ export async function handleInbound(input: {
 	const reply = {
 		externalConversationId: message.externalConversationId,
 		text: sent.result.text,
+		...(message.deliveryId !== undefined
+			? { deliveryId: message.deliveryId }
+			: { deliveryId: "" }),
 		...(message.replyContext !== undefined
 			? { replyContext: message.replyContext }
 			: {}),
 	};
-	const key =
+	// KEYED ON THE RUN, not on the delivery. A run is the unit that produces an answer: two messages
+	// sent while one turn is in flight are answered together, so keying the reply on either inbound
+	// delivery would ask which of two messages the single answer "belongs" to — a question with no
+	// principled answer, because it belongs to both. The delivery id keeps its own job on the inbound
+	// side, turning away provider retries.
+	const key: ReplyKey | undefined =
 		input.outbox !== undefined && message.deliveryId !== undefined
 			? {
 					provider: channel.provider,
 					endpointKey: endpoint.endpointKey,
-					deliveryId: message.deliveryId,
+					runId: sent.runId,
 				}
 			: undefined;
 	// No outbox (or no delivery id to key one on) ⇒ send and hope, exactly as before.
@@ -134,11 +143,13 @@ export async function handleInbound(input: {
 async function deliverReply(input: {
 	channel: Channel;
 	endpoint: EndpointContext;
-	key: DeliveryKey;
+	key: ReplyKey;
 	reply: {
 		externalConversationId: string;
 		text: string;
 		replyContext?: JsonValue;
+		/** The inbound delivery that opened this exchange — forensic on the stored row. */
+		deliveryId: string;
 	};
 	outbox?: DeliveryOutbox;
 }): Promise<void> {
@@ -398,20 +409,25 @@ export async function runDelivery(input: {
 	// from a dead one, so a recovery took over work that was never stuck and ran it a second time.
 	const stopHeartbeat = startLeaseHeartbeat({ inbox, key, leaseId, leaseMs });
 	try {
-		const text = await runTurn({
+		const answered = await runTurn({
 			claw,
 			work,
 			principal: endpointPrincipal(endpoint),
 		});
 		const target = replyTargetOf(work);
-		if (text !== null && target !== null) {
+		if (answered !== null && target !== null) {
 			await deliverReply({
 				channel,
 				endpoint,
-				key,
+				key: {
+					provider: key.provider,
+					endpointKey: key.endpointKey,
+					runId: answered.runId,
+				},
 				reply: {
 					externalConversationId: target.externalConversationId,
-					text,
+					text: answered.text,
+					deliveryId: key.deliveryId,
 					...(target.replyContext !== undefined
 						? { replyContext: target.replyContext }
 						: {}),
@@ -453,7 +469,9 @@ async function runTurn(input: {
 	/** The endpoint's service principal — the SAME identity the binding was stamped with, or the owner
 	 *  rule would deny the run into a claw this dispatch itself created. */
 	principal: Principal;
-}): Promise<string | null> {
+	/** The run that answered, alongside the answer — the reply row is keyed on it, so a caller that
+	 *  only got the text could not enqueue one. */
+}): Promise<{ text: string; runId: string } | null> {
 	const target = replyTargetOf(input.work);
 	// A stored payload that is not a message is not runnable. Thrown rather than skipped: it means the
 	// row was written by something that did not agree with this code about what a delivery is.
@@ -476,7 +494,7 @@ async function runTurn(input: {
 	// there is nothing to deliver and nothing to claim credit for.
 	if (!sent.driven) return null;
 	if (sent.result.status !== "completed" || !sent.result.text) return null;
-	return sent.result.text;
+	return { text: sent.result.text, runId: sent.runId };
 }
 
 /**
@@ -736,12 +754,18 @@ export async function drainOutbox(input: {
 	let sent = 0;
 	let failed = 0;
 	for (const row of owed) {
-		const key = {
+		const key: ReplyKey = {
+			provider: row.provider,
+			endpointKey: row.endpointKey,
+			runId: row.runId,
+		};
+		// `endpointFor` resolves a provider/endpoint pair; the delivery id is what it has always been
+		// handed and stays the forensic link back to what opened the exchange.
+		const resolved = await input.endpointFor({
 			provider: row.provider,
 			endpointKey: row.endpointKey,
 			deliveryId: row.deliveryId,
-		};
-		const resolved = await input.endpointFor(key);
+		});
 		if (resolved === undefined) {
 			// A provider that is no longer configured, or an endpoint that has been revoked. Recorded as
 			// a failure so it backs off and is eventually buried, rather than left for every future drain

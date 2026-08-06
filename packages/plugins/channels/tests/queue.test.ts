@@ -44,15 +44,15 @@ const brokenWrites = (): Adapter => {
 	};
 };
 
-const key = {
-	provider: "fake",
-	endpointKey: "acme-bot",
-	deliveryId: "u-1",
-};
+const key = { provider: "fake", endpointKey: "acme-bot", deliveryId: "u-1" };
+/** The OUTBOUND key is the run's, not the delivery's — one answer per turn, however many messages
+ *  that turn answered. The delivery id stays on the inbound side, turning away provider retries. */
+const replyKey = { provider: "fake", endpointKey: "acme-bot", runId: "run-1" };
 
 const reply: OutboundRecord = {
 	externalConversationId: "chat-1",
 	text: "the answer",
+	deliveryId: "u-1",
 };
 
 const admitted = async (
@@ -82,7 +82,9 @@ describe("a storage failure is not a duplicate", () => {
 
 	it("rethrows an unreachable database instead of reporting the reply already owed", async () => {
 		const outbox = createDeliveryOutbox(brokenWrites());
-		await expect(outbox.enqueue(key, reply)).rejects.toThrow(/ECONNREFUSED/);
+		await expect(outbox.enqueue(replyKey, reply)).rejects.toThrow(
+			/ECONNREFUSED/,
+		);
 	});
 
 	// …and the recoverable case still recovers: a genuine duplicate is still answered, not thrown.
@@ -95,9 +97,9 @@ describe("a storage failure is not a duplicate", () => {
 		// A second arrival of the same delivery is a retry, not new work.
 		expect(await admitted(inbox)).toBe(false);
 
-		expect(await outbox.enqueue(key, reply)).not.toBeNull();
+		expect(await outbox.enqueue(replyKey, reply)).not.toBeNull();
 		// …and a second reply for the same delivery is refused, so a re-run cannot enqueue one.
-		expect(await outbox.enqueue(key, reply)).toBeNull();
+		expect(await outbox.enqueue(replyKey, reply)).toBeNull();
 	});
 });
 
@@ -145,8 +147,9 @@ describe("a delivery that already owes a reply is left to the drain", () => {
 		const outbox = createDeliveryOutbox(adapter);
 		// The dead attempt: it recorded its answer and never confirmed the send.
 		expect(
-			await outbox.enqueue(key, {
+			await outbox.enqueue(replyKey, {
 				externalConversationId: "chat-1",
+				deliveryId: "u-1",
 				text: "the FIRST answer",
 			}),
 		).not.toBeNull();
@@ -906,7 +909,7 @@ describe("the drains are reachable, and divide their work", () => {
 
 		// A reply recorded by an attempt that died before sending it.
 		const writer = createDeliveryOutbox(adapter);
-		expect(await writer.enqueue(key, reply)).not.toBeNull();
+		expect(await writer.enqueue(replyKey, reply)).not.toBeNull();
 
 		// Two drains run at the same moment, both past the writer's lease.
 		const later = clock(5 * 60 * 1000);
@@ -930,7 +933,7 @@ describe("the drains are reachable, and divide their work", () => {
 	it("buries a reply whose endpoint is gone rather than retrying it forever", async () => {
 		const adapter = db();
 		const writer = createDeliveryOutbox(adapter);
-		await writer.enqueue(key, reply);
+		await writer.enqueue(replyKey, reply);
 
 		let landed = { sent: 0, failed: 0 };
 		for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -1081,7 +1084,7 @@ describe("a displaced outbox sender cannot mark it delivered", () => {
 	it("refuses markSent and markFailed from a lease that was re-taken", async () => {
 		const adapter = db();
 		const writer = createDeliveryOutbox(adapter);
-		const first = await writer.enqueue(key, reply);
+		const first = await writer.enqueue(replyKey, reply);
 		if (!first) throw new Error("expected the enqueue to claim the row");
 
 		// The writer's lease lapses and a drain takes over.
@@ -1093,10 +1096,10 @@ describe("a displaced outbox sender cannot mark it delivered", () => {
 		expect(taken.leaseId).not.toBe(first.leaseId);
 
 		// The displaced writer comes back. Neither transition is its to make.
-		expect(await later.markSent(key, first.leaseId)).toBe(false);
+		expect(await later.markSent(replyKey, first.leaseId)).toBe(false);
 		expect(
 			await later.markFailed({
-				key,
+				key: replyKey,
 				leaseId: first.leaseId,
 				error: "the displaced attempt's error",
 				backoffMs: 1000,
@@ -1105,7 +1108,7 @@ describe("a displaced outbox sender cannot mark it delivered", () => {
 		).toBe("lost");
 
 		// …and the row is still owed, still the drain's to finish.
-		expect(await later.markSent(key, taken.leaseId)).toBe(true);
+		expect(await later.markSent(replyKey, taken.leaseId)).toBe(true);
 	});
 });
 

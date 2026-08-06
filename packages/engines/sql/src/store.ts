@@ -343,6 +343,9 @@ export type SqlEngineStore = {
 		messages: number;
 		runIds: string[];
 	}>;
+	/** The unfinished runs on one thread, newest first — what a router reads to steer a live turn
+	 *  instead of starting a second one beside it. */
+	listActiveForThread: (threadId: string) => Promise<RunRecord[]>;
 	/** The highest inbox seq this run's rows already hold, or 0. Seeds `run.messageSeq` on a run that
 	 *  predates that column — see the field's own doc for why zero would be wrong. */
 	maxMessageSeq: (toRunId: string) => Promise<number>;
@@ -1010,6 +1013,24 @@ export function createSqlEngineStore(
 				where: [{ field: "id", value: lease.id }],
 			});
 			return row;
+		},
+
+		async listActiveForThread(threadId) {
+			return db.findMany({
+				model: "run",
+				where: [
+					{ field: "threadId", value: threadId },
+					{
+						field: "status",
+						value: [...NON_TERMINAL_RUN_STATUSES],
+						operator: "in",
+						connector: "AND",
+					},
+				],
+				// NEWEST FIRST: a router steering a conversation wants the turn in flight now, and with
+				// two live runs the later one is the one still gathering context.
+				sortBy: { field: "createdAt", direction: "desc" },
+			});
 		},
 
 		async adoptThreadInbox({ threadId, toRunId }) {

@@ -619,6 +619,8 @@ export function sqlEngine<const Config extends SqlEngineConfig>(
 					get: (id) => resolved.store.getRun(id),
 					events: (runId) => resolved.store.events(runId),
 					listActiveForClaw: (input) => resolved.store.listActiveForClaw(input),
+					listActiveForThread: ({ threadId }) =>
+						resolved.store.listActiveForThread(threadId),
 				},
 			};
 		},

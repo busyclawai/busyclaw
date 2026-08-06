@@ -94,6 +94,27 @@ export const channelDeliveryFields = {
 		immutable: true,
 		doc: "The normalized inbound message, tokenized into the claw's containerKind. Immutable: what was admitted is what runs.",
 	}),
+	/**
+	 * WHICH RUN IS ANSWERING THIS, stamped once the message has been relayed.
+	 *
+	 * The link that makes the reply recoverable. A reply is produced by a RUN, and a run can finish in
+	 * this invocation, in a cron drain minutes later, or after an approval somebody grants tomorrow —
+	 * so the trigger that sends it cannot be "whatever happened to be awake when the run ended". This
+	 * row was written before the run existed and outlives it; with the run id on it, a drain can ask
+	 * "which admitted messages are still owed an answer" and get a truthful list.
+	 *
+	 * Absent means the relay has not happened yet, which is the same thing the lease already says.
+	 */
+	runId: field.string({ index: true }),
+	/**
+	 * When the reply for this message was ENQUEUED — not sent. The outbox owns sending.
+	 *
+	 * Stamped after the enqueue, never before, so a failure between them leaves the row claimable and
+	 * the next sweep retries. Stamped even when there is nothing to send (a run that failed, or
+	 * answered with no text), because "answered with silence" and "still owed an answer" are different
+	 * states and only one of them should keep coming back.
+	 */
+	repliedAt: field.string({ index: true }),
 	/** WHERE the work lands, resolved at ingress. Binding is a cheap, deterministic lookup-or-create, so
 	 *  it happens on the acknowledged path and the worker inherits a fully-resolved unit of work rather
 	 *  than re-deriving one from an endpoint that may since have been revoked. */
@@ -155,6 +176,29 @@ export function deliveryRowId(key: {
 		),
 	);
 }
+
+/**
+ * The id of a REPLY row — `hash(provider, endpointKey, runId)`.
+ *
+ * A separate derivation from `deliveryRowId`, and a separate key type, because the two sides of the
+ * round trip dedupe on different things: inbound on the provider's delivery id (turning away its
+ * retries), outbound on the RUN (one answer per turn, however many messages that turn answered).
+ * Sharing one key type would have made the second job invisible.
+ */
+export function replyRowId(key: ReplyKey): string {
+	return bytesToHex(
+		sha256(
+			utf8ToBytes(`${key.provider}\u0000${key.endpointKey}\u0000${key.runId}`),
+		),
+	);
+}
+
+/** Which conversation's endpoint owes a reply, and for which run. */
+export type ReplyKey = {
+	provider: string;
+	endpointKey: string;
+	runId: string;
+};
 
 /** The proof that an attempt holds a delivery — carried back into every later transition on it. */
 export type DeliveryClaim = { leaseId: string; work: DeliveryWork };
@@ -550,8 +594,18 @@ export const channelOutboxStatusValues = ["pending", "sent", "dead"] as const;
 export type ChannelOutboxStatus = (typeof channelOutboxStatusValues)[number];
 
 export const channelOutboxFields = {
-	/** hash(provider, endpointKey, deliveryId) — one reply per delivery, so a re-run of the same
-	 *  delivery cannot enqueue a second. */
+	/**
+	 * hash(provider, endpointKey, runId) — ONE REPLY PER RUN.
+	 *
+	 * Keyed on the run rather than the delivery, because a run is the unit that produces an answer.
+	 * Two messages sent while one turn is in flight are delivered into that same run and answered
+	 * together: two inbound rows, one run, one reply. Keyed on the delivery this would have been two
+	 * replies to two messages the agent answered once — and there is no principled way to pick which
+	 * of the two the single answer "belongs" to, because it belongs to both.
+	 *
+	 * The inbound `deliveryId` keeps its own job on the other side of the round trip: deduping
+	 * provider retries. Two keys, two directions, neither doing a second job.
+	 */
 	id: field.string({
 		required: true,
 		primaryKey: true,
@@ -560,6 +614,10 @@ export const channelOutboxFields = {
 	}),
 	provider: field.string({ required: true, index: true, immutable: true }),
 	endpointKey: field.string({ required: true, index: true, immutable: true }),
+	/** The run whose answer this is — the id above is derived from it. */
+	runId: field.string({ required: true, index: true, immutable: true }),
+	/** The inbound delivery that OPENED the conversation this answers. Forensic: a run can answer
+	 *  several, and this names the first, so a reply can be traced back to something a provider sent. */
 	deliveryId: field.string({ required: true, immutable: true }),
 	status: field.enum(channelOutboxStatusValues, {
 		required: true,
@@ -608,11 +666,13 @@ export type OutboundRecord = {
 	externalConversationId: string;
 	text: string;
 	replyContext?: JsonValue;
+	/** The inbound delivery that opened this exchange. Forensic — a run may answer several. */
+	deliveryId: string;
 };
 
 /** A reply the drain took responsibility for, with the proof it holds it. */
 export type ClaimedReply = OutboundRecord &
-	DeliveryKey & { leaseId: string; attempts: number };
+	ReplyKey & { leaseId: string; attempts: number };
 
 export type DeliveryOutbox = {
 	/**
@@ -626,7 +686,7 @@ export type DeliveryOutbox = {
 	 * too — the queue built to stop a reply being lost producing a duplicate instead.
 	 */
 	enqueue: (
-		key: DeliveryKey,
+		key: ReplyKey,
 		reply: OutboundRecord,
 	) => Promise<{ leaseId: string } | null>;
 	/** Take whatever replies are owed and due — the drain's entry point. Fenced, so two drains running
@@ -636,7 +696,7 @@ export type DeliveryOutbox = {
 		limit?: number;
 	}) => Promise<ClaimedReply[]>;
 	/** Mark it delivered. `false` ⇒ the lease was re-taken; this attempt does not get to say it sent. */
-	markSent: (key: DeliveryKey, leaseId: string) => Promise<boolean>;
+	markSent: (key: ReplyKey, leaseId: string) => Promise<boolean>;
 	/**
 	 * Record a failed send, back it off, and bury it past the cap.
 	 *
@@ -644,7 +704,7 @@ export type DeliveryOutbox = {
 	 * drain forever. Now it becomes `dead`: still on the record, no longer costing an api call a minute.
 	 */
 	markFailed: (input: {
-		key: DeliveryKey;
+		key: ReplyKey;
 		leaseId: string;
 		error: string;
 		backoffMs: number;
@@ -654,7 +714,7 @@ export type DeliveryOutbox = {
 	 *  `claimPending`; reading this and acting on it is the race the lease exists to close. */
 	pending: (
 		limit?: number,
-	) => Promise<(OutboundRecord & DeliveryKey & { attempts: number })[]>;
+	) => Promise<(OutboundRecord & ReplyKey & { attempts: number })[]>;
 };
 
 /** Back the outbox with a storage adapter. */
@@ -668,8 +728,8 @@ export function createDeliveryOutbox(
 	});
 	const leaseUntil = (leaseMs: number) =>
 		new Date(Date.parse(now()) + leaseMs).toISOString();
-	const rowWhere = (key: DeliveryKey, leaseId: string) => [
-		{ field: "id" as const, value: deliveryRowId(key) },
+	const rowWhere = (key: ReplyKey, leaseId: string) => [
+		{ field: "id" as const, value: replyRowId(key) },
 		{ field: "leaseId" as const, value: leaseId, connector: "AND" as const },
 	];
 
@@ -682,7 +742,8 @@ export function createDeliveryOutbox(
 					model: "channel_outbox",
 					data: {
 						...key,
-						id: deliveryRowId(key),
+						id: replyRowId(key),
+						deliveryId: reply.deliveryId,
 						status: "pending",
 						externalConversationId: reply.externalConversationId,
 						text: reply.text,
@@ -745,6 +806,7 @@ export function createDeliveryOutbox(
 				taken.push({
 					provider: row.provider,
 					endpointKey: row.endpointKey,
+					runId: row.runId,
 					deliveryId: row.deliveryId,
 					externalConversationId: row.externalConversationId,
 					text: row.text,
@@ -812,6 +874,7 @@ export function createDeliveryOutbox(
 			return rows.map((row) => ({
 				provider: row.provider,
 				endpointKey: row.endpointKey,
+				runId: row.runId,
 				deliveryId: row.deliveryId,
 				externalConversationId: row.externalConversationId,
 				text: row.text,

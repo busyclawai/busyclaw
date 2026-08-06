@@ -18,6 +18,10 @@ export const CLAW_API_METHOD_NAMES = [
 	// Retention, host-scheduled: sweeps the operational exhaust of finished runs. Destructive and
 	// bulk, so it authorizes at `manage` on the claw rather than at the level a guest drives a turn.
 	"pruneRuns",
+	// "is somebody already answering this conversation?" — what a router reads before it starts a
+	// second turn beside a live one. Read-level, on the thread: if you can read the conversation you
+	// can see what is working on it.
+	"listActiveRuns",
 	"archiveThread",
 	"bindConversation",
 	"controlRun",

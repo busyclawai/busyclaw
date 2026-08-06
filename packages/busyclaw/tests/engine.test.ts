@@ -238,6 +238,7 @@ describe("createClaw engine", () => {
 			"getToolResult",
 			"grantApproval",
 			"listActions",
+			"listActiveRuns",
 			"listApprovals",
 			"listMessages",
 			"listPolicySlices",
