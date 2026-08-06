@@ -147,6 +147,32 @@ export type EngineProceedRunInput = {
 	runId: string;
 	proceed: EngineProceed;
 	ctx?: JsonObject;
+	/**
+	 * Drive the admitted slice HERE, in this caller's invocation — the same option `startRun` takes,
+	 * for the same reason and with the same shape.
+	 *
+	 * Without it, advancing a parked run means "enqueue and wait for cron", which is right for an
+	 * operator clicking approve and wrong for a door whose caller is awaiting the answer. It is also
+	 * what makes a resumed turn REACH ITS WATCHERS: every chunk is written by `driveClaim`, so a
+	 * resume that never goes through the engine produces no text and, worse, no terminal event — a
+	 * `watchRun` subscription that waits forever for a turn that finished.
+	 */
+	drive?: {
+		deadlineAt?: string | (() => string | undefined);
+		onDelta?: (text: string) => void | Promise<void>;
+	};
+};
+
+/**
+ * What advancing a run produced — a superset of {@link EngineRunHandle}, so a caller that only ever
+ * wanted the id is unaffected.
+ *
+ * Same three outcomes as `startRun`, because it is the same question: this invocation either drove
+ * the slice or it did not, and the reasons a caller did not are backend-neutral.
+ */
+export type EngineProceedRunResult = EngineRunHandle & {
+	result?: EngineWorkResult;
+	notDriven?: EngineNotDrivenReason;
 };
 
 /**
@@ -299,7 +325,7 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	 * Advance an EXISTING parked run. Admits one durable work item and returns; nothing executes
 	 * here. Idempotent per (runId, proceed) — a duplicate loses the insert and gets the same handle.
 	 */
-	proceedRun: (input: EngineProceedRunInput) => Promise<EngineRunHandle>;
+	proceedRun: (input: EngineProceedRunInput) => Promise<EngineProceedRunResult>;
 	/**
 	 * Record an external intent against a run in flight. REQUIRED, deliberately not optional: an
 	 * engine that cannot park must throw `unsupportedOperationError` and say so. Optional would mean

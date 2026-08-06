@@ -325,7 +325,18 @@ describe("createClaw send", () => {
 				status: "failed",
 			},
 		]);
-		await api.continueRun({ approvalId });
+		// A SECOND RESUME IS REFUSED, where it used to be a quiet no-op.
+		//
+		// `continueRun` goes through the engine now, so the first call drove the run to a terminal
+		// status and the engine's own fence — the one that stops a CANCELLED run being resumed by an
+		// approval somebody grants later — refuses this one. It used to bypass the run entirely and
+		// re-run the runtime, which found the approval already decided and returned the same answer:
+		// harmless here, and the same code path that let a stopped run execute its gated tool call.
+		//
+		// The tool result count is what both behaviours protect, and it is still one.
+		await expect(api.continueRun({ approvalId })).rejects.toThrow(
+			/already terminal/,
+		);
 		expect(
 			await api.listToolResults({
 				runId: sent.runId,

@@ -439,7 +439,7 @@ function shapeFor(
 // below without widening it. The `as T` is sound because the morph runs on a VALIDATED value:
 // required props can't hold undefined (the validator rejected that), so only optional keys drop —
 // the result still satisfies T.
-function dropUndefined<T extends object>(value: T): T {
+export function dropUndefined<T extends object>(value: T): T {
 	return Object.fromEntries(
 		Object.entries(value).filter(([, v]) => v !== undefined),
 	) as T;

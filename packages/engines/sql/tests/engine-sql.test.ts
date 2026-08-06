@@ -408,6 +408,52 @@ describe("@busyclaw/engine-sql", () => {
 		expect(finalStatus).toBe("idle");
 	});
 
+	it("stores a DENIED result, whose optional fields are absent rather than present-and-undefined", async () => {
+		// THE CRASH. A denied result is built straight off an approval record, so a denial with no
+		// reason code carries `reasonCode: undefined`. The type permits it; JSON does not — and every
+		// terminal branch here PERSISTS the result, as a task output and as a run-event payload. So
+		// `proceedRun({ kind: "approval" })` on a denied approval threw `task output invalid` and
+		// killed the drain, on the door documented as the fenced one.
+		//
+		// A granted approval returns `completed`, which has no optional fields at all. That is why
+		// nothing caught this, and why the fix is at the engine's ingress rather than at that one
+		// construction site.
+		const store = createSqlEngineStore(memoryAdapter(), {
+			now: () => "2026-01-01T00:00:00.000Z",
+		});
+		const runtime = engineRuntime({
+			generate: async () => ({ status: "completed", text: "x", steps: 1 }),
+			continueRun: async () => ({
+				status: "denied",
+				approvalId: "a1",
+				text: "no",
+				steps: 1,
+				// Both absent as an explicit `undefined`, exactly as the approval path builds them.
+				decidedBy: undefined,
+				reasonCode: undefined,
+			}),
+		});
+		const worker = createSqlEngineWorker({ store, runtime, workerId: "w1" });
+		const run = await store.createRun({ input: { prompt: "hello" } });
+		const task = await store.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_CONTINUE_RUN_TASK,
+			payload: { approvalId: "a1" },
+		});
+
+		const result = await worker.tick();
+
+		// `denied` as the TICK result — a refusal is not a completion, and the event and the watcher
+		// are both told which it was. The RUN's own status is `completed`, because the status
+		// vocabulary deliberately has no denial and a refused run did finish.
+		expect(result).toMatchObject({ status: "denied" });
+		expect((await store.getTask(task.id))?.status).toBe("completed");
+		expect((await store.getRun(run.id))?.status).toBe("completed");
+		expect((await store.events(run.id)).map((event) => event.type)).toContain(
+			"run.denied",
+		);
+	});
+
 	it("tells a watcher NOTHING when the driver lost its lease", async () => {
 		// A driver that lost its lease cannot say how the run ended — a successor may already own it,
 		// and `failed` is TERMINAL on the stream, so a watcher would close its subscription and render

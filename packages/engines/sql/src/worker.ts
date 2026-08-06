@@ -19,6 +19,7 @@ import type {
 } from "@busyclaw/contracts";
 import {
 	asPrincipal,
+	dropUndefined,
 	errorMessage,
 	isReservedScope,
 	type Principal,
@@ -126,6 +127,10 @@ export type WorkerTickResult =
 	 *  step was cancelled in flight, so there is no resumable point to have written. */
 	| { status: "cancelled"; task: RuntimeTask }
 	| { status: "completed"; task: RuntimeTask }
+	/** A governed call was REFUSED and the run ended there. The run's own status is `completed` —
+	 *  the vocabulary deliberately has no `denied` member, and a denied run did finish — but what
+	 *  HAPPENED is a denial, and the event stream and the watcher are both told so. */
+	| { status: "denied"; task: RuntimeTask }
 	/** The task had nothing left to do — its resume state is already claimed or spent. The task is
 	 *  retired and the RUN is left exactly as it was. Not a failure: nobody's work was lost. */
 	| { status: "skipped"; task: RuntimeTask; reason: string }
@@ -170,12 +175,28 @@ function runtimeResumeRunPayload(
 	return valid;
 }
 
+/**
+ * A runtime result, validated AND made storable — the engine's one ingress for both.
+ *
+ * `dropUndefined` is not tidiness. Every result variant has optional fields, and this codebase's
+ * idiom for "absent" is a literal `undefined` property: the denied result is built straight off an
+ * approval record, so a denial with no reason code carries `reasonCode: undefined`. The TYPE permits
+ * that (`"reasonCode?": "string | undefined"`). JSON does not — `isJsonValue` rejects a property
+ * whose value is `undefined` — and everything the engine does with a result PERSISTS it, as a task
+ * output and as a run-event payload.
+ *
+ * So `proceedRun({ kind: "approval" })` on a DENIED approval threw `task output invalid` and killed
+ * the drain, on the door documented as the fenced one. A granted approval returns `completed`, which
+ * has no optional fields, which is why nothing caught it — and why this belongs at the boundary
+ * rather than at that one construction site: the type will keep permitting what JSON refuses, on
+ * every variant, including ones added later.
+ */
 function runtimeResult(result: unknown, label: string): RuntimeResult {
 	const valid = RuntimeResultSchema(result);
 	if (valid instanceof type.errors) {
 		throw validationError(`${label} invalid`, valid.summary);
 	}
-	return valid;
+	return dropUndefined(valid);
 }
 
 function workerRuntimeResult(result: unknown): WorkerRuntimeResult {
@@ -183,7 +204,7 @@ function workerRuntimeResult(result: unknown): WorkerRuntimeResult {
 	if (valid instanceof type.errors) {
 		throw validationError("worker runtime result invalid", valid.summary);
 	}
-	return valid;
+	return dropUndefined(valid);
 }
 
 type TaskExecution =
@@ -593,6 +614,11 @@ async function emitSliceEnd(input: {
 		switch (result.status) {
 			case "completed":
 				return { event: "completed" };
+			// TERMINAL, and not a completion. The run row says `completed` because the status
+			// vocabulary has no denial and a denied run did finish; the stream says what actually
+			// happened, which is what the transcript already said (D10).
+			case "denied":
+				return { event: "denied" };
 			// A DRIVER THAT LOST ITS LEASE CANNOT SAY HOW THE RUN ENDED — a successor may already own
 			// it, and "failed" would close a watcher's view of a turn somebody else is finishing. The
 			// door already refused to guess here (`notDriven: "driver-lost"`); the drain was guessing,
@@ -1278,12 +1304,18 @@ async function driveClaimSlice(
 						reason: `run already ${current?.status ?? "terminal"}`,
 					};
 				}
+				// NAMED FOR WHAT HAPPENED. Both outcomes settle the run `completed` — that transition is
+				// genuinely the same — but the EVENT is the history, and calling a refusal a completion
+				// made the engine's vocabulary contradict the runtime's, which emits `run.denied` for
+				// the same result. Two planes, one classification.
 				await tx.appendEvent({
 					runId: task.runId,
-					type: "run.completed",
+					type: terminal.status === "denied" ? "run.denied" : "run.completed",
 					payload: { taskId: task.id, result: terminal },
 				});
-				return { status: "completed", task };
+				return terminal.status === "denied"
+					? { status: "denied", task }
+					: { status: "completed", task };
 			});
 		}
 

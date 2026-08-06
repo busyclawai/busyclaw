@@ -8,6 +8,7 @@ import type {
 	EngineDeliverMessageInput,
 	EngineDeliverMessageResult,
 	EngineProceedRunInput,
+	EngineProceedRunResult,
 	EngineRunHandle,
 	EngineStartRunInput,
 	EngineStartRunResult,
@@ -278,7 +279,7 @@ function createSqlEngineHandle(input: {
 		},
 		async proceedRun(
 			proceedInput: EngineProceedRunInput,
-		): Promise<EngineRunHandle> {
+		): Promise<EngineProceedRunResult> {
 			// One admit body for every tag. The tag decides two things and nothing else: which task
 			// kind carries the work, and which record id the derived task id is built from.
 			const { proceed } = proceedInput;
@@ -287,7 +288,7 @@ function createSqlEngineHandle(input: {
 					? ([RUNTIME_CONTINUE_RUN_TASK, proceed.approvalId] as const)
 					: ([RUNTIME_RESUME_RUN_TASK, proceed.checkpointId] as const);
 
-			await input.config.store.transaction(async (store) => {
+			const admitted = await input.config.store.transaction(async (store) => {
 				const run = await store.getRun(proceedInput.runId);
 				// R-M10, generalized. A continuation used to CREATE a run when it could not find one,
 				// so a resumed run got a second engine row while the runtime restored the original id
@@ -312,9 +313,10 @@ function createSqlEngineHandle(input: {
 				// id and the second loses at the database, so one record can only ever schedule one
 				// slice. Before this, each call minted its own id and the loser was a task that could
 				// only fail — taking its run's status down with it.
+				const taskId = proceedTaskId(run.id, kind, recordId);
 				try {
 					await store.enqueueTask({
-						id: proceedTaskId(run.id, kind, recordId),
+						id: taskId,
 						kind,
 						payload: {
 							...(proceed.kind === "approval"
@@ -329,9 +331,10 @@ function createSqlEngineHandle(input: {
 					});
 				} catch (error) {
 					// Already admitted by an earlier call — the run is scheduled, which is what the
-					// caller wanted. Anything else is real and must not be swallowed.
+					// caller wanted. Anything else is real and must not be swallowed. Nothing to drive:
+					// whoever admitted it first owns the slice.
 					if (!isConflict(error)) throw error;
-					return;
+					return null;
 				}
 
 				// Back to queued so a worker picks it up — and CONDITIONALLY, because a run left
@@ -345,8 +348,55 @@ function createSqlEngineHandle(input: {
 						resumeCheckpointId: null,
 					},
 				});
+				// CLAIMED IN THE SAME TRANSACTION that admitted it, exactly as `startRun` does — an
+				// uncommitted insert is invisible to another connection, so no replica can see this
+				// task before this caller already holds its lease.
+				return proceedInput.drive === undefined
+					? null
+					: ((await store.claimTask(taskId, {
+							workerId,
+							...(input.config.leaseTtlMs !== undefined
+								? { leaseTtlMs: input.config.leaseTtlMs }
+								: {}),
+						})) ?? "lost");
 			});
-			return { id: proceedInput.runId };
+			if (proceedInput.drive === undefined) return { id: proceedInput.runId };
+			// Admitted by somebody else, or claimed by somebody else between the insert and here.
+			if (admitted === null) {
+				return { id: proceedInput.runId, notDriven: "running-elsewhere" };
+			}
+			if (admitted === "lost") {
+				return { id: proceedInput.runId, notDriven: "running-elsewhere" };
+			}
+			// DRIVEN OUTSIDE THE TRANSACTION, for the reason `startRun` drives outside its own: a
+			// model call inside an open transaction holds a connection for the length of a turn.
+			let runtimeResult: RuntimeResult | undefined;
+			const drive = proceedInput.drive;
+			const driven = await driveClaim({
+				claim: admitted,
+				runtime: input.runtime,
+				store: input.config.store,
+				workerId,
+				onResult: (produced) => {
+					runtimeResult = produced;
+				},
+				...(input.config.leaseTtlMs !== undefined
+					? { leaseTtlMs: input.config.leaseTtlMs }
+					: {}),
+				...(drive.deadlineAt !== undefined
+					? { deadlineAt: drive.deadlineAt }
+					: {}),
+				...(drive.onDelta !== undefined ? { onDelta: drive.onDelta } : {}),
+				...(input.config.runStream !== undefined
+					? { runStream: input.config.runStream }
+					: {}),
+			});
+			if (driven.status === "failed" && driven.task === null) {
+				return { id: proceedInput.runId, notDriven: "driver-lost" };
+			}
+			return runtimeResult === undefined
+				? { id: proceedInput.runId, notDriven: "running-elsewhere" }
+				: { id: proceedInput.runId, result: runtimeResult };
 		},
 		async controlRun(
 			controlInput: EngineControlRunInput,

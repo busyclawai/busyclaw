@@ -33,6 +33,7 @@ import type {
 	EngineRunRecord,
 	EngineStartRunInput,
 	EngineStartRunResult,
+	EngineWorkResult,
 	JsonObject,
 	MessageRecord,
 	MessageVisibility,
@@ -1920,18 +1921,35 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				reason: outcome.notDriven ?? "running-elsewhere",
 			};
 		}
-		// PARSED, not cast. `EngineWorkResult` is `unknown` on purpose — contracts does not import
-		// `RuntimeResult` — so this boundary is where an engine's opaque payload becomes the shape
-		// this door promises its callers. An engine returning something else is a configuration
-		// error to say out loud, not a value to hand onward and let fail somewhere less obvious.
-		const valid = RuntimeResultSchema(outcome.result);
+		return {
+			driven: true,
+			runId,
+			result: runtimeResultOf(outcome.result),
+			userMessage,
+		};
+	};
+
+	/**
+	 * An engine's opaque work result, as the shape this door promises its callers.
+	 *
+	 * PARSED, not cast. `EngineWorkResult` is `unknown` on purpose — contracts does not import
+	 * `RuntimeResult` — so this is where the boundary is crossed, and an engine returning something
+	 * else is a configuration error to say out loud rather than a value to hand onward and let fail
+	 * somewhere less obvious.
+	 *
+	 * ONE parser, because two doors cross this boundary now: a conversational turn and an approval
+	 * resume. Writing the second one by hand is how the door and the engine came to disagree about
+	 * everything else in this file.
+	 */
+	const runtimeResultOf = (result: EngineWorkResult): RuntimeResult => {
+		const valid = RuntimeResultSchema(result);
 		if (valid instanceof ark.errors) {
 			throw validationError(
 				`engine "${context.engine?.kind ?? "unknown"}" returned a result this door cannot read`,
 				valid.summary,
 			);
 		}
-		return { driven: true, runId, result: valid, userMessage };
+		return valid;
 	};
 
 	const redactArtifact = async <T>(
@@ -2484,6 +2502,39 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// deliberately: revoking a member cancels their parked runs, and every one of those runs is
 			// parked ON an approval somebody can still grant.
 			await assertRunContinuable(recording?.runId);
+			// THROUGH THE ENGINE WHEN THERE IS ONE, which is the correction `sendMessage` already took.
+			//
+			// This used to call `runtime.continueRun` directly, and the runtime knows about approvals
+			// and nothing about runs — so an approved turn executed OUTSIDE the durable run it belongs
+			// to. Three things followed. Nothing fenced it, which is why the check above had to be
+			// bolted on here. Not one chunk of the resumed answer reached a watcher, because every
+			// chunk is written by `driveClaim`. And no terminal lifecycle was written either, so
+			// `watchRun` waited forever for a turn that had finished — a leaked connection per resumed
+			// run.
+			//
+			// `drive` is what keeps this a RESUME rather than a schedule: the same enqueue-claim-drive
+			// `sendMessage` performs, so the caller still awaits the answer.
+			const engineRunId = recording?.runId;
+			if (context.engine !== undefined && engineRunId !== undefined) {
+				const outcome = await context.engine.proceedRun({
+					runId: engineRunId,
+					proceed: { kind: "approval", approvalId },
+					...(ctx !== undefined ? { ctx: forRuntimeCtx(ctx) } : {}),
+					drive: driveBudget(),
+				});
+				if (outcome.result !== undefined)
+					return runtimeResultOf(outcome.result);
+				// Somebody else is driving it, or the driver lost its lease mid-slice. Either way this
+				// caller cannot report an answer it did not produce.
+				throw stateError("the approval is being resumed elsewhere", {
+					approvalId,
+					runId: engineRunId,
+					reason: outcome.notDriven ?? "running-elsewhere",
+				});
+			}
+			// NO ENGINE, or an ad-hoc approval with no durable run behind it — the runtime path, which
+			// is what this door has always been, fenced by `assertRunContinuable` above.
+			//
 			// A human just granted the approval → interactive (a caller may override explicitly). The
 			// caller AUTHORIZES this resume (the PEP decides the call) but does NOT choose the executing
 			// identity: the approved action runs under the authority the IMMUTABLE approval record fixes

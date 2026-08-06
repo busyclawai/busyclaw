@@ -127,7 +127,13 @@ function createChunkWriter(writer: UIMessageStreamWriter, runId: string) {
 						case "yielded":
 							closeText();
 							return;
+						// DENIED joins the terminal group rather than getting its own arm: this protocol has
+						// one `finish`, and its only lever is `finishReason`. A refusal is not a normal
+						// completion, so it takes the same `error` reason failures do — the difference
+						// between "refused" and "broke" is in the transcript, which is the door that can
+						// express it.
 						case "completed":
+						case "denied":
 						case "failed":
 						case "cancelled": {
 							finished = true;

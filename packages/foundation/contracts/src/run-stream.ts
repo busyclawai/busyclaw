@@ -37,6 +37,10 @@ export type RunStreamLifecycle =
 	| "resumed"
 	| "superseded"
 	| "completed"
+	// A GOVERNED CALL WAS REFUSED, and the run ended there. Terminal like `completed`, and not the
+	// same thing: the transcript records a denial as its own state (D10), so a stream that reported
+	// it as a completion would have the two doors disagreeing about whether the action happened.
+	| "denied"
 	| "failed"
 	| "cancelled";
 
@@ -51,6 +55,7 @@ export type RunStreamLifecycle =
  */
 export const terminalRunStreamLifecycle = [
 	"completed",
+	"denied",
 	"failed",
 	"cancelled",
 ] as const satisfies readonly RunStreamLifecycle[];

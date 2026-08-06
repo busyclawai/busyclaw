@@ -228,6 +228,7 @@ export type {
 	EngineNotDrivenReason,
 	EngineProceed,
 	EngineProceedRunInput,
+	EngineProceedRunResult,
 	EngineRecording,
 	EngineRunEvent,
 	EngineRunHandle,
@@ -254,7 +255,7 @@ export type {
 	EntitySchemaOptions,
 	EntityUpdateInput,
 } from "./entity";
-export { entity, field } from "./entity";
+export { dropUndefined, entity, field } from "./entity";
 export type { Event, EventSink } from "./events";
 export { event } from "./events";
 export type { ToolEffectPolicy, ToolGate, ToolGovernance } from "./govern";
