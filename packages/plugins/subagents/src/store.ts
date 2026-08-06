@@ -47,6 +47,8 @@ export type SubagentStore = {
 		createdBy: Principal;
 		createdAt: string;
 	}) => Promise<void>;
+	/** Every edge under one root — the subtree, in one indexed query rather than a recursive walk. */
+	tree: (rootRunId: string) => Promise<readonly AgentEdge[]>;
 	/** Resolve an alias the OWNER was introduced under. `null` ⇒ this run may not name that peer. */
 	resolve: (
 		ownerRunId: string,
@@ -89,6 +91,18 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 			const rows = await db.findMany({
 				model: "agent_edge",
 				where: [{ field: "parentRunId", value: parentRunId }],
+				sortBy: { field: "createdAt", direction: "asc" },
+			});
+			return rows.map(asEdge);
+		},
+
+		async tree(rootRunId) {
+			// `rootRunId` is denormalized onto every edge at spawn precisely so this is one indexed
+			// read at any depth, rather than a walk over a tree whose depth nothing bounds at read
+			// time.
+			const rows = await db.findMany({
+				model: "agent_edge",
+				where: [{ field: "rootRunId", value: rootRunId }],
 				sortBy: { field: "createdAt", direction: "asc" },
 			});
 			return rows.map(asEdge);

@@ -7,6 +7,7 @@
 import type { BusyclawPlugin, CapabilityContext } from "@busyclaw/contracts";
 import { configurationError, govern } from "@busyclaw/contracts";
 import { jsonSchema, tool } from "ai";
+import { buildAgentsApi } from "./api";
 import {
 	type AgentCapability,
 	createAgentCapability,
@@ -26,6 +27,7 @@ export type SubagentsConfig = {
 	maxChildren?: number;
 };
 
+export type { AgentTreeNode } from "./api";
 export type { AgentCapability, AgentChildStatus } from "./capability";
 export {
 	agentEdgeEntity,
@@ -70,21 +72,24 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 	let wired: { claw: () => SpawnClawLike; store: SubagentStore } | undefined;
 	const now = () => new Date().toISOString();
 
-	const capability = (ctx: CapabilityContext): AgentCapability => {
+	const requireWired = () => {
 		if (wired === undefined) {
 			throw configurationError("subagents() is not wired to a claw yet", {
 				reason:
 					"the plugin needs a database — `configure` never ran, so there is nowhere to record an edge",
 			});
 		}
-		return createAgentCapability({
+		return wired;
+	};
+
+	const capability = (ctx: CapabilityContext): AgentCapability =>
+		createAgentCapability({
 			ctx,
-			claw: wired.claw(),
-			store: wired.store,
+			claw: requireWired().claw(),
+			store: requireWired().store,
 			limits,
 			now,
 		});
-	};
 
 	return {
 		id: "subagents",
@@ -124,6 +129,15 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 				),
 			},
 		},
+		api: () =>
+			({
+				agents: buildAgentsApi({
+					claw: () => requireWired().claw(),
+					store: () => requireWired().store,
+					limits,
+					now,
+				}),
+			}) as never,
 		configure(context) {
 			const adapter = context.adapter;
 			if (adapter === undefined) {
