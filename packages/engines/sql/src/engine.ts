@@ -16,6 +16,7 @@ import type {
 	RunStreamPort,
 } from "@busyclaw/contracts";
 import {
+	configurationError,
 	drainWork as drainEngineWork,
 	isConflict,
 	isTerminalRunStatus,
@@ -86,6 +87,20 @@ export type SqlEngineConfig = {
 	softDeadlineMs?: number;
 	cron?: false | { limit?: number };
 	/**
+	 * How many due tasks one drain round claims and drives AT ONCE. Default 1.
+	 *
+	 * Default 1 makes this inert: `work()` claims one task and drives it, exactly as before, and the
+	 * cron drain keeps its serial loop. Nothing about the lease protocol changes at any value —
+	 * `startHeartbeat` and the control port are already built per claim, so N in flight is N
+	 * independent leases rather than one shared by N.
+	 *
+	 * WHAT IT COSTS. Each concurrent slice is a model turn with its own tool calls, so N is a
+	 * multiplier on peak spend and on provider rate limits, not just on latency. It also multiplies
+	 * database connections held at once. A subagent tree is the case that wants it — the children are
+	 * independent by construction — and a single conversational claw is the case that does not.
+	 */
+	concurrency?: number;
+	/**
 	 * Live deltas for whoever is watching. Threaded to the worker so the CRON path writes them too —
 	 * the second slice of a parked turn is driven here, minutes later and in another process, and a
 	 * watcher who saw the first half must see the rest.
@@ -102,6 +117,17 @@ type SqlEngineCronFlag<Config extends SqlEngineConfig> = Config extends {
 export type SqlEngineHandle = ClawEngineHandle<WorkerTickResult> & {
 	kind: "sql";
 	work: (options?: WorkerTickOptions) => Promise<WorkerTickResult>;
+	/**
+	 * One drain ROUND at the configured concurrency: claim up to N, drive them together.
+	 *
+	 * Separate from `work` rather than replacing it, because `work` is the shape `drainWork` and
+	 * every caller-driven path already speak — one result, or idle. A batch is a different answer to
+	 * a different question, and collapsing the two would have made "did anything happen" ambiguous
+	 * for every existing reader.
+	 */
+	workMany: (
+		options?: WorkerTickOptions,
+	) => Promise<readonly WorkerTickResult[]>;
 };
 
 function createSqlEngineHandle(input: {
@@ -112,6 +138,14 @@ function createSqlEngineHandle(input: {
 	// `leaseId`/`tokenHash`, never on this — but a caller driving its own run and the cron drain must
 	// not disagree about what to record, so the default is resolved once here rather than twice.
 	const workerId = input.config.workerId ?? "busyclaw-worker";
+	// REFUSED, not clamped. A fractional or zero concurrency is a typo, and silently rounding it to
+	// something that works hides the fact that the number the host wrote is not the number running.
+	const concurrency = input.config.concurrency ?? 1;
+	if (!Number.isInteger(concurrency) || concurrency < 1) {
+		throw configurationError("engine concurrency must be a positive integer", {
+			concurrency,
+		});
+	}
 	const worker = createSqlEngineWorker({
 		leaseTtlMs: input.config.leaseTtlMs,
 		runtime: input.runtime,
@@ -556,6 +590,8 @@ function createSqlEngineHandle(input: {
 			};
 		},
 		work: (options?: WorkerTickOptions) => worker.tick(options),
+		workMany: (options?: WorkerTickOptions) =>
+			worker.tickMany({ ...(options ?? {}), max: concurrency }),
 	};
 }
 
@@ -579,12 +615,25 @@ function sqlCronPlugin<const Config extends SqlEngineConfig>(
 									config.softDeadlineMs !== undefined
 										? addMs(now(), config.softDeadlineMs)
 										: undefined;
-								return drainEngineWork({
-									limit:
-										limit ??
-										(config.cron === false ? undefined : config.cron?.limit),
+								const rounds =
+									limit ??
+									(config.cron === false ? undefined : config.cron?.limit);
+								// AT CONCURRENCY 1 THIS IS THE PATH IT ALWAYS WAS — one task per round,
+								// `drainWork`'s serial loop, byte-identical. The batch drain below only
+								// exists once a host has asked for more than one.
+								if ((config.concurrency ?? 1) === 1) {
+									return drainEngineWork({
+										...(rounds !== undefined ? { limit: rounds } : {}),
+										work: () =>
+											engine.work(
+												deadlineAt !== undefined ? { deadlineAt } : undefined,
+											),
+									});
+								}
+								return drainEngineWorkBatched({
+									...(rounds !== undefined ? { limit: rounds } : {}),
 									work: () =>
-										engine.work(
+										engine.workMany(
 											deadlineAt !== undefined ? { deadlineAt } : undefined,
 										),
 								});
@@ -592,6 +641,42 @@ function sqlCronPlugin<const Config extends SqlEngineConfig>(
 						},
 					],
 	};
+}
+
+/**
+ * The batch analog of `drainWork`: repeat rounds until one comes back empty.
+ *
+ * Not a variant of `drainWork` with a flag. That function's whole contract is one result or idle,
+ * and `isIdle` is how every caller reads "did anything happen" — a batch answers a different
+ * question, so it gets a different function rather than making the shared one ambiguous.
+ *
+ * A round that claims NOTHING ends the drain, which is the same stop condition `drainWork` has. A
+ * round that claims fewer than the concurrency is not idle: the queue may simply be shorter than the
+ * width, and the next round is what discovers whether more arrived.
+ */
+async function drainEngineWorkBatched(input: {
+	limit?: number;
+	work: () => Promise<readonly WorkerTickResult[]>;
+}): Promise<{
+	processed: number;
+	results: WorkerTickResult[];
+	status: "idle" | "limit";
+}> {
+	const rounds = input.limit ?? 10;
+	if (!Number.isInteger(rounds) || rounds < 1) {
+		throw configurationError("drain limit must be a positive integer", {
+			limit: rounds,
+		});
+	}
+	const results: WorkerTickResult[] = [];
+	for (let round = 0; round < rounds; round++) {
+		const batch = await input.work();
+		if (batch.length === 0) {
+			return { processed: results.length, results, status: "idle" };
+		}
+		results.push(...batch);
+	}
+	return { processed: results.length, results, status: "limit" };
 }
 
 export function sqlEngine<const Config extends SqlEngineConfig>(

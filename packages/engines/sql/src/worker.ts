@@ -573,6 +573,9 @@ function startHeartbeat(
 
 export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 	tick: (options?: WorkerTickOptions) => Promise<WorkerTickResult>;
+	tickMany: (
+		options: WorkerTickOptions & { max: number },
+	) => Promise<readonly WorkerTickResult[]>;
 } {
 	const { store, runtime, workerId, leaseTtlMs, runStream } = config;
 	const now = store.now;
@@ -599,6 +602,62 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 			});
 			// NO EMIT HERE. `driveClaim` announces the slice it drove, whoever called it — see there.
 			return result;
+		},
+
+		/**
+		 * Claim up to `max` due tasks and drive them CONCURRENTLY.
+		 *
+		 * The claims are sequential and the driving is parallel, which is the only split that helps.
+		 * Each claim is a compare-and-set on one row, so racing them just makes workers collide on the
+		 * head of the same `dueAt` window and lose; the expensive part — a model turn and its tool
+		 * calls — is what there is to overlap.
+		 *
+		 * Everything a claim needs is already per-claim: `startHeartbeat` and the control port are
+		 * built inside `driveClaim`, not shared by the worker, so N of them in flight is N independent
+		 * leases. That was true before this existed and is why this is small.
+		 */
+		async tickMany({ max, ...options }) {
+			const deadlineAt = options.deadlineAt;
+			if (deadlineAt !== undefined && now() >= deadlineAt) return [];
+			const claims = await store.claimDueTasks({
+				workerId,
+				leaseTtlMs,
+				max: Math.max(1, max),
+			});
+			if (claims.length === 0) return [];
+			// ISOLATED PER CLAIM, and stated honestly: NO REACHABLE THROW IS KNOWN TODAY. Every failure
+			// inside a slice is converted to a result on purpose — a broken model becomes `failed`,
+			// and a run-stream write is advisory and dropped on the floor by contract — and three
+			// attempts to force one through this catch all failed to.
+			//
+			// It stays because of the ASYMMETRY, not because of a demonstrated trigger: `Promise.all`
+			// rejects the whole batch on the first throw, so one unexpected escape would lose N−1
+			// sibling results for slices that finished fine, leaving their leases held until they
+			// lapse. Cheap guard, expensive absence. If a throw is ever found, it belongs in a test
+			// here — this comment is the record that one was looked for and not found.
+			return Promise.all(
+				claims.map(async (claim) => {
+					try {
+						return await driveClaim({
+							claim,
+							runtime,
+							store,
+							workerId,
+							...(leaseTtlMs !== undefined ? { leaseTtlMs } : {}),
+							...(deadlineAt !== undefined ? { deadlineAt } : {}),
+							...(runStream !== undefined ? { runStream } : {}),
+						});
+					} catch (error) {
+						// `driveClaim` records the failure against the task before it rethrows, so the
+						// row is already correct; what is left is to keep the sibling results.
+						return {
+							status: "failed" as const,
+							task: null,
+							reason: errorMessage(error),
+						};
+					}
+				}),
+			);
 		},
 	};
 }

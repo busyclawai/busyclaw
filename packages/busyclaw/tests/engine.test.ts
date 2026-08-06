@@ -203,6 +203,10 @@ describe("createClaw engine", () => {
 			"resumesPendingWork",
 			"startRun",
 			"work",
+			// One drain ROUND at the configured concurrency. Separate from `work` rather than
+			// replacing it: `work` is the one-result-or-idle shape `drainWork` and every
+			// caller-driven path already speak, and a batch answers a different question.
+			"workMany",
 		]);
 		// `$tables` is the migration CLI's door — the merged SchemaDeclaration this claw expects to
 		// exist, computed lazily on first read. It joins `$context` as an escape hatch, not product

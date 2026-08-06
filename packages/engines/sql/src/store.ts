@@ -296,6 +296,22 @@ export type SqlEngineStore = {
 	getTask: (id: string) => Promise<RuntimeTask | null>;
 	claimDueTask: (input: ClaimTaskInput) => Promise<ClaimedTask | null>;
 	/**
+	 * Claim up to `max` due tasks in ONE pass — the batch a concurrent worker needs.
+	 *
+	 * NOT `claimDueTask` called K times, and the difference is not stylistic. Each of those begins
+	 * with `reapExpiredLeases()`, an unbounded scan over every expired lease plus a transaction per
+	 * lease, so K calls do K full sweeps per tick. And all K read the same candidate window in the
+	 * same `dueAt` order, so they collide on the same head row and K−1 lose the CAS and retry — the
+	 * work is serialized by contention exactly where it was supposed to become parallel.
+	 *
+	 * So: reap once, read a window wider than `max` (candidates get skipped — already claimed, run
+	 * already finished), and CAS down it until `max` are held. The claims themselves stay sequential
+	 * because each is a compare-and-set on one row; what runs in parallel is the driving.
+	 */
+	claimDueTasks: (
+		input: ClaimTaskInput & { max: number },
+	) => Promise<readonly ClaimedTask[]>;
+	/**
 	 * Claim ONE task by primary key — the same acquisition `claimDueTask` performs, without its
 	 * candidate scan.
 	 *
@@ -898,19 +914,37 @@ export function createSqlEngineStore(
 		},
 
 		async claimDueTask(input) {
+			const [claimed] = await store.claimDueTasks({ ...input, max: 1 });
+			return claimed ?? null;
+		},
+
+		async claimDueTasks(input) {
+			const max = Math.max(1, input.max);
+			// ONCE PER BATCH. This is the sweep that made K parallel single claims quadratic.
 			await store.reapExpiredLeases();
 			const ts = now();
 			const candidates = await db.findMany({
 				model: "runtime_task",
 				where: pendingWhere(ts),
 				sortBy: { field: "dueAt", direction: "asc" },
-				limit: input.limit ?? 10,
+				// WIDER THAN `max`, and honestly: this is a throughput heuristic, not a fence.
+				// `pendingWhere` already excludes leased rows, so a task another worker HOLDS is never
+				// a candidate and cannot starve this batch. What the extra width buys is the narrow
+				// case the filter cannot cover — a row claimed by somebody else between this read and
+				// this CAS, or one whose run finished in the same window. Reading exactly `max` would
+				// return short on those instead of reaching past them.
+				//
+				// `input.limit` keeps its old meaning — the candidate window — so the single-claim
+				// path is byte-identical to what it was.
+				limit: input.limit ?? Math.max(10, max * 4),
 			});
+			const claimed: ClaimedTask[] = [];
 			for (const candidate of candidates) {
-				const claimed = await attemptClaim(candidate, input, ts);
-				if (claimed) return claimed;
+				if (claimed.length >= max) break;
+				const taken = await attemptClaim(candidate, input, ts);
+				if (taken) claimed.push(taken);
 			}
-			return null;
+			return claimed;
 		},
 
 		async claimTask(taskId, input) {
