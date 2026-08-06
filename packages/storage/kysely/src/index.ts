@@ -232,7 +232,46 @@ export function resolveKyselyDatabase(database: KyselyDatabase): {
  * Adapt Kysely — or a raw driver/pool/dialect — to the storage Adapter port. Tables/columns are
  * addressed by string. SQLite + Postgres today (a mysql2 pool is rejected: create/update use RETURNING).
  */
-export function kyselyAdapter(database: KyselyDatabase): Adapter {
+/**
+ * Does this database's driver take a JS boolean, or does it need 0/1?
+ *
+ * ASKED OF KYSELY'S OWN `DialectAdapter`, which is public API, rather than sniffing a constructor
+ * name. The two flags are a proxy and are documented as one: `supportsReturning === false` is MySQL,
+ * `supportsTransactionalDdl === true` is Postgres, and what is left is SQLite. The proxy holds
+ * because the dialects that lack a native boolean are the same ones that lack these features — but
+ * it is a proxy, which is why `kyselyAdapter(db, { booleans })` overrides it.
+ *
+ * A WRONG GUESS IS LOUD, never silent: `true` into a SQLite integer column is refused by the driver,
+ * and `1` into a Postgres boolean column is refused by the server. Nothing is corrupted by getting
+ * this wrong, which is what makes detecting rather than demanding acceptable.
+ */
+function detectBooleanMode(db: {
+	getExecutor: () => {
+		adapter: {
+			supportsReturning?: boolean;
+			supportsTransactionalDdl?: boolean;
+		};
+	};
+}): "native" | "integer" {
+	try {
+		const dialect = db.getExecutor().adapter;
+		if (dialect.supportsReturning === false) return "integer"; // MySQL
+		if (dialect.supportsTransactionalDdl === true) return "native"; // Postgres
+		return "integer"; // SQLite
+	} catch {
+		// An executor shape we do not recognize: leave values untouched, which is what this adapter
+		// did before any of this existed.
+		return "native";
+	}
+}
+
+export function kyselyAdapter(
+	database: KyselyDatabase,
+	options: {
+		/** Override the driver's boolean shape. Detected when absent — see `detectBooleanMode`. */
+		booleans?: "native" | "integer";
+	} = {},
+): Adapter {
 	const db = toKysely(database);
 	const findOne = async <T>(input: {
 		model: string;
@@ -246,6 +285,7 @@ export function kyselyAdapter(database: KyselyDatabase): Adapter {
 	};
 	return {
 		id: "kysely",
+		booleans: options.booleans ?? detectBooleanMode(db),
 
 		async create({ model, data }) {
 			const row = await db

@@ -28,7 +28,18 @@ export type WhereOperator =
  *  `in []` matches nothing, `not_in []` matches everything. */
 export type WhereClause = {
 	field: string;
-	value: string | number | boolean | string[] | number[] | Date | null;
+	// `boolean[]` belongs here for the same reason `boolean` does: a declared boolean column is
+	// filterable with `in`, and leaving the list form out made the scalar case expressible and the
+	// list case a type error — which is a distinction the storage layer does not actually have.
+	value:
+		| string
+		| number
+		| boolean
+		| string[]
+		| number[]
+		| boolean[]
+		| Date
+		| null;
 	/** Default "eq". */
 	operator?: WhereOperator;
 	/** How this node joins the previous SIBLING (left-fold). Default "AND". */
@@ -162,6 +173,20 @@ export type Adapter = {
 	 * handles losing is the branch nothing exercises.
 	 */
 	enforcesUnique?: boolean;
+	/**
+	 * How this adapter's driver wants a boolean: as one, or as 0/1.
+	 *
+	 * Declared by the ADAPTER because only it knows. better-sqlite3 refuses to bind a JS boolean at
+	 * all — "SQLite3 can only bind numbers, strings, bigints, buffers, and null" — so before this
+	 * existed a `field.boolean()` column could be neither written nor filtered through kysely on
+	 * SQLite, and the error came from the driver rather than from anything that knew a boolean column
+	 * was involved. MySQL has the same shape (tinyint(1)); Postgres and Mongo have real booleans.
+	 *
+	 * Absent means `native`, so an adapter that says nothing behaves exactly as it did before. The
+	 * READ side normalizes 0/1 back to a boolean whatever this says — see `schemaAdapter` for why the
+	 * two directions are deliberately asymmetric.
+	 */
+	booleans?: "native" | "integer";
 	/** Run a set of adapter operations atomically when the backing store supports transactions. */
 	transaction?: <R>(fn: (tx: Adapter) => Promise<R>) => Promise<R>;
 };

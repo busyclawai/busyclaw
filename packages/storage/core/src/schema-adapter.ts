@@ -17,8 +17,20 @@ import type {
 export type SchemaAdapterOptions = {
 	/** Store JSON fields as serialized text by default; use native only when the backing adapter returns native JSON. */
 	json?: "string" | "native";
+	/**
+	 * Override how boolean columns are written. Normally read from the ADAPTER, which is the only
+	 * party that knows what its driver can bind — this is the escape hatch for a backing store whose
+	 * declaration is wrong or absent.
+	 */
+	booleans?: "native" | "integer";
 	/** Unknown models/fields fail by default instead of silently bypassing schema transforms. */
 	strict?: boolean;
+};
+
+/** How values are shaped on their way across the adapter boundary, resolved once per adapter. */
+type ValueCodec = {
+	json: "string" | "native";
+	booleans: "native" | "integer";
 };
 
 type FieldMapping = {
@@ -120,11 +132,25 @@ function decodeJsonValue(value: unknown, label: string): unknown {
 function encodeFieldValue(input: {
 	value: unknown;
 	field: FieldMapping;
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 	model: string;
 }): unknown {
 	if (input.value === undefined) return undefined;
-	if (input.field.meta.type !== "json" || input.jsonMode === "native") {
+	// A DRIVER THAT CANNOT BIND A BOOLEAN. better-sqlite3 refuses one outright — "SQLite3 can only
+	// bind numbers, strings, bigints, buffers, and null" — so a `field.boolean()` column was
+	// unwritable AND unfilterable there, and the failure came from the driver rather than from
+	// anything that knew what a boolean column was. MySQL has the same shape (tinyint(1)).
+	if (
+		input.field.meta.type === "boolean" &&
+		input.codec.booleans === "integer"
+	) {
+		return typeof input.value === "boolean"
+			? input.value
+				? 1
+				: 0
+			: input.value;
+	}
+	if (input.field.meta.type !== "json" || input.codec.json === "native") {
 		return input.value;
 	}
 	return encodeJsonValue(
@@ -136,13 +162,21 @@ function encodeFieldValue(input: {
 function decodeFieldValue(input: {
 	value: unknown;
 	field: FieldMapping;
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 	model: string;
 }): unknown {
 	if (input.value === undefined) return undefined;
 	if (input.value === null && input.field.meta.required !== true)
 		return undefined;
-	if (input.field.meta.type !== "json" || input.jsonMode === "native") {
+	// UNCONDITIONAL, unlike the encode side, and that asymmetry is deliberate. Writing needs to know
+	// what the driver accepts; reading only needs to know what the column MEANS, and a store that
+	// hands back 0/1 for a declared boolean is a store whose rows would otherwise fail read
+	// validation. Normalizing here costs nothing on a backend that already returns real booleans.
+	if (input.field.meta.type === "boolean") {
+		if (input.value === 0 || input.value === 1) return input.value === 1;
+		return input.value;
+	}
+	if (input.field.meta.type !== "json" || input.codec.json === "native") {
 		return input.value;
 	}
 	if (input.value === null) return null;
@@ -205,7 +239,7 @@ function transformWhere(input: {
 	model: ModelMapping | undefined;
 	where: Where[] | undefined;
 	strict: boolean;
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 	action: string;
 }): Where[] | undefined {
 	if (!input.where || !input.model) return input.where;
@@ -225,7 +259,19 @@ function transformWhere(input: {
 		});
 		if (!mapping) return node;
 		let value = node.value;
-		if (mapping.meta.type === "json" && input.jsonMode === "string") {
+		// THE WHERE PATH ENCODES TOO. This is where the boolean gap actually bit: a value written
+		// correctly through `encodeFieldValue` was then compared against a raw JS boolean, so the
+		// filter threw where the write had not.
+		if (mapping.meta.type === "boolean" && input.codec.booleans === "integer") {
+			value = Array.isArray(value)
+				? (value.map((item) =>
+						typeof item === "boolean" ? (item ? 1 : 0) : item,
+					) as WhereClause["value"])
+				: typeof value === "boolean"
+					? ((value ? 1 : 0) as WhereClause["value"])
+					: value;
+		}
+		if (mapping.meta.type === "json" && input.codec.json === "string") {
 			if (
 				Array.isArray(value) &&
 				(node.operator === "in" || node.operator === "not_in")
@@ -233,7 +279,7 @@ function transformWhere(input: {
 				value = value.map((item) =>
 					encodeFieldValue({
 						field: mapping,
-						jsonMode: input.jsonMode,
+						codec: input.codec,
 						model: model.logical,
 						value: item,
 					}),
@@ -241,7 +287,7 @@ function transformWhere(input: {
 			} else if (value !== null) {
 				value = encodeFieldValue({
 					field: mapping,
-					jsonMode: input.jsonMode,
+					codec: input.codec,
 					model: model.logical,
 					value,
 				}) as WhereClause["value"];
@@ -340,7 +386,7 @@ function transformCreateData(input: {
 	model: ModelMapping | undefined;
 	data: Record<string, unknown>;
 	strict: boolean;
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 }): Record<string, unknown> {
 	if (!input.model) return input.data;
 	for (const key of Object.keys(input.data)) {
@@ -367,7 +413,7 @@ function transformCreateData(input: {
 		}
 		const encoded = encodeFieldValue({
 			field,
-			jsonMode: input.jsonMode,
+			codec: input.codec,
 			model: input.model.logical,
 			value,
 		});
@@ -380,7 +426,7 @@ function transformUpdateData(input: {
 	model: ModelMapping | undefined;
 	update: Record<string, unknown>;
 	strict: boolean;
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 }): Record<string, unknown> {
 	if (!input.model) return input.update;
 	for (const key of Object.keys(input.update)) {
@@ -407,7 +453,7 @@ function transformUpdateData(input: {
 		}
 		const encoded = encodeFieldValue({
 			field,
-			jsonMode: input.jsonMode,
+			codec: input.codec,
 			model: input.model.logical,
 			value,
 		});
@@ -420,7 +466,7 @@ function decodeRow(input: {
 	model: ModelMapping | undefined;
 	row: unknown;
 	select?: string[];
-	jsonMode: "string" | "native";
+	codec: ValueCodec;
 	strict: boolean;
 }): Record<string, unknown> {
 	if (!input.model) return input.row as Record<string, unknown>;
@@ -439,7 +485,7 @@ function decodeRow(input: {
 		if (!Object.hasOwn(row, field.physical)) continue;
 		const value = decodeFieldValue({
 			field,
-			jsonMode: input.jsonMode,
+			codec: input.codec,
 			model: input.model.logical,
 			value: row[field.physical],
 		});
@@ -475,7 +521,16 @@ export function schemaAdapter(
 	options: SchemaAdapterOptions = {},
 ): Adapter {
 	const models = prepareSchema(schema);
-	const jsonMode = options.json ?? "string";
+	// ONE CODEC for every value crossing the adapter, resolved once. It was a lone json mode threaded
+	// through twenty call sites; booleans need exactly the same treatment, and a second parallel
+	// parameter would have been twenty more chances for the two to disagree about which paths encode.
+	const codec: ValueCodec = {
+		json: options.json ?? "string",
+		// THE ADAPTER DECIDES, because only it knows what its driver can bind. Explicit config wins,
+		// then the adapter's own declaration, then native — so an adapter that says nothing behaves
+		// exactly as it did before this existed.
+		booleans: options.booleans ?? adapter.booleans ?? "native",
+	};
 	const strict = options.strict ?? true;
 	const runTransaction = adapter.transaction;
 	const modelFor = (model: string) =>
@@ -488,13 +543,13 @@ export function schemaAdapter(
 			const mapped = modelFor(model);
 			const row = asRow(
 				await adapter.create({
-					data: transformCreateData({ data, jsonMode, model: mapped, strict }),
+					data: transformCreateData({ data, codec, model: mapped, strict }),
 					model: mapped?.physical ?? model,
 					select: transformSelect({ model: mapped, select, strict }),
 				}),
 			);
 			return decodeRow({
-				jsonMode,
+				codec,
 				model: mapped,
 				row,
 				select,
@@ -510,7 +565,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "findOne",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -519,7 +574,7 @@ export function schemaAdapter(
 			return row == null
 				? null
 				: decodeRow({
-						jsonMode,
+						codec,
 						model: mapped,
 						row: asRow(row),
 						select,
@@ -537,14 +592,14 @@ export function schemaAdapter(
 				sortBy: transformSortBy({ model: mapped, sortBy, strict }),
 				where: transformWhere({
 					action: "findMany",
-					jsonMode,
+					codec,
 					model: mapped,
 					strict,
 					where,
 				}),
 			});
 			return rows.map((row) =>
-				decodeRow({ jsonMode, model: mapped, row: asRow(row), select, strict }),
+				decodeRow({ codec, model: mapped, row: asRow(row), select, strict }),
 			);
 		},
 
@@ -554,7 +609,7 @@ export function schemaAdapter(
 				model: mapped?.physical ?? model,
 				where: transformWhere({
 					action: "count",
-					jsonMode,
+					codec,
 					model: mapped,
 					strict,
 					where,
@@ -567,7 +622,7 @@ export function schemaAdapter(
 			const row = await adapter.update({
 				model: mapped?.physical ?? model,
 				update: transformUpdateData({
-					jsonMode,
+					codec,
 					model: mapped,
 					strict,
 					update,
@@ -575,7 +630,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "update",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -583,7 +638,7 @@ export function schemaAdapter(
 			});
 			return row == null
 				? null
-				: decodeRow({ jsonMode, model: mapped, row: asRow(row), strict });
+				: decodeRow({ codec, model: mapped, row: asRow(row), strict });
 		},
 
 		async updateMany({ model, where, update }) {
@@ -591,7 +646,7 @@ export function schemaAdapter(
 			return adapter.updateMany({
 				model: mapped?.physical ?? model,
 				update: transformUpdateData({
-					jsonMode,
+					codec,
 					model: mapped,
 					strict,
 					update,
@@ -599,7 +654,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "updateMany",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -614,7 +669,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "delete",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -629,7 +684,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "deleteMany",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -644,7 +699,7 @@ export function schemaAdapter(
 				where:
 					transformWhere({
 						action: "consumeOne",
-						jsonMode,
+						codec,
 						model: mapped,
 						strict,
 						where,
@@ -652,7 +707,7 @@ export function schemaAdapter(
 			});
 			return row == null
 				? null
-				: decodeRow({ jsonMode, model: mapped, row: asRow(row), strict });
+				: decodeRow({ codec, model: mapped, row: asRow(row), strict });
 		},
 
 		transaction: runTransaction

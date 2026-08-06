@@ -166,3 +166,52 @@ describe("declared uniqueness is enforced even where the engine cannot", () => {
 		expect(isConflict(conflict)).toBe(true);
 	});
 });
+
+describe("boolean columns", () => {
+	// The coercion is driven by the ADAPTER's declaration, so an adapter that says nothing must be
+	// left alone — booleans in, booleans out, no 0/1 anywhere. This is the half a fix aimed at SQLite
+	// could quietly break for everyone else.
+	const fields = {
+		id: field.string({ required: true, primaryKey: true, unique: true }),
+		flag: field.boolean(),
+	} as const;
+
+	it("passes a boolean through untouched on an adapter with native booleans", async () => {
+		const adapter = memoryAdapter();
+		expect(adapter.booleans).toBeUndefined();
+		const db = entityDb(adapter, { thing: { fields } });
+
+		const created = await db.create({
+			model: "thing",
+			data: { id: "1", flag: true },
+		});
+		expect(created.flag).toBe(true);
+		expect(
+			(await adapter.findMany({ model: "thing", where: [] }))[0],
+		).toMatchObject({ flag: true });
+
+		const found = await db.findMany({
+			model: "thing",
+			where: [{ field: "flag", value: true }],
+		});
+		expect(found.map((row) => row.id)).toEqual(["1"]);
+	});
+
+	it("reads 0/1 back as a boolean whatever the adapter declares", async () => {
+		// The read side normalizes unconditionally, because reading needs to know what the column
+		// MEANS while writing needs to know what the driver ACCEPTS. A store that hands back 1 for a
+		// declared boolean would otherwise fail read validation.
+		const adapter = memoryAdapter();
+		await adapter.create({ model: "thing", data: { id: "1", flag: 1 } });
+		const db = entityDb(adapter, { thing: { fields } });
+
+		expect(
+			(
+				await db.findOne({
+					model: "thing",
+					where: [{ field: "id", value: "1" }],
+				})
+			)?.flag,
+		).toBe(true);
+	});
+});
