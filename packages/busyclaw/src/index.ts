@@ -3,6 +3,8 @@ import type {
 	CapabilityContext,
 	ClawEngineFactory,
 	ClawEngineHandle,
+	ClawRunReadModel,
+	JsonObject,
 	SchemaDeclaration,
 } from "@busyclaw/contracts";
 import {
@@ -604,6 +606,52 @@ function assertApiContribution(input: {
 	return input.value as Record<string, unknown>;
 }
 
+/**
+ * The run read model as a PLUGIN sees it: everything except the run's own input.
+ *
+ * `EngineRunRecord.input` is the run's `ctx`, and the product api already refuses to serve it —
+ * `ClawRunView = Omit<EngineRunRecord, "input">`, because the run door stopped being a content door
+ * (D13/P2). Handing plugins the raw read model quietly undid that: a plugin could read run inputs
+ * that the claw's own OWNER cannot get through `getRun`, with no `view` gate and no
+ * `pii.reidentification` audit line. Not a plugin doing anything wrong — just a door that had one
+ * rule at the front and another round the side.
+ *
+ * This is NOT plugin-versus-plugin access control. A plugin can still read any run whose id it
+ * holds, and enforcing more would need a marker on `run` saying which plugin created it, which this
+ * schema deliberately does not have. What it removes is the asymmetry: a plugin now sees exactly the
+ * run facts an api caller sees, and content stays behind the door that gates and audits it.
+ */
+function contentFreeRuns(runs: ClawRunReadModel): ClawRunReadModel {
+	const strip = <T extends { input: JsonObject }>(
+		record: T,
+	): Omit<T, "input"> & { input: JsonObject } => {
+		// `input` stays PRESENT and EMPTY rather than absent: the field is required on the record
+		// type, and a plugin reading `run.input` should get "nothing here" instead of a TypeError
+		// that only fires on the paths where a ctx happened to be set.
+		const { input: _dropped, ...rest } = record;
+		return { ...rest, input: {} } as Omit<T, "input"> & { input: JsonObject };
+	};
+	return {
+		...runs,
+		get: async (id: string) => {
+			const record = await runs.get(id);
+			return record === null ? null : strip(record);
+		},
+		...(runs.listActiveForClaw
+			? {
+					listActiveForClaw: async (input) =>
+						((await runs.listActiveForClaw?.(input)) ?? []).map(strip),
+				}
+			: {}),
+		...(runs.listActiveForThread
+			? {
+					listActiveForThread: async (input) =>
+						((await runs.listActiveForThread?.(input)) ?? []).map(strip),
+				}
+			: {}),
+	};
+}
+
 function createPluginApi(input: {
 	baseApi: object;
 	context: ClawContext;
@@ -1134,7 +1182,10 @@ export function createClaw<
 	assembledEngine =
 		engine === undefined
 			? undefined
-			: { ...engine.engine, ...(engine.runs ? { runs: engine.runs } : {}) };
+			: {
+					...engine.engine,
+					...(engine.runs ? { runs: contentFreeRuns(engine.runs) } : {}),
+				};
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const plugins: BusyclawPlugin<BusyclawCronFlag>[] = [
 		...configuredPlugins,
