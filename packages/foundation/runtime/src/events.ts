@@ -14,6 +14,11 @@ export const RUNTIME_RECORDING_CONTEXT_KEY = `${RESERVED_CONTEXT_PREFIX}recordin
 export const RUNTIME_RECORDING_OPTION: unique symbol = Symbol(
 	"busyclaw.runtime.recording",
 );
+/** The claw an UNRECORDED run belongs to. A symbol for the same reason the recording is one: it
+ *  names the run's authz parent, and a wire `options` object must not be able to carry it. */
+export const RUNTIME_CLAW_OPTION: unique symbol = Symbol(
+	"busyclaw.runtime.claw",
+);
 
 export const runtimeRecordingContext = ark({
 	clawId: "string",

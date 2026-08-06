@@ -572,7 +572,12 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		id: string;
 	}) => Promise<void>;
 
-	startRun: (input: EngineStartRunInput) => Promise<EngineRunHandle>;
+	/** `parentRunId` grafts this run onto one the caller already owns; the child's `clawId` is copied
+	 *  from that parent SERVER-SIDE. Never a `clawId` — that names the authz parent and the redaction
+	 *  container, and a caller who could set it would choose both. */
+	startRun: (
+		input: EngineStartRunInput & { parentRunId?: string },
+	) => Promise<EngineRunHandle>;
 	/** Advance a parked run. `manage` on the RUN, because this is the verb that makes it act again —
 	 *  `use` is for verbs that reduce or inform. The caller names both the run and the record; the
 	 *  handler refuses if the record does not belong to that run. */
@@ -891,6 +896,11 @@ const startRunInput = ark({
 	prompt: ark("string").configure({
 		busyclaw: {
 			doc: "The prompt for the durable engine run — distinct from the runtime `run` path.",
+		},
+	}),
+	"parentRunId?": ark("string | undefined").configure({
+		busyclaw: {
+			doc: "Graft this run onto one you already own: its claw is copied from that parent server-side, so a child reaches policy with the `clawId` fact PRESENT (absent, an unguarded forbid skips and fails open). Refused unless the parent already runs as you — you may never name the claw directly.",
 		},
 	}),
 	"run?": engineRunMetadataOrUndefined,
@@ -2705,7 +2715,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// body — because the worker executes the run's tool calls under it. An unauthenticated start
 		// records SYSTEM_ANONYMOUS, which the floor refuses at the first tool: work nobody can be shown
 		// to have asked for does not get to act.
-		startRun: (args, caller?: ClawApiCaller) => {
+		startRun: async (args, caller?: ClawApiCaller) => {
 			assertNoReservedContext(args.ctx);
 			// ENUMERATED, never spread — and this is a security property, not a style one. arktype
 			// PRESERVES undeclared keys and `parseClawApiInput` returns its output verbatim, so
@@ -2716,9 +2726,37 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// with no schema change anywhere and nothing to notice. The schema rejects undeclared keys
 			// too, and the two are deliberately redundant: one of them is the door, the other survives
 			// somebody adding a field to the engine input without looking here.
+			// THE CLAW IS DERIVED FROM A PARENT RUN, never accepted as one. `run.clawId` names this
+			// run's authz parent and its redaction container, which is why the column is `input: false`
+			// — a caller who could set it would choose whose rules apply to them and whose PII
+			// namespace they mint into. So the caller names a PARENT, and the rule is that the parent
+			// must already run as them: you may graft a child onto a run that is yours, and onto no
+			// other. That is the same authority-is-copied property the spawn capability has, stated
+			// where an over-the-wire caller reaches it too.
+			const parent =
+				args.parentRunId === undefined
+					? undefined
+					: await context.runs?.get(args.parentRunId);
+			if (args.parentRunId !== undefined) {
+				if (parent === undefined || parent === null) {
+					throw stateError("no such parent run", {
+						parentRunId: args.parentRunId,
+					});
+				}
+				const principal = caller?.principal ?? SYSTEM_ANONYMOUS;
+				if (parent.principal !== principal) {
+					throw authorizationError(
+						"a run may only be parented to one that already runs as you",
+						{ parentRunId: args.parentRunId },
+					);
+				}
+			}
 			return requireEngine(context.engine).startRun({
 				prompt: args.prompt,
 				ctx: args.ctx,
+				// From the PARENT ROW, read server-side. Absent when there is no parent, which leaves
+				// the column unset exactly as before.
+				...(parent?.clawId !== undefined ? { clawId: parent.clawId } : {}),
 				run: {
 					id: args.run?.id,
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,

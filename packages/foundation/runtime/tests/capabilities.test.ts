@@ -12,7 +12,7 @@
 // "agent" cannot reach "sandbox" by guessing its option name.
 
 import type { Detector, PiiSpan } from "@busyclaw/contracts";
-import { userPrincipal } from "@busyclaw/contracts";
+import { CLAW_ID_CONTEXT_KEY, userPrincipal } from "@busyclaw/contracts";
 import { createMemoryAudit, createStoredRedactor } from "@busyclaw/core";
 import { memoryAdapter } from "@busyclaw/storage-core";
 import { createPiiMappingStore } from "@busyclaw/storage-durable";
@@ -23,6 +23,7 @@ import {
 	createRuntime,
 	govern,
 	runtimeRunOptionsWithCaller,
+	runtimeRunOptionsWithClaw,
 } from "../src/index";
 
 const emailDetector: Detector = (text) => {
@@ -355,5 +356,56 @@ describe("translate crosses two containers", () => {
 
 		await runtime.generate("go");
 		expect(translated).toEqual({ prompt: "hello" });
+	});
+});
+
+describe("an unrecorded run still says which claw it belongs to", () => {
+	it("stamps clawId when there is no recording", async () => {
+		// D7's ⚠, and the reason this is an `else` rather than a wider `if`. `clawId` was stamped only
+		// from a recording, and a subagent has none — so a child reached the policy engine with the
+		// fact ABSENT. An absent attribute base-errors, which SKIPS the policy rather than failing it,
+		// so an unguarded `forbid` written against `clawId` fails OPEN: the rule silently stops
+		// applying to exactly the runs nobody is watching. Making the fact TRUE beats making it
+		// nullable, so an unrecorded run that belongs to a claw says so.
+		let seen: unknown = "not-stamped";
+		const runtime = createRuntime({
+			model: callToolOnceModel("plain", {}),
+			audit: createMemoryAudit(),
+			plugins: [
+				{
+					id: "watch",
+					gates: [
+						{
+							id: "watch",
+							matcher: () => true,
+							handler: (_call, ctx: Record<string, unknown>) => {
+								seen = ctx[CLAW_ID_CONTEXT_KEY];
+								return { decision: "permit" as const };
+							},
+						},
+					],
+				},
+			],
+			tools: {
+				plain: govern(
+					tool({
+						description: "A normal tool.",
+						inputSchema: jsonSchema({ type: "object" }),
+						execute: async () => ({ ok: true }),
+					}),
+					{},
+				),
+			},
+		});
+
+		await runtime.generate(
+			"go",
+			{},
+			runtimeRunOptionsWithClaw(
+				runtimeRunOptionsWithCaller(undefined, userPrincipal("alice")),
+				"claw-1",
+			),
+		);
+		expect(seen).toBe("claw-1");
 	});
 });

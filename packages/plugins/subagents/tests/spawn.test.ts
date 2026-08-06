@@ -53,7 +53,9 @@ describe("a spawn creates a real run, and an edge that describes it", () => {
 		// `system:anonymous` — which is what `startRun` writes when the caller is absent — would be
 		// refused by the floor at its first tool call, and it would look like a policy bug.
 		const { claw, store } = await harness();
+		const parentRunId = await claw.openRun(userPrincipal("alice"));
 		const parent = await claw.spawnFrom({
+			parentRunId,
 			principal: userPrincipal("alice"),
 			alias: "researcher",
 			prompt: "find the thing",
@@ -79,7 +81,9 @@ describe("a spawn creates a real run, and an edge that describes it", () => {
 
 	it("introduces the two runs to each other, in both directions", async () => {
 		const { claw, store } = await harness();
+		const parent = await claw.openRun(userPrincipal("alice"));
 		const { parentRunId, childRunId: child } = await claw.spawnFrom({
+			parentRunId: parent,
 			principal: userPrincipal("alice"),
 			alias: "researcher",
 			prompt: "find the thing",
@@ -124,7 +128,9 @@ describe("a replayed spawn asks for the child it already has", () => {
 
 	it("does not start a second run when the same spawn runs twice", async () => {
 		const { claw, store } = await harness();
+		const parent = await claw.openRun(userPrincipal("alice"));
 		const spawn = {
+			parentRunId: parent,
 			principal: userPrincipal("alice"),
 			alias: "researcher",
 			prompt: "find the thing",
@@ -157,16 +163,17 @@ describe("two spawns in one step are two different children", () => {
 		// the alias was already doing the work. Worse, the ordinal restarts at zero on a replay, so a
 		// retried second spawn would have derived the FIRST child's id.
 		const { claw, store } = await harness();
+		const parentRunId = await claw.openRun(userPrincipal("alice"));
 		const agent = claw.capability({
 			principal: userPrincipal("alice"),
-			parentRunId: "run-parent",
+			parentRunId,
 			step: 0,
 		});
 		const first = await agent.spawnChild({ alias: "a", prompt: "go" });
 		const second = await agent.spawnChild({ alias: "b", prompt: "go" });
 
 		expect(second.childRunId).not.toBe(first.childRunId);
-		expect(await store.countChildren("run-parent")).toBe(2);
+		expect(await store.countChildren(parentRunId)).toBe(2);
 	});
 });
 
@@ -176,7 +183,7 @@ describe("a derived id is exactly-once but not authenticated", () => {
 		// authenticated principal pin a run id. Adopting whatever is already there would let a peer
 		// pre-create a run the parent then treats as its own child.
 		const { claw, store, adapter } = await harness();
-		const parentRunId = "run-parent";
+		const parentRunId = await claw.openRun(userPrincipal("alice"));
 		const id = childRunId({ parentRunId, alias: "researcher" });
 		// Somebody else got there first, with a different owner.
 		const stamp = new Date().toISOString();
@@ -207,6 +214,47 @@ describe("a derived id is exactly-once but not authenticated", () => {
 	});
 });
 
+describe("the claw follows the tree, and only from a parent you own", () => {
+	it("copies the parent's claw onto the child, server-side", async () => {
+		// D7's ⚠. `clawId` is stamped from a recording, and a subagent has none — so without this the
+		// child reaches Cedar with the fact ABSENT, and an absent attribute base-errors: the policy is
+		// SKIPPED, so an unguarded `forbid` written against `clawId` fails OPEN.
+		const { claw } = await harness();
+		const parentRunId = await claw.openRun(userPrincipal("alice"), "claw-1");
+		const { childRunId: child } = await claw.spawnFrom({
+			parentRunId,
+			principal: userPrincipal("alice"),
+			alias: "researcher",
+			prompt: "go",
+		});
+
+		const childRun = await claw.api.getRun(
+			{ id: child },
+			{ principal: userPrincipal("alice") },
+		);
+		expect(childRun?.clawId).toBe("claw-1");
+		// And no thread: it belongs to the claw without writing into anyone's conversation.
+		expect(childRun?.threadId).toBeUndefined();
+	});
+
+	it("REFUSES a parent that does not already run as the caller", async () => {
+		// The child's claw is copied off the parent row, so naming somebody else's run would be
+		// choosing their authz parent and their PII namespace — which is exactly what `input: false`
+		// on the column exists to prevent. The caller names a parent, never a claw, and the parent
+		// must be theirs.
+		const { claw } = await harness();
+		const someoneElses = await claw.openRun(userPrincipal("bob"));
+		await expect(
+			claw.spawnFrom({
+				parentRunId: someoneElses,
+				principal: userPrincipal("mallory"),
+				alias: "researcher",
+				prompt: "go",
+			}),
+		).rejects.toThrow(/already runs as you/);
+	});
+});
+
 describe("the prompt crosses into the CHILD's container", () => {
 	it("translates it, rather than handing over a placeholder the child cannot resolve", async () => {
 		// The parent tokenized this prompt in ITS container. A placeholder means nothing outside the
@@ -225,6 +273,7 @@ describe("the prompt crosses into the CHILD's container", () => {
 		});
 
 		const { childRunId: child } = await claw.spawnFrom({
+			parentRunId: await claw.openRun(userPrincipal("alice")),
 			principal: userPrincipal("alice"),
 			alias: "researcher",
 			prompt: "write to {{pii:parent-token}}",
@@ -241,7 +290,9 @@ describe("the prompt crosses into the CHILD's container", () => {
 describe("the ceilings hold in the database, not in a JS integer", () => {
 	it("refuses past maxDepth, and says how deep it is", async () => {
 		const { claw } = await harness({ maxDepth: 1 });
+		const parent = await claw.openRun(userPrincipal("alice"));
 		const first = await claw.spawnFrom({
+			parentRunId: parent,
 			principal: userPrincipal("alice"),
 			alias: "a",
 			prompt: "go",
@@ -261,7 +312,7 @@ describe("the ceilings hold in the database, not in a JS integer", () => {
 		// A parent resumed in another worker has no memory of what it spawned before the park, which
 		// is exactly why this is a count over rows rather than a counter in the capability.
 		const { claw } = await harness({ maxChildren: 2 });
-		const parentRunId = "run-parent";
+		const parentRunId = await claw.openRun(userPrincipal("alice"));
 		await claw.spawnFrom({
 			principal: userPrincipal("alice"),
 			alias: "a",
@@ -289,8 +340,10 @@ describe("the ceilings hold in the database, not in a JS integer", () => {
 
 	it("refuses the reserved parent alias", async () => {
 		const { claw } = await harness();
+		const parentRunId = await claw.openRun(userPrincipal("alice"));
 		await expect(
 			claw.spawnFrom({
+				parentRunId,
 				principal: userPrincipal("alice"),
 				alias: "parent",
 				prompt: "go",

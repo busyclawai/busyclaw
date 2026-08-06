@@ -38,6 +38,7 @@ import {
 	type RuntimeResult,
 	RuntimeResult as RuntimeResultSchema,
 	runtimeRunOptionsWithCaller,
+	runtimeRunOptionsWithClaw,
 	runtimeRunOptionsWithRecording,
 } from "@busyclaw/runtime";
 import { type } from "arktype";
@@ -228,6 +229,10 @@ async function runTask(
 	deadlineAt?: string | (() => string | undefined),
 	principal?: Principal,
 	recording?: EngineRecording,
+	/** The claw an UNRECORDED run belongs to. Separate from `recording` because they answer
+	 *  different questions — whose agent acted, versus where the answers land — and a subagent has
+	 *  the first without the second. */
+	clawId?: string,
 	model?: string,
 	runMode?: RunMode,
 	onDelta?: (text: string) => void | Promise<void>,
@@ -306,10 +311,18 @@ async function runTask(
 		// SILENTLY over the record. One writer per fact: the run row seeds the first slice, the
 		// records own every resume. Threading it onto all three kinds re-opens an R-M10-shaped fork
 		// with nothing testing it.
+		// The claw, for a run that has one and is NOT recorded — a subagent. Without this the child
+		// reaches Cedar with `clawId` absent, and an unguarded `forbid` skips rather than denies:
+		// fails open, on the runs nobody is watching. Applied before the recording so a recorded run
+		// still takes its claw from there and the two cannot disagree.
+		const withClaw =
+			recording === undefined && clawId !== undefined
+				? runtimeRunOptionsWithClaw(withCaller, clawId)
+				: withCaller;
 		const withRecording =
 			recording === undefined
-				? withCaller
-				: runtimeRunOptionsWithRecording(withCaller, {
+				? withClaw
+				: runtimeRunOptionsWithRecording(withClaw, {
 						clawId: recording.clawId,
 						threadId: recording.threadId,
 						runId: claim.task.runId,
@@ -913,6 +926,9 @@ async function driveClaimSlice(
 						originMessageId: run.originMessageId,
 					}
 				: undefined,
+			// Passed WHETHER OR NOT there is a recording — a run with a claw and no thread is a
+			// subagent, and it is exactly the case the recording cannot express.
+			run?.clawId,
 			run?.model,
 			run?.runMode,
 			// STREAMING IS THE CALLER'S REQUEST, NEVER IMPLIED BY HAVING A SINK — and that distinction

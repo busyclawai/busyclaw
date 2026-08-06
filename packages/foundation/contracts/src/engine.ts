@@ -50,6 +50,18 @@ export type EngineStartRunInput = {
 	run?: EngineRunMetadata;
 	recording?: EngineRecording;
 	/**
+	 * The claw an UNRECORDED run belongs to.
+	 *
+	 * Backed by the `run.clawId` column in the same commit, per the rule above. It exists because a
+	 * subagent acts for a claw and writes no transcript, so it has a claw and no thread — and with
+	 * the fact ABSENT at the policy engine an unguarded `forbid` is SKIPPED rather than applied,
+	 * which fails open on exactly the runs nobody is watching.
+	 *
+	 * The api door never forwards a caller's: it takes a `parentRunId`, verifies the parent already
+	 * runs as that caller, and copies the claw off the parent row.
+	 */
+	clawId?: string;
+	/**
 	 * The model pool entry that answers this run, resolved by the door from the caller's validated
 	 * selection. Rides the RUN rather than the invocation because a continuation claimed months later
 	 * must reach the model the caller picked, not whichever is default by then. Absent on a

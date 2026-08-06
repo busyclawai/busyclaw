@@ -58,12 +58,20 @@ export type SpawningClaw = {
 		getRun: (
 			input: { id: string },
 			caller?: { principal?: Principal },
-		) => Promise<{ status: string; principal?: string } | null>;
+		) => Promise<{
+			status: string;
+			principal?: string;
+			clawId?: string;
+			threadId?: string;
+		} | null>;
 	};
 	$tables: unknown;
 	spawnFrom: (
 		input: SpawnRequest,
 	) => Promise<{ childRunId: string; parentRunId: string }>;
+	/** A REAL parent run, because the door copies the child's claw off the parent's row and refuses
+	 *  a parent it cannot find. */
+	openRun: (principal: Principal, clawId?: string) => Promise<string>;
 	capability: (input: {
 		principal: Principal;
 		parentRunId?: string;
@@ -129,6 +137,56 @@ export function spawningClaw(
 
 	return {
 		...claw,
+		async openRun(principal: Principal, clawId?: string) {
+			// A parent WITH a claw is what the descendant stamp needs to inherit. Written through the
+			// engine's own input rather than the door, because the door only ever derives it.
+			if (clawId !== undefined) {
+				// A REAL claw, because giving the run a `clawId` changes its authz parent: the run
+				// loader climbs to the claw for grant parents, so a run pointed at a claw that does not
+				// exist is a run nobody can read. That is the mechanism working, and the test has to
+				// respect it.
+				await (
+					claw as unknown as {
+						api: {
+							createClaw: (
+								i: { id: string; name: string },
+								c: { principal: Principal },
+							) => Promise<unknown>;
+						};
+					}
+				).api.createClaw({ id: clawId, name: "Parent" }, { principal });
+				const started = await (
+					claw as unknown as {
+						$context: {
+							engine?: {
+								startRun: (i: {
+									prompt: string;
+									clawId: string;
+									run: { principal: Principal };
+								}) => Promise<{ id: string }>;
+							};
+						};
+					}
+				).$context.engine?.startRun({
+					prompt: "parent",
+					clawId,
+					run: { principal },
+				});
+				if (started === undefined) throw new Error("no engine");
+				return started.id;
+			}
+			const started = await (
+				claw as unknown as {
+					api: {
+						startRun: (
+							i: { prompt: string },
+							c: { principal: Principal },
+						) => Promise<{ id: string }>;
+					};
+				}
+			).api.startRun({ prompt: "parent" }, { principal });
+			return started.id;
+		},
 		/** Spawn as if a stamped tool had. */
 		async spawnFrom(input: SpawnRequest) {
 			const parentRunId = input.parentRunId ?? "run-parent";

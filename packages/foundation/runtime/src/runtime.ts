@@ -69,6 +69,7 @@ import {
 	createRuntimeEvent,
 	emitRuntimeEvent,
 	eventSinksFrom,
+	RUNTIME_CLAW_OPTION,
 	RUNTIME_RECORDING_OPTION,
 	type RuntimeEventFanout,
 	type RuntimeEventPayloadInput,
@@ -265,6 +266,8 @@ export type RuntimeRunOptions = {
 	 */
 	onAuthorityResolved?: (boundary: { scope: string; scopeId: string }) => void;
 	readonly [RUNTIME_RECORDING_OPTION]?: RuntimeRecordingContext;
+	/** The claw an UNRECORDED run belongs to — see {@link runtimeRunOptionsWithClaw}. */
+	readonly [RUNTIME_CLAW_OPTION]?: string;
 	/** The authenticated caller principal — set only via {@link runtimeRunOptionsWithCaller} (symbol
 	 *  key, forge-proof). Seeded as `busyclaw__principal` by the trusted context assembly. */
 	readonly [RUNTIME_CALLER_OPTION]?: Principal;
@@ -510,6 +513,20 @@ export type Runtime<Config extends RuntimeConfig = RuntimeConfig> = {
 	 *  calling a tool still routes through the governance chokepoint. */
 	readonly catalog: ToolCatalog;
 };
+
+/**
+ * Name the claw an UNRECORDED run belongs to.
+ *
+ * A symbol, like the recording and the caller, and forge-proof for the same reason: a JSON or wire
+ * `options` object cannot carry one. What it names is the run's authz parent and the fact a policy
+ * reads, so a caller who could set it would be choosing which claw's rules apply to them.
+ */
+export function runtimeRunOptionsWithClaw(
+	options: RuntimeRunOptions | undefined,
+	clawId: string,
+): RuntimeRunOptions {
+	return { ...(options ?? {}), [RUNTIME_CLAW_OPTION]: clawId };
+}
 
 export function runtimeRunOptionsWithRecording(
 	options: RuntimeRunOptions | undefined,
@@ -1530,9 +1547,20 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			}
 			// Runtime-stamped, spoof-proof facts (the caller's busyclaw__ keys were already stripped).
 			resolved[RUN_MODE_CONTEXT_KEY] = state.runMode;
+			// THE CLAW IS STAMPED WHETHER OR NOT THE RUN IS RECORDED, and that `else` is the point. A
+			// subagent belongs to a claw but writes no transcript, so under `if (state.recording)` alone
+			// it reached Cedar with `clawId` ABSENT — and an absent attribute base-errors, which SKIPS
+			// the policy rather than failing it. An unguarded `forbid` written against `clawId` therefore
+			// fails OPEN, on exactly the runs nobody is watching. This tree has been bitten by that
+			// twice, so the fact is made TRUE rather than made nullable.
+			//
+			// `threadId` stays conditional: an unrecorded run genuinely has no thread, and inventing one
+			// would be a fact that is false rather than merely absent.
 			if (state.recording) {
 				resolved[CLAW_ID_CONTEXT_KEY] = state.recording.clawId;
 				resolved[THREAD_ID_CONTEXT_KEY] = state.recording.threadId;
+			} else if (state.clawId !== undefined) {
+				resolved[CLAW_ID_CONTEXT_KEY] = state.clawId;
 			}
 			stampRedactionContainer(resolved, state.recording, state.runId);
 			// The run's own id — the recording's when the run is recorded, else the one this invocation
@@ -2055,6 +2083,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		assertYieldable(options);
 		const recording = options?.[RUNTIME_RECORDING_OPTION];
 		state.recording = recording;
+		// A RECORDED run's claw comes from its recording; an unrecorded one may still belong to a claw
+		// and say so through this. Recording wins, so the two can never disagree about one fact.
+		state.clawId = recording?.clawId ?? options?.[RUNTIME_CLAW_OPTION];
 		// Every run gets an id, including an ad-hoc `generate` that has no claw and no thread to be
 		// named by. Minted LAST — a caller's durable run id wins, then the recording's (so a recorded
 		// run keeps one id, not two) — and it is what the gated call is stamped with and what a parked

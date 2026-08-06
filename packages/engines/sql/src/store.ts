@@ -209,6 +209,11 @@ export type CreateRunInput = {
 	 *  to. Columns, not task payload: the payload is gone by the time a reader asks, and the
 	 *  `deliverMessage` door needs the claw before any task has been claimed. */
 	recording?: EngineRecording;
+	/** The claw an UNRECORDED run belongs to — a subagent acts for a claw and writes no transcript.
+	 *  The `run.clawId` column is the only channel that survives to the worker, and it is what the
+	 *  Cedar `clawId` fact is read from. Never reachable from the api door: the column is
+	 *  `input: false` and the door enumerates what it forwards. */
+	clawId?: string;
 	/** Which model answers this run. Columns for the same reason as `recording`: a continuation
 	 *  claimed months later reads the row, and a payload cannot answer it. */
 	model?: string;
@@ -784,7 +789,15 @@ export function createSqlEngineStore(
 					// WHERE this run's output belongs. Written HERE and nowhere else, because this
 					// function enumerates the columns it writes and drops everything it was not told
 					// about — the `team` failure the contracts comment turned into a review rule.
-					clawId: input.recording?.clawId,
+					// A RECORDED run's claw comes from its recording. An UNRECORDED one may still belong
+					// to a claw — a subagent does: it acts for a claw and writes no transcript — and
+					// `run.clawId` is the only channel that survives to the worker, which is what the
+					// Cedar `clawId` fact is read from. Recording wins, so one fact has one writer.
+					//
+					// Safe HERE and not at the api door: the column is `input: false` and the door
+					// enumerates what it forwards, so a caller cannot reach this. The door derives it
+					// from a parent run it verified instead.
+					clawId: input.recording?.clawId ?? input.clawId,
 					threadId: input.recording?.threadId,
 					originMessageId: input.recording?.originMessageId,
 					// Fixed at birth: the run must be able to answer "which model, and was anyone there"

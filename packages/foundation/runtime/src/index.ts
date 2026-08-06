@@ -21,6 +21,7 @@ export {
 	createRuntimeEvent,
 	emitRuntimeEvent,
 	pluginEventSink,
+	RUNTIME_CLAW_OPTION,
 	RUNTIME_RECORDING_CONTEXT_KEY,
 	RUNTIME_RECORDING_OPTION,
 	runtimeEvent,
@@ -67,6 +68,7 @@ export {
 	recordingFromRuntimeApprovalMetadata,
 	runtimeApprovalMetadata,
 	runtimeRunOptionsWithCaller,
+	runtimeRunOptionsWithClaw,
 	runtimeRunOptionsWithRecording,
 	runtimeYieldMetadata,
 } from "./runtime";

@@ -55,6 +55,18 @@ export type RunState = {
 	 *  WHO approved it (beside the borrowed `principal`). Absent for a normal (non-resume) run. */
 	approvedBy?: string;
 	currentModelRunner?: () => unknown | Promise<unknown>;
+	/**
+	 * The claw this run belongs to WITHOUT being recorded into it.
+	 *
+	 * A subagent is the case: it acts for a claw but writes no transcript, so it has a `clawId` and no
+	 * `threadId`. Kept separate from `recording` because they answer different questions — "whose
+	 * agent acted" versus "where do the answers land" — and collapsing them would have meant either
+	 * inventing a thread or leaving the Cedar fact absent, where an unguarded `forbid` fails open.
+	 *
+	 * Set from the run ROW by the worker, never from a payload or a caller's ctx: it names the run's
+	 * authz parent, which is exactly the kind of fact a caller must not choose.
+	 */
+	clawId?: string;
 	recording?: RuntimeRecordingContext;
 	abortSignal?: RuntimeAbortSignal;
 };

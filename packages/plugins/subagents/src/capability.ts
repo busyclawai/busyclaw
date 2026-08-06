@@ -36,6 +36,7 @@ export type SpawnClawLike = {
 			input: {
 				prompt: string;
 				ctx?: JsonObject;
+				parentRunId?: string;
 				run?: { id?: string };
 			},
 			caller?: { principal?: Principal },
@@ -205,6 +206,11 @@ export function createAgentCapability(input: {
 				await claw.api.startRun(
 					{
 						prompt: childPrompt,
+						// THE CLAW FOLLOWS THE TREE (D7). The door copies it off this parent — verified
+						// server-side — so the child reaches policy with the `clawId` fact PRESENT.
+						// Absent, an unguarded `forbid` written against it base-errors and is SKIPPED,
+						// which fails open on exactly the runs nobody is watching.
+						parentRunId,
 						// Lineage for gates, as `ctx` — convenience, not the record. The tables are the
 						// truth; nothing added to the run row, because `createRun` enumerates its fields
 						// and silently drops the rest.
