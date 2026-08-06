@@ -382,6 +382,7 @@ export type {
 	BusyclawRouteContext,
 	BusyclawRouteRequest,
 	BusyclawRouteResult,
+	CapabilityContext,
 	InferContext,
 	InferPluginApi,
 	InferPluginSchema,

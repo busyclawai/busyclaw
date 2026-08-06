@@ -1,0 +1,55 @@
+{
+	"name": "@busyclaw/subagents",
+	"version": "0.0.0",
+	"type": "module",
+	"description": "The subagents() plugin for busyclaw: a run spawns child runs. Each child is a real engine run carrying the parent's principal, addressed by an alias its parent chose, with its own redaction container — so a value crossing the edge is re-minted for the child rather than handed over as a placeholder it cannot resolve.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"homepage": "https://github.com/busyclaw-sh/busyclaw#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/busyclaw-sh/busyclaw.git",
+		"directory": "packages/plugins/subagents"
+	},
+	"bugs": {
+		"url": "https://github.com/busyclaw-sh/busyclaw/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest run tests",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
+		"@noble/hashes": "2.2.0",
+		"ai": "7.0.22",
+		"arktype": "2.2.0"
+	},
+	"devDependencies": {
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/engine-sql": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
+		"@busyclaw/storage-kysely": "workspace:*",
+		"@types/better-sqlite3": "7.6.13",
+		"better-sqlite3": "12.11.1",
+		"busyclaw": "workspace:*",
+		"kysely": "0.29.2"
+	}
+}

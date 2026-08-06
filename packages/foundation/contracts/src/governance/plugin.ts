@@ -33,6 +33,43 @@ import type { AfterGate, BoundaryGate, Gate } from "./boundary";
 import type { ClawApiCaller, Principal } from "./principal";
 import type { ReasonCode } from "./reason-codes";
 
+/**
+ * What a capability factory is told about the call it is being built for.
+ *
+ * NARROW ON PURPOSE. Everything here is a fact about the CURRENT run, pinned by the runtime — a
+ * capability cannot name a different run and be handed its authority or its container. That is the
+ * whole reason `translate` takes no `from`: making it unrepresentable beats validating it, and the
+ * shipped plugin `redact` door was built to forbid exactly this (it resolves "ONLY within its own
+ * container. Deliberately no `clawId` option"), so a capability that could name its source would
+ * reopen that by the side door.
+ */
+export type CapabilityContext = {
+	/** The run this capability is being used FROM. Absent on an ad-hoc `generate` with no run id. */
+	readonly runId: string | undefined;
+	/** The authority this run executes as — what a capability reconstructs a caller from, rather
+	 *  than accepting one. */
+	readonly principal: Principal | undefined;
+	/** Which step of the loop is calling. REPLAY-STABLE, unlike a provider's tool-call id: a resume
+	 *  re-calls the tool and gets a new one, so anything derived from a call id forks on retry. */
+	readonly step: number | undefined;
+	/**
+	 * Move a value out of THIS run's redaction container and into another run's.
+	 *
+	 * The first thing in the tree that crosses two containers. Rehydrate in the source, re-redact in
+	 * the destination — so a value the parent tokenized arrives in the child as the child's own
+	 * placeholder, resolvable there. Without it the naive path is silent: a foreign placeholder
+	 * resolves to nothing and passes through as the literal `{{pii:…}}` text with nothing thrown.
+	 *
+	 * `subjectIds` rides along because token coherence does NOT survive the crossing — the two
+	 * containers mint different placeholders for one person — so erasure has to be told who the value
+	 * is about on the way over, or the copy in the destination is unreachable by their request.
+	 */
+	readonly translate: <T>(
+		value: T,
+		to: { runId: string; subjectIds?: readonly string[] },
+	) => Promise<T>;
+};
+
 export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
 export type BusyclawRouteRequest = {
@@ -265,6 +302,22 @@ export type BusyclawPluginConfigureContext = {
 	/** The resolved storage adapter (schema-aware, wrapped once by the assembly). A plugin that owns
 	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
 	readonly adapter?: Adapter;
+	/**
+	 * The assembled claw, resolved LAZILY — the governed api, not the engine.
+	 *
+	 * A thunk because of construction order: `configure` runs while the claw is still being built, and
+	 * the api this returns is the PEP-wrapped one that does not exist until the very end of assembly.
+	 * A plugin stores the thunk and calls it when it actually needs the door, by which time the binding
+	 * is set.
+	 *
+	 * WHY NOT `engine`. The engine's `startRun` accepts a principal freely and runs no product-api
+	 * decision, so a plugin reaching for it would turn any capability built on it into a
+	 * privilege-escalation primitive. Going through the governed api means a plugin's own writes are
+	 * decided by the same PEP a host's are.
+	 *
+	 * Throws when called before assembly finishes, rather than handing back a half-built object.
+	 */
+	readonly claw?: () => unknown;
 	/** Tokenize plugin-held data — the SAFE direction (a redacted value may travel anywhere; only
 	 *  rehydration is fenced). Without `clawId` the value redacts into this plugin's own
 	 *  ("plugin", id) container; with `clawId` into that claw's ("claw", clawId) container — the
@@ -404,6 +457,21 @@ export type BusyclawPlugin<
 	 *  plugin's `configure` assigns later. A sink must NOT emit through the configure context's `events`
 	 *  door: that re-enters the very fan-out it observes (loop). */
 	eventSinks?: readonly EventSink[];
+	/**
+	 * Named capabilities this plugin provides to `capability`-stamped tools.
+	 *
+	 * Read STATICALLY off the raw plugin object, before `configure` runs — the same rule
+	 * `eventSinks` and `secrets.providers` follow, and here it is what makes the whole thing work
+	 * rather than a consistency preference. A capability that needs the assembled claw cannot be
+	 * built when the runtime is: the claw is being constructed AROUND the runtime. So the factory
+	 * closes over a binding its own `configure` fills later, and the runtime calls it per tool call,
+	 * by which time that binding is set.
+	 *
+	 * A capability name is global to the claw and injected under that name into the stamped tool's
+	 * execute options, so two plugins claiming one name is a collision the assembly refuses rather
+	 * than resolves — last-write-wins would silently hand a tool somebody else's authority.
+	 */
+	capabilities?: Record<string, (ctx: CapabilityContext) => unknown>;
 	/** Compose this plugin against host-created stores/context, returning ONLY the RUNTIME half
 	 *  ({@link BusyclawPluginRuntime}) — routes/cron/api built over the store/reader that arrive here.
 	 *  Returns `undefined` when a plugin has nothing runtime to add (a static-only plugin skips

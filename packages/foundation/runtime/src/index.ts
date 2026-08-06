@@ -1,4 +1,7 @@
-export type { ToolGovernance } from "@busyclaw/contracts";
+export type {
+	CapabilityContext,
+	ToolGovernance,
+} from "@busyclaw/contracts";
 export { govern } from "@busyclaw/contracts";
 export * from "./catalog";
 export * from "./context";
@@ -26,7 +29,6 @@ export {
 	runtimeRecordingContext,
 } from "./events";
 export type {
-	CapabilityContext,
 	ModelName,
 	ModelPool,
 	ModelPoolEntry,

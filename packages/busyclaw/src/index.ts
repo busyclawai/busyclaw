@@ -1,5 +1,6 @@
 import type { PrincipalScope } from "@busyclaw/authz";
 import type {
+	CapabilityContext,
 	ClawEngineFactory,
 	ClawEngineHandle,
 	SchemaDeclaration,
@@ -983,6 +984,29 @@ export function createClaw<
 		observers: observerSinks,
 		warn,
 	};
+	// Gathered STATICALLY, like `eventSinks` above and for a sharper reason: a capability that needs
+	// the assembled claw cannot be built here, because the claw is being constructed around this. The
+	// factory closes over a binding its own `configure` fills later and the runtime calls it per tool
+	// call, by which time that binding is set.
+	//
+	// A COLLISION IS REFUSED, not resolved. The name is how a stamped tool addresses its capability,
+	// so last-write-wins would silently hand a tool whichever plugin loaded second — the same tool,
+	// the same stamp, different authority depending on array order.
+	const pluginCapabilities: Record<
+		string,
+		(ctx: CapabilityContext) => unknown
+	> = {};
+	for (const plugin of pluginList) {
+		for (const [name, factory] of Object.entries(plugin.capabilities ?? {})) {
+			if (pluginCapabilities[name] !== undefined) {
+				throw configurationError(
+					`two plugins provide the capability "${name}"`,
+					{ capability: name, plugin: plugin.id },
+				);
+			}
+			pluginCapabilities[name] = factory;
+		}
+	}
 	// Door redaction (docs/plans/observability-plan.md, slice 5): a plugin-emitted event's payload
 	// is tokenized BEFORE fan-out, but only under redacted postures — `armed` is false for the
 	// no-redaction recipe and posture "raw", and that path stays byte-identical (the door never
@@ -995,6 +1019,9 @@ export function createClaw<
 	// redact/rehydrate handles (slice 6, pluginRedactionHandles above); their audit sink is the
 	// SAME config.audit the runtime and the product api use.
 	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
+	// Assigned at the very end of assembly and read only through the `claw()` thunk above, which is
+	// what lets a plugin hold a reference to a door built after it.
+	let assembled: unknown;
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -1010,6 +1037,22 @@ export function createClaw<
 			clawsStore,
 			effects: effectsStore,
 			secrets,
+			// LAZY, and it has to be: this context is built while the claw is still assembling, and
+			// the api a plugin should call is the PEP-wrapped one that does not exist until the last
+			// step. Throwing beats returning a half-built object — a plugin holding one would call
+			// ungoverned methods and never know.
+			claw: () => {
+				if (assembled === undefined) {
+					throw configurationError(
+						"the claw was read before it finished assembling",
+						{
+							reason:
+								"a plugin called context.claw() during configure; store the thunk and call it when the door is actually needed",
+						},
+					);
+				}
+				return assembled;
+			},
 		},
 		bind: (plugin) => ({
 			events: pluginEventSink(
@@ -1068,6 +1111,9 @@ export function createClaw<
 		...(resolveTools ? { resolveTools } : {}),
 		...(redaction.redactor ? { redactor: redaction.redactor } : {}),
 		...(system !== undefined ? { system } : {}),
+		// AFTER the spread, and merged host-last so a host can override a plugin's capability by name
+		// — the same precedence `tools` uses, for the same reason: the host wrote the assembly.
+		capabilities: { ...pluginCapabilities, ...(config.capabilities ?? {}) },
 	} as ResolvedConfig<Config>);
 	// SERVICES the factory could not have known at config time. A host writes `sqlEngine({ store })`
 	// long before this line decides where live deltas go, so without handing it over a host-supplied
@@ -1169,7 +1215,7 @@ export function createClaw<
 	// materialization inside every createClaw — including every test that assembles one — for a
 	// value only the migration CLI ever reads. Memoized, so the CLI still pays it once.
 	let tables: SchemaDeclaration | undefined;
-	return {
+	const claw = {
 		$context: context,
 		get $tables(): SchemaDeclaration {
 			tables ??= getBusyclawTables({
@@ -1182,6 +1228,10 @@ export function createClaw<
 		},
 		api,
 	};
+	// The binding the configure context's `claw()` thunk reads. Set LAST, on purpose: everything a
+	// plugin could reach through it — the PEP-wrapped api included — exists by now.
+	assembled = claw;
+	return claw;
 }
 
 export type {
