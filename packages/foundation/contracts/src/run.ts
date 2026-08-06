@@ -39,6 +39,64 @@ const runStatusValues = [
 	"failed",
 	"cancelled",
 ] as const;
+export type RunStatusValue = (typeof runStatusValues)[number];
+
+/**
+ * THE PARTITION every door asks about: is this run over?
+ *
+ * Declared ONCE, here, beside the vocabulary it splits — because three copies of it existed and each
+ * was a separate chance to answer differently. Two of them were written as the complement of the
+ * other, so adding a status to `runStatusValues` would have made one door treat it as live and
+ * another as finished, with nothing failing.
+ *
+ * The guard below is what makes that impossible: every member has to appear in exactly one half or
+ * this file stops compiling. It is a type-level assertion with no runtime cost, the same shape the
+ * run-stream chunk allowlist uses.
+ */
+export const terminalRunStatuses = [
+	"completed",
+	"failed",
+	"cancelled",
+] as const satisfies readonly RunStatusValue[];
+export const nonTerminalRunStatuses = [
+	"queued",
+	"running",
+	"waiting",
+] as const satisfies readonly RunStatusValue[];
+
+export const isTerminalRunStatus = (status: string): boolean =>
+	(terminalRunStatuses as readonly string[]).includes(status);
+
+// EXHAUSTIVE AND DISJOINT, checked at compile time: a status in neither half, or in both, fails to
+// compile here — which is the one moment anybody is thinking about the new value.
+//
+// Written as `Assert<... extends true>` rather than as a `never[]` variable, because that shape does
+// NOT work and looks like it does: an empty array literal is assignable to `never[]` and to
+// `"whatever"[]` alike, so the declaration compiles whatever the type resolves to. The first draft
+// here was exactly that, and adding a bogus status to `runStatusValues` compiled clean.
+type Assert<T extends true> = T;
+type _Exhaustive = Assert<
+	[
+		Exclude<
+			RunStatusValue,
+			| (typeof terminalRunStatuses)[number]
+			| (typeof nonTerminalRunStatuses)[number]
+		>,
+	] extends [never]
+		? true
+		: false
+>;
+type _Disjoint = Assert<
+	[
+		Extract<
+			(typeof terminalRunStatuses)[number],
+			(typeof nonTerminalRunStatuses)[number]
+		>,
+	] extends [never]
+		? true
+		: false
+>;
+export type RunStatusPartition = [_Exhaustive, _Disjoint];
 
 export const runFields = {
 	// A run's identity + input are fixed at create; only status advances. updatedAt is store-written.

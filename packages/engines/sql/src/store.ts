@@ -25,6 +25,7 @@ import {
 	errorMessage,
 	isConflict,
 	jsonObject as jsonObjectSchema,
+	nonTerminalRunStatuses,
 	type Principal,
 	runMessageFields,
 	stateError,
@@ -385,13 +386,16 @@ export type SqlEngineStore = {
 	saveIdempotency: (input: SaveIdempotencyInput) => Promise<IdempotencyRecord>;
 };
 
-/** A run in one of these still has work ahead of it; anything else is finished and must not be
- *  written back into flight by a claim that lost its race. */
-export const NON_TERMINAL_RUN_STATUSES = [
-	"queued",
-	"running",
-	"waiting",
-] as const;
+/**
+ * A run in one of these still has work ahead of it; anything else is finished and must not be
+ * written back into flight by a claim that lost its race.
+ *
+ * RE-EXPORTED, not re-declared. This was its own literal, and the api and the engine each had their
+ * own copy of the complement — three answers to "is this run over", any two of which could disagree
+ * the moment a status was added. The partition lives in contracts now, with a compile-time guard
+ * that a new status joins exactly one half.
+ */
+export const NON_TERMINAL_RUN_STATUSES = nonTerminalRunStatuses;
 
 /** How many times a task may be CLAIMED before it is abandoned, however it lost each claim. The
  *  backstop against a flapping host, deliberately not a config knob: it bounds crash loops, and a

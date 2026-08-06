@@ -465,13 +465,17 @@ export type {
 export { route } from "./governance/route";
 export type { PiiContainerRef } from "./pii-container";
 export { UNCONTAINED } from "./pii-container";
+export type { RunStatusValue } from "./run";
 // ── the run itself: the GOVERNANCE record every engine needs, whatever schedules its work ────
 export {
+	isTerminalRunStatus,
+	nonTerminalRunStatuses,
 	runEntity,
 	runEventEntity,
 	runEventFields,
 	runFields,
 	runSchema,
+	terminalRunStatuses,
 } from "./run";
 export type {
 	NewRunCheckpoint,

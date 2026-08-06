@@ -75,6 +75,7 @@ import {
 	createToolResultInput,
 	endpointHttpMethod,
 	errorMessage,
+	isTerminalRunStatus,
 	jsonObject,
 	parsePrincipal,
 	RESERVED_CONTEXT_PREFIX,
@@ -1695,16 +1696,16 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * of being killed mid-step by the platform. Absent when the engine has no deadline (a daemon
 	 * host), in which case nothing yields and nothing needs to.
 	 */
-	/** A run nobody may advance any further. Mirrors the engine's own list rather than importing it:
-	 *  `runStatusValues` is the vocabulary, and these three are the members that mean "over". */
-	const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
-		"completed",
-		"failed",
-		"cancelled",
-	]);
-
 	/**
 	 * Refuse to resume a run that has already ended.
+	 *
+	 * A CHECK, NOT A FENCE, and the difference is worth stating rather than discovering. Between this
+	 * read and the resume that follows it there is a window a concurrent stop can land in — narrow
+	 * (one round trip, no human in it) and unbounded only in principle. The fenced door is
+	 * `proceedRun({ kind: "approval" })`, which goes through the engine and settles the run's status
+	 * in the same conditional write that admits the continuation; a host that needs the guarantee
+	 * rather than the guard should prefer it. What this closes is the case that is not a race at all:
+	 * a run cancelled minutes ago, whose approval somebody then grants.
 	 *
 	 * SILENT when there is no run id (an ad-hoc runtime approval with no durable run behind it) or no
 	 * run read model — there is nothing to check against, and inventing a refusal there would break
@@ -1715,7 +1716,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	): Promise<void> => {
 		if (runId === undefined || context.runs === undefined) return;
 		const run = await context.runs.get(runId);
-		if (run && TERMINAL_RUN_STATUSES.has(run.status)) {
+		if (run && isTerminalRunStatus(run.status)) {
 			throw stateError("run is already terminal", {
 				runId,
 				status: run.status,

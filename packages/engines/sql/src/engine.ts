@@ -17,6 +17,7 @@ import type {
 import {
 	drainWork as drainEngineWork,
 	isConflict,
+	isTerminalRunStatus,
 	runStreamKey,
 	stateError,
 	threadStreamKey,
@@ -39,13 +40,6 @@ import {
 	RUNTIME_RESUME_RUN_TASK,
 	RUNTIME_RUN_TASK,
 } from "./worker";
-
-/** A run in one of these has nothing left to continue; a continuation against it is a mistake. */
-const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
-	"completed",
-	"failed",
-	"cancelled",
-]);
 
 /** The monotone ladder. `suspend < stop < abort`, compared by position so a later value can be
  *  added without every comparison site learning about it. */
@@ -307,7 +301,7 @@ function createSqlEngineHandle(input: {
 				// A TERMINAL run has nothing left to advance. Resetting one to `queued` resurrects it,
 				// and the slice that follows finds its record already spent and dead-letters — which is
 				// how `completed` used to be rewritten as `failed` by a second click.
-				if (TERMINAL_RUN_STATUSES.has(run.status)) {
+				if (isTerminalRunStatus(run.status)) {
 					throw stateError("run is already terminal and cannot proceed", {
 						runId: run.id,
 						status: run.status,
@@ -367,7 +361,7 @@ function createSqlEngineHandle(input: {
 				// TERMINAL — write no latch at all. A latch on a finished run poisons a later
 				// operator-driven resume of a leftover checkpoint, and would sit there forever with
 				// nothing left to observe it. Loud and recorded, not a 404 and not a lie.
-				if (TERMINAL_RUN_STATUSES.has(run.status)) {
+				if (isTerminalRunStatus(run.status)) {
 					await store.appendEvent({
 						runId: run.id,
 						type: "run.control_ignored",
