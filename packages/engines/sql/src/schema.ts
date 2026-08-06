@@ -26,7 +26,20 @@ export const runtimeTaskFields = {
 	runId: field.string({ required: true, index: true }),
 	kind: field.string({ required: true, index: true }),
 	status: field.enum(taskStatusValues, { required: true, index: true }),
-	payload: field.jsonObject({ required: true }),
+	/**
+	 * WHAT THE SLICE NEEDS TO RUN — for a first slice, the prompt itself, because that is what seeds
+	 * the transcript and there is nowhere else it could come from.
+	 *
+	 * So this IS a content column, and the `pii` marker says so rather than fixing it (adapters neither
+	 * read nor enforce it). What makes the CONVERSATIONAL path safe is upstream: the door hands the
+	 * engine the already-tokenized string, so the prompt landing here is placeholders, and
+	 * `forgetSubject` reaches it by shredding the mapping. A run started through `startRun` with no
+	 * claw has no container to tokenize into at the door, so its prompt arrives raw and stays raw —
+	 * named here because the marker on the column would otherwise imply otherwise.
+	 *
+	 * Nothing prunes this. `completeTask` retains the payload and adds `output` (D13's retention note).
+	 */
+	payload: field.jsonObject({ required: true, pii: "redacted" }),
 	dueAt: field.string({ required: true, index: true }),
 	// CLAIMS, not failures. A lease lapse costs one of these — the host vanished, which says nothing
 	// about whether the work is bad.

@@ -169,7 +169,18 @@ function createSqlEngineHandle(input: {
 			const opened = await input.config.store.transaction(async (store) => {
 				const run = await store.createRun({
 					...startInput.run,
-					input: { prompt: startInput.prompt, ctx: startInput.ctx ?? {} },
+					// NO PROMPT (D13). This column is `immutable`, nothing prunes it, no api
+					// re-identifies it and `forgetSubject` cannot reach text that was never tokenized —
+					// so a prompt written here is a permanent cleartext copy of whatever the caller
+					// typed, sitting one row away from the transcript that took care to tokenize the
+					// same words. `getRun` no longer returns it either; the control plane needs status,
+					// scope and wait reason, not content.
+					//
+					// Where the prompt IS: the task payload, which is what actually seeds the run, and —
+					// for a conversational run — the `origin_message_id` column, which points at the
+					// tokenized transcript row. Copying that id in here too would be a second slot for
+					// one fact, which is the fork this schema keeps refusing.
+					input: { ctx: startInput.ctx ?? {} },
 					// COLUMNS, not the task payload. The payload is `completed` and unindexed by the
 					// time a reader asks which thread a run answered, and the `deliverMessage` door
 					// needs the claw before any task has been claimed — neither question a payload can

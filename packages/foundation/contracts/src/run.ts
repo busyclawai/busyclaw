@@ -54,7 +54,25 @@ export const runFields = {
 		immutable: true,
 	}),
 	status: field.enum(runStatusValues, { required: true, index: true }),
-	input: field.jsonObject({ required: true, immutable: true }),
+	/**
+	 * WHAT THIS RUN WAS ASKED, minus the asking — `{ ctx }`, and the ids that point at content stored
+	 * somewhere erasable. Never the prompt (D13).
+	 *
+	 * `required: true` STAYS, because dropping it is not expressible: `planMigrations` turns `required`
+	 * into `notNull()` only in the CREATE branch, and the ALTER branch never changes an existing
+	 * column's nullability — so the drop would diverge fresh deployments from migrated ones and change
+	 * nothing else.
+	 *
+	 * The `pii` marker is DOCUMENTATION, not the fix, and saying so here matters: adapters neither read
+	 * nor enforce it (`storage.ts`), and `planMigrations` emits no UPDATE, so a row already written
+	 * stays exactly as raw as it was. What makes this column safe is that nothing writes content into
+	 * it any more.
+	 */
+	input: field.jsonObject({
+		required: true,
+		immutable: true,
+		pii: "redacted",
+	}),
 	principal: field.principal({ index: true, immutable: true }),
 
 	// ── THE TENANCY ANCHOR. Written by the WORKER from the authority the runtime actually resolved,

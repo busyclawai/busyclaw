@@ -116,6 +116,40 @@ import { type ActionView, assembleOrgActions } from "./registry";
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
 export type MessageView = "redacted" | "original";
 
+/** What `claw.api.getRun` answers with: the governance record minus its `input`. */
+export type ClawRunView = Omit<EngineRunRecord, "input">;
+
+/**
+ * The keys of a `run_event` payload a control plane may read, and nothing else.
+ *
+ * An allowlist rather than a denylist, because the failure this prevents is a payload gaining a
+ * content-bearing key that nobody remembers to exclude — `run.completed` already carries the whole
+ * terminal result, which is the assistant's answer, into a column no `view` gate and no audit line
+ * covers (P2). A new operational key has to be added here to be visible, which is the direction that
+ * fails safe.
+ */
+const OPERATIONAL_EVENT_KEYS = [
+	"taskId",
+	"checkpointId",
+	"steps",
+	"intent",
+	"requestedBy",
+	"reason",
+	"attempt",
+	"status",
+	"workerId",
+	"approvalIds",
+] as const;
+
+function operationalPayload(payload: JsonObject): JsonObject {
+	const out: JsonObject = {};
+	for (const key of OPERATIONAL_EVENT_KEYS) {
+		const value = payload[key];
+		if (value !== undefined) out[key] = value;
+	}
+	return out;
+}
+
 /** The out-of-band caller context every governed `claw.api` method takes as its 2nd argument. Defined
  *  in `@busyclaw/contracts` (the shared protocol home, beside `Principal`) so busyclaw's api surface and
  *  the HTTP adapter's `resolveCaller` seam name ONE caller type; re-exported here for `from "busyclaw"`
@@ -526,7 +560,9 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		intent: RunControlIntent;
 		reason?: string;
 	}) => Promise<EngineControlRunResult>;
-	getRun: (input: { id: string }) => Promise<EngineRunRecord | null>;
+	/** The run WITHOUT its input — see the handler. Status, scope, wait reason and timestamps; never
+	 *  content, which `listMessages` serves under a `view` gate and an audit line. */
+	getRun: (input: { id: string }) => Promise<ClawRunView | null>;
 	listRunEvents: (input: { runId: string }) => Promise<EngineRunEvent[]>;
 
 	// The generic share/unshare api (slice 5) — write/revoke an access_grant on ANY shareable resource.
@@ -1625,7 +1661,17 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		// from `args` — a caller who could set it would be satisfying the very policy that exists to
 		// detect their absence (see the field comment in contracts/src/run.ts).
 		const startInput: EngineStartRunInput = {
-			prompt: args.message,
+			// THE TOKENIZED STRING, never `args.message` — this is D13, and it is a privacy fact rather
+			// than a preference. The engine writes its prompt into `runtime_task.payload`, a column
+			// nothing shreds and no api re-identifies. Handing it raw text made a second, permanent,
+			// cleartext copy of every chat message one line after the same words were tokenized into
+			// the transcript, and `forgetSubject` — which shreds MAPPINGS — structurally cannot reach
+			// text that was never mapped. A completed DSR would have been a false statement (P1).
+			//
+			// Costs nothing downstream: the runtime's ingress redaction is a no-op on already-tokenized
+			// text (the invariant `appendMessage` relies on) and the container is the same
+			// `("claw", clawId)` either way, so placeholders stay coherent with the transcript.
+			prompt: userContent.text,
 			...(args.ctx !== undefined ? { ctx: forRuntimeCtx(args.ctx) } : {}),
 			run: {
 				id: runId,
@@ -2550,8 +2596,31 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				...(args.ctx ? { ctx: args.ctx } : {}),
 			});
 		},
-		getRun: ({ id }) => requireRuns(context.runs).get(id),
-		listRunEvents: ({ runId }) => requireRuns(context.runs).events(runId),
+		// THE RUN DOOR STOPS BEING A CONTENT DOOR (D13/P2).
+		//
+		// `listMessages` gates content behind `view` and audits every re-identification as
+		// `pii.reidentification`. These two returned the same class of thing at `read` with neither —
+		// `run.input` used to carry the prompt, and a `run.completed` event payload carries the whole
+		// terminal result including the assistant's answer. An asymmetry like that is not a smaller
+		// door, it is a way around the bigger one.
+		//
+		// Removing the content rather than threading `view` through here is deliberate:
+		// `ClawRunReadModel` knows a run id and nothing else, so the claw container a re-identification
+		// needs would have to be plumbed in for a feature the control plane does not want. Status,
+		// wait reason, scope and timestamps are what "how is my run doing" actually asks.
+		getRun: async ({ id }) => {
+			const run = await requireRuns(context.runs).get(id);
+			if (!run) return null;
+			const { input: _input, ...view } = run;
+			return view;
+		},
+		listRunEvents: async ({ runId }) => {
+			const events = await requireRuns(context.runs).events(runId);
+			return events.map((event) => ({
+				...event,
+				payload: operationalPayload(event.payload),
+			}));
+		},
 
 		// The PEP has already required the caller MANAGE (resourceKind, resourceId) — so a write here is a
 		// share the caller is entitled to make. The store is org-blind; principalRef stays opaque. The
