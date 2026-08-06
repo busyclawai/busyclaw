@@ -54,6 +54,18 @@ export const toolGovernance = type({
 	// This tool's execute receives a `subInvoke` for governed nested tool calls
 	// (capability tools: sandboxes, delegate). Least-authority: absent = no invoker.
 	"invoker?": "true",
+	// THIS TOOL RECEIVES ONE NAMED CAPABILITY, built per call by whoever registered it.
+	//
+	// Deliberately NOT `invoker`. One bit there gates two unrelated things — the `subInvoke`
+	// injection and the redacted-args posture — so reusing it to hand a tool the ability to spawn a
+	// subordinate would hand it arbitrary governed tool invocation as well. "May create subordinates"
+	// and "may call anything directly" are different permissions and this is the seam that keeps them
+	// apart.
+	//
+	// A capability-stamped tool keeps its args REDACTED, the same posture `invoker` implies, because
+	// the capability owns every container crossing and a tool that had rehydrated values in hand
+	// could cross one without going through it.
+	"capability?": "string",
 	// ── authz-model facts (see src/authz/model.ts) ──
 	// Does this tool mutate state? Absent = "write" in the model (fail-closed under seeded
 	// policies). Named `access`, not `risk` — `effect.risk` is a different axis.

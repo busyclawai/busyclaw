@@ -26,6 +26,7 @@ export {
 	runtimeRecordingContext,
 } from "./events";
 export type {
+	CapabilityContext,
 	ModelName,
 	ModelPool,
 	ModelPoolEntry,

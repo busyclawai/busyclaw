@@ -366,6 +366,57 @@ export type RuntimeConfig = {
 	warn?: (message: string) => void;
 	plugins?: readonly BusyclawPlugin[];
 	maxSteps?: number;
+	/**
+	 * Named capabilities a `capability`-stamped tool receives, built fresh for each call.
+	 *
+	 * ONE GENERIC SEAM rather than a third bespoke one. `subInvoke` and `probeAccess` are each wired
+	 * in by name at the same injection site; a fourth tenant would be a fourth conditional, and the
+	 * thing after that a fifth. A tool declares which capability it wants
+	 * (`govern(tool, { capability: "agent" })`), the host registers a factory under that name, and
+	 * the runtime hands over exactly what was asked for and nothing else.
+	 *
+	 * The factory runs PER CALL, not at assembly, which is what dissolves the construction-order
+	 * problem for anything that needs the fully-built claw: the capability can close over a slot its
+	 * own plugin fills later.
+	 */
+	capabilities?: Record<string, (ctx: CapabilityContext) => unknown>;
+};
+
+/**
+ * What a capability factory is told about the call it is being built for.
+ *
+ * NARROW ON PURPOSE. Everything here is a fact about the CURRENT run, pinned by the runtime — a
+ * capability cannot name a different run and be handed its authority or its container. That is the
+ * whole reason `translate` takes no `from`: making it unrepresentable beats validating it, and the
+ * shipped plugin `redact` door was built to forbid exactly this (it resolves "ONLY within its own
+ * container. Deliberately no `clawId` option"), so a capability that could name its source would
+ * reopen that by the side door.
+ */
+export type CapabilityContext = {
+	/** The run this capability is being used FROM. Absent on an ad-hoc `generate` with no run id. */
+	readonly runId: string | undefined;
+	/** The authority this run executes as — what a capability reconstructs a caller from, rather
+	 *  than accepting one. */
+	readonly principal: Principal | undefined;
+	/** Which step of the loop is calling. REPLAY-STABLE, unlike a provider's tool-call id: a resume
+	 *  re-calls the tool and gets a new one, so anything derived from a call id forks on retry. */
+	readonly step: number | undefined;
+	/**
+	 * Move a value out of THIS run's redaction container and into another run's.
+	 *
+	 * The first thing in the tree that crosses two containers. Rehydrate in the source, re-redact in
+	 * the destination — so a value the parent tokenized arrives in the child as the child's own
+	 * placeholder, resolvable there. Without it the naive path is silent: a foreign placeholder
+	 * resolves to nothing and passes through as the literal `{{pii:…}}` text with nothing thrown.
+	 *
+	 * `subjectIds` rides along because token coherence does NOT survive the crossing — the two
+	 * containers mint different placeholders for one person — so erasure has to be told who the value
+	 * is about on the way over, or the copy in the destination is unreachable by their request.
+	 */
+	readonly translate: <T>(
+		value: T,
+		to: { runId: string; subjectIds?: readonly string[] },
+	) => Promise<T>;
 };
 
 /**
@@ -1103,6 +1154,32 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	};
 	const staticTools = withDiscovery(declaredTools);
 	const staticProjection = modelToolProjection(staticTools);
+
+	/**
+	 * The option names the runtime's own calling convention already owns.
+	 *
+	 * A capability is injected under its own name, so a capability called `messages` would replace the
+	 * transcript the AI SDK passes and a capability called `subInvoke` would hand a non-invoker tool
+	 * something that looks exactly like arbitrary governed invocation. Refused at ASSEMBLY, where it
+	 * is a developer holding a stack trace, rather than at call time inside somebody's model turn.
+	 */
+	const RESERVED_CAPABILITY_NAMES = new Set([
+		"toolCallId",
+		"messages",
+		"abortSignal",
+		"effectId",
+		"subInvoke",
+		"probeAccess",
+	]);
+	const capabilities = config.capabilities ?? {};
+	for (const name of Object.keys(capabilities)) {
+		if (RESERVED_CAPABILITY_NAMES.has(name)) {
+			throw configurationError(
+				`capability "${name}" collides with the runtime's own tool-call option`,
+				{ capability: name },
+			);
+		}
+	}
 	// The catalog is the HOST's read-path over the tools it declared — the meta-tools are the
 	// runtime's own plumbing and would only be noise in it.
 	const catalog = createToolCatalog(toolEntriesFromTools(declaredTools));
@@ -1353,30 +1430,96 @@ export function createRuntime<const Config extends RuntimeConfig>(
 	 * behind it. The run is the container when nothing larger is: `(run, runId)`, minted per run, so the
 	 * absent case is many namespaces of one rather than one namespace of many.
 	 */
+	/**
+	 * WHICH CONTAINER a run's placeholders live in — the decision itself, typed, in one place.
+	 *
+	 * Split out of the context stamp when a second caller appeared (`translate`, crossing two of
+	 * these). The stamp writes into an untyped context bag, so the alternative was reading the answer
+	 * back out with `typeof` guards — which silently drops a container it cannot recognise and leaves
+	 * the caller rehydrating in the UNCONTAINED bucket, where every lookup misses and the value is
+	 * returned as the raw `{{pii:…}}` string with nothing thrown.
+	 *
+	 * A recorded run is contained by its CLAW: the transcript outlives the run, and a placeholder in
+	 * message 3 has to rehydrate in message 40. An ad-hoc run has no such life — nothing survives it —
+	 * so its own id is the honest boundary, and erasure reaches it the same way it reaches a claw.
+	 *
+	 * `undefined` is a real answer, not a failure. A container has to be the SAME one on the way back
+	 * in — a placeholder minted before an approval park must rehydrate after it — so a resume whose
+	 * checkpoint carries no run id stays uncontained ON PURPOSE: that run was minted before run
+	 * containers existed, and inventing one now would put the read in a namespace the mint never used.
+	 */
+	const runContainer = (
+		recording: RuntimeRecordingContext | undefined,
+		runId: string | undefined,
+	): { containerKind: string; containerId: string } | undefined => {
+		if (recording !== undefined) {
+			return { containerKind: "claw", containerId: recording.clawId };
+		}
+		if (runId !== undefined) {
+			return { containerKind: "run", containerId: runId };
+		}
+		return undefined;
+	};
+
 	const stampRedactionContainer = (
 		ctx: Record<string, unknown>,
 		recording: RuntimeRecordingContext | undefined,
 		runId: string | undefined,
 	): Record<string, unknown> => {
-		// A recorded run is contained by its CLAW: the transcript outlives the run, and a placeholder in
-		// message 3 has to rehydrate in message 40. An ad-hoc run has no such life — nothing survives it
-		// — so its own id is the honest boundary, and erasure reaches it the same way it reaches a claw.
-		if (recording !== undefined) {
-			ctx[PII_CONTAINER_KIND_CONTEXT_KEY] = "claw";
-			ctx[PII_CONTAINER_ID_CONTEXT_KEY] = recording.clawId;
-			return ctx;
-		}
-		// A container has to be the SAME one on the way back in: a placeholder minted before an approval
-		// park must rehydrate after it. So a resume whose checkpoint carries no run id is left
-		// uncontained on purpose — that run was minted before run containers existed, and inventing one
-		// now would put the read in a namespace the mint never used. Nothing throws on a container
-		// mismatch; the value just comes back as a raw placeholder, which is why this stays explicit.
-		if (runId !== undefined) {
-			ctx[PII_CONTAINER_KIND_CONTEXT_KEY] = "run";
-			ctx[PII_CONTAINER_ID_CONTEXT_KEY] = runId;
-		}
+		const container = runContainer(recording, runId);
+		if (container === undefined) return ctx;
+		ctx[PII_CONTAINER_KIND_CONTEXT_KEY] = container.containerKind;
+		ctx[PII_CONTAINER_ID_CONTEXT_KEY] = container.containerId;
 		return ctx;
 	};
+
+	/**
+	 * Move a value out of one run's redaction container and into another's.
+	 *
+	 * REHYDRATE THERE, RE-REDACT HERE — the two halves are the whole point. A placeholder is only
+	 * meaningful inside the container that minted it, so handing a child a token the parent minted
+	 * gives it a string that resolves to nothing: it reaches the child's tool as the literal
+	 * `{{pii:…}}` text, with nothing thrown anywhere. Nothing in the tree crossed two containers
+	 * before this, so there is no prior art to have copied and no existing bug to have noticed.
+	 *
+	 * `subjectIds` has to ride along because token coherence does NOT survive the crossing: the two
+	 * containers mint different placeholders for the same person, so the destination's mapping has to
+	 * be told whose data it is or a later erasure request cannot reach the copy it just made.
+	 *
+	 * No `from`. The source is whatever container the CALLING run is in, pinned here — making a
+	 * foreign source unrepresentable rather than validating it, which is the same rule the plugin
+	 * `redact` door already holds ("ONLY within its own container").
+	 */
+	const translateInto =
+		(state: RunState, redactor: Redactor | undefined) =>
+		async <T>(
+			value: T,
+			to: { runId: string; subjectIds?: readonly string[] },
+		): Promise<T> => {
+			// No redactor ⇒ nothing was ever tokenized, so there is nothing to translate and the value
+			// is already what it appears to be.
+			if (redactor === undefined) return value;
+			// The SAME decision the context stamp makes, from the same function — not re-derived, and
+			// not read back out of the untyped context bag through `typeof` guards. That shape looks
+			// defensive and is the opposite: a container failing the guard would be silently dropped, the
+			// rehydrate would run UNCONTAINED, and the value would come back as the placeholder it went in
+			// as with nothing thrown — the precise failure this crossing exists to prevent, reintroduced
+			// inside the fix for it. `undefined` is a real answer here (an uncontained run mints
+			// uncontained) and it is reached deliberately, not by a guard falling through.
+			const plain = await redactor.rehydrateValue(
+				value,
+				runContainer(state.recording, state.runId),
+			);
+			return redactor.redactValue(plain, {
+				// The destination is a RUN container. A child has its own (D10) — it is not inside the
+				// parent's claw, which is what stops a token minted for one subtree resolving in another.
+				containerKind: "run",
+				containerId: to.runId,
+				...(to.subjectIds !== undefined
+					? { subjectIds: [...to.subjectIds] }
+					: {}),
+			});
+		};
 
 	const createRunCore = (
 		state: RunState,
@@ -1534,12 +1677,52 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						paths.map((name) => ({ name, args: {} })),
 						_ctx,
 					);
+				// THE GENERIC CAPABILITY SEAM. `subInvoke` and `probeAccess` above are each wired in by
+				// name; a third tenant would be a third conditional and the one after that a fourth. A
+				// tool names the capability it wants, the host registers a factory under that name, and
+				// exactly that one thing is handed over — a tool that asked for nothing gets nothing, and
+				// a tool that asked for "agent" cannot reach "sandbox" by knowing its option name.
+				//
+				// BUILT PER CALL, not at assembly. That is what dissolves the construction-order problem
+				// for a capability needing the fully-built claw: the factory can close over a slot its own
+				// plugin fills later, and nothing here has to exist yet when the runtime is created.
+				const capabilityName = stamp.capability;
+				const capability =
+					capabilityName === undefined
+						? undefined
+						: capabilities[capabilityName]?.({
+								runId: state.runId,
+								// The FROZEN resolved authority, not the raw caller: a capability reconstructs a
+								// caller from this rather than accepting one, which is what stops a spawned
+								// child being pointed at somebody else's identity (D7).
+								principal: state.authority?.principal,
+								step: state.currentStep,
+								translate: translateInto(state, redactor),
+							});
+				// A tool asking for a capability nobody registered is a MISCONFIGURATION, not a tool that
+				// runs with one fewer argument. Silently omitting it means the tool discovers the absence
+				// at the moment it tries to use it, inside a model turn, as a TypeError attributed to the
+				// model's arguments.
+				if (capabilityName !== undefined && capability === undefined) {
+					throw configurationError(
+						`tool "${call.name}" needs the "${capabilityName}" capability, which this claw does not provide`,
+						{ toolName: call.name, capability: capabilityName },
+					);
+				}
 				// An invoker tool is BRAIN, not edge: it runs untrusted model-authored code, so its args
 				// must stay redacted (placeholders reach the guest). A normal tool is the trusted edge and
 				// rehydrates. Nested calls the guest makes are re-redacted on the way back (nested runTool
 				// below), so the guest only ever holds placeholders. Future: a "trusted/unredacted" sandbox
 				// variant opts out here.
-				const args = isInvokerTool ? call.args : await rehydrate(call.args);
+				//
+				// A CAPABILITY TOOL KEEPS THEM REDACTED TOO, for a different reason than the invoker's:
+				// the capability owns every container crossing (`translate`), and a tool holding
+				// rehydrated values could put one into another container without going through it —
+				// where it would arrive as a placeholder the destination cannot resolve, silently.
+				const args =
+					isInvokerTool || capabilityName !== undefined
+						? call.args
+						: await rehydrate(call.args);
 				const execute = (abortSignal?: unknown) =>
 					// The runtime's calling convention: the AI-SDK call options plus `subInvoke`, which
 					// busyclaw adds for invoker-stamped capability tools only (least authority). The
@@ -1559,6 +1742,11 @@ export function createRuntime<const Config extends RuntimeConfig>(
 							: {}),
 						...(isInvokerTool ? { subInvoke } : {}),
 						...(isDiscoverySearch ? { probeAccess } : {}),
+						// Under its OWN name, so a tool's signature says what it needs. The reserved-name
+						// check at assembly is what keeps this from clobbering `messages` or `subInvoke`.
+						...(capabilityName !== undefined
+							? { [capabilityName]: capability }
+							: {}),
 					});
 				const effectPolicy = stamp.effect;
 				const outputMode = effectOutputMode(effectPolicy);
