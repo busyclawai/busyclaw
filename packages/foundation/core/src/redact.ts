@@ -264,6 +264,31 @@ export function createMemoryPiiMappingStore(): PiiMappingStore {
 				set.add(key);
 			}
 		},
+		linkSubjects(placeholders, subjectIds, ctx) {
+			const container = piiContainer(ctx);
+			for (const placeholder of placeholders) {
+				const key = containerKey(container, placeholder);
+				// A placeholder with no mapping HERE is a namesake from another container, a stale
+				// token left in a transcript after an erasure, or a string somebody pasted — not this
+				// subject's data.
+				//
+				// It changes no ANSWER in this store: `deleteForSubject` already skips a key whose
+				// mapping is gone, so an orphan would be uncounted either way. It is kept because the
+				// durable store cannot skip it (there is no row to take a container from, so the guard
+				// is structural there), and one port with two behaviours is how a difference nobody
+				// meant becomes a difference somebody depends on. What it does buy here is a bounded
+				// index: without it, pasting fake tokens grows `subjectToKeys` forever.
+				if (!byKey.has(key)) continue;
+				for (const subjectId of subjectIds) {
+					let set = subjectToKeys.get(subjectId);
+					if (set === undefined) {
+						set = new Set<string>();
+						subjectToKeys.set(subjectId, set);
+					}
+					set.add(key);
+				}
+			}
+		},
 		resolve(placeholder, ctx) {
 			// The container is baked into the key, so a foreign placeholder simply misses.
 			const mapping = byKey.get(containerKey(piiContainer(ctx), placeholder));
@@ -573,10 +598,41 @@ export function createStoredRedactor(options: StoredRedactorOptions): Redactor {
 		}
 	};
 
+	/**
+	 * LINK WHAT IS ALREADY TOKENIZED to the subject this context names — R-M03.
+	 *
+	 * Minting links a mapping to its subject; nothing linked one that already existed. That is the gap,
+	 * and it is not an edge case: the door tokenizes the user's message BEFORE the run that resolves
+	 * whose data it is has started, so the single most likely place for a person's PII was the one
+	 * redaction with no subject on it. `forgetSubject` then answered "erased 0" — successfully — about
+	 * a person whose address was sitting in the transcript.
+	 *
+	 * Done HERE rather than at the door, so lineage follows the DATA rather than the call site. Every
+	 * already-tokenized value entering a run with a resolved subject gets linked by this one rule: the
+	 * prompt, a delivered message body, an adopted inbox message, a tool argument rehydrated and
+	 * re-redacted. Fixing it at the door would have fixed exactly one of those and left the rest to be
+	 * discovered one at a time.
+	 *
+	 * Costs nothing when no subject is resolved, which is every deployment that has not configured one.
+	 */
+	const linkExisting = async (
+		text: string,
+		ctx: RedactionContext | undefined,
+	): Promise<void> => {
+		const subjectIds = ctx?.subjectIds;
+		if (subjectIds === undefined || subjectIds.length === 0) return;
+		if (mappings.linkSubjects === undefined) return;
+		const found = new Set<string>();
+		for (const match of text.matchAll(PLACEHOLDER)) found.add(match[0]);
+		if (found.size === 0) return;
+		await mappings.linkSubjects([...found], subjectIds, ctx);
+	};
+
 	const redactText = async (
 		text: string,
 		ctx?: RedactionContext,
 	): Promise<string> => {
+		await linkExisting(text, ctx);
 		const detected = piiSpans(await detect(text));
 		if (detected instanceof type.errors) {
 			throw validationError(

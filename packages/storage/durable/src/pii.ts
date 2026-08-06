@@ -211,6 +211,41 @@ export function createPiiMappingStore(
 			}
 		},
 
+		async linkSubjects(placeholders, subjectIds, ctx) {
+			if (placeholders.length === 0 || subjectIds.length === 0) return;
+			for (const placeholder of placeholders) {
+				const rows = await db.findMany({
+					model: "pii_mapping",
+					where: [{ field: "placeholder", value: placeholder }],
+				});
+				// A placeholder with no mapping in THIS container is a namesake, not a hit — word-code
+				// tokens are lower entropy than the old hex, so the same token can legitimately exist in
+				// two containers meaning two different things. Linking it would put an orphan row in the
+				// junction and make a later erasure report a count that erased nothing.
+				const mapping = rows.find((row) => sameContainer(row, ctx));
+				if (mapping === undefined) continue;
+				for (const subjectId of subjectIds) {
+					const linked = await db.findMany({
+						model: "pii_subject",
+						where: [
+							...subjectContainerWhere(mapping),
+							{ field: "subjectId", value: subjectId, connector: "AND" },
+						],
+					});
+					if (linked.length > 0) continue;
+					await db.create({
+						model: "pii_subject",
+						data: {
+							placeholder: mapping.placeholder,
+							subjectId,
+							containerKind: mapping.containerKind,
+							containerId: mapping.containerId,
+						},
+					});
+				}
+			}
+		},
+
 		async resolve(placeholder, ctx) {
 			const rows = await db.findMany({
 				model: "pii_mapping",

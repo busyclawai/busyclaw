@@ -177,6 +177,27 @@ export type PiiMappingStore = {
 		mapping: PiiMapping,
 		subjectIds?: readonly string[],
 	) => void | Promise<void>;
+	/**
+	 * Link placeholders that ALREADY EXIST to a data subject — the erasure junction, without a mint.
+	 *
+	 * The gap it closes (R-M03): a value is tokenized at the door, before the run that would say whose
+	 * data it is has started. `save` links only what it mints, so the user's own message — the single
+	 * most likely place for their PII — was the one redaction with no subject on it, and
+	 * `forgetSubject` answered "erased 0" about a person whose address was right there.
+	 *
+	 * Placeholders that name no mapping in this container are IGNORED rather than written as orphan
+	 * junction rows: the pair is only meaningful if erasure has something to erase, and a token
+	 * belonging to another container is a namesake, not a hit.
+	 *
+	 * OPTIONAL, because a custom store owns its own erasure — the same reason `forgetSubject` refuses
+	 * outright on one. Absent means lineage is that store's business, and the assembly's boot warning
+	 * already says what happens when nobody claims it.
+	 */
+	linkSubjects?: (
+		placeholders: readonly string[],
+		subjectIds: readonly string[],
+		ctx?: RehydrationContext,
+	) => void | Promise<void>;
 	/** placeholder → original, but only within the SAME container (scope, scopeId). */
 	resolve: (
 		placeholder: string,
