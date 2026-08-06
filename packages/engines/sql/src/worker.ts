@@ -563,20 +563,7 @@ export function createSqlEngineWorker(config: SqlEngineWorkerConfig): {
 				...(deadlineAt !== undefined ? { deadlineAt } : {}),
 				...(runStream !== undefined ? { runStream } : {}),
 			});
-			// HOW THIS SLICE ENDED, told to whoever is watching the conversation.
-			//
-			// Emitted HERE rather than inside `driveClaim` because that function has twenty exits and
-			// one entry; a caller driving its own turn announces its own ending from the result it
-			// hands back. One writer per SLICE either way — the door and the drain never drive the
-			// same claim — which is the unit that matters, since a parked turn's second slice belongs
-			// to whichever process resumed it.
-			await emitSliceEnd({
-				runStream,
-				store,
-				runId: claim.task.runId,
-				attempt: claim.task.attempt,
-				result,
-			});
+			// NO EMIT HERE. `driveClaim` announces the slice it drove, whoever called it — see there.
 			return result;
 		},
 	};
@@ -606,8 +593,12 @@ async function emitSliceEnd(input: {
 		switch (result.status) {
 			case "completed":
 				return { event: "completed" };
+			// A DRIVER THAT LOST ITS LEASE CANNOT SAY HOW THE RUN ENDED — a successor may already own
+			// it, and "failed" would close a watcher's view of a turn somebody else is finishing. The
+			// door already refused to guess here (`notDriven: "driver-lost"`); the drain was guessing,
+			// and unifying the two writers is what made the disagreement visible.
 			case "failed":
-				return { event: "failed" };
+				return result.task === null ? null : { event: "failed" };
 			case "cancelled":
 				return { event: "cancelled" };
 			// COMES BACK ON ITS OWN. A continuation is already enqueued, so a reader told "paused"
@@ -669,7 +660,38 @@ async function emitSliceEnd(input: {
  * runs one task" — the moment two claims are driven in one process, a shared heartbeat would arm the
  * wrong run's AbortController.
  */
-export async function driveClaim(input: {
+/**
+ * Drive one claimed slice, and tell whoever is watching how it ended — ONCE.
+ *
+ * THE EMIT LIVES HERE, at the one exit, and that is the whole point of this wrapper. It used to sit
+ * in `tick`, outside this function, on the argument that the body has "twenty exits and one entry" —
+ * which is an argument FOR wrapping, not against emitting. The cost of it being outside was a second
+ * writer: the door, which drives its own turn, had to map the same fact again from `ClawSendResult`,
+ * so "how did this slice end" existed as two switches over two result shapes that had to be kept in
+ * agreement by hand. They drifted, and a yield was reported as a park for months.
+ *
+ * This is the THIRD time the same correction has been applied. `run.started` moved from the door
+ * into the engine, then the text chunks did, each for exactly this reason. The lifecycle event was
+ * the one left behind.
+ *
+ * Both callers already pass the SAME `runStream` into this function, so nothing had to move to make
+ * this possible — only the emit.
+ */
+export async function driveClaim(
+	input: DriveClaimInput,
+): Promise<WorkerTickResult> {
+	const result = await driveClaimSlice(input);
+	await emitSliceEnd({
+		runStream: input.runStream,
+		store: input.store,
+		runId: input.claim.task.runId,
+		attempt: input.claim.task.attempt,
+		result,
+	});
+	return result;
+}
+
+type DriveClaimInput = {
 	store: SqlEngineStore;
 	runtime: Runtime;
 	claim: ClaimedTask;
@@ -694,7 +716,11 @@ export async function driveClaim(input: {
 	 * exists, before any of them run.
 	 */
 	onResult?: (result: RuntimeResult) => void;
-}): Promise<WorkerTickResult> {
+};
+
+async function driveClaimSlice(
+	input: DriveClaimInput,
+): Promise<WorkerTickResult> {
 	const {
 		claim,
 		deadlineAt,

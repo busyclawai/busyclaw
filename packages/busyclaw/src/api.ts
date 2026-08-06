@@ -43,8 +43,6 @@ import type {
 	RouteLevel,
 	RunControlIntent,
 	RunMessageMode,
-	RunStreamChunk,
-	RunStreamLifecycle,
 	RunStreamPage,
 	RunStreamPort,
 	ScopeRef,
@@ -1845,55 +1843,18 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * actually read it.
 	 */
 	/**
-	 * Append one chunk to a thread's live stream, and NEVER let it matter if that fails.
+	 * NOTHING IN THIS FILE WRITES TO THE RUN STREAM, and that is the design rather than an omission.
 	 *
-	 * The stream is a transport buffer: a run whose deltas nobody could persist still completes and
-	 * still lands in the transcript. Propagating an error from here would let a slow or broken KV
-	 * fail a turn that was otherwise perfect — which is the one thing an advisory sink must not do.
+	 * Every chunk is written by the ENGINE, at the one place that knows a slice ended: `driveClaim`,
+	 * which both the door and the cron drain go through. The door used to write some of them —
+	 * `run.started`, then the text deltas, then the lifecycle event — and each was moved for the same
+	 * reason. A door and a drain producing the same chunk from two different result shapes is two
+	 * switches to keep in agreement by hand, and the last one drifted: a yield was announced as a
+	 * park for months because only one of the two knew the difference.
+	 *
+	 * What the door keeps is its own in-memory tee to the reader in THIS invocation
+	 * (`createDeltaChannel`), which is not the log and is nobody else's business.
 	 */
-	const emitChunk = async (
-		threadId: string,
-		chunk: RunStreamChunk,
-	): Promise<void> => {
-		const stream = context.runStream;
-		if (stream === undefined) return;
-		try {
-			await stream.append(threadStreamKey(threadId), chunk);
-		} catch {
-			// Deliberately silent. A warn per delta would be a log flood at 20-50 chunks a turn, and
-			// the condition is already visible to a watcher as a stream that stops moving.
-		}
-	};
-
-	/** What a watcher is told when a turn ends, from what the door got back. A run somebody else is
-	 *  driving emits NOTHING here — their invocation owns that announcement, and two `completed`
-	 *  chunks for one run would have a client render the answer twice. */
-	const lifecycleOf = (
-		sent: ClawSendResult,
-	): { event: RunStreamLifecycle; reason?: string } | undefined => {
-		if (!sent.driven) return undefined;
-		// THE SECOND WRITER OF THIS FACT, and it has to agree with engine-sql's `emitSliceEnd` — a
-		// door driving its own turn announces its own ending, the drain announces the ones it drives.
-		// One slice has exactly one writer, so they never both fire; that is also why a disagreement
-		// between them shows up as "streaming works, except on the path I did not test".
-		switch (sent.result.status) {
-			case "completed":
-			case "denied":
-				return { event: "completed" };
-			// COMES BACK ON ITS OWN — a continuation is already enqueued. Reported as `parked` until
-			// now, which told a reader "waiting for you" about a turn that was still going.
-			case "yielded":
-				return { event: "yielded" };
-			// WAITS FOR A VERB, and which verb is the part a reader can act on.
-			case "parked":
-				return { event: "parked", reason: sent.result.reason };
-			case "waiting_approval":
-				return { event: "parked", reason: "approval" };
-			default:
-				return { event: "failed" };
-		}
-	};
-
 	/**
 	 * The one subscription body, shared by `watchThread` and `watchRun` so the two cannot drift on
 	 * the things that are easy to get subtly different: when to stop, when to sleep, and what a stale
@@ -2252,16 +2213,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 							runId,
 							userMessage,
 						);
-			const ended = lifecycleOf(response);
-			if (ended !== undefined) {
-				await emitChunk(args.threadId, {
-					kind: "lifecycle",
-					runId,
-					attempt: 1,
-					event: ended.event,
-					...(ended.reason !== undefined ? { reason: ended.reason } : {}),
-				});
-			}
 			if (args.view !== "original" || context.redaction === undefined) {
 				return response;
 			}
@@ -2360,20 +2311,9 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			context.waitUntil?.(driven);
 			return {
 				textStream: channel.iterable,
-				result: driven.then(async (outcome) => {
-					const sent = sendResultOf(outcome, runId, userMessage);
-					const ended = lifecycleOf(sent);
-					if (ended !== undefined) {
-						await emitChunk(args.threadId, {
-							kind: "lifecycle",
-							runId,
-							attempt: 1,
-							event: ended.event,
-							...(ended.reason !== undefined ? { reason: ended.reason } : {}),
-						});
-					}
-					return sent;
-				}),
+				result: driven.then((outcome) =>
+					sendResultOf(outcome, runId, userMessage),
+				),
 				userMessage,
 				runId,
 			};

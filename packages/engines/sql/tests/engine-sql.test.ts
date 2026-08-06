@@ -408,6 +408,62 @@ describe("@busyclaw/engine-sql", () => {
 		expect(finalStatus).toBe("idle");
 	});
 
+	it("tells a watcher NOTHING when the driver lost its lease", async () => {
+		// A driver that lost its lease cannot say how the run ended — a successor may already own it,
+		// and `failed` is TERMINAL on the stream, so a watcher would close its subscription and render
+		// a failure for a turn somebody else is about to finish.
+		//
+		// The door already refused to guess here (`notDriven: "driver-lost"`). The drain was guessing,
+		// and that disagreement was invisible while the two announced slice endings separately.
+		const appended: { key: string; chunk: unknown }[] = [];
+		const runStream = {
+			append: async (key: string, chunk: unknown) => {
+				appended.push({ key, chunk });
+			},
+			read: async () => ({ chunks: [], cursor: "0", stale: false }),
+		};
+		const baseStore = createSqlEngineStore(memoryAdapter(), {
+			now: () => "2026-01-01T00:00:00.000Z",
+		});
+		const store = { ...baseStore, heartbeatLease: async () => null };
+		const runtime = engineRuntime({
+			generate: async (_prompt, _ctx, options) => {
+				const timers = globalThis as typeof globalThis & {
+					setTimeout: (fn: () => void, ms: number) => unknown;
+				};
+				while (!options?.abortSignal?.aborted) {
+					await new Promise<void>((resolve) => {
+						timers.setTimeout(resolve, 10);
+					});
+				}
+				return { status: "completed", text: "should not persist", steps: 1 };
+			},
+			continueRun: async () => null,
+		});
+		const worker = createSqlEngineWorker({
+			store,
+			runtime,
+			workerId: "worker-1",
+			leaseTtlMs: 1,
+			runStream: runStream as never,
+		});
+		const run = await baseStore.createRun({ input: { prompt: "hello" } });
+		await baseStore.enqueueTask({
+			runId: run.id,
+			kind: RUNTIME_RUN_TASK,
+			payload: { prompt: "hello" },
+		});
+
+		const result = await worker.tick();
+
+		expect(result).toMatchObject({ status: "failed", task: null });
+		expect(
+			appended.filter(
+				(entry) => (entry.chunk as { kind?: string }).kind === "lifecycle",
+			),
+		).toEqual([]);
+	});
+
 	it("worker aborts runtime and skips terminal persistence when heartbeat is lost", async () => {
 		const baseStore = createSqlEngineStore(memoryAdapter(), {
 			now: () => "2026-01-01T00:00:00.000Z",
