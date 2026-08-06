@@ -17,7 +17,7 @@ import { type } from "arktype";
 import {
 	type AgentCapability,
 	createAgentCapability,
-	type SpawnClawLike,
+	type SpawnEngine,
 	type SpawnLimits,
 } from "./capability";
 import type { SubagentStore } from "./store";
@@ -42,7 +42,7 @@ export type AgentTreeNode = {
 };
 
 export function buildAgentsApi(input: {
-	claw: () => SpawnClawLike;
+	engine: () => SpawnEngine;
 	store: () => SubagentStore;
 	limits: SpawnLimits;
 	now: () => string;
@@ -77,7 +77,7 @@ export function buildAgentsApi(input: {
 		};
 		return createAgentCapability({
 			ctx,
-			claw: input.claw(),
+			engine: input.engine(),
 			store: input.store(),
 			limits: input.limits,
 			now: input.now,
@@ -112,19 +112,20 @@ export function buildAgentsApi(input: {
 				kind: RUN_KIND,
 				id: rootRunId,
 			}))
-			.handler(async (args: { rootRunId: string }, caller?: ClawApiCaller) => {
+			.handler(async (args: { rootRunId: string }) => {
 				const edges = await input.store().tree(args.rootRunId);
-				const claw = input.claw();
+				const engine = input.engine();
 				const nodes: AgentTreeNode[] = [];
 				for (const edge of edges) {
 					// The RUN's status, read from the run. Mirroring it onto the edge would make the edge
 					// a second place one fact lives, and the two would disagree exactly when it mattered.
-					const run = await claw.api.getRun(
-						{ id: edge.id },
-						caller?.principal !== undefined
-							? { principal: caller.principal }
-							: undefined,
-					);
+					//
+					// Read WITHOUT a per-child decision, and deliberately: the PEP has already required
+					// `read` on the ROOT, which is this door's anchor. Re-deciding each child would
+					// authorize a subtree read as N separate reads and answer a different question —
+					// and a child a caller may not read individually would silently vanish from a tree
+					// they are entitled to see whole.
+					const run = await engine.runs?.get(edge.id);
 					nodes.push({
 						childRunId: edge.id,
 						parentRunId: edge.parentRunId,

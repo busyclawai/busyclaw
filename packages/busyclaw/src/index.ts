@@ -1019,9 +1019,9 @@ export function createClaw<
 	// redact/rehydrate handles (slice 6, pluginRedactionHandles above); their audit sink is the
 	// SAME config.audit the runtime and the product api use.
 	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
-	// Assigned at the very end of assembly and read only through the `claw()` thunk above, which is
-	// what lets a plugin hold a reference to a door built after it.
-	let assembled: unknown;
+	// Assigned once the engine exists and read only through the `engine()` thunk above — the binding
+	// that lets a plugin hold a handle built after it.
+	let assembledEngine: unknown;
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -1038,20 +1038,19 @@ export function createClaw<
 			effects: effectsStore,
 			secrets,
 			// LAZY, and it has to be: this context is built while the claw is still assembling, and
-			// the api a plugin should call is the PEP-wrapped one that does not exist until the last
-			// step. Throwing beats returning a half-built object — a plugin holding one would call
-			// ungoverned methods and never know.
-			claw: () => {
-				if (assembled === undefined) {
+			// the engine handle does not exist until after the runtime, which needs these very
+			// plugins. A plugin stores the thunk and calls it when it acts.
+			engine: () => {
+				if (assembledEngine === undefined) {
 					throw configurationError(
-						"the claw was read before it finished assembling",
+						"the engine was read before it finished assembling",
 						{
 							reason:
-								"a plugin called context.claw() during configure; store the thunk and call it when the door is actually needed",
+								"a plugin called context.engine() during configure; store the thunk and call it when it actually creates or reads a run",
 						},
 					);
 				}
-				return assembled;
+				return assembledEngine;
 			},
 		},
 		bind: (plugin) => ({
@@ -1123,6 +1122,19 @@ export function createClaw<
 		runtime,
 		runStream !== undefined ? { runStream } : {},
 	);
+	// The binding the configure context's `engine()` thunk reads. Set the moment the handle exists,
+	// which is as early as the construction order allows.
+	//
+	// HANDLE PLUS READ MODEL, merged. `runs` lives on the INSTANCE and the verbs live on the HANDLE,
+	// and a plugin orchestrating runs needs both — it starts one and then asks what became of it.
+	// Handing over only the handle made `engine.runs?.get()` silently undefined, which is the shape of
+	// failure this codebase keeps paying for: an optional chain over an absent thing, no throw, a
+	// status that reads "unknown" forever. `plugins` and `$HasCron` stay out; they are the assembly's
+	// business, not a plugin's.
+	assembledEngine =
+		engine === undefined
+			? undefined
+			: { ...engine.engine, ...(engine.runs ? { runs: engine.runs } : {}) };
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const plugins: BusyclawPlugin<BusyclawCronFlag>[] = [
 		...configuredPlugins,
@@ -1215,7 +1227,7 @@ export function createClaw<
 	// materialization inside every createClaw — including every test that assembles one — for a
 	// value only the migration CLI ever reads. Memoized, so the CLI still pays it once.
 	let tables: SchemaDeclaration | undefined;
-	const claw = {
+	return {
 		$context: context,
 		get $tables(): SchemaDeclaration {
 			tables ??= getBusyclawTables({
@@ -1228,10 +1240,6 @@ export function createClaw<
 		},
 		api,
 	};
-	// The binding the configure context's `claw()` thunk reads. Set LAST, on purpose: everything a
-	// plugin could reach through it — the PEP-wrapped api included — exists by now.
-	assembled = claw;
-	return claw;
 }
 
 export type {

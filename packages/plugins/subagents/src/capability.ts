@@ -29,22 +29,25 @@ import {
 import { childRunId, PARENT_ALIAS } from "./schema";
 import type { SubagentStore } from "./store";
 
-/** The claw surface a spawn needs — structural, so this package never imports the assembly. */
-export type SpawnClawLike = {
-	api: {
-		startRun: (
-			input: {
-				prompt: string;
-				ctx?: JsonObject;
-				parentRunId?: string;
-				run?: { id?: string };
-			},
-			caller?: { principal?: Principal },
-		) => Promise<{ runId: string }>;
-		getRun: (
-			input: { id: string },
-			caller?: { principal?: Principal },
-		) => Promise<{ status: string; principal?: string } | null>;
+/**
+ * The engine surface a spawn needs — structural, so this package never imports an engine package.
+ *
+ * `startRun` and a run reader is the whole dependency. Any engine implementing the contract
+ * satisfies it, which is the point: nothing here knows it is talking to `engine-sql`.
+ */
+export type SpawnEngine = {
+	startRun: (input: {
+		prompt: string;
+		ctx?: JsonObject;
+		clawId?: string;
+		run?: { id?: string; principal?: Principal };
+	}) => Promise<{ id: string }>;
+	runs?: {
+		get: (id: string) => Promise<{
+			status: string;
+			principal?: string;
+			clawId?: string;
+		} | null>;
 	};
 };
 
@@ -80,12 +83,12 @@ export type SpawnLimits = {
  */
 export function createAgentCapability(input: {
 	ctx: CapabilityContext;
-	claw: SpawnClawLike;
+	engine: SpawnEngine;
 	store: SubagentStore;
 	limits: SpawnLimits;
 	now: () => string;
 }): AgentCapability {
-	const { ctx, claw, store, limits } = input;
+	const { ctx, engine, store, limits } = input;
 	const requireRun = (): { runId: string; principal: Principal } => {
 		// An ad-hoc `generate` has no run id and therefore no durable identity for a child to point at.
 		// Refused rather than invented: a child whose parent cannot be named is unreachable by every
@@ -202,27 +205,30 @@ export function createAgentCapability(input: {
 
 			// PINNED, so this is idempotent: a retry that already wrote the edge re-runs exactly this and
 			// the run row's unique id turns the second attempt away.
+			// THE CLAW FOLLOWS THE TREE (D7), read off the parent run rather than passed in. Without
+			// it the child reaches policy with the `clawId` fact ABSENT, and an absent attribute
+			// base-errors — the policy is SKIPPED, so an unguarded `forbid` fails OPEN on exactly the
+			// runs nobody is watching.
+			const parent = await engine.runs?.get(parentRunId);
 			try {
-				await claw.api.startRun(
-					{
-						prompt: childPrompt,
-						// THE CLAW FOLLOWS THE TREE (D7). The door copies it off this parent — verified
-						// server-side — so the child reaches policy with the `clawId` fact PRESENT.
-						// Absent, an unguarded `forbid` written against it base-errors and is SKIPPED,
-						// which fails open on exactly the runs nobody is watching.
-						parentRunId,
-						// Lineage for gates, as `ctx` — convenience, not the record. The tables are the
-						// truth; nothing added to the run row, because `createRun` enumerates its fields
-						// and silently drops the rest.
-						ctx: { agentParentRunId: parentRunId, agentAlias: alias },
-						run: { id },
-					},
-					// The parent's authority, COPIED. Never a parameter.
-					{ principal },
-				);
+				await engine.startRun({
+					prompt: childPrompt,
+					// Lineage for gates, as `ctx` — convenience, not the record. The tables are the
+					// truth; nothing added to the run row, because `createRun` enumerates its fields
+					// and silently drops the rest.
+					ctx: { agentParentRunId: parentRunId, agentAlias: alias },
+					...(parent?.clawId !== undefined ? { clawId: parent.clawId } : {}),
+					// PINNED, so this is idempotent: a retry that already wrote the edge re-runs
+					// exactly this and the run row's unique id turns the second attempt away.
+					//
+					// The principal is the parent's authority, COPIED. Never a parameter — the
+					// capability has no way to be told one, which is what makes this not an escalation
+					// primitive even though the engine would accept any principal it was handed.
+					run: { id, principal },
+				});
 			} catch (error) {
-				// The run already exists — this spawn's own retry, verified above by the edge check that
-				// let us get here. Starting it twice is what the pinned id makes impossible.
+				// The run already exists — this spawn's own retry, verified above by the edge check
+				// that let us get here. Starting it twice is what the pinned id makes impossible.
 				if (!isConflict(error)) throw error;
 			}
 			return { childRunId: id };
@@ -233,7 +239,7 @@ export function createAgentCapability(input: {
 			const edges = await store.children(parentRunId);
 			const out: AgentChildStatus[] = [];
 			for (const edge of edges) {
-				const run = await claw.api.getRun({ id: edge.id });
+				const run = await engine.runs?.get(edge.id);
 				out.push({
 					alias: edge.alias,
 					childRunId: edge.id,

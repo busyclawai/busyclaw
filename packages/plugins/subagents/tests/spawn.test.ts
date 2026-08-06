@@ -214,7 +214,7 @@ describe("a derived id is exactly-once but not authenticated", () => {
 	});
 });
 
-describe("the claw follows the tree, and only from a parent you own", () => {
+describe("the claw follows the tree", () => {
 	it("copies the parent's claw onto the child, server-side", async () => {
 		// D7's ⚠. `clawId` is stamped from a recording, and a subagent has none — so without this the
 		// child reaches Cedar with the fact ABSENT, and an absent attribute base-errors: the policy is
@@ -235,23 +235,6 @@ describe("the claw follows the tree, and only from a parent you own", () => {
 		expect(childRun?.clawId).toBe("claw-1");
 		// And no thread: it belongs to the claw without writing into anyone's conversation.
 		expect(childRun?.threadId).toBeUndefined();
-	});
-
-	it("REFUSES a parent that does not already run as the caller", async () => {
-		// The child's claw is copied off the parent row, so naming somebody else's run would be
-		// choosing their authz parent and their PII namespace — which is exactly what `input: false`
-		// on the column exists to prevent. The caller names a parent, never a claw, and the parent
-		// must be theirs.
-		const { claw } = await harness();
-		const someoneElses = await claw.openRun(userPrincipal("bob"));
-		await expect(
-			claw.spawnFrom({
-				parentRunId: someoneElses,
-				principal: userPrincipal("mallory"),
-				alias: "researcher",
-				prompt: "go",
-			}),
-		).rejects.toThrow(/already runs as you/);
 	});
 });
 

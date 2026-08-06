@@ -102,6 +102,10 @@ describe("claw.api.agents.spawn", () => {
 	it("refuses a parent the caller does not manage", async () => {
 		// You may graft a child onto a run you already manage and onto no other — which is what stops
 		// a caller pointing a spawn at somebody else's run to have a child created inside their claw.
+		//
+		// THE ONLY PLACE THIS IS DECIDED. An earlier version also checked, inside `startRun`, that the
+		// parent ran as the caller — stricter, and wrong: `manage` is grantable, so that check refused
+		// a caller who had been given exactly the authority this door asks for. One rule, at the door.
 		const { claw } = await harness();
 		const alicesRun = await claw.openRun(userPrincipal("alice"));
 

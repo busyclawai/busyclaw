@@ -11,7 +11,7 @@ import { buildAgentsApi } from "./api";
 import {
 	type AgentCapability,
 	createAgentCapability,
-	type SpawnClawLike,
+	type SpawnEngine,
 } from "./capability";
 import { subagentModels } from "./schema";
 import { createSubagentStore, type SubagentStore } from "./store";
@@ -69,7 +69,7 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 	};
 	// Filled by `configure`, read at CALL time. This is the binding the static-registration rule
 	// exists for: the capability needs the assembled claw, which is being built around this plugin.
-	let wired: { claw: () => SpawnClawLike; store: SubagentStore } | undefined;
+	let wired: { engine: () => SpawnEngine; store: SubagentStore } | undefined;
 	const now = () => new Date().toISOString();
 
 	const requireWired = () => {
@@ -85,7 +85,7 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 	const capability = (ctx: CapabilityContext): AgentCapability =>
 		createAgentCapability({
 			ctx,
-			claw: requireWired().claw(),
+			engine: requireWired().engine(),
 			store: requireWired().store,
 			limits,
 			now,
@@ -132,7 +132,7 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 		api: () =>
 			({
 				agents: buildAgentsApi({
-					claw: () => requireWired().claw(),
+					engine: () => requireWired().engine(),
 					store: () => requireWired().store,
 					limits,
 					now,
@@ -145,17 +145,18 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 					reason: "a child's edge is a row; there is nowhere to write one",
 				});
 			}
-			const resolveClaw = context.claw;
-			if (resolveClaw === undefined) {
-				throw configurationError("subagents() needs the assembled claw", {
+			const resolveEngine = context.engine;
+			if (resolveEngine === undefined) {
+				throw configurationError("subagents() requires an engine", {
 					reason:
-						"a child is started through the governed api, not the engine — an engine start accepts a principal freely and runs no product-api decision",
+						"a child is a durable run; a claw with no engine has nowhere to put one",
 				});
 			}
-			// THE THUNK IS STORED, NOT CALLED. Calling it here would read a claw that does not exist
-			// yet; the capability calls it per tool call, long after assembly finished.
+			// THE THUNK IS STORED, NOT CALLED. The handle does not exist yet — the runtime is built
+			// from these plugins and the engine from that runtime — so this resolves at spawn time,
+			// long after assembly finished.
 			wired = {
-				claw: () => resolveClaw() as SpawnClawLike,
+				engine: () => resolveEngine() as SpawnEngine,
 				store: createSubagentStore(adapter),
 			};
 			return undefined;

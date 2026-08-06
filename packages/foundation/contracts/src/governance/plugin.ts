@@ -303,21 +303,36 @@ export type BusyclawPluginConfigureContext = {
 	 *  tables builds its store from this at configure time; absent when createClaw got no database. */
 	readonly adapter?: Adapter;
 	/**
-	 * The assembled claw, resolved LAZILY — the governed api, not the engine.
+	 * The durable engine — the substrate for a plugin that ORCHESTRATES RUNS.
 	 *
-	 * A thunk because of construction order: `configure` runs while the claw is still being built, and
-	 * the api this returns is the PEP-wrapped one that does not exist until the very end of assembly.
-	 * A plugin stores the thunk and calls it when it actually needs the door, by which time the binding
-	 * is set.
+	 * Subagents is the first, not the shape of the seam: a workflows plugin, a scheduler, a batch
+	 * runner all need the same four things — start a run, read its state, advance it, stop it — and
+	 * all of them would otherwise reimplement scheduling over the adapter, which is how two writers
+	 * to one queue get built by accident.
 	 *
-	 * WHY NOT `engine`. The engine's `startRun` accepts a principal freely and runs no product-api
-	 * decision, so a plugin reaching for it would turn any capability built on it into a
-	 * privilege-escalation primitive. Going through the governed api means a plugin's own writes are
-	 * decided by the same PEP a host's are.
+	 * A THUNK, because the construction order forbids anything else: `createClaw` configures plugins,
+	 * builds the runtime from what they contributed, and only then calls
+	 * `engineFactory.create(runtime)`. The runtime needs the plugins and the engine needs the runtime,
+	 * so there is no point at which a handle could be handed over eagerly — and a plugin cannot be
+	 * given one in its own config either, since the host holds a FACTORY at that moment, not a
+	 * handle. Calling `create()` a second time would build a second engine over one store: a second
+	 * worker id, a second lease set, two schedulers on one queue.
 	 *
-	 * Throws when called before assembly finishes, rather than handing back a half-built object.
+	 * WHY THE ENGINE AND NOT THE API, since `engine.startRun` takes the principal as data and runs no
+	 * product-api decision. That objection is about an UNGATED caller. A plugin's own entry points are
+	 * already decided before its handler runs: a stamped tool has been through the governance floor,
+	 * and a plugin api method through the PEP via its route. Sending such a caller back through the
+	 * front door adds a second decision on a call already past the gate, and makes the api grow inputs
+	 * that exist for no other reason.
+	 *
+	 * SO THE RULE IS ABOUT THE ENTRY POINT, not the plugin. Reach for this from a path the floor or
+	 * the PEP has already decided. From anything else — a route handler with no authz declaration, a
+	 * cron task acting for nobody — expose a governed method and let the PEP decide, exactly as a host
+	 * must. The engine will not check for you.
+	 *
+	 * `undefined` when the claw has no engine, which is a real state rather than a failure.
 	 */
-	readonly claw?: () => unknown;
+	readonly engine?: () => unknown;
 	/** Tokenize plugin-held data — the SAFE direction (a redacted value may travel anywhere; only
 	 *  rehydration is fenced). Without `clawId` the value redacts into this plugin's own
 	 *  ("plugin", id) container; with `clawId` into that claw's ("claw", clawId) container — the
