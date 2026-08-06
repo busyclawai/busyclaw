@@ -99,6 +99,9 @@ importers:
       '@busyclaw/core':
         specifier: workspace:*
         version: link:../../foundation/core
+      '@busyclaw/vendors':
+        specifier: workspace:*
+        version: link:../../foundation/vendors
       arktype:
         specifier: 2.2.0
         version: 2.2.0
