@@ -1754,13 +1754,20 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	/**
 	 * Refuse to resume a run that has already ended.
 	 *
-	 * A CHECK, NOT A FENCE, and the difference is worth stating rather than discovering. Between this
-	 * read and the resume that follows it there is a window a concurrent stop can land in — narrow
-	 * (one round trip, no human in it) and unbounded only in principle. The fenced door is
-	 * `proceedRun({ kind: "approval" })`, which goes through the engine and settles the run's status
-	 * in the same conditional write that admits the continuation; a host that needs the guarantee
-	 * rather than the guard should prefer it. What this closes is the case that is not a race at all:
-	 * a run cancelled minutes ago, whose approval somebody then grants.
+	 * A CHECK, NOT A FENCE, and on the engine path it is deliberately the outer of two. This read is
+	 * a round trip ahead of the resume, so a concurrent stop can land in between; what actually
+	 * settles it is `proceedRun`'s conditional write, in the same transaction that admits the
+	 * continuation. This one exists because it refuses precisely — "run is already terminal", with
+	 * the status — where the engine's refusal is a lost CAS reported as "somebody else is driving".
+	 * On the ENGINE-LESS path it is not the outer guard, it is the only one.
+	 *
+	 * A SECOND RESUME OF THE SAME APPROVAL THROWS. That is the decision, not an oversight, and it is
+	 * written here because this is where somebody would undo it. The first resume drives the run to a
+	 * terminal status, so the second meets this. Before the door went through the engine it quietly
+	 * re-ran the runtime and handed back the earlier answer — retry-safe, and the same shape that let
+	 * a CANCELLED run execute the tool call its stop existed to prevent. Retry-safety was weighed
+	 * against that and declined: a resume verb that silently re-runs is a resume verb that cannot be
+	 * fenced. A caller that wants the earlier answer reads the transcript, which has it.
 	 *
 	 * SILENT when there is no run id (an ad-hoc runtime approval with no durable run behind it) or no
 	 * run read model — there is nothing to check against, and inventing a refusal there would break
