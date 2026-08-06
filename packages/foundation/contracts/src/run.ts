@@ -156,6 +156,25 @@ export const runFields = {
 	//    literal values only.
 	controlSeq: field.number({ input: false }),
 
+	// ── THE MESSAGE-INBOX WATERMARK, split out of `controlSeq` (hazard C3).
+	//
+	//    One counter did two jobs, and one of its two writers was careless: `controlRun` computes
+	//    `controlSeq + 1` from a value read at the top of its transaction and writes it with a bare
+	//    update. A stop racing two admits therefore drove the counter BACKWARDS, and the next message
+	//    was minted at a seq the drain had already passed — `seq > afterSeq` skipped it, forever. The
+	//    message was admitted, acknowledged, stored, and never seen.
+	//
+	//    Split, the control watermark can be as sloppy as it likes: nothing about message ORDER rides
+	//    on it (C9 — the park is computed before the seq short-circuit, so a lost bump cannot swallow
+	//    a stop either). This one is CAS'd by `admitMessage` alone.
+	//
+	//    SEEDED, NOT DEFAULTED, on a run that predates the column. `?? 0` would mint seq=1 onto a row
+	//    that already exists at seq=1 (minted from `controlSeq`), and `admitMessage`'s catch treats
+	//    ANY conflict as a redelivery — so a real message would be acknowledged as already-seen and
+	//    dropped, the exact outcome C6 rules out. First use reads `max(run_message.seq)` for the run.
+	//    A READ, not a backfill: `planMigrations` emits no UPDATE and there is nothing to migrate with.
+	messageSeq: field.number({ input: false }),
+
 	// ── WHY this run is waiting, which decides what un-waits it. A YIELDED run is NOT here: it is
 	//    `queued` with a due task, so the yield/park distinction already lives in `status`.
 	waitReason: field.enum(runWaitReasonValues, { index: true, input: false }),

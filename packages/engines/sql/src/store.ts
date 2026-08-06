@@ -59,6 +59,26 @@ export type TaskStatus = typeof TaskStatus.infer;
 const JsonRecord = jsonObjectSchema;
 const OptionalString = ark("string | undefined");
 
+/**
+ * The row id for a message. Derived so the INSERT is the admission — the same construction the
+ * channels inbox uses, NUL-joined for the same reason: three opaque ids from different sources must
+ * not be able to collide by concatenation. Written as the escape rather than a literal NUL byte,
+ * because a source file carrying a raw NUL is binary to git.
+ *
+ * Lives HERE rather than beside the engine because both the admit door and the thread-inbox adoption
+ * mint one, and the adoption is a store operation — a second copy of this construction is a second
+ * chance for two ids of the same message to disagree.
+ */
+export function messageRowId(
+	toRunId: string,
+	sender: string,
+	idempotencyKey: string,
+): string {
+	return bytesToHex(
+		sha256(utf8ToBytes(`${toRunId}\u0000${sender}\u0000${idempotencyKey}`)),
+	);
+}
+
 export const RunControlIntentValue = ark("'suspend' | 'stop' | 'abort'");
 export const RunWaitReasonValue = ark("'approval' | 'suspended'");
 
@@ -85,6 +105,9 @@ export const RunRecord = ark({
 	"controlRequestedBy?": OptionalString,
 	"controlReason?": OptionalString,
 	"controlSeq?": "number | undefined",
+	// Split out of `controlSeq` so a careless control write cannot renumber a message (C3). Absent on
+	// every row written before it existed, which is what `admitMessage`'s seeding path is for.
+	"messageSeq?": "number | undefined",
 	"waitReason?": RunWaitReasonValue.or("undefined"),
 	"resumeCheckpointId?": OptionalString,
 	createdAt: "string",
@@ -297,6 +320,21 @@ export type SqlEngineStore = {
 	 *  a withheld task cannot be picked up later by a host that never saw the intent. Returns how
 	 *  many were withheld. */
 	deadLetterPendingTasks: (runId: string, reason: string) => Promise<number>;
+	/** The highest inbox seq this run's rows already hold, or 0. Seeds `run.messageSeq` on a run that
+	 *  predates that column — see the field's own doc for why zero would be wrong. */
+	maxMessageSeq: (toRunId: string) => Promise<number>;
+	/**
+	 * Take over the messages this thread's FINISHED runs never read, and report how many.
+	 *
+	 * `at_turn_end` is wake fuel for the next turn by definition, and a `next_step` message typed
+	 * while a turn was finishing has no step left to be seen at — both leave words addressed to a
+	 * conversation that the run they named will never read (hazard C6). Called at the start of a
+	 * conversational run, which is the first moment a next run exists to hand them to.
+	 */
+	adoptThreadInbox: (input: {
+		threadId: string;
+		toRunId: string;
+	}) => Promise<number>;
 	/** Take every undelivered message for a run past `afterSeq`, in the run's own order, and mark it
 	 *  delivered at `step`. Exactly one reader — the run itself, already fenced by the engine lease on
 	 *  its own task — so there is no claim and no lease on the row. */
@@ -695,6 +733,10 @@ export function createSqlEngineStore(
 					// column is not zero: `eq null` does not match `undefined`, so a CAS on `0` would
 					// match nothing and spin.
 					controlSeq: 0,
+					// Written from birth for the same reason `controlSeq` is: `eq null` cannot express
+					// "absent", so a CAS pinned on a default matches nothing and the seeding path exists
+					// only for rows created before the column did.
+					messageSeq: 0,
 					input: asJsonRecord(input.input ?? {}, "run input"),
 					principal:
 						input.principal === undefined
@@ -934,6 +976,106 @@ export function createSqlEngineStore(
 			return row;
 		},
 
+		async adoptThreadInbox({ threadId, toRunId }) {
+			// WHAT `at_turn_end` HAS ALWAYS PROMISED AND NEVER DELIVERED (hazard C6).
+			//
+			// Two ways a message ends up here. `at_turn_end` is wake fuel for the NEXT turn by
+			// definition — `drainMessages` excludes it, and nothing else ever read it, so every one
+			// written since the mode existed has sat `pending` forever. And a `next_step` message typed
+			// while a turn was finishing is admitted, acknowledged, and then missed: the control point
+			// is at the TOP of a step, so a message arriving after the last one has no step left to be
+			// seen at.
+			//
+			// Both are the same shape — words somebody sent to this conversation that the run they
+			// were addressed to will never read — and the answer is the same: the next run on the
+			// thread takes them.
+			//
+			// PULLED at run start, not pushed at terminal transition, because at terminal time the next
+			// run does not exist yet and there is nothing to re-admit onto. Pulling also means a
+			// message admitted AFTER its run finished is still picked up, which a push would have
+			// missed by minutes.
+			//
+			// ONLY FROM TERMINAL RUNS. A live sibling run's pending messages are its own — stealing
+			// them would deliver one person's words to a turn they were not sent to.
+			const priorRuns = await db.findMany({
+				model: "run",
+				where: [
+					{ field: "threadId", value: threadId },
+					{ field: "id", value: toRunId, operator: "ne", connector: "AND" },
+					{
+						field: "status",
+						value: [...NON_TERMINAL_RUN_STATUSES],
+						operator: "not_in",
+						connector: "AND",
+					},
+				],
+			});
+			if (priorRuns.length === 0) return 0;
+			const left = await db.findMany({
+				model: "run_message",
+				where: [
+					{
+						field: "toRunId",
+						value: priorRuns.map((run) => run.id),
+						operator: "in",
+					},
+					{ field: "status", value: "pending", connector: "AND" },
+				],
+				sortBy: { field: "seq", direction: "asc" },
+			});
+			let adopted = 0;
+			for (const row of left) {
+				// A NEW ROW ON THIS RUN, not a moved one: `toRunId` and `seq` are both `immutable`, and
+				// the new run numbers its own inbox. The id is re-derived the way `admitMessage` derives
+				// it, so a redelivery of the original message still loses at the database.
+				const admittedAs = await store.admitMessage({
+					id: messageRowId(toRunId, row.sender, row.id),
+					toRunId,
+					// `at_turn_end` MEANS "the next turn", and this IS the next turn — so it enters as
+					// `next_step`. Adopted unchanged it would be excluded from the drain again by the
+					// same rule that excluded it from the run it was sent to, and the message would
+					// travel from turn to turn forever without ever being read.
+					mode: row.mode === "at_turn_end" ? "next_step" : row.mode,
+					body: row.body,
+					sender: row.sender,
+					...(row.containerKind !== undefined
+						? { containerKind: row.containerKind }
+						: {}),
+					...(row.containerId !== undefined
+						? { containerId: row.containerId }
+						: {}),
+				});
+				if (!admittedAs.admitted) continue;
+				// The original is retired so a THIRD run does not adopt it again. `dead` rather than
+				// `delivered`: this run never showed it to a model, and a status that says otherwise
+				// would make `deliveredAtStep` a lie.
+				await db.update({
+					model: "run_message",
+					where: [
+						{ field: "id", value: row.id },
+						{ field: "status", value: "pending", connector: "AND" },
+					],
+					update: {
+						status: "dead",
+						lastError: `adopted by ${toRunId}`,
+						updatedAt: now(),
+					},
+				});
+				adopted++;
+			}
+			return adopted;
+		},
+
+		async maxMessageSeq(toRunId) {
+			const rows = await db.findMany({
+				model: "run_message",
+				where: [{ field: "toRunId", value: toRunId }],
+				sortBy: { field: "seq", direction: "desc" },
+				limit: 1,
+			});
+			return rows[0]?.seq ?? 0;
+		},
+
 		async drainMessages({ toRunId, afterSeq, step, runAs }) {
 			const rows = await db.findMany({
 				model: "run_message",
@@ -1017,14 +1159,20 @@ export function createSqlEngineStore(
 				// ABSENT IS NOT ZERO, and no predicate can say "absent": `eq null` compares against
 				// `undefined` and is false, so a CAS pinned on `0` matches a legacy row not at all and
 				// the retry loop spins to exhaustion. `createRun` writes 0 from birth; a row that
-				// predates the column is normalized to 0 first and re-read, which two concurrent
-				// admits can both do harmlessly because setting 0 twice is the same as setting it once.
-				const stored = run.controlSeq;
+				// predates the column is normalized first and re-read, which two concurrent admits can
+				// both do harmlessly because writing the same seed twice is the same as writing it once.
+				//
+				// SEEDED FROM THE ROWS, not from zero. This column was split out of `controlSeq`, and a
+				// run that predates the split already has `run_message` rows numbered from that counter
+				// — so seeding 0 would mint seq=1 onto an occupied slot, and the catch below treats any
+				// conflict as a redelivery. A brand-new message would be acknowledged as already-seen
+				// and silently dropped (C3).
+				const stored = run.messageSeq;
 				if (stored === undefined) {
 					await db.update({
 						model: "run",
 						where: [{ field: "id", value: input.toRunId }],
-						update: { controlSeq: 0 },
+						update: { messageSeq: await store.maxMessageSeq(input.toRunId) },
 					});
 					continue;
 				}
@@ -1034,7 +1182,7 @@ export function createSqlEngineStore(
 					model: "run",
 					where: [
 						{ field: "id", value: input.toRunId },
-						{ field: "controlSeq", value: stored, connector: "AND" },
+						{ field: "messageSeq", value: stored, connector: "AND" },
 						{
 							field: "status",
 							value: [...NON_TERMINAL_RUN_STATUSES],
@@ -1042,7 +1190,7 @@ export function createSqlEngineStore(
 							connector: "AND",
 						},
 					],
-					update: { controlSeq: seq, updatedAt: now() },
+					update: { messageSeq: seq, updatedAt: now() },
 				});
 				if (!moved) {
 					// Either the counter moved under us (retry) or the run finished (bounce). Only a

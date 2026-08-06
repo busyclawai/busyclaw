@@ -34,6 +34,7 @@ import {
 	runCheckpointFields,
 	runEventFields,
 	runFields,
+	runMessageEntity,
 	runMessageFields,
 	runStreamChunkFields,
 	specRegistrationEntity,
@@ -65,6 +66,9 @@ const CORE_UNIQUES: Record<string, readonly (readonly string[])[]> = {
 	facts_overlay: factsOverlayEntity.storage["facts_overlay"]?.uniques ?? [],
 	pii_mapping: piiMappingEntity.storage["pii_mapping"]?.uniques ?? [],
 	policy_slice: policySliceEntity.storage["policy_slice"]?.uniques ?? [],
+	// Per-run FIFO. The inbox's `seq` used to be minted under `controlSeq`, which `controlRun` also
+	// wrote carelessly — a duplicate here is a message stored, acknowledged and never drained (C3).
+	run_message: runMessageEntity.storage["run_message"]?.uniques ?? [],
 	// Natural keys that were never declared anywhere. Each is a real identity, and each was
 	// enforceable only by whichever code path happened to look first:
 	//   tool_call — a result is addressed by (run, toolCallId); a duplicate is a cross-run disclosure.

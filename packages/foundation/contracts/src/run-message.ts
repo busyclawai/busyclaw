@@ -64,7 +64,14 @@ export const runMessageFields = {
 	updatedAt: field.string({ required: true, input: false }),
 } as const;
 
-export const runMessageEntity = entity("run_message", runMessageFields);
+export const runMessageEntity = entity("run_message", runMessageFields, {
+	// PER-RUN FIFO, ENFORCED. `seq` used to be minted under `controlSeq`, a counter `controlRun` also
+	// wrote with a bare read-then-update — so a stop racing two admits drove the watermark BACKWARDS
+	// and a later message was minted at an already-delivered seq, which the drain (`seq > afterSeq`)
+	// then skipped forever (hazard C3). The counters are split now, and this is what makes a
+	// regression fail at the insert instead of becoming an undeliverable row nobody notices.
+	uniques: [["toRunId", "seq"]],
+});
 export const runMessageRecord = runMessageEntity.record;
 export type RunMessageRecord = EntityRecord<typeof runMessageFields>;
 

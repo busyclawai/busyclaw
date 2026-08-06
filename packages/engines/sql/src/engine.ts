@@ -25,7 +25,7 @@ import type { Runtime, RuntimeResult } from "@busyclaw/runtime";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { sqlEngineModels } from "./schema";
-import { addMs, type SqlEngineStore } from "./store";
+import { addMs, messageRowId, type SqlEngineStore } from "./store";
 import type {
 	SqlEngineWorkerConfig,
 	WorkerTickOptions,
@@ -74,22 +74,6 @@ function proceedTaskId(
 ): string {
 	return bytesToHex(
 		sha256(utf8ToBytes(`${runId}\u0000${taskKind}\u0000${recordId}`)),
-	);
-}
-
-/**
- * The row id for a message. Derived so the INSERT is the admission — the same construction the
- * channels inbox uses, NUL-joined for the same reason: three opaque ids from different sources must
- * not be able to collide by concatenation. Written as the escape rather than a literal NUL byte,
- * because a source file carrying a raw NUL is binary to git.
- */
-function messageRowId(
-	toRunId: string,
-	sender: string,
-	idempotencyKey: string,
-): string {
-	return bytesToHex(
-		sha256(utf8ToBytes(`${toRunId}\u0000${sender}\u0000${idempotencyKey}`)),
 	);
 }
 
@@ -190,6 +174,20 @@ function createSqlEngineHandle(input: {
 					model: startInput.model,
 					runMode: startInput.runMode,
 				});
+				// THE THREAD'S LEFTOVER MESSAGES BECOME THIS RUN'S (hazard C6), inside the same
+				// transaction that created it — so a turn either starts with the words waiting for it
+				// or does not start at all, rather than adopting them into a run that then failed to
+				// enqueue.
+				//
+				// Before the task exists, deliberately: the drain reads the inbox at its first control
+				// point, and a message adopted after the claim would be one step late for a turn that
+				// may only have one step.
+				if (startInput.recording?.threadId !== undefined) {
+					await store.adoptThreadInbox({
+						threadId: startInput.recording.threadId,
+						toRunId: run.id,
+					});
+				}
 				const task = await store.enqueueTask({
 					kind: RUNTIME_RUN_TASK,
 					payload: {

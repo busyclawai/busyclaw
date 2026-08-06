@@ -682,11 +682,23 @@ export async function driveClaim(input: {
 		},
 		poll: async (runId, seenSeq, deliveredThrough) => {
 			// ONE primary-key read per step, and that is the steady-state cost of the whole control
-			// plane. The message table is touched only when the watermark moved — which is why every
-			// control write bumps it in the same transaction.
+			// plane. The message table is touched only when one of the two watermarks on this row says
+			// there is something to see.
 			const run = await store.getRun(runId);
 			if (!run) return { seq: seenSeq };
 			const seq = run.controlSeq ?? 0;
+			// WHETHER THERE IS ANYTHING TO DRAIN, asked directly rather than inferred. The inbox has its
+			// own counter now (C3), so a control write no longer numbers messages — and this used to
+			// lean on the fact that it did: the skip below compared `controlSeq` alone, so once admits
+			// stopped bumping it, every message was stored, acknowledged, and never read.
+			//
+			// `messageSeq` is the highest seq admitted; `deliveredThrough` is the highest the transcript
+			// holds. That comparison IS the question, where the old one was a proxy for it.
+			// Floored at 0 because the two counters start from different places: `messageSeq` is 0 on a
+			// run nobody has written to, while `deliveredThrough` is -1 for "the transcript holds none".
+			// Compared raw, `0 > -1` reads as "there is a message" on every step of every quiet run and
+			// the one-read-per-step budget becomes two.
+			const undrained = (run.messageSeq ?? 0) > Math.max(deliveredThrough, 0);
 			// The LADDER collapses to what the loop can act on. `abort` is not a different park — it
 			// tears down the in-flight call as well, which the heartbeat does; here it parks like a
 			// stop rather than being silently ignored.
@@ -696,7 +708,9 @@ export async function driveClaim(input: {
 						? ("suspended" as const)
 						: ("stopped" as const)
 					: undefined;
-			if (seq === seenSeq) return { seq, ...(park ? { park } : {}) };
+			if (seq === seenSeq && !undrained) {
+				return { seq, ...(park ? { park } : {}) };
+			}
 			const drained = await store.drainMessages({
 				toRunId: runId,
 				afterSeq: deliveredThrough,
