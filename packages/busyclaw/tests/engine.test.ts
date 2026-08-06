@@ -151,6 +151,10 @@ describe("createClaw engine", () => {
 			"deliverMessage",
 			"kind",
 			"proceedRun",
+			// Retention, host-scheduled. Optional on the handle, because an engine over a backend that
+			// owns its own durability prunes differently or not at all — and the api says so loudly
+			// rather than reporting a zero that reads like "nothing to do".
+			"pruneRuns",
 			// Declared even when false — a door deciding what a departing reader means has to be able
 			// to read "nothing will resume this", and an absent property and a false one would have to
 			// be treated identically anyway.
@@ -200,6 +204,7 @@ describe("createClaw engine", () => {
 			"listThreads",
 			"listToolResults",
 			"proceedRun",
+			"pruneRuns",
 			"putPolicySlice",
 			"registerOpenApiSpec",
 			"sendMessage",

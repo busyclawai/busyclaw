@@ -85,6 +85,7 @@ import {
 	threadStreamKey,
 	toKebabCase,
 	toolCallEntity,
+	unsupportedOperationError,
 	validationError,
 } from "@busyclaw/contracts";
 import {
@@ -116,6 +117,21 @@ import { type ActionView, assembleOrgActions } from "./registry";
 /** How a read presents stored message content: `"redacted"` (default) returns it as persisted —
  *  tokens; `"original"` re-identifies for an authorized viewer (read-side only, audited). */
 export type MessageView = "redacted" | "original";
+
+/**
+ * What a prune removed, per table.
+ *
+ * Per table because the numbers answer different questions: `runs` is how many finished turns were
+ * swept — what a host schedules against — while the rest is how much exhaust each of them left. One
+ * total would hide a claw whose runs are cheap and whose events are not.
+ */
+export type ClawPruneResult = {
+	runs: number;
+	events: number;
+	tasks: number;
+	messages: number;
+	checkpoints: number;
+};
 
 /** What `claw.api.getRun` answers with: the governance record minus its `input`. */
 export type ClawRunView = Omit<EngineRunRecord, "input">;
@@ -317,6 +333,23 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		patch: UpdateClawInput;
 	}) => Promise<ClawRecordOf<Config> | null>;
 	archiveClaw: (input: { id: string }) => Promise<ClawRecordOf<Config> | null>;
+	/**
+	 * Delete the operational exhaust of this claw's FINISHED runs — retention, on the host's schedule.
+	 *
+	 * Not a job this library runs. A retention window is host policy — 30 days is wrong for a
+	 * regulated tenant and seven years is wrong for a chat toy — so the window is an argument, and the
+	 * host's own cron decides how often to call this. Bounded per call: loop until `runs` is 0.
+	 *
+	 * WHAT GOES: run events, scheduling tasks, inbox rows, checkpoints. WHAT STAYS: the run rows
+	 * themselves (`message.runId` points at them), the transcript, approvals, effects and the audit.
+	 * So this frees space without changing what any product api can answer, except `listRunEvents`,
+	 * whose whole subject is the history being pruned.
+	 */
+	pruneRuns: (input: {
+		clawId: string;
+		before: string;
+		limit?: number;
+	}) => Promise<ClawPruneResult>;
 
 	createThread: (input: CreateThreadInput) => Promise<ThreadRecord>;
 	getThread: (input: { id: string }) => Promise<ThreadRecord | null>;
@@ -725,6 +758,23 @@ const listMessagesInput = ark({
 		},
 	}),
 });
+const pruneRunsInput = ark({
+	clawId: ark("string").configure({
+		busyclaw: {
+			doc: "The claw whose finished runs are swept. REQUIRED — a deployment-wide prune is not something a request gets to ask for, the same rule forgetSubject follows (R-H01).",
+		},
+	}),
+	before: ark("string").configure({
+		busyclaw: {
+			doc: "ISO timestamp. Runs that reached a terminal status strictly before this are swept; the window is the caller's policy, not a default this library picks.",
+		},
+	}),
+	"limit?": ark("number | undefined").configure({
+		busyclaw: {
+			doc: "How many finished runs to sweep in this call (default 500). Loop until `runs` comes back 0.",
+		},
+	}),
+}).onUndeclaredKey("reject");
 const sendMessageInput = ark({
 	clawId: ark("string").configure({
 		busyclaw: {
@@ -1055,6 +1105,7 @@ export const clawApiInputSchemas = {
 	bindConversation: bindConversationInput,
 	appendMessage: appendMessageInput.and(subjectLineageInput),
 	archiveClaw: idInput,
+	pruneRuns: pruneRunsInput,
 	archiveThread: idInput,
 	controlRun: controlRunInput,
 	deliverMessage: deliverMessageInput,
@@ -1196,6 +1247,10 @@ export const clawApiRoutes = {
 	getClaw: apiRoute("getClaw", on("read", "claw", "id")),
 	updateClaw: apiRoute("updateClaw", on("manage", "claw", "id")),
 	archiveClaw: apiRoute("archiveClaw", on("manage", "claw", "id")),
+	// MANAGE, and on the CLAW rather than on each run. It is destructive and it is bulk: `use` is the
+	// level at which a guest drives a turn, and a guest must not be able to delete the history of
+	// everybody else's.
+	pruneRuns: apiRoute("pruneRuns", on("manage", "claw", "clawId")),
 	// thread — a method reaching a claw via one of its threads/messages anchors on that claw (its grants
 	// inherit down); a method acting on the thread row itself anchors on the thread.
 	createThread: apiRoute("createThread", on("use", "claw", "clawId")),
@@ -2072,6 +2127,39 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 		getClaw: ({ id }) => store().claws.get(id),
 		updateClaw: ({ id, patch }) => store().claws.update(id, patch),
 		archiveClaw: ({ id }) => store().claws.archive(id),
+
+		async pruneRuns({ clawId, before, limit }) {
+			const engine = context.engine;
+			if (engine?.pruneRuns === undefined) {
+				// LOUD, not a silent zero. "Nothing to prune" and "this engine cannot prune" are
+				// different facts, and a host scheduling this needs to learn the second one at the first
+				// call rather than from a disk graph six months later.
+				throw unsupportedOperationError(
+					"this engine cannot prune runs",
+					engine === undefined
+						? { reason: "no engine is configured" }
+						: { engine: engine.kind },
+				);
+			}
+			const swept = await engine.pruneRuns({
+				clawId,
+				before,
+				...(limit !== undefined ? { limit } : {}),
+			});
+			// The checkpoints belong to a DIFFERENT port over the same database, so the engine cannot
+			// reach them — it hands back the ids it swept and this joins the two halves. Safe because
+			// every id it names is terminal, which is the precondition `deleteForRuns` states and
+			// cannot check for itself.
+			const checkpoints =
+				(await context.runtime.checkpoints?.deleteForRuns?.(swept.runIds)) ?? 0;
+			return {
+				runs: swept.runs,
+				events: swept.events,
+				tasks: swept.tasks,
+				messages: swept.messages,
+				checkpoints,
+			};
+		},
 
 		createThread: (args) => store().threads.create(args),
 		getThread: ({ id }) => store().threads.get(id),

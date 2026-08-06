@@ -29,6 +29,7 @@ import {
 	type Principal,
 	runMessageFields,
 	stateError,
+	terminalRunStatuses,
 	validationError,
 } from "@busyclaw/contracts";
 import {
@@ -106,6 +107,9 @@ export const RunRecord = ark({
 	"controlRequestedBy?": OptionalString,
 	"controlReason?": OptionalString,
 	"controlSeq?": "number | undefined",
+	// When this run's exhaust was swept, `""` for never. A written sentinel rather than null or a
+	// boolean — see the field's own comment for why both of those are unportable.
+	"prunedAt?": OptionalString,
 	// Split out of `controlSeq` so a careless control write cannot renumber a message (C3). Absent on
 	// every row written before it existed, which is what `admitMessage`'s seeding path is for.
 	"messageSeq?": "number | undefined",
@@ -321,6 +325,24 @@ export type SqlEngineStore = {
 	 *  a withheld task cannot be picked up later by a host that never saw the intent. Returns how
 	 *  many were withheld. */
 	deadLetterPendingTasks: (runId: string, reason: string) => Promise<number>;
+	/**
+	 * Delete the operational rows of finished runs in one claw, oldest first, and report the counts.
+	 *
+	 * Retention, not correctness: nothing here has a reader once the run is terminal. The `run` row
+	 * itself STAYS — `message.runId` points at it, and `getRun` answering "cancelled, last March" is
+	 * worth more than the bytes.
+	 */
+	pruneRuns: (input: {
+		clawId: string;
+		before: string;
+		limit?: number;
+	}) => Promise<{
+		runs: number;
+		events: number;
+		tasks: number;
+		messages: number;
+		runIds: string[];
+	}>;
 	/** The highest inbox seq this run's rows already hold, or 0. Seeds `run.messageSeq` on a run that
 	 *  predates that column — see the field's own doc for why zero would be wrong. */
 	maxMessageSeq: (toRunId: string) => Promise<number>;
@@ -396,6 +418,15 @@ export type SqlEngineStore = {
  * that a new status joins exactly one half.
  */
 export const NON_TERMINAL_RUN_STATUSES = nonTerminalRunStatuses;
+
+/**
+ * How many finished runs one prune call sweeps.
+ *
+ * Bounded so a year of chat cannot be swept inside one request — the host loops until the count comes
+ * back 0. Not a config knob: the number that matters is the RETENTION WINDOW, which the caller
+ * passes, and this is only how big a bite each call takes.
+ */
+const DEFAULT_PRUNE_LIMIT = 500;
 
 /** How many times a task may be CLAIMED before it is abandoned, however it lost each claim. The
  *  backstop against a flapping host, deliberately not a config knob: it bounds crash loops, and a
@@ -737,6 +768,7 @@ export function createSqlEngineStore(
 					// column is not zero: `eq null` does not match `undefined`, so a CAS on `0` would
 					// match nothing and spin.
 					controlSeq: 0,
+					prunedAt: "",
 					// Written from birth for the same reason `controlSeq` is: `eq null` cannot express
 					// "absent", so a CAS pinned on a default matches nothing and the seeding path exists
 					// only for rows created before the column did.
@@ -1068,6 +1100,76 @@ export function createSqlEngineStore(
 				adopted++;
 			}
 			return adopted;
+		},
+
+		async pruneRuns({ clawId, before, limit }) {
+			// TERMINAL AND OLD ENOUGH, in that order of importance. `updatedAt` is when the run last
+			// moved, which for a finished run is when it finished — the engine writes it on every
+			// transition and nothing touches it afterwards.
+			const runs = await db.findMany({
+				model: "run",
+				where: [
+					{ field: "clawId", value: clawId },
+					{
+						field: "status",
+						value: [...terminalRunStatuses],
+						operator: "in",
+						connector: "AND",
+					},
+					{
+						field: "updatedAt",
+						value: before,
+						operator: "lt",
+						connector: "AND",
+					},
+					// NOT ALREADY SWEPT. The run row survives a prune, so without this the next call
+					// selects the same runs, reports the same count, and "loop until 0" never
+					// terminates — which a three-runs-two-at-a-time test caught.
+					{ field: "prunedAt", value: "", connector: "AND" },
+				],
+				// OLDEST FIRST, which is what makes a bounded call composable: a host loops until the
+				// count comes back 0, and each pass takes the next-oldest slice rather than re-scanning
+				// the same page.
+				sortBy: { field: "updatedAt", direction: "asc" },
+				limit: limit ?? DEFAULT_PRUNE_LIMIT,
+			});
+			if (runs.length === 0) {
+				return { runs: 0, events: 0, tasks: 0, messages: 0, runIds: [] };
+			}
+			const runIds = runs.map((run) => run.id);
+			// COUNTED BY READING FIRST, because `deleteMany` reports nothing. An operator scheduling
+			// this needs to know whether it is keeping up, and "it ran" is not that.
+			const countOf = async (model: string, field: string): Promise<number> => {
+				const rows = await db.findMany({
+					model: model as "run_event",
+					where: [{ field: field as "runId", value: runIds, operator: "in" }],
+				});
+				return rows.length;
+			};
+			const events = await countOf("run_event", "runId");
+			const tasks = await countOf("runtime_task", "runId");
+			const messages = await countOf("run_message", "toRunId");
+			for (const [model, field] of [
+				["run_event", "runId"],
+				["runtime_task", "runId"],
+				["run_message", "toRunId"],
+			] as const) {
+				await adapter.deleteMany?.({
+					model,
+					where: [{ field, value: runIds, operator: "in" }],
+				});
+			}
+			// MARKED AFTER the deletes, so a crash in between leaves a run whose rows are partly gone
+			// and which the next pass will finish. The reverse order would mark it done and leave the
+			// remainder unreachable.
+			for (const runId of runIds) {
+				await db.update({
+					model: "run",
+					where: [{ field: "id", value: runId }],
+					update: { prunedAt: now() },
+				});
+			}
+			return { runs: runs.length, events, tasks, messages, runIds };
 		},
 
 		async maxMessageSeq(toRunId) {

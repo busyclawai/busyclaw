@@ -15,6 +15,9 @@ import { type } from "arktype";
 export const CLAW_API_METHOD_NAMES = [
 	"appendMessage",
 	"archiveClaw",
+	// Retention, host-scheduled: sweeps the operational exhaust of finished runs. Destructive and
+	// bulk, so it authorizes at `manage` on the claw rather than at the level a guest drives a turn.
+	"pruneRuns",
 	"archiveThread",
 	"bindConversation",
 	"controlRun",

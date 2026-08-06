@@ -117,4 +117,16 @@ export type RunCheckpointStore = {
 		id: string,
 		leaseId: string,
 	) => Promise<RunCheckpointRecord | null>;
+	/**
+	 * Delete every checkpoint of these runs, and report how many went — retention, not correctness.
+	 *
+	 * Only ever called for runs that have REACHED A TERMINAL STATUS, which is what makes it safe: a
+	 * pending checkpoint is a run's only way forward, and deleting one belonging to a live run would
+	 * strand it. The caller owns that precondition because only the caller can see run status; this
+	 * port knows about checkpoints.
+	 *
+	 * OPTIONAL, like every retention hook: a store that manages its own lifetime (a TTL'd KV, a
+	 * partitioned table) has nothing to do here, and a host that never prunes never calls it.
+	 */
+	deleteForRuns?: (runIds: readonly string[]) => Promise<number>;
 };

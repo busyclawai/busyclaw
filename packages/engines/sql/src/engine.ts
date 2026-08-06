@@ -488,6 +488,20 @@ function createSqlEngineHandle(input: {
 						...(admitted.bounced ? { bounced: admitted.bounced } : {}),
 					};
 		},
+		pruneRuns: async ({ clawId, before, limit }) => {
+			const swept = await input.config.store.pruneRuns({
+				clawId,
+				before,
+				...(limit !== undefined ? { limit } : {}),
+			});
+			return {
+				runs: swept.runs,
+				events: swept.events,
+				tasks: swept.tasks,
+				messages: swept.messages,
+				runIds: swept.runIds,
+			};
+		},
 		work: (options?: WorkerTickOptions) => worker.tick(options),
 	};
 }

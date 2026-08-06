@@ -189,6 +189,22 @@ export function createRunCheckpointStore(
 			return reclaimed ? { record: reclaimed, leaseId } : null;
 		},
 
+		async deleteForRuns(runIds) {
+			// RETENTION, and the caller owns the precondition that these runs are terminal — a pending
+			// checkpoint is a live run's only way forward, and this port cannot see run status to check.
+			if (runIds.length === 0) return 0;
+			const rows = await db.findMany({
+				model: MODEL,
+				where: [{ field: "runId", value: [...runIds], operator: "in" }],
+			});
+			if (rows.length === 0) return 0;
+			await adapter.deleteMany?.({
+				model: MODEL,
+				where: [{ field: "runId", value: [...runIds], operator: "in" }],
+			});
+			return rows.length;
+		},
+
 		async complete(id, leaseId) {
 			// Pinned on the leaseId: an attempt that overran its lease and was re-claimed by another
 			// worker must not retire the row out from under the attempt that now owns it.

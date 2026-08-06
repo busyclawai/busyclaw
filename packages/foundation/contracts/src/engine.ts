@@ -213,6 +213,29 @@ export type EngineDeliverMessageResult = {
 	bounced?: string;
 };
 
+/**
+ * What a prune actually removed, per table rather than as one number.
+ *
+ * Per table because the numbers answer different questions: `runs` is how many finished turns were
+ * swept (what a host schedules against), while the rest is how much exhaust each of them left. One
+ * total would hide a claw whose runs are cheap and whose events are not.
+ */
+export type EnginePruneResult = {
+	/** Runs swept — NOT deleted. Their rows stay; their exhaust does not. */
+	runs: number;
+	events: number;
+	tasks: number;
+	messages: number;
+	/**
+	 * WHICH runs were swept, so a caller can prune the stores this engine does not own — checkpoints
+	 * live behind `RunCheckpointStore`, which is a different port over the same database.
+	 *
+	 * Bounded by `limit`, so this is a page of ids rather than an open-ended list. Returning them
+	 * beats a second "which runs would you sweep" query that could disagree with the sweep itself.
+	 */
+	runIds: readonly string[];
+};
+
 export type EngineWorkResult = unknown;
 
 export type EngineRunRecord = {
@@ -318,6 +341,31 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	deliverMessage: (
 		input: EngineDeliverMessageInput,
 	) => Promise<EngineDeliverMessageResult>;
+	/**
+	 * Delete the OPERATIONAL EXHAUST of finished runs in one claw — retention, host-scheduled.
+	 *
+	 * Not a cron job this library owns, deliberately. A retention window is host policy: 30 days is
+	 * wrong for a regulated tenant and seven years is wrong for a chat toy, and a job we scheduled
+	 * would need exactly the knob that should not exist. The host already has cron; this is the
+	 * primitive it calls.
+	 *
+	 * WHAT GOES: run events, scheduling tasks and inbox rows — everything with no reader once a run
+	 * is terminal. WHAT STAYS: the `run` row itself, because `message.runId` points at it and
+	 * `getRun` answering "cancelled, last March" is worth more than the ~200 bytes; the transcript,
+	 * which is the product record and not exhaust; and approvals and effects, which are evidence.
+	 *
+	 * BOUNDED by `limit` runs per call, so a year of chat cannot be swept inside one request. A host
+	 * loops until `runs` comes back 0.
+	 *
+	 * OPTIONAL: an engine over a backend that owns its own durability prunes differently or not at
+	 * all, and the api says so rather than pretending the call happened.
+	 */
+	pruneRuns?: (input: {
+		clawId: string;
+		/** Prune runs that reached a terminal status STRICTLY BEFORE this ISO timestamp. */
+		before: string;
+		limit?: number;
+	}) => Promise<EnginePruneResult>;
 	/** Engines with an explicit worker lifecycle expose this; managed engines may omit it. */
 	work?: () => Promise<WorkResult>;
 };

@@ -214,6 +214,26 @@ export const runFields = {
 	//    literal values only.
 	controlSeq: field.number({ input: false }),
 
+	// ── WHEN THIS RUN'S EXHAUST WAS SWEPT, or `""` for never.
+	//
+	//    `pruneRuns` deletes a finished run's operational rows and KEEPS this one, so without a mark
+	//    the next prune selects the same runs again, reports the same count, and the "loop until it
+	//    comes back 0" contract never terminates. A test that pruned three runs two at a time found
+	//    it: the second pass answered 2 where it should have answered 1.
+	//
+	//    THE SENTINEL, not null and not a boolean, because both of those are unportable here and each
+	//    was tried:
+	//      · `field.boolean()` cannot be FILTERED on SQLite at all — the driver refuses to bind a JS
+	//        boolean, and the where value does not go through the column's encoder the way a written
+	//        value does. Any `field.boolean()` column has this problem; it is not specific to this one.
+	//      · `value: null` diverges: kysely translates it to `IS NULL` and matches, while the memory
+	//        adapter compares `undefined === null` and does not. One predicate, two answers.
+	//    A written sentinel is matched identically by both, which is the same reason `controlSeq` is
+	//    written `0` at birth rather than left absent. A row that predates this column has no value
+	//    and is therefore never selected — the standing consequence of `planMigrations` emitting no
+	//    UPDATE, and stated here rather than discovered.
+	prunedAt: field.string({ input: false }),
+
 	// ── THE MESSAGE-INBOX WATERMARK, split out of `controlSeq` (hazard C3).
 	//
 	//    One counter did two jobs, and one of its two writers was careless: `controlRun` computes
