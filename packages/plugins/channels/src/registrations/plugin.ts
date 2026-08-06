@@ -29,6 +29,7 @@ import {
 	dispatchWebhook,
 	drainDeliveries,
 	drainOutbox,
+	drainReplies,
 	type ResolvedEndpoint,
 } from "../core/dispatch";
 import { endpointId } from "../core/id";
@@ -490,16 +491,28 @@ export function buildRegistrationsPlugin(
 					endpointFor,
 					...(limit !== undefined ? { limit } : {}),
 				});
+				// BETWEEN THE TWO, and in this order. A run that finished since the last pass owes an
+				// answer that has not been written anywhere yet, so this is what turns it into an outbox
+				// row — and running it before `drainOutbox` means the answer goes out on THIS pass
+				// instead of waiting for the next one. Every message parked on an approval somebody
+				// granted between passes is answered here or not at all.
+				const replies = await drainReplies({
+					claw: requireClaw(claw),
+					inbox,
+					outbox,
+					endpointFor,
+					...(limit !== undefined ? { limit } : {}),
+				});
 				const outbound = await drainOutbox({
 					outbox,
 					endpointFor,
 					...(limit !== undefined ? { limit } : {}),
 				});
-				const processed = inbound.processed + outbound.sent;
+				const processed = inbound.processed + replies.sent + outbound.sent;
 				return {
 					processed,
 					status: processed > 0 ? ("processed" as const) : ("idle" as const),
-					data: { inbound, outbound },
+					data: { inbound, replies, outbound },
 				};
 			},
 		};

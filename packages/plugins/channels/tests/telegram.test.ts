@@ -10,6 +10,7 @@ import {
 	telegram,
 	telegramWebhookSecret,
 } from "../src/telegram/index";
+import { fakeClaw } from "./fake-claw";
 
 // The app bot resolves its token ONLY through the one-door reader the plugin threads onto the endpoint.
 // This shared reader resolves the unnamed bot's TELEGRAM_BOT_TOKEN to "app-token" — what the derived
@@ -393,22 +394,7 @@ describe("telegram channel", () => {
 		const api = fakeApi();
 		const channel = telegram({ fetch: api.fetch });
 		const events: EndpointEvent[] = [];
-		const claw = {
-			api: {
-				bindConversation: async () => ({
-					binding: { id: "b" },
-					claw: { id: "claw-1" },
-					thread: { id: "thread-1" },
-					created: true,
-				}),
-				sendMessage: async () => ({
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: "pong" },
-					userMessage: { id: "m" },
-				}),
-			},
-		};
+		const claw = fakeClaw({ answer: "pong" });
 
 		const result = await dispatchWebhook({
 			claw,

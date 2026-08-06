@@ -129,6 +129,14 @@ export type MessageStore = {
 		afterSequence?: number;
 		limit?: number;
 		/**
+		 * One TURN's messages, rather than the conversation's.
+		 *
+		 * The transcript is append-only and a channel thread outlives every run on it, so "what did run
+		 * X answer" asked without this reads every message ever sent to get at the last two. It is a
+		 * filter, not a cursor: `sortBy` and `limit` still mean what they meant.
+		 */
+		runId?: string;
+		/**
 		 * Which visibilities to return. Absent means all of them — this is the full transcript door,
 		 * and a default that quietly hid rows would be the wrong kind of convenient.
 		 *

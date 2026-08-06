@@ -31,6 +31,7 @@ import {
 	openRegistrationSecret,
 	webhookSecretDigest,
 } from "../src/registrations/store";
+import { type FakeClaw, fakeClaw as sharedFakeClaw } from "./fake-claw";
 
 // Stores and the configure context take the schema-aware adapter the assembly provides in
 // production; tests wrap manually.
@@ -43,30 +44,24 @@ const db = () =>
 
 const now = () => "2026-01-01T00:00:00.000Z";
 
-function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }) {
+function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }): FakeClaw {
+	// `driven` is the TAG, and a double that omits it reads as "somebody else is driving this" — so
+	// the channel correctly says nothing and every reply assertion here silently passes for the wrong
+	// reason. The shared double gets it right by construction; this route takes `claw: unknown`, so
+	// only the runtime behaviour catches it.
+	const base = sharedFakeClaw({
+		answer: (message) => `echo:${message}`,
+		onTurn: (message) => {
+			recorded.relayed.push(message);
+		},
+	});
 	return {
+		...base,
 		api: {
-			bindConversation: async (input: unknown) => {
+			...base.api,
+			bindConversation: async (input, caller) => {
 				recorded.binds.push(input);
-				return {
-					binding: { id: "binding-1" },
-					claw: { id: "claw-1" },
-					thread: { id: "thread-1" },
-					created: true,
-				};
-			},
-			sendMessage: async (input: { message: string }) => {
-				recorded.relayed.push(input.message);
-				return {
-					// `driven` is the TAG, and a double that omits it reads as "somebody else is
-					// driving this" — so the channel correctly says nothing and every reply assertion
-					// here silently passes for the wrong reason. It is required by `ClawLike`; this
-					// route takes `claw: unknown`, so only the runtime behaviour catches it.
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: `echo:${input.message}` },
-					userMessage: { id: "message-1" },
-				};
+				return base.api.bindConversation(input, caller);
 			},
 		},
 	};
@@ -967,13 +962,20 @@ describe("a reply is durable before it is sent", () => {
 		if (!route) throw new Error("expected the registrations webhook route");
 
 		// The turn runs and the send fails. The reply is NOT lost — it was written first.
-		await expect(
-			route.handler({
-				claw: fakeClaw(recorded),
-				params: { provider: "fake" },
-				request: webhookRequest({ body: "u-1", secret: "hook-1" }),
-			}),
-		).rejects.toThrow(/telegram unreachable/);
+		//
+		// AND THE WEBHOOK STILL SUCCEEDS, which is the half that changed. An outbound failure used to
+		// propagate out of the inbound path: the request 500'd, and the delivery — which had done its
+		// whole job, relaying a message into a run — spent one of its five attempts on the outbox's
+		// problem. Two queues sharing one failure counter buries a healthy conversation because a
+		// provider's send endpoint is down. Worse, a persistent outage would fail every webhook, and
+		// providers disable a webhook that keeps failing: an outbound problem would take the inbound
+		// path down with it. The error belongs to the row that owns the retry, and it is recorded there.
+		const response = await route.handler({
+			claw: fakeClaw(recorded),
+			params: { provider: "fake" },
+			request: webhookRequest({ body: "u-1", secret: "hook-1" }),
+		});
+		expect(response).toMatchObject({ status: 200 });
 		expect(sent).toEqual([]);
 
 		const outbox = createDeliveryOutbox(adapter);

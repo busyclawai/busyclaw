@@ -6,29 +6,34 @@ import {
 	type EndpointEvent,
 	pollEndpoint,
 } from "../src/index";
+import {
+	type FakeClaw,
+	type FakeClawOptions,
+	fakeClaw as sharedFakeClaw,
+} from "./fake-claw";
 
 // A fake claw whose api records what the engine relays and always replies with an echo. Enough to
-// exercise the shared bind -> relay -> reply path without the full assembly.
-function fakeClaw(recorded: { binds: unknown[]; relayed: string[] }) {
+// exercise the shared bind -> relay -> reply path without the full assembly. The transcript-keeping
+// half lives in `fake-claw.ts` — the engine reads the answer back rather than being handed it, so a
+// double that only returns text agrees with none of the deferred paths.
+function fakeClaw(
+	recorded: { binds: unknown[]; relayed: string[] },
+	options: FakeClawOptions = {},
+): FakeClaw {
+	const base = sharedFakeClaw({
+		answer: (message) => `echo:${message}`,
+		onTurn: (message) => {
+			recorded.relayed.push(message);
+		},
+		...options,
+	});
 	return {
+		...base,
 		api: {
-			bindConversation: async (input: unknown) => {
+			...base.api,
+			bindConversation: async (input) => {
 				recorded.binds.push(input);
-				return {
-					binding: { id: "binding-1" },
-					claw: { id: "claw-1" },
-					thread: { id: "thread-1" },
-					created: true,
-				};
-			},
-			sendMessage: async (input: { message: string }) => {
-				recorded.relayed.push(input.message);
-				return {
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: `echo:${input.message}` },
-					userMessage: { id: "message-1" },
-				};
+				return base.api.bindConversation(input);
 			},
 		},
 	};
@@ -136,16 +141,7 @@ describe("dispatch engine", () => {
 		const recorded = { binds: [] as unknown[], relayed: [] as string[] };
 		const replies: string[] = [];
 		const events: EndpointEvent[] = [];
-		const claw = fakeClaw(recorded);
-		const acceptedClaw = {
-			api: {
-				...claw.api,
-				sendMessage: async (input: { message: string }) => {
-					recorded.relayed.push(input.message);
-					return { driven: false as const, runId: "run-1" };
-				},
-			},
-		};
+		const acceptedClaw = fakeClaw(recorded, { driven: false });
 
 		const result = await dispatchWebhook({
 			claw: acceptedClaw,

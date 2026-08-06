@@ -107,14 +107,18 @@ export const channelDeliveryFields = {
 	 */
 	runId: field.string({ index: true }),
 	/**
-	 * When the reply for this message was ENQUEUED — not sent. The outbox owns sending.
+	 * When this message stopped being owed an answer — enqueued, or established there will never be one.
 	 *
-	 * Stamped after the enqueue, never before, so a failure between them leaves the row claimable and
-	 * the next sweep retries. Stamped even when there is nothing to send (a run that failed, or
-	 * answered with no text), because "answered with silence" and "still owed an answer" are different
-	 * states and only one of them should keep coming back.
+	 * NOT `repliedAt`, because a run that fails, is cancelled, or answers with no text ends this row's
+	 * life without a reply, and a column called `repliedAt` stamped in those cases would be a lie in the
+	 * data. What the sweep needs to know is whether to come back, and that is one question with one
+	 * name. Silence and still-owed are different states; only one of them should keep returning.
+	 *
+	 * Stamped AFTER the enqueue, never before, so a crash between them leaves the row in the sweep and
+	 * the next pass retries. Enqueued rather than sent because the outbox owns sending — a reply that is
+	 * durable but unsent is the outbox's problem, and it already has one.
 	 */
-	repliedAt: field.string({ index: true }),
+	settledAt: field.string({ index: true }),
 	/** WHERE the work lands, resolved at ingress. Binding is a cheap, deterministic lookup-or-create, so
 	 *  it happens on the acknowledged path and the worker inherits a fully-resolved unit of work rather
 	 *  than re-deriving one from an endpoint that may since have been revoked. */
@@ -193,6 +197,27 @@ export function replyRowId(key: ReplyKey): string {
 	);
 }
 
+/**
+ * The transcript row id for a message that JOINED a run already in flight.
+ *
+ * Derived from the delivery so the append is idempotent: a relay retried after a crash loses the
+ * insert instead of writing the same sentence into the conversation twice. Domain-separated from
+ * `deliveryRowId` because the two ids live in different tables and must not be able to collide into
+ * one if either derivation is ever changed.
+ *
+ * Only the JOIN path needs one. A message that opens a run is appended by `sendMessage`, which owns
+ * its own id and its own fence.
+ */
+export function joinedMessageId(key: DeliveryKey): string {
+	return bytesToHex(
+		sha256(
+			utf8ToBytes(
+				`join\u0000${key.provider}\u0000${key.endpointKey}\u0000${key.deliveryId}`,
+			),
+		),
+	);
+}
+
 /** Which conversation's endpoint owes a reply, and for which run. */
 export type ReplyKey = {
 	provider: string;
@@ -210,6 +235,15 @@ export type DeliveryWork = {
 	payload: JsonObject;
 	clawId: string;
 	threadId: string;
+	/**
+	 * The run already carrying this message, or `""` if it has not been relayed yet.
+	 *
+	 * WHY A RE-CLAIM MUST READ THIS. Relaying twice is not merely wasted model spend — since the reply
+	 * is keyed on the run, a second relay mints a second run id, which is a second reply key, which is
+	 * a duplicate message to a human. The row remembering its run is what holds one delivery to one
+	 * run for good, and it is what makes the run-keyed reply safe.
+	 */
+	runId: string;
 	/** How many attempts have already been spent on it, this one included. */
 	attempts: number;
 };
@@ -232,7 +266,9 @@ export type DeliveryInbox = {
 	 */
 	admit: (
 		key: DeliveryKey,
-		work: Omit<DeliveryWork, "attempts">,
+		// No `runId` and no `attempts`: admission happens BEFORE anything has run, which is the whole
+		// point of it. Both are the row's to count.
+		work: Omit<DeliveryWork, "attempts" | "runId">,
 	) => Promise<boolean>;
 	/**
 	 * Has this delivery already been admitted?
@@ -302,6 +338,46 @@ export type DeliveryInbox = {
 		backoffMs: number;
 		maxAttempts: number;
 	}) => Promise<"pending" | "dead" | "lost">;
+	/**
+	 * Record WHICH RUN is carrying this message, before anything can go wrong afterwards.
+	 *
+	 * `false` ⇒ displaced, so the successor owns the row and this attempt must not write its run id
+	 * over theirs. Fenced for the same reason `complete` is, and it matters more here: the stamp is
+	 * what stops a recovery relaying the same message a second time.
+	 */
+	relayed: (
+		key: DeliveryKey,
+		leaseId: string,
+		runId: string,
+	) => Promise<boolean>;
+	/**
+	 * Every message that has been relayed and not yet answered — the reply sweep's input.
+	 *
+	 * A READ, not a claim, and deliberately unleased. Two drains reaching the same row both try to
+	 * enqueue one reply, and the outbox's insert-is-the-claim already arbitrates that: the loser is
+	 * told the reply exists and sends nothing. A lease here would add a second answer to a question the
+	 * database is already answering, and it would have to be held across a run parked on an approval a
+	 * human might grant tomorrow.
+	 */
+	owed: (input: { limit?: number }) => Promise<OwedReply[]>;
+	/**
+	 * This message is no longer owed an answer.
+	 *
+	 * Unfenced, because there is no lease on this half and nothing to lose by two drains agreeing.
+	 * Idempotent: the second stamp overwrites the first with a time a few milliseconds later, and no
+	 * reader can tell or cares.
+	 */
+	settle: (key: DeliveryKey) => Promise<void>;
+};
+
+/** A relayed message still waiting on its run — everything the reply needs, without a second read. */
+export type OwedReply = {
+	key: DeliveryKey;
+	runId: string;
+	clawId: string;
+	threadId: string;
+	/** The stored inbound message, for the conversation id and reply context the send needs. */
+	payload: JsonObject;
 };
 
 export type DeliveryKey = {
@@ -369,6 +445,13 @@ export function createDeliveryInbox(
 						payload: work.payload,
 						clawId: work.clawId,
 						threadId: work.threadId,
+						// WRITTEN AS EMPTY, not left absent. The reply sweep asks `runId ne "" AND
+						// settledAt eq ""`, and a NULL answers neither predicate the same way on every
+						// adapter — memory compares `undefined === null` as false where SQL writes `IS
+						// NULL`. A sentinel every backend agrees about is cheaper than a divergence that
+						// only shows up as a queue that silently skips rows on one of them.
+						runId: "",
+						settledAt: "",
 						attempts: 0,
 						createdAt: stamp,
 						updatedAt: stamp,
@@ -507,6 +590,62 @@ export function createDeliveryInbox(
 			if (landed === null) return "lost";
 			return buried ? "dead" : "pending";
 		},
+
+		async relayed(key, leaseId, runId) {
+			const stamped = await db.update({
+				model: "channel_delivery",
+				where: [
+					{ field: "id", value: deliveryRowId(key) },
+					{ field: "leaseId", value: leaseId, connector: "AND" },
+				],
+				update: { runId, updatedAt: now() },
+			});
+			return stamped !== null;
+		},
+
+		async owed({ limit }) {
+			const rows = await db.findMany({
+				model: "channel_delivery",
+				where: [
+					// Relayed (there is a run to ask about) and unanswered. Status is deliberately NOT in
+					// this predicate: the delivery's own lifecycle ended when the message reached a run,
+					// and a reply owed by a run parked on an approval must not be gated on a queue state
+					// that says the queue is finished with it — because it is.
+					{ field: "runId", operator: "ne", value: "" },
+					{ field: "settledAt", value: "", connector: "AND" },
+				],
+				sortBy: { field: "createdAt", direction: "asc" },
+				...(limit !== undefined ? { limit } : {}),
+			});
+			const out: OwedReply[] = [];
+			for (const row of rows) {
+				// A row missing what the reply needs cannot be replied to, now or ever. Skipped rather
+				// than settled: settling would erase the evidence that somebody is still owed an answer,
+				// and this shape only occurs on rows written before these columns existed.
+				if (row.payload == null || row.clawId == null || row.threadId == null)
+					continue;
+				out.push({
+					key: {
+						provider: row.provider,
+						endpointKey: row.endpointKey,
+						deliveryId: row.deliveryId,
+					},
+					runId: row.runId ?? "",
+					clawId: row.clawId,
+					threadId: row.threadId,
+					payload: row.payload,
+				});
+			}
+			return out;
+		},
+
+		async settle(key) {
+			await db.update({
+				model: "channel_delivery",
+				where: [{ field: "id", value: deliveryRowId(key) }],
+				update: { settledAt: now(), updatedAt: now() },
+			});
+		},
 	};
 
 	/**
@@ -526,6 +665,7 @@ export function createDeliveryInbox(
 			payload?: JsonObject | null;
 			clawId?: string | null;
 			threadId?: string | null;
+			runId?: string | null;
 			attempts: number;
 		},
 		leaseMs: number,
@@ -572,6 +712,9 @@ export function createDeliveryInbox(
 				payload: row.payload,
 				clawId: row.clawId,
 				threadId: row.threadId,
+				// Absent on a row admitted before this column existed, which reads the same as "not
+				// relayed yet" and is exactly right for it: that row never was.
+				runId: row.runId ?? "",
 				attempts: row.attempts,
 			},
 		};

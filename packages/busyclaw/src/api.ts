@@ -368,6 +368,8 @@ export type ClawApi<Config extends RuntimeConfig = RuntimeConfig> = {
 		threadId: string;
 		afterSequence?: number;
 		limit?: number;
+		/** Narrow to one TURN — what did this run say. A filter, not a cursor. */
+		runId?: string;
 		/** Omit for the whole transcript; `["user"]` for what a chat UI should render. Run notices are
 		 *  written `internal`, so this is how a client stops seeing them. */
 		visibility?: readonly MessageVisibility[];
@@ -749,6 +751,11 @@ const listMessagesInput = ark({
 		},
 	}),
 	"limit?": "number | undefined",
+	"runId?": ark("string | undefined").configure({
+		busyclaw: {
+			doc: "Narrow to ONE TURN's messages. A thread outlives every run on it, so asking what a given run answered without this reads the whole transcript to reach the last two rows.",
+		},
+	}),
 	threadId: ark("string").configure({
 		busyclaw: {
 			doc: "The thread to list; also resolves the claw scope when `view: 'original'` re-identifies the returned rows.",

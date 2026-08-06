@@ -48,6 +48,7 @@ export {
 	// already runs on a schedule", which no deployment could.
 	drainDeliveries,
 	drainOutbox,
+	drainReplies,
 	type EndpointResolver,
 	handleInbound,
 	pollEndpoint,

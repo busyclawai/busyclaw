@@ -25,7 +25,8 @@ import {
 	deliveryRowId,
 	type OutboundRecord,
 } from "../src/core/inbox";
-import type { Channel, EndpointContext } from "../src/index";
+import type { Channel, ClawLike, EndpointContext } from "../src/index";
+import { fakeClaw } from "./fake-claw";
 
 const db = (): Adapter =>
 	entityAdapter(memoryAdapter(), {
@@ -114,22 +115,13 @@ describe("a delivery that already owes a reply is left to the drain", () => {
 		mode: "webhook",
 	};
 
-	const claw = (relayed: string[]) => ({
-		api: {
-			bindConversation: async () => ({
-				claw: { id: "claw-1" },
-				thread: { id: "thread-1" },
-			}),
-			sendMessage: async (input: { message: string }) => {
-				relayed.push(input.message);
-				return {
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: "the SECOND answer" },
-				};
+	const claw = (relayed: string[]) =>
+		fakeClaw({
+			answer: "the SECOND answer",
+			onTurn: (message) => {
+				relayed.push(message);
 			},
-		},
-	});
+		});
 
 	const channel = (sent: string[]): Channel => ({
 		provider: "fake",
@@ -241,19 +233,11 @@ describe("the enqueue contract", () => {
 		};
 
 		await handleInbound({
-			claw: {
-				api: {
-					bindConversation: async () => ({
-						claw: { id: "claw-1" },
-						thread: { id: "thread-1" },
-					}),
-					sendMessage: async () => ({
-						driven: true as const,
-						runId: "run-1",
-						result: { status: "completed", text: "answer" },
-					}),
-				},
-			},
+			claw: fakeClaw({
+				answer: "answer",
+				clawId: "claw-1",
+				threadId: "thread-1",
+			}),
 			channel: {
 				provider: "fake",
 				supports: { webhook: true, poll: false },
@@ -423,7 +407,16 @@ const stubWork = {
 	payload: { externalConversationId: "chat-1", text: "hello" },
 	clawId: "claw-1",
 	threadId: "thread-1",
+	// Never relayed — so a runner claiming this row does the turn, which is what these tests are about.
+	runId: "",
 	attempts: 0,
+};
+
+/** The three methods the reply half added, as no-ops. Overridden by any test that cares. */
+const replyStubs = {
+	relayed: async () => true,
+	owed: async () => [],
+	settle: async () => undefined,
 };
 
 describe("the dispatch carries the lease it was given", () => {
@@ -448,28 +441,15 @@ describe("the dispatch carries the lease it was given", () => {
 		send: async () => {},
 	});
 
-	const claw = (onTurn?: () => Promise<void>) => ({
-		api: {
-			bindConversation: async () => ({
-				claw: { id: "claw-1" },
-				thread: { id: "thread-1" },
-			}),
-			sendMessage: async () => {
-				await onTurn?.();
-				return {
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: "answer" },
-				};
-			},
-		},
-	});
+	const claw = (onTurn?: () => Promise<void>) =>
+		fakeClaw({ answer: "answer", onTurn: () => onTurn?.() });
 
 	const request = { headers: { get: () => null }, rawBody: "u-1" };
 
 	it("presents the claim's own lease id at completion", async () => {
 		const completedWith: string[] = [];
 		const inbox: DeliveryInbox = {
+			...replyStubs,
 			claim: async () => ({ leaseId: "lease-A", work: stubWork }),
 			admit: async () => true,
 			known: async () => false,
@@ -501,6 +481,7 @@ describe("the dispatch carries the lease it was given", () => {
 	// the attempt that owns it did — so it must not report that it did.
 	it("does not report a delivery it was displaced from as processed", async () => {
 		const inbox: DeliveryInbox = {
+			...replyStubs,
 			claim: async () => ({ leaseId: "lease-A", work: stubWork }),
 			admit: async () => true,
 			known: async () => false,
@@ -530,6 +511,7 @@ describe("the dispatch carries the lease it was given", () => {
 		try {
 			const beats: string[] = [];
 			const inbox: DeliveryInbox = {
+				...replyStubs,
 				claim: async () => ({ leaseId: "lease-A", work: stubWork }),
 				admit: async () => true,
 				known: async () => false,
@@ -568,6 +550,7 @@ describe("the dispatch carries the lease it was given", () => {
 		try {
 			const beats: string[] = [];
 			const inbox: DeliveryInbox = {
+				...replyStubs,
 				claim: async () => ({ leaseId: "lease-A", work: stubWork }),
 				admit: async () => true,
 				known: async () => false,
@@ -636,17 +619,18 @@ describe("a delivery survives the process that received it", () => {
 		send: async () => {},
 	});
 
-	const clawThatFails = () => ({
-		api: {
-			bindConversation: async () => ({
-				claw: { id: "claw-1" },
-				thread: { id: "thread-1" },
-			}),
-			sendMessage: async () => {
-				throw new Error("the model is down");
+	const clawThatFails = (): ClawLike => {
+		const base = fakeClaw();
+		return {
+			...base,
+			api: {
+				...base.api,
+				sendMessage: async () => {
+					throw new Error("the model is down");
+				},
 			},
-		},
-	});
+		};
+	};
 
 	it("stores the message before the turn, so a failed turn leaves work to recover", async () => {
 		const time = clock();
@@ -689,19 +673,11 @@ describe("a delivery survives the process that received it", () => {
 		const inbox = createDeliveryInbox(adapter);
 
 		await dispatchWebhook({
-			claw: {
-				api: {
-					bindConversation: async () => ({
-						claw: { id: "claw-7" },
-						thread: { id: "thread-7" },
-					}),
-					sendMessage: async () => ({
-						driven: true as const,
-						runId: "run-1",
-						result: { status: "completed", text: "answer" },
-					}),
-				},
-			},
+			claw: fakeClaw({
+				answer: "answer",
+				clawId: "claw-7",
+				threadId: "thread-7",
+			}),
 			channel: channel(),
 			endpoint,
 			request: { headers: { get: () => null }, rawBody: "call me on 555-0100" },
@@ -962,22 +938,12 @@ describe("the drains are reachable, and divide their work", () => {
 		await admitted(inbox);
 
 		const result = await drainDeliveries({
-			claw: {
-				api: {
-					bindConversation: async () => ({
-						claw: { id: "claw-1" },
-						thread: { id: "thread-1" },
-					}),
-					sendMessage: async (input: { message: string }) => {
-						relayed.push(input.message);
-						return {
-							driven: true as const,
-							runId: "run-1",
-							result: { status: "completed", text: "recovered" },
-						};
-					},
+			claw: fakeClaw({
+				answer: "recovered",
+				onTurn: (message) => {
+					relayed.push(message);
 				},
-			},
+			}),
 			inbox,
 			outbox: createDeliveryOutbox(adapter),
 			endpointFor: resolveTo(channel),
@@ -997,19 +963,11 @@ describe("the drains are reachable, and divide their work", () => {
 		await admitted(inbox);
 
 		const result = await drainDeliveries({
-			claw: {
-				api: {
-					bindConversation: async () => ({
-						claw: { id: "claw-1" },
-						thread: { id: "thread-1" },
-					}),
-					sendMessage: async () => ({
-						driven: true as const,
-						runId: "run-1",
-						result: { status: "completed", text: "never" },
-					}),
-				},
-			},
+			claw: fakeClaw({
+				answer: "never",
+				clawId: "claw-1",
+				threadId: "thread-1",
+			}),
 			inbox,
 			endpointFor: () => undefined,
 			maxAttempts: 1,
@@ -1053,22 +1011,12 @@ describe("the drains are reachable, and divide their work", () => {
 		);
 
 		const result = await drainDeliveries({
-			claw: {
-				api: {
-					bindConversation: async () => ({
-						claw: { id: "claw-1" },
-						thread: { id: "thread-1" },
-					}),
-					sendMessage: async (input: { message: string }) => {
-						if (input.message === "poison") throw new Error("boom");
-						return {
-							driven: true as const,
-							runId: "run-1",
-							result: { status: "completed", text: "ok" },
-						};
-					},
+			claw: fakeClaw({
+				answer: "ok",
+				onTurn: (message) => {
+					if (message === "poison") throw new Error("boom");
 				},
-			},
+			}),
 			inbox,
 			endpointFor: resolveTo(channel),
 		});
@@ -1119,22 +1067,17 @@ describe("a displaced outbox sender cannot mark it delivered", () => {
 describe("each endpoint relays as its own service principal", () => {
 	const seen: { bind?: string; send?: string } = {};
 
-	const claw = {
+	const base = fakeClaw({ answer: "ok" });
+	const claw: ClawLike = {
 		api: {
-			bindConversation: async (
-				_input: unknown,
-				caller?: { principal?: string },
-			) => {
+			...base.api,
+			bindConversation: async (input, caller) => {
 				seen.bind = caller?.principal;
-				return { claw: { id: "claw-1" }, thread: { id: "thread-1" } };
+				return base.api.bindConversation(input, caller);
 			},
-			sendMessage: async (_input: unknown, caller?: { principal?: string }) => {
+			sendMessage: async (input, caller) => {
 				seen.send = caller?.principal;
-				return {
-					driven: true as const,
-					runId: "run-1",
-					result: { status: "completed", text: "ok" },
-				};
+				return base.api.sendMessage(input, caller);
 			},
 		},
 	};

@@ -5,26 +5,19 @@ import { describe, expect, it } from "vitest";
 import { channelDeliveryModels, channelOutboxModels } from "../src/core/inbox";
 import { type Channel, channels, channelsModels } from "../src/index";
 import { telegram, telegramWebhookSecret } from "../src/telegram/index";
+import { type FakeClaw, fakeClaw as sharedFakeClaw } from "./fake-claw";
 
 // A fake claw that records binds and completes without reply text (so no Bot API egress happens).
-function fakeClaw(binds: unknown[]) {
+function fakeClaw(binds: unknown[]): FakeClaw {
+	const base = sharedFakeClaw({ answer: null });
 	return {
+		...base,
 		api: {
-			bindConversation: async (input: unknown) => {
+			...base.api,
+			bindConversation: async (input, caller) => {
 				binds.push(input);
-				return {
-					binding: { id: "b" },
-					claw: { id: "claw-1" },
-					thread: { id: "thread-1" },
-					created: true,
-				};
+				return base.api.bindConversation(input, caller);
 			},
-			sendMessage: async () => ({
-				driven: true as const,
-				runId: "run-1",
-				result: { status: "completed" },
-				userMessage: { id: "m" },
-			}),
 		},
 	};
 }
