@@ -153,21 +153,33 @@ describe("createClaw deadline slicing", () => {
 			"run.completed",
 		]);
 
-		// Both parked checkpoints were consumed exactly once by their continuations.
+		// EACH CHECKPOINT WAS CONSUMED, AND ONLY THE LAST ONE SURVIVES (hazard P3(a)).
+		//
+		// This used to assert both rows were still there, `consumed`, which was true and was the
+		// problem: every departure minted a permanent full-transcript checkpoint and nothing collected
+		// any of them. `complete` now drops what the run has moved past, so a three-slice run leaves
+		// one row rather than three copies of a growing conversation.
 		const checkpoints = createRunCheckpointStore(db);
 		const yieldedEvents = events.filter(
 			(event) => event.type === "run.yielded",
 		);
 		expect(yieldedEvents).toHaveLength(2);
-		for (const event of yieldedEvents) {
-			const checkpointId = event.payload.checkpointId;
-			if (typeof checkpointId !== "string")
+		const checkpointIds = yieldedEvents.map((event) => {
+			const id = event.payload.checkpointId;
+			if (typeof id !== "string")
 				throw new Error("expected checkpointId in run.yielded payload");
-			await expect(checkpoints.get(checkpointId)).resolves.toMatchObject({
-				status: "consumed",
-				runId: run.id,
-			});
-		}
+			return id;
+		});
+		// The first is gone — superseded by the second, which the slice that consumed it had already
+		// written before it retired its own.
+		expect(await checkpoints.get(checkpointIds[0] as string)).toBeNull();
+		expect(await checkpoints.get(checkpointIds[1] as string)).toMatchObject({
+			status: "consumed",
+			runId: run.id,
+		});
+		expect(
+			await db.findMany({ model: "run_checkpoint", where: [] }),
+		).toHaveLength(1);
 	});
 
 	it("runs to completion in one invocation when the deadline is never hit", async () => {

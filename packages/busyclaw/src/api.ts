@@ -1695,6 +1695,79 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 * of being killed mid-step by the platform. Absent when the engine has no deadline (a daemon
 	 * host), in which case nothing yields and nothing needs to.
 	 */
+	/** A run nobody may advance any further. Mirrors the engine's own list rather than importing it:
+	 *  `runStatusValues` is the vocabulary, and these three are the members that mean "over". */
+	const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+		"completed",
+		"failed",
+		"cancelled",
+	]);
+
+	/**
+	 * Refuse to resume a run that has already ended.
+	 *
+	 * SILENT when there is no run id (an ad-hoc runtime approval with no durable run behind it) or no
+	 * run read model — there is nothing to check against, and inventing a refusal there would break
+	 * the engine-less path this door also serves.
+	 */
+	const assertRunContinuable = async (
+		runId: string | undefined,
+	): Promise<void> => {
+		if (runId === undefined || context.runs === undefined) return;
+		const run = await context.runs.get(runId);
+		if (run && TERMINAL_RUN_STATUSES.has(run.status)) {
+			throw stateError("run is already terminal", {
+				runId,
+				status: run.status,
+			});
+		}
+	};
+
+	/**
+	 * Stop what a revoked principal still has running in the claw they just lost.
+	 *
+	 * BEST EFFORT, and each run independently: the grant is already gone by the time this runs, so a
+	 * failure here must not roll the revocation back or throw at a caller whose access change did
+	 * take effect. One run that cannot be stopped must not spare the others either.
+	 *
+	 * SILENT when the engine cannot enumerate runs — an engine with no `listActiveForClaw` has no way
+	 * to answer "which runs did this principal start here", and the honest consequence is that
+	 * revocation on that backend removes the grant only. Stated in the port's own doc rather than
+	 * warned about per call, which would fire on every unshare of a non-claw resource.
+	 */
+	const stopRunsOf = async (input: {
+		resourceKind: string;
+		resourceId: string;
+		principalRef: string;
+		requestedBy?: Principal;
+	}): Promise<void> => {
+		if (input.resourceKind !== "claw") return;
+		const engine = context.engine;
+		const list = context.runs?.listActiveForClaw;
+		if (engine === undefined || list === undefined) return;
+		const runs = await list({
+			clawId: input.resourceId,
+			principal: input.principalRef,
+		});
+		await Promise.all(
+			runs.map(async (run) => {
+				try {
+					await engine.controlRun({
+						runId: run.id,
+						intent: "stop",
+						...(input.requestedBy !== undefined
+							? { requestedBy: input.requestedBy }
+							: {}),
+						reason: "access revoked",
+					});
+				} catch {
+					// The revocation stands regardless; a run that refused the latch is one the reaper
+					// or its own terminal transition will settle.
+				}
+			}),
+		);
+	};
+
 	const driveDeadline = (): string | undefined => {
 		const ms = context.engine?.softDeadlineMs;
 		return ms === undefined
@@ -2359,6 +2432,15 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			const recording = approval
 				? recordingFromRuntimeApprovalMetadata(approval.metadata)
 				: undefined;
+			// A CANCELLED RUN STAYS CANCELLED, and this door is where that was not true.
+			//
+			// The engine's `proceedRun` refuses a terminal run — it is the whole reason `EngineProceed`
+			// verifies the record's own run id. This path goes straight to `runtime.continueRun`, which
+			// knows about approvals and nothing about runs, so a granted approval resumed a stopped run
+			// and executed the very tool call the stop existed to prevent. G6 makes that reachable
+			// deliberately: revoking a member cancels their parked runs, and every one of those runs is
+			// parked ON an approval somebody can still grant.
+			await assertRunContinuable(recording?.runId);
 			// A human just granted the approval → interactive (a caller may override explicitly). The
 			// caller AUTHORIZES this resume (the PEP decides the call) but does NOT choose the executing
 			// identity: the approved action runs under the authority the IMMUTABLE approval record fixes
@@ -2637,12 +2719,35 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 				permission,
 				grantedBy: caller?.principal ?? SYSTEM_ANONYMOUS,
 			}),
-		unshareResource: ({ resourceKind, resourceId, principalRef }) =>
-			requireGrantStore(context.grantStore).delete({
+		// REVOCATION REACHES THE RUNS IT AUTHORIZED (hazard G6).
+		//
+		// Deleting the grant used to be the whole operation, and authority is resolved ONCE per slice
+		// from `run.principal` — so a member removed from a claw kept executing tool calls in it until
+		// their in-flight run finished on its own. Revoking access while the access is still being
+		// used is precisely the moment it matters.
+		//
+		// No new primitive: the same latch `controlRun` already writes. A queued run's task is
+		// dead-lettered, a run in flight stops at its next control point, and a run that has already
+		// finished answers `accepted: false` and costs one read.
+		unshareResource: async (
+			{ resourceKind, resourceId, principalRef },
+			caller?: ClawApiCaller,
+		) => {
+			const deleted = await requireGrantStore(context.grantStore).delete({
 				resourceKind,
 				resourceId,
 				principalRef,
-			}),
+			});
+			await stopRunsOf({
+				resourceKind,
+				resourceId,
+				principalRef,
+				...(caller?.principal !== undefined
+					? { requestedBy: caller.principal }
+					: {}),
+			});
+			return deleted;
+		},
 	} satisfies ClawApi;
 
 	// The claws store is typed against the base claw contract, but at runtime it persists and returns

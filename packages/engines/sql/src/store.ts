@@ -230,6 +230,18 @@ export type SqlEngineStore = {
 	transaction: <R>(fn: (tx: SqlEngineStore) => Promise<R>) => Promise<R>;
 	createRun: (input?: CreateRunInput) => Promise<RunRecord>;
 	getRun: (id: string) => Promise<RunRecord | null>;
+	/**
+	 * The runs in this claw that a given principal started and that have not finished — what
+	 * revoking that principal's access has to reach (hazard G6).
+	 *
+	 * NARROW ON PURPOSE. This is not a run browser: it answers one question, from two indexed
+	 * columns, for a caller that already holds `manage` on the claw. A general "list runs" surface is
+	 * a different decision with a paging and authorization story this does not need.
+	 */
+	listActiveForClaw: (input: {
+		clawId: string;
+		principal: string;
+	}) => Promise<RunRecord[]>;
 	updateRun: (
 		id: string,
 		patch: EntityPatch<typeof runFields>,
@@ -708,6 +720,27 @@ export function createSqlEngineStore(
 			return db.findOne({
 				model: "run",
 				where: [{ field: "id", value: id }],
+			});
+		},
+
+		async listActiveForClaw({ clawId, principal }) {
+			// The SAME list the terminal-write CAS pins on, deliberately — a status this file already
+			// treats as "still has work ahead of it" is exactly the one revocation has to reach, and
+			// two lists would drift in opposite directions. A new live status has to join
+			// `NON_TERMINAL_RUN_STATUSES` to be handled anywhere in this store; that dependency exists
+			// already and this does not add a second one.
+			return db.findMany({
+				model: "run",
+				where: [
+					{ field: "clawId", value: clawId },
+					{ field: "principal", value: principal, connector: "AND" },
+					{
+						field: "status",
+						value: [...NON_TERMINAL_RUN_STATUSES],
+						operator: "in",
+						connector: "AND",
+					},
+				],
 			});
 		},
 

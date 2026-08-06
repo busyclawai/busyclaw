@@ -120,6 +120,64 @@ function suite(
 			expect((await store.get(rec.id))?.status).toBe("consumed");
 		});
 
+		// HAZARD P3(a). Every reader departure mints a permanent full-transcript checkpoint, and
+		// nothing collected any of them — a turn suspended and resumed twenty times left twenty copies
+		// of a growing conversation, nineteen of which no code path can reach: `latestPendingForRun`
+		// takes the newest pending row, so an older one is not a fallback, it is dead weight.
+		it("retires the checkpoints the run has moved past", async () => {
+			const adapter = makeAdapter();
+			const store = createRunCheckpointStore(adapter);
+			const rows = () =>
+				adapter.findMany({ model: "run_checkpoint", where: [] });
+
+			// Twenty suspend/resume cycles, each writing its successor before retiring its own —
+			// the order the runtime actually uses (`persistYieldCheckpoint` inside the loop,
+			// `complete` after it returns).
+			let current = await store.create({
+				...base,
+				createdAt: "2026-01-01T00:00:00.000Z",
+			});
+			for (let cycle = 1; cycle <= 20; cycle++) {
+				const claim = await store.claim(current.id);
+				if (!claim) throw new Error("expected to claim");
+				const next = await store.create({
+					...base,
+					createdAt: `2026-01-01T00:00:${String(cycle).padStart(2, "0")}.000Z`,
+				});
+				await store.complete(current.id, claim.leaseId);
+				current = next;
+			}
+
+			// TWO rows, not twenty: the one just consumed, and the successor it wrote. The successor is
+			// the whole reason this deletes only what is OLDER — "delete the others" would have taken
+			// the run's only way forward.
+			expect(await rows()).toHaveLength(2);
+			const pending = await store.latestPendingForRun("run-1");
+			expect(pending?.id).toBe(current.id);
+
+			// And when the last slice completes without writing a successor, ONE remains.
+			const last = await store.claim(current.id);
+			if (!last) throw new Error("expected to claim");
+			await store.complete(current.id, last.leaseId);
+			expect(await rows()).toHaveLength(1);
+			expect(await store.latestPendingForRun("run-1")).toBeNull();
+		});
+
+		it("leaves another run's checkpoints alone", async () => {
+			// Scoped by runId, because two conversations park independently and one finishing says
+			// nothing about the other.
+			const adapter = makeAdapter();
+			const store = createRunCheckpointStore(adapter);
+			const mine = await store.create(base);
+			const theirs = await store.create({ ...base, runId: "run-2" });
+
+			const claim = await store.claim(mine.id);
+			if (!claim) throw new Error("expected to claim");
+			await store.complete(mine.id, claim.leaseId);
+
+			expect(await store.get(theirs.id)).not.toBeNull();
+		});
+
 		it("rejects malformed stored checkpoint rows", async () => {
 			const adapter = makeAdapter();
 			const store = createRunCheckpointStore(adapter);

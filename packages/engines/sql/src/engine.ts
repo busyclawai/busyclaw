@@ -553,6 +553,7 @@ export function sqlEngine<const Config extends SqlEngineConfig>(
 				runs: {
 					get: (id) => config.store.getRun(id),
 					events: (runId) => config.store.events(runId),
+					listActiveForClaw: (input) => config.store.listActiveForClaw(input),
 				},
 			};
 		},

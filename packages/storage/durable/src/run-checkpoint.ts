@@ -85,6 +85,46 @@ export function createRunCheckpointStore(
 		},
 	];
 
+	/**
+	 * Drop the checkpoints this run has moved past — hazard P3(a).
+	 *
+	 * Every reader departure used to mint a permanent full-transcript checkpoint, plus a resume task
+	 * and an event, and nothing collected any of it. A chat turn suspended and resumed twenty times
+	 * left twenty copies of a growing transcript, nineteen of which no code path can ever reach:
+	 * `latestPendingForRun` takes the NEWEST pending row, so an older one is not a fallback, it is
+	 * dead weight carrying a full conversation.
+	 *
+	 * OLDER, not "every other row", and that distinction is the whole correctness of this. A slice
+	 * that parks writes its successor BEFORE this runs — `persistYieldCheckpoint` fires inside the
+	 * loop, `complete` fires after it returns — so "delete the others" would delete the run's only
+	 * way forward. Bounded by `createdAt lte` and excluding the row just consumed, which leaves that
+	 * successor and nothing else.
+	 *
+	 * BEST EFFORT. The resume has already succeeded by the time this runs; a sweep that failed must
+	 * not turn a completed slice into a thrown one. What it costs is rows that stay, which is exactly
+	 * the situation before this existed.
+	 */
+	const deleteSuperseded = async (
+		runId: string,
+		consumedId: string,
+		createdAt: string,
+	): Promise<void> => {
+		try {
+			await db.deleteMany({
+				model: MODEL,
+				where: [
+					{ field: "runId", value: runId },
+					{ field: "createdAt", value: createdAt, operator: "lte" },
+					// `lte` rather than `lt` because two parks can share a millisecond; the id exclusion
+					// is what keeps the consumed row itself, which is the run's record of where it got to.
+					{ field: "id", value: consumedId, operator: "ne" },
+				],
+			});
+		} catch {
+			// Nothing downstream depends on the sweep having run.
+		}
+	};
+
 	return {
 		async create(input) {
 			const valid = validateNewCheckpoint(input);
@@ -152,7 +192,7 @@ export function createRunCheckpointStore(
 		async complete(id, leaseId) {
 			// Pinned on the leaseId: an attempt that overran its lease and was re-claimed by another
 			// worker must not retire the row out from under the attempt that now owns it.
-			return db.update({
+			const consumed = await db.update({
 				model: MODEL,
 				where: [
 					{ field: "id", value: id },
@@ -161,6 +201,10 @@ export function createRunCheckpointStore(
 				],
 				update: { status: "consumed", consumedAt: now(), leaseExpiresAt: null },
 			});
+			if (consumed?.runId !== undefined) {
+				await deleteSuperseded(consumed.runId, id, consumed.createdAt);
+			}
+			return consumed;
 		},
 	};
 }

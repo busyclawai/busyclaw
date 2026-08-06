@@ -197,12 +197,20 @@ describe("the run door is not a content door", () => {
 		// redacted: a reader cannot tell from this door what the run was asked.
 		expect(run && "input" in run).toBe(false);
 		expect(JSON.stringify(run)).not.toContain(SECRET);
-		// NO re-identification line, because nothing was re-identified. `listMessages({view:"original"})`
-		// writes one; this door has no content to write one about, which is the asymmetry D13 closes —
-		// the smaller door used to reach the same class of thing with neither a gate nor an audit.
-		expect(
-			audit.entries().some((entry) => entry.action === "pii.reidentification"),
-		).toBe(false);
+		// NO re-identification line, because nothing was re-identified.
+		const reidentifications = () =>
+			audit.entries().filter((entry) => entry.name === "pii.reidentification")
+				.length;
+		expect(reidentifications()).toBe(0);
+		// AND THE AUDIT IS LISTENING — asserted rather than assumed, or "no line was written" and "no
+		// audit was configured" would be the same green. `listMessages({view:"original"})` reaches the
+		// same class of content through the door that HAS a gate, and it says so.
+		await api.listMessages({ threadId: thread.id, view: "original" });
+		expect(reidentifications()).toBe(1);
+		// The run door, called again, still adds nothing — which is the asymmetry D13 closes: the
+		// smaller door used to reach the same content with neither a gate nor an audit.
+		await api.getRun({ id: sent.runId });
+		expect(reidentifications()).toBe(1);
 	});
 
 	it("listRunEvents reports what happened, not what was said", async () => {

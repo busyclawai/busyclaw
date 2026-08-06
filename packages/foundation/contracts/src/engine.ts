@@ -251,6 +251,19 @@ export type EngineRunEvent = {
 export type ClawRunReadModel = {
 	get: (id: string) => Promise<EngineRunRecord | null>;
 	events: (runId: string) => Promise<EngineRunEvent[]>;
+	/**
+	 * The unfinished runs a principal started in one claw — what revoking that principal's access has
+	 * to reach (hazard G6).
+	 *
+	 * OPTIONAL, because an engine over a backend that does not index runs this way cannot answer it,
+	 * and the honest consequence of that is stated where it bites: `unshareResource` deletes the grant
+	 * and cannot stop the runs it authorized. A required member would force every engine to grow a
+	 * query it may have no index for, and the usual result of that is a table scan nobody sees.
+	 */
+	listActiveForClaw?: (input: {
+		clawId: string;
+		principal: string;
+	}) => Promise<EngineRunRecord[]>;
 };
 
 export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
