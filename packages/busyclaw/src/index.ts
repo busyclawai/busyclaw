@@ -813,6 +813,20 @@ export function createClaw<
 	// also rides the createRuntime spread untouched, so the runtime's own sites (tool-name
 	// collisions) resolve the SAME door.
 	const warn = config.warn ?? ((message: string) => console.warn(message));
+	// LIVE WATCHING HALF-WORKS on a host-supplied engine, and half is the worst amount. The claw
+	// resolves a `runStream` and hands it to the engine it DEFAULTS; a `config.engine` arrives
+	// already constructed, so there is no injection point and the drain writes nothing. The door
+	// still does — so a first turn streams perfectly and the second half of every parked turn, which
+	// cron drives, arrives as silence.
+	//
+	// A warning rather than a throw: threading it is one argument the host may well have passed
+	// already, and refusing to boot over a buffer would be out of proportion to a feature that is
+	// advisory by design.
+	if (config.engine !== undefined && runStream !== undefined) {
+		warn(
+			"busyclaw: a host-supplied `engine` does not receive the resolved `runStream` — pass it to your engine factory too, or the cron drain's slices will not reach watchers",
+		);
+	}
 	// The one door every subsystem resolves credentials through, built once from the provider chain.
 	// Plugin-contributed providers come FIRST; `env()` is appended as the lowest-priority FALLBACK
 	// floor — always present, because installing a provider plugin must never silently REMOVE env

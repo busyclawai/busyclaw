@@ -19,15 +19,45 @@
 import { entity, field } from "./entity";
 import type { Principal } from "./governance/principal";
 
-/** What ended a run's participation in the stream. `superseded` is not terminal — it says a NEW
- *  attempt of the same run has taken over and the previous attempt's chunks should be dropped. */
+/**
+ * What ended a run's participation in the stream — or paused it.
+ *
+ * `yielded` and `parked` are BOTH pauses and they are not the same pause, which is the whole reason
+ * they are separate members. A yield left a continuation behind and comes back on its own; a park
+ * waits for somebody to say a verb. A reader shown "paused" for both cannot tell "still working" from
+ * "waiting for you" — and the transcript already tells them apart (`step` vs `park` checkpoint kinds,
+ * docs/plans/one-run.md D10), so collapsing them here made two doors onto one fact disagree.
+ *
+ * `superseded` is neither: a NEW attempt of the same run has taken over and the previous attempt's
+ * chunks should be dropped.
+ */
 export type RunStreamLifecycle =
+	| "yielded"
 	| "parked"
 	| "resumed"
 	| "superseded"
 	| "completed"
 	| "failed"
 	| "cancelled";
+
+/**
+ * The members after which this run will never produce another chunk.
+ *
+ * ONE DECLARATION, because three places branch on it — `watchRun` decides when to stop holding a
+ * connection open, the AI SDK bridge decides when to `finish` a message, and the emitter decides
+ * what to send. Each had its own inline list, and the cost of them disagreeing is not symmetric: a
+ * watcher that stops early truncates an answer, while one that never stops holds an HTTP connection
+ * open forever for a turn that finished.
+ */
+export const terminalRunStreamLifecycle = [
+	"completed",
+	"failed",
+	"cancelled",
+] as const satisfies readonly RunStreamLifecycle[];
+
+export const isTerminalRunStreamLifecycle = (
+	event: RunStreamLifecycle,
+): boolean => (terminalRunStreamLifecycle as readonly string[]).includes(event);
 
 /**
  * One entry in the log.

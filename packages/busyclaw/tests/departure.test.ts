@@ -17,11 +17,20 @@
 // The two arms are tested against ONE model and ONE departure, differing only in the cron posture, so
 // the gate itself is what the tests can see.
 
-import type { Adapter, SchemaDeclaration } from "@busyclaw/contracts";
-import { govern } from "@busyclaw/contracts";
+import type {
+	Adapter,
+	RunStreamChunk,
+	RunStreamPort,
+	SchemaDeclaration,
+} from "@busyclaw/contracts";
+import { govern, threadStreamKey } from "@busyclaw/contracts";
 import { createStoredRedactor } from "@busyclaw/core";
 import { createSqlEngineStore, sqlEngine } from "@busyclaw/engine-sql";
 import type { RuntimeModel } from "@busyclaw/runtime";
+import {
+	memorySecondaryStorage,
+	secondaryStorageStream,
+} from "@busyclaw/storage-core";
 import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import { kyselyAdapter, planMigrations } from "@busyclaw/storage-kysely";
 import { jsonSchema, tool } from "ai";
@@ -154,16 +163,22 @@ async function conversation(input: {
 	});
 	const adapter: Adapter = kyselyAdapter(kdb);
 	const store = createSqlEngineStore(adapter);
+	// ONE stream both writers share — the door's and the drain's.
+	const runStream = secondaryStorageStream(memorySecondaryStorage());
 	const claw = owned({
 		// The ONE difference between the two arms. `cronHandler` decides the engine's cron posture,
 		// which decides `resumesPendingWork`, which decides what a departure means.
 		cronHandler: input.cron ? { secret: "cron-secret" } : false,
 		database: adapter,
+		// `runStream` is threaded EXPLICITLY, because a host-supplied engine does not receive the one
+		// the claw resolves — the assembly warns about it, and without this the cron drain's slices
+		// reach no watcher while the door's do.
 		engine: sqlEngine(
 			input.cron
-				? { store, workerId: "w1" }
-				: { store, workerId: "w1", cron: false },
+				? { store, workerId: "w1", runStream }
+				: { store, workerId: "w1", cron: false, runStream },
 		),
+		runStream,
 		model: streamingToolModel(input.toolSteps),
 		plugins: [floorPermitsWrites],
 		redaction: {
@@ -205,6 +220,30 @@ async function conversation(input: {
 		title: "Chat",
 	});
 	return { agent, api, claw, store, thread };
+}
+
+/**
+ * Every chunk in a thread's log, read straight off the port.
+ *
+ * NOT through `watchThread`: that is a subscription with no end, so draining it means racing its
+ * `next()` against a timer — and the losing promise stays pending and holds the iterator, which is
+ * its own flake. What these tests assert is what was WRITTEN, and a one-shot read answers that.
+ */
+async function chunksOf(
+	claw: { $context: { runStream?: RunStreamPort } },
+	threadId: string,
+): Promise<RunStreamChunk[]> {
+	const stream = claw.$context.runStream;
+	if (!stream) throw new Error("expected a run stream");
+	const out: RunStreamChunk[] = [];
+	let cursor: string | undefined;
+	for (let i = 0; i < 20; i++) {
+		const page = await stream.read(threadStreamKey(threadId), cursor);
+		out.push(...page.chunks);
+		if (page.chunks.length === 0) break;
+		cursor = page.cursor;
+	}
+	return out;
 }
 
 /** Send, read exactly one delta, and walk away — the tab closing, in one line. */
@@ -265,6 +304,15 @@ describe("a departing reader, with somewhere for the run to go", () => {
 		expect(answers).toHaveLength(1);
 		expect(JSON.stringify(answers[0]?.content)).toContain("step2");
 		expect(toolCalls).toBe(1);
+
+		// BOTH WRITERS, in order. The door announced its own slice ending (`yielded`), the DRAIN
+		// announced the one it drove (`completed`) — two independent mappings of the same fact, which
+		// is exactly why they are asserted together.
+		expect(
+			(await chunksOf(claw, thread.id))
+				.filter((chunk) => chunk.kind === "lifecycle")
+				.map((chunk) => chunk.event),
+		).toEqual(["yielded", "completed"]);
 	});
 
 	it("still completes when the departure lands on the FINAL step", async () => {
@@ -323,6 +371,52 @@ describe("a departing reader, with nowhere for the run to go", () => {
 		).filter((message) => message.role === "assistant");
 		expect(answers).toHaveLength(1);
 		expect(JSON.stringify(answers[0]?.content)).toContain("step2");
+	});
+});
+
+describe("a WATCHER can tell a stopped run from a working one", () => {
+	// The transcript learned this distinction in slice 7 (`step` vs `park` checkpoint kinds, and the
+	// notice's own `run.state`). The STREAM collapsed all three of yield, park and approval-wait into
+	// one `parked` event and never set the `reason` its own contract declared — so the two doors onto
+	// one fact disagreed, and a reader was told "paused" for a turn that was about to resume itself.
+	it("says YIELDED for a slice that comes back on its own", async () => {
+		const { agent, api, claw, thread } = await conversation({
+			cron: true,
+			toolSteps: 1,
+		});
+		const stream = await leaveAfterOneDelta(api, agent.id, thread.id);
+		await stream.result;
+
+		const lifecycles = (await chunksOf(claw, thread.id)).filter(
+			(chunk) => chunk.kind === "lifecycle",
+		);
+		expect(lifecycles.map((chunk) => chunk.event)).toContain("yielded");
+		expect(lifecycles.map((chunk) => chunk.event)).not.toContain("parked");
+	});
+
+	it("says PARKED with a reason for a slice waiting on a verb", async () => {
+		const { agent, api, claw, thread } = await conversation({
+			cron: true,
+			toolSteps: 2,
+		});
+		const stream = await api.sendMessageAndStream({
+			clawId: agent.id,
+			threadId: thread.id,
+			message: "hello",
+		});
+		let asked = false;
+		for await (const _delta of stream.textStream) {
+			if (asked) continue;
+			asked = true;
+			await api.controlRun({ runId: stream.runId, intent: "suspend" });
+		}
+		await stream.result;
+
+		expect(
+			(await chunksOf(claw, thread.id)).filter(
+				(chunk) => chunk.kind === "lifecycle",
+			),
+		).toMatchObject([{ event: "parked", reason: "suspended" }]);
 	});
 });
 

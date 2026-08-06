@@ -31,6 +31,7 @@ import {
 } from "@busyclaw/contracts";
 import {
 	type RunControlPort,
+	type RunParkReason,
 	type Runtime,
 	type RuntimeAbortSignal,
 	type RuntimeResult,
@@ -112,8 +113,15 @@ export type WorkerTickResult =
 	| { status: "waiting_approval"; task: RuntimeTask; approvalIds: string[] }
 	| { status: "yielded"; task: RuntimeTask; checkpointId: string }
 	/** Parked on an external intent. Unlike `yielded`, NO continuation task was enqueued — the run
-	 *  waits until somebody asks it to proceed. */
-	| { status: "parked"; task: RuntimeTask; checkpointId: string }
+	 *  waits until somebody asks it to proceed. `reason` is carried because a watcher shown "paused"
+	 *  cannot act on it: "waiting for your approval" and "an operator suspended this" want different
+	 *  things from the person reading. */
+	| {
+			status: "parked";
+			task: RuntimeTask;
+			checkpointId: string;
+			reason: RunParkReason;
+	  }
 	/** Torn down mid-step by an abort. Distinct from `parked` because there is NO checkpoint: the
 	 *  step was cancelled in flight, so there is no resumable point to have written. */
 	| { status: "cancelled"; task: RuntimeTask }
@@ -590,26 +598,58 @@ async function emitSliceEnd(input: {
 }): Promise<void> {
 	const { runStream, store, runId, attempt, result } = input;
 	if (runStream === undefined) return;
-	const event: RunStreamLifecycle | undefined =
-		result.status === "completed"
-			? "completed"
-			: result.status === "failed"
-				? "failed"
-				: result.status === "cancelled"
-					? "cancelled"
-					: result.status === "parked" ||
-							result.status === "yielded" ||
-							result.status === "waiting_approval"
-						? "parked"
-						: undefined;
-	if (event === undefined) return;
+	// EXHAUSTIVE, by a switch whose default is `never`. This was a conditional chain ending in
+	// `undefined`, which is how `yielded` came to be reported as `parked` for months: the chain
+	// grouped three statuses that mean three different things, and nothing failed when it did. A new
+	// `WorkerTickResult` member now has to be classified here or this stops compiling.
+	const told = ((): { event: RunStreamLifecycle; reason?: string } | null => {
+		switch (result.status) {
+			case "completed":
+				return { event: "completed" };
+			case "failed":
+				return { event: "failed" };
+			case "cancelled":
+				return { event: "cancelled" };
+			// COMES BACK ON ITS OWN. A continuation is already enqueued, so a reader told "paused"
+			// would be watching a turn that is still going.
+			case "yielded":
+				return { event: "yielded" };
+			// WAITS FOR A VERB, and `reason` says which one — "an operator suspended this" and
+			// "somebody stopped this" want different things from the person reading.
+			case "parked":
+				return { event: "parked", reason: result.reason };
+			// Also a park, and the one where the reason matters most: this is the state where the
+			// reader is the person who can end it.
+			case "waiting_approval":
+				return { event: "parked", reason: "approval" };
+			// NOTHING ENDED. A drain that found no work, or a duplicate task whose resume state was
+			// already claimed — saying "completed" on either's behalf would close a watcher's view of
+			// a turn that is still going under somebody else's lease.
+			case "idle":
+			case "skipped":
+				return null;
+			default: {
+				const unreachable: never = result;
+				throw stateError("unhandled worker result in slice-end emit", {
+					status: (unreachable as { status?: unknown }).status,
+				});
+			}
+		}
+	})();
+	if (told === null) return;
 	try {
 		const run = await store.getRun(runId);
 		const key =
 			run?.threadId !== undefined
 				? threadStreamKey(run.threadId)
 				: runStreamKey(runId);
-		await runStream.append(key, { kind: "lifecycle", runId, attempt, event });
+		await runStream.append(key, {
+			kind: "lifecycle",
+			runId,
+			attempt,
+			event: told.event,
+			...(told.reason !== undefined ? { reason: told.reason } : {}),
+		});
 	} catch {
 		// Advisory, like every other write to this buffer.
 	}
@@ -1175,7 +1215,7 @@ export async function driveClaim(input: {
 							: {}),
 					},
 				});
-				return { status: "parked", task, checkpointId };
+				return { status: "parked", task, checkpointId, reason: result.reason };
 			});
 		}
 

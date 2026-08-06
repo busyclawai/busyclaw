@@ -515,10 +515,12 @@ export type {
 	RunStreamPort,
 } from "./run-stream";
 export {
+	isTerminalRunStreamLifecycle,
 	runStreamChunkEntity,
 	runStreamChunkFields,
 	runStreamKey,
 	runStreamSchema,
+	terminalRunStreamLifecycle,
 	threadStreamKey,
 } from "./run-stream";
 // ── the opaque access boundary every scope-keyed core row carries ──

@@ -105,25 +105,47 @@ function createChunkWriter(writer: UIMessageStreamWriter, runId: string) {
 				}
 
 				case "lifecycle": {
-					// NEITHER OF THESE ENDS THE MESSAGE. A resume continues it, and a supersede means a
-					// new generation of the same run is about to arrive — which this protocol cannot
-					// express, since it has no way to say "discard what I already sent". A client that
-					// needs that reads chunks instead.
-					if (chunk.event === "superseded" || chunk.event === "resumed") return;
-					if (chunk.event === "parked") {
-						// PARKED IS NOT FINISHED. `finish` would tell the client the answer is complete
-						// while it waits on an approval that may be granted minutes later, and the rest
-						// would then arrive after a message the client had already closed.
-						closeText();
-						return;
+					// EXHAUSTIVE, and that matters more here than almost anywhere: the fall-through case
+					// was `finish`, so a lifecycle member nobody classified would have told the client
+					// the answer was complete while the run carried on. Adding `yielded` to the union
+					// would have done exactly that. A new member now fails to compile instead.
+					switch (chunk.event) {
+						// NEITHER ENDS THE MESSAGE. A resume continues it, and a supersede means a new
+						// generation of the same run is about to arrive — which this protocol cannot
+						// express, since it has no way to say "discard what I already sent". A client
+						// that needs that reads chunks instead.
+						case "superseded":
+						case "resumed":
+							return;
+						// A PAUSE IS NOT A FINISH. `finish` would tell the client the answer is complete
+						// while it waits on an approval that may be granted minutes later, or on a
+						// continuation cron will claim in seconds — and the rest would then arrive after
+						// a message the client had already closed. The two are separate members because
+						// they mean different things to a person; they mean the same thing to this
+						// protocol, which has no way to say "still working" either way.
+						case "parked":
+						case "yielded":
+							closeText();
+							return;
+						case "completed":
+						case "failed":
+						case "cancelled": {
+							finished = true;
+							closeText();
+							writer.write({
+								type: "finish",
+								...(chunk.event === "completed"
+									? {}
+									: { finishReason: "error" }),
+							});
+							return;
+						}
+						default: {
+							const unreachable: never = chunk.event;
+							void unreachable;
+							return;
+						}
 					}
-					finished = true;
-					closeText();
-					writer.write({
-						type: "finish",
-						...(chunk.event === "completed" ? {} : { finishReason: "error" }),
-					});
-					return;
 				}
 			}
 		},

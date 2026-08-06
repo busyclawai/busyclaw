@@ -76,6 +76,7 @@ import {
 	endpointHttpMethod,
 	errorMessage,
 	isTerminalRunStatus,
+	isTerminalRunStreamLifecycle,
 	jsonObject,
 	parsePrincipal,
 	RESERVED_CONTEXT_PREFIX,
@@ -1869,18 +1870,27 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 	 *  chunks for one run would have a client render the answer twice. */
 	const lifecycleOf = (
 		sent: ClawSendResult,
-	): RunStreamLifecycle | undefined => {
+	): { event: RunStreamLifecycle; reason?: string } | undefined => {
 		if (!sent.driven) return undefined;
+		// THE SECOND WRITER OF THIS FACT, and it has to agree with engine-sql's `emitSliceEnd` — a
+		// door driving its own turn announces its own ending, the drain announces the ones it drives.
+		// One slice has exactly one writer, so they never both fire; that is also why a disagreement
+		// between them shows up as "streaming works, except on the path I did not test".
 		switch (sent.result.status) {
 			case "completed":
 			case "denied":
-				return "completed";
-			case "waiting_approval":
+				return { event: "completed" };
+			// COMES BACK ON ITS OWN — a continuation is already enqueued. Reported as `parked` until
+			// now, which told a reader "waiting for you" about a turn that was still going.
 			case "yielded":
+				return { event: "yielded" };
+			// WAITS FOR A VERB, and which verb is the part a reader can act on.
 			case "parked":
-				return "parked";
+				return { event: "parked", reason: sent.result.reason };
+			case "waiting_approval":
+				return { event: "parked", reason: "approval" };
 			default:
-				return "failed";
+				return { event: "failed" };
 		}
 	};
 
@@ -2248,7 +2258,8 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					kind: "lifecycle",
 					runId,
 					attempt: 1,
-					event: ended,
+					event: ended.event,
+					...(ended.reason !== undefined ? { reason: ended.reason } : {}),
 				});
 			}
 			if (args.view !== "original" || context.redaction === undefined) {
@@ -2357,7 +2368,8 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 							kind: "lifecycle",
 							runId,
 							attempt: 1,
-							event: ended,
+							event: ended.event,
+							...(ended.reason !== undefined ? { reason: ended.reason } : {}),
 						});
 					}
 					return sent;
@@ -2391,7 +2403,12 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// AND IT ENDS WHEN THE RUN DOES. A terminal run will never produce another chunk, so a
 			// subscription that kept polling would hold an HTTP connection open forever for a turn
 			// that finished — which `watchThread` must do (more turns may come) and this must not.
-			// `superseded` and `parked` are NOT terminal: a new attempt or an approval continues it.
+			//
+			// WHICH EVENTS ARE TERMINAL is read from the contract rather than listed here. Three places
+			// branch on it and each carried its own list; the cost of them disagreeing is not
+			// symmetric — stopping early truncates an answer, never stopping holds an HTTP connection
+			// open forever. `superseded`, `parked` and `yielded` are all non-terminal: a new attempt, a
+			// verb somebody has to say, or a continuation already enqueued.
 			return (async function* untilTerminal() {
 				for await (const page of pages) {
 					yield page;
@@ -2399,10 +2416,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 					if (
 						page.chunks.some(
 							(c) =>
-								c.kind === "lifecycle" &&
-								(c.event === "completed" ||
-									c.event === "failed" ||
-									c.event === "cancelled"),
+								c.kind === "lifecycle" && isTerminalRunStreamLifecycle(c.event),
 						)
 					) {
 						return;
