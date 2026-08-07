@@ -158,7 +158,14 @@ const OPERATIONAL_EVENT_KEYS = [
 	"approvalIds",
 ] as const;
 
-function operationalPayload(payload: JsonObject): JsonObject {
+/**
+ * One payload allowlist, shared by the two doors that serve run events.
+ *
+ * Exported because the plugin-facing engine view needs the SAME filter: two copies over one payload
+ * shape drift the first time a key is added to either, and the key that gets added is exactly the
+ * content-bearing one somebody forgets to exclude.
+ */
+export function operationalPayload(payload: JsonObject): JsonObject {
 	const out: JsonObject = {};
 	for (const key of OPERATIONAL_EVENT_KEYS) {
 		const value = payload[key];

@@ -159,6 +159,34 @@ describe("a plugin's engine handle", () => {
 		expect(await originOf(claw, started.id)).toBe("core");
 	});
 
+	it("keeps the assistant's ANSWER out of the run's event history", async () => {
+		// The method that looks like operational history is the one with the most content in it:
+		// `run.completed` carries `{ taskId, result }`, and `result` is the terminal RuntimeResult —
+		// the answer. `get` was filtered and this was not, so the leak sat behind the one call whose
+		// name suggests it holds nothing interesting.
+		const { claw, engine } = harness();
+		const started = await engine().startRun({
+			prompt: "go",
+			run: { principal: userPrincipal("alice") },
+		});
+		// Drive it, so there is a terminal result to leak.
+		await (
+			claw as unknown as {
+				$context: { engine?: { work?: () => Promise<unknown> } };
+			}
+		).$context.engine?.work?.();
+
+		const events = await (
+			engine() as unknown as {
+				runs?: { events: (id: string) => Promise<{ payload: unknown }[]> };
+			}
+		).runs?.events(started.id);
+
+		expect(events?.length ?? 0).toBeGreaterThan(0);
+		// `done` is what textModel answers. Operational keys survive; the answer does not.
+		expect(JSON.stringify(events)).not.toContain("done");
+	});
+
 	it("serves every run FACT and none of its CONTENT", async () => {
 		const { engine } = harness();
 		const started = await engine().startRun({

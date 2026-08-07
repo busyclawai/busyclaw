@@ -70,6 +70,7 @@ import {
 	clawCronHandlerSecretConfig,
 	clawCronHandlerUnsafeConfig,
 	createClawApi,
+	operationalPayload,
 } from "./api";
 import { buildFloorPolicyPlugin } from "./authz-floor";
 import {
@@ -634,6 +635,20 @@ function contentFreeRuns(runs: ClawRunReadModel): ClawRunReadModel {
 	};
 	return {
 		...runs,
+		// EVENTS TOO, and this one is easy to miss — it was. `run.completed` carries
+		// `{ taskId, result }`, and `result` is the terminal RuntimeResult, which holds the
+		// assistant's ANSWER. So the method that looks like operational history is the one with the
+		// most content in it. The product api already knew: `listRunEvents` filters every payload
+		// through an ALLOWLIST, precisely because the failure it prevents is a payload gaining a
+		// content-bearing key that nobody remembers to exclude.
+		//
+		// Same allowlist here, and a shared one on purpose: two filters over one payload shape would
+		// drift the first time a key was added to either.
+		events: async (runId: string) =>
+			(await runs.events(runId)).map((event) => ({
+				...event,
+				payload: operationalPayload(event.payload),
+			})),
 		get: async (id: string) => {
 			const record = await runs.get(id);
 			return record === null ? null : strip(record);
