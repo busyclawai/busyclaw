@@ -209,9 +209,6 @@ export type CreateRunInput = {
 	 *  to. Columns, not task payload: the payload is gone by the time a reader asks, and the
 	 *  `deliverMessage` door needs the claw before any task has been claimed. */
 	recording?: EngineRecording;
-	/** Which subsystem started this run — `"core"` or a plugin id. Written to the `origin` column;
-	 *  a fact for operators, read by nothing that decides. */
-	origin?: string;
 	/** The claw an UNRECORDED run belongs to — a subagent acts for a claw and writes no transcript.
 	 *  The `run.clawId` column is the only channel that survives to the worker, and it is what the
 	 *  Cedar `clawId` fact is read from. Never reachable from the api door: the column is
@@ -816,12 +813,6 @@ export function createSqlEngineStore(
 					// Safe HERE and not at the api door: the column is `input: false` and the door
 					// enumerates what it forwards, so a caller cannot reach this. The door derives it
 					// from a parent run it verified instead.
-					// NO DEFAULT. Defaulting to `"core"` here made the api door's own stamp dead code —
-					// removing it changed nothing, so the column said "core" whether or not anybody had
-					// claimed it. Both doors now say which one they are, and a caller wiring this engine
-					// directly leaves it absent, which is the honest answer: that run is neither the
-					// product api nor a plugin.
-					origin: input.origin,
 					clawId: input.recording?.clawId ?? input.clawId,
 					threadId: input.recording?.threadId,
 					originMessageId: input.recording?.originMessageId,

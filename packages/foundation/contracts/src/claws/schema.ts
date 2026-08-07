@@ -113,7 +113,7 @@ export const threadFields = {
 	/**
 	 * WHICH SUBSYSTEM opened this thread — `"core"` for one a person started, else a plugin's id.
 	 *
-	 * The same word `run.origin` uses, deliberately: core learns "who made this" and nothing else. It
+	 * Core learns "who made this" and nothing else. It
 	 * does NOT learn that subagents exist, that threads nest, or that there is a tree — a plugin that
 	 * opens threads for its own work owns whatever structure those threads have, and exposes its own
 	 * walk over them.

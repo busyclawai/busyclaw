@@ -1101,12 +1101,12 @@ export function createClaw<
 		| undefined;
 
 	/**
-	 * The engine as ONE PLUGIN sees it: every verb, its own attribution stamped on what it creates,
-	 * and run facts without run content.
+	 * The engine as ONE PLUGIN sees it: every verb, and run facts without run content.
 	 *
-	 * The stamp is the whole reason this is per plugin rather than shared. `run.origin` has to be set
-	 * by the door, never asked of the caller — a plugin that could name its own origin would be
-	 * choosing its own attribution, which is the one thing the column is for.
+	 * Per plugin rather than shared so the error names who asked when it is read too early. Runs
+	 * carry no origin — a plugin that creates runs already knows which are its own from its own
+	 * tables, and a column nothing read was surface without a reader. THREADS still carry one,
+	 * because there `listForClaw`'s default is a real reader and core has no other way to get it.
 	 */
 	const pluginEngine = (pluginId: string) => {
 		if (assembledEngine === undefined) {
@@ -1122,10 +1122,6 @@ export function createClaw<
 		const { engine: handle, runs } = assembledEngine;
 		return {
 			...handle,
-			// LAST, so it wins. Spread the other way and a plugin passing its own `origin` would
-			// choose its own attribution — the one thing this column exists to prevent.
-			startRun: (input: EngineStartRunInput) =>
-				handle.startRun({ ...input, origin: pluginId }),
 			...(runs ? { runs: contentFreeRuns(runs) } : {}),
 		};
 	};
@@ -1146,16 +1142,15 @@ export function createClaw<
 			secrets,
 		},
 		bind: (plugin) => ({
-			// A PLUGIN'S THREADS CARRY ITS NAME. Same rule as `run.origin` and stamped the same way —
-			// by the door, so a plugin is never asked and cannot claim another's. What it buys is one
+			// A PLUGIN'S THREADS CARRY ITS NAME, stamped by the door so a plugin is never asked and
+			// cannot claim another's. What it buys is one
 			// thing: `listForClaw` returns `"core"` threads by default, so a plugin opening a thread
 			// per unit of work does not fill a person's chat list with transcripts nobody started.
 			...(clawsStore
 				? { clawsStore: threadOriginStore(clawsStore, plugin.id) }
 				: {}),
-			// PER PLUGIN, so the view can stamp `run.origin` with who is asking. Lazy for the same
-			// reason it always was: the handle does not exist until after the runtime, which is built
-			// from these very plugins.
+			// PER PLUGIN, so an early read names who asked. Lazy for the reason it always was: the
+			// handle does not exist until after the runtime, which is built from these very plugins.
 			engine: () => pluginEngine(plugin.id),
 			events: pluginEventSink(
 				eventFanout,

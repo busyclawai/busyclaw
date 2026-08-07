@@ -30,21 +30,6 @@ type PluginEngine = {
 	};
 };
 
-/** The run's recorded attribution, read through the assembly's own read model. */
-async function originOf(
-	claw: unknown,
-	runId: string,
-): Promise<string | undefined> {
-	const row = await (
-		claw as {
-			$context: {
-				runs?: { get: (id: string) => Promise<{ origin?: string } | null> };
-			};
-		}
-	).$context.runs?.get(runId);
-	return row?.origin;
-}
-
 /** A plugin that captures the engine thunk, the way subagents does. */
 function capture() {
 	let resolve: (() => unknown) | undefined;
@@ -116,57 +101,6 @@ describe("a plugin's engine handle", () => {
 		expect(await engine().runs?.get(started.id)).not.toBeNull();
 	});
 
-	it("stamps the plugin's own id as the run's origin", async () => {
-		// Set by the DOOR, never asked of the plugin — a plugin that could name its own origin would
-		// be choosing its own attribution, which is the one thing the column is for. Nothing reads it
-		// to decide anything yet; it answers "who started this" for whoever is looking at a table of
-		// runs they do not recognise.
-		const { claw, engine } = harness();
-		const started = await engine().startRun({
-			prompt: "go",
-			run: { principal: userPrincipal("alice") },
-		});
-
-		expect(await originOf(claw, started.id)).toBe("keeper");
-	});
-
-	it("overrides an origin the plugin tried to name for itself", async () => {
-		// The stamp is applied LAST for exactly this. A plugin choosing its own attribution defeats
-		// the column, and the failure would be silent — a run filed under whoever it felt like.
-		const { claw, engine } = harness();
-		const started = await (
-			engine() as unknown as {
-				startRun: (i: {
-					prompt: string;
-					origin: string;
-					run?: { principal?: string };
-				}) => Promise<{ id: string }>;
-			}
-		).startRun({
-			prompt: "go",
-			origin: "somebody-else",
-			run: { principal: userPrincipal("alice") },
-		});
-
-		expect(await originOf(claw, started.id)).toBe("keeper");
-	});
-
-	it("stamps `core` for a run the product api started", async () => {
-		const { claw } = await harness();
-		const started = await (
-			claw as unknown as {
-				api: {
-					startRun: (
-						i: { prompt: string },
-						c: { principal: string },
-					) => Promise<{ id: string }>;
-				};
-			}
-		).api.startRun({ prompt: "go" }, { principal: userPrincipal("alice") });
-
-		expect(await originOf(claw, started.id)).toBe("core");
-	});
-
 	it("keeps the assistant's ANSWER out of the run's event history", async () => {
 		// The method that looks like operational history is the one with the most content in it:
 		// `run.completed` carries `{ taskId, result }`, and `result` is the terminal RuntimeResult —
@@ -216,57 +150,7 @@ describe("a plugin's engine handle", () => {
 	});
 });
 
-describe("core stamps its own work", () => {
-	it("stamps `core` on a run a CHAT TURN created", async () => {
-		// The commonest way a run is created, and the one that was missed: `sendMessage` builds its
-		// engine input separately from the `startRun` door, so stamping only the door left
-		// `run.origin` empty on nearly every row while the column claimed to answer "who started
-		// this". Found by asking the question, not by reading the code.
-		const { claw } = harness();
-		const agent = await (
-			claw as unknown as {
-				api: {
-					createClaw: (i: {
-						id: string;
-						name: string;
-					}) => Promise<{ id: string }>;
-					createThread: (i: {
-						id: string;
-						clawId: string;
-					}) => Promise<{ id: string }>;
-					sendMessage: (i: {
-						clawId: string;
-						threadId: string;
-						message: string;
-					}) => Promise<{ runId: string }>;
-				};
-			}
-		).api.createClaw({ id: "claw-chat", name: "Assistant" });
-		const api = (
-			claw as unknown as {
-				api: {
-					createThread: (i: {
-						id: string;
-						clawId: string;
-					}) => Promise<{ id: string }>;
-					sendMessage: (i: {
-						clawId: string;
-						threadId: string;
-						message: string;
-					}) => Promise<{ runId: string }>;
-				};
-			}
-		).api;
-		await api.createThread({ id: "thread-chat", clawId: agent.id });
-		const sent = await api.sendMessage({
-			clawId: agent.id,
-			threadId: "thread-chat",
-			message: "hello",
-		});
-
-		expect(await originOf(claw, sent.runId)).toBe("core");
-	});
-
+describe("a plugin's threads carry its name", () => {
 	it("stamps `core` on a thread the api opened, and the plugin's id on one it opened", async () => {
 		const { claw, threads } = harness();
 		const agent = (

@@ -40,6 +40,18 @@ export type AgentTreeNode = {
 	alias: string;
 	depth: number;
 	status: string;
+	/**
+	 * Where this child's work is written — the door onto its answer.
+	 *
+	 * DERIVED from the run, not stored: `childThreadId` is deterministic, so recording it on the edge
+	 * would be a second copy of a fact one function already computes, and the two could disagree only
+	 * by being wrong. Absent when the child had no claw to open a thread in, which is the same shape
+	 * as any claw-less run: it ran, and nothing kept a transcript.
+	 *
+	 * Read it with `listMessages({ threadId, runId })` — the transcript door, which already gates,
+	 * audits and `view`-guards content. A subagent's answer deliberately has no door of its own.
+	 */
+	threadId?: string;
 };
 
 export function buildAgentsApi(input: {
@@ -123,11 +135,16 @@ export function buildAgentsApi(input: {
 					// and a child a caller may not read individually would silently vanish from a tree
 					// they are entitled to see whole.
 					const run = await engine.runs?.get(edge.id);
+					// The thread exists only if the child was recorded, which needs a claw. Asked of the
+					// RUN rather than assumed from the derivation, so a claw-less child reports no
+					// thread instead of an id pointing at a row nobody wrote.
+					const threadId = run?.threadId;
 					nodes.push({
 						childRunId: edge.id,
 						parentRunId: edge.parentRunId,
 						alias: edge.alias,
 						depth: edge.depth,
+						...(threadId !== undefined ? { threadId } : {}),
 						status: run?.status ?? "unknown",
 					});
 				}

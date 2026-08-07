@@ -157,27 +157,6 @@ export const runFields = {
 	// given and falls back to the raw model name when absent — and an engine-only deployment
 	// materializes these tables without `claw`/`thread`, so an FK here would point at a table that
 	// does not exist. Plain indexed strings, following `scope`/`scopeId`'s proven shape.
-	/**
-	 * WHICH SUBSYSTEM created this run — `"core"` for the product api, else the plugin's id.
-	 *
-	 * A fact, not a fence. Nothing reads it to decide anything today, and that is deliberate: the
-	 * question it answers first is operational — a table of runs nobody recognises is a bad hour, and
-	 * "who started this" is the column that ends it. Same class as `clawId` and `scope`: a governance
-	 * property of the run, not scheduling state.
-	 *
-	 * WHY NOT ENFORCEMENT YET. The obvious next step is a per-plugin engine view that refuses
-	 * `controlRun`/`proceedRun`/`deliverMessage` on a run whose origin is not yours. Two things have
-	 * to settle first. Reads cannot be filtered the same way — subagents' first act is to read its
-	 * PARENT, a `"core"` run, to copy the claw off it, so "only see your own" breaks the primary case
-	 * on day one. And origin is a property of the DOOR, not the subsystem: channels creates its runs
-	 * through `claw.api.sendMessage`, so they are `"core"`, and a rule keyed on this would refuse
-	 * channels control over runs it caused. Both are answerable; neither is answerable well against a
-	 * single consumer, and subagents is the only one today.
-	 *
-	 * STAMPED BY THE DOOR, never from a request body — a caller who could set this would be choosing
-	 * their own attribution, which is the one thing it is for.
-	 */
-	origin: field.string({ index: true, input: false, immutable: true }),
 	clawId: field.string({ index: true, input: false, immutable: true }),
 	threadId: field.string({ index: true, input: false, immutable: true }),
 	// The user message this run answers, when it has one. Optional forever — a run started by cron

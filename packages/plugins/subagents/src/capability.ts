@@ -47,6 +47,7 @@ export type SpawnEngine = {
 			status: string;
 			principal?: string;
 			clawId?: string;
+			threadId?: string;
 		} | null>;
 	};
 };

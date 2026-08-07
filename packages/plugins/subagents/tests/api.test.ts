@@ -55,7 +55,12 @@ const agentsOf = (claw: unknown) =>
 						i: { rootRunId: string },
 						c?: { principal?: string },
 					) => Promise<{
-						nodes: { alias: string; depth: number; status: string }[];
+						nodes: {
+							alias: string;
+							depth: number;
+							status: string;
+							threadId?: string;
+						}[];
 					}>;
 				};
 			};
@@ -126,7 +131,9 @@ describe("claw.api.agents.tree", () => {
 		// `rootRunId` is denormalized onto every edge at spawn precisely so this is one indexed read
 		// rather than a recursive walk over a tree whose depth nothing bounds at read time.
 		const { claw } = await harness();
-		const root = await claw.openRun(userPrincipal("alice"));
+		// WITH a claw: a child's thread lives in its parent's, so a claw-less parent has children
+		// with no transcript — which the walk reports honestly as an absent `threadId`.
+		const root = await claw.openRun(userPrincipal("alice"), "claw-tree");
 		const caller = { principal: userPrincipal("alice") };
 		const agents = agentsOf(claw);
 
@@ -146,6 +153,9 @@ describe("claw.api.agents.tree", () => {
 		]);
 		// The status comes from each RUN, not mirrored onto the edge — one writer for one fact.
 		expect(nodes.every((node) => node.status !== "unknown")).toBe(true);
+		// AND the door onto each child's answer. Derived from the run, not stored on the edge — one
+		// deterministic function, so a second copy could only ever disagree by being wrong.
+		expect(nodes.every((node) => typeof node.threadId === "string")).toBe(true);
 	});
 
 	it("is refused to a caller who cannot read the root run", async () => {

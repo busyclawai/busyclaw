@@ -200,7 +200,6 @@ function createSqlEngineHandle(input: {
 					// answer. `model` and `runMode` join them for the same reason one rung out: a
 					// continuation claimed months later reads the row, not the invocation that is gone.
 					recording: startInput.recording,
-					origin: startInput.origin,
 					// The claw of an UNRECORDED run. `createRun` prefers the recording's when there is
 					// one, so a recorded run keeps a single writer for the fact.
 					clawId: startInput.clawId,

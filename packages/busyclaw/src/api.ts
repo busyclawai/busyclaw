@@ -1763,12 +1763,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			// text (the invariant `appendMessage` relies on) and the container is the same
 			// `("claw", clawId)` either way, so placeholders stay coherent with the transcript.
 			prompt: userContent.text,
-			// A CHAT TURN IS A CORE RUN, and this is the commonest way a run is created — so leaving
-			// it unstamped left `run.origin` empty on nearly every row while the column claimed to
-			// answer "who started this". Stamped in the SHARED builder both conversational doors go
-			// through, rather than at each of them, because the pair that drift are the ones written
-			// twice.
-			origin: "core",
 			...(args.ctx !== undefined ? { ctx: forRuntimeCtx(args.ctx) } : {}),
 			run: {
 				id: runId,
@@ -2198,7 +2192,7 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			};
 		},
 
-		// STAMPED AT THE DOOR, like `run.origin` and for the same reason: a store default would make
+		// STAMPED AT THE DOOR, never defaulted in the store: a default would make
 		// this stamp dead code, and then the column would say "core" whether or not anyone had
 		// claimed it. A plugin reaches the store through its own view, which stamps its id instead.
 		createThread: (args) => store().threads.create({ ...args, origin: "core" }),
@@ -2735,10 +2729,6 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return requireEngine(context.engine).startRun({
 				prompt: args.prompt,
 				ctx: args.ctx,
-				// THE PRODUCT API IS `"core"`. Stamped here, not defaulted in the store, so the two
-				// doors that can create a run each say which one they are rather than one of them
-				// inheriting the other's answer.
-				origin: "core",
 				run: {
 					id: args.run?.id,
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,
