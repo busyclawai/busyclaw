@@ -62,6 +62,10 @@ const agentsOf = (claw: unknown) =>
 							threadId?: string;
 						}[];
 					}>;
+					cancelTree: (
+						i: { rootRunId: string },
+						c?: { principal?: string },
+					) => Promise<{ runs: number; cancelled: number; joins: number }>;
 				};
 			};
 		}
@@ -166,6 +170,124 @@ describe("claw.api.agents.tree", () => {
 				{ rootRunId: root },
 				{ principal: userPrincipal("mallory") },
 			),
+		).rejects.toThrow(/app-authz denied/);
+	});
+});
+
+describe("claw.api.agents.cancelTree", () => {
+	it("stops the root as well as its children", async () => {
+		// THE ROOT IS NOT IN ITS OWN TREE — `agent_edge` holds children, and the root is somebody's
+		// parent rather than somebody's child. Cancelling every descendant and leaving the run that
+		// started them going is the shape of this that looks right and is not.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const rootRunId = await claw.openRun(alice);
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "a", prompt: "go" },
+			{ principal: alice },
+		);
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "b", prompt: "go" },
+			{ principal: alice },
+		);
+
+		const result = await agentsOf(claw).cancelTree(
+			{ rootRunId },
+			{ principal: alice },
+		);
+
+		expect(result.runs).toBe(3);
+		expect(result.cancelled).toBe(3);
+	});
+
+	it("closes the barrier the cancelled parent was waiting on", async () => {
+		// Otherwise the join outlives every run in it. Its children are stopping, so no arrival will
+		// ever meet the threshold; the reconciler keeps examining it every tick until the deadline
+		// finally times it out, and then tries to wake a run that is already terminal.
+		const { claw, store } = await harness();
+		const alice = userPrincipal("alice");
+		const rootRunId = await claw.openRun(alice);
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "a", prompt: "go" },
+			{ principal: alice },
+		);
+		const waiting = await claw
+			.capability({ principal: alice, parentRunId: rootRunId, step: 0 })
+			.awaitChildren({});
+		expect(waiting.status).toBe("waiting");
+		expect(await store.openJoins(10)).toHaveLength(1);
+
+		const result = await agentsOf(claw).cancelTree(
+			{ rootRunId },
+			{ principal: alice },
+		);
+
+		expect(result.joins).toBe(1);
+		expect(await store.openJoins(10)).toEqual([]);
+	});
+
+	it("is DECIDED — an anonymous call is refused", async () => {
+		const { claw } = await harness();
+		const rootRunId = await claw.openRun(userPrincipal("alice"));
+		await expect(agentsOf(claw).cancelTree({ rootRunId })).rejects.toThrow(
+			/app-authz denied/,
+		);
+	});
+
+	it("refuses a stranger outright", async () => {
+		const { claw } = await harness();
+		const rootRunId = await claw.openRun(userPrincipal("alice"));
+		await expect(
+			agentsOf(claw).cancelTree(
+				{ rootRunId },
+				{ principal: userPrincipal("mallory") },
+			),
+		).rejects.toThrow(/app-authz denied/);
+	});
+
+	it("refuses a caller who may SEE the tree but not manage it", async () => {
+		// THE LEVEL, pinned. A stranger is denied at every level, so a test using one cannot tell
+		// `manage` from `read` — and this door being a read would let anyone entitled to watch a
+		// subtree stop it. Bob is granted `read` explicitly: he gets the tree and not the cancel.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const bob = userPrincipal("bob");
+		const rootRunId = await claw.openRun(alice);
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "a", prompt: "go" },
+			{ principal: alice },
+		);
+		await (
+			claw as unknown as {
+				api: {
+					shareResource: (
+						i: {
+							resourceKind: string;
+							resourceId: string;
+							principalRef: string;
+							permission: string;
+						},
+						c: { principal: string },
+					) => Promise<unknown>;
+				};
+			}
+		).api.shareResource(
+			{
+				resourceKind: "run",
+				resourceId: rootRunId,
+				principalRef: bob,
+				permission: "read",
+			},
+			{ principal: alice },
+		);
+
+		// He can read it …
+		await expect(
+			agentsOf(claw).tree({ rootRunId }, { principal: bob }),
+		).resolves.toMatchObject({ nodes: [{ alias: "a" }] });
+		// … and stopping it is a different question.
+		await expect(
+			agentsOf(claw).cancelTree({ rootRunId }, { principal: bob }),
 		).rejects.toThrow(/app-authz denied/);
 	});
 });

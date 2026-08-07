@@ -154,5 +154,62 @@ export function buildAgentsApi(input: {
 				}
 				return { nodes };
 			}),
+		cancelTree: route
+			.input(treeInput)
+			// MANAGE ON THE ROOT, like `spawn` and unlike `tree`. Stopping work is not reading it, and
+			// the anchor is the root for the same reason the read's is: a subtree is one thing. Deciding
+			// per child would let a caller cancel the half of a tree they happen to manage and leave the
+			// rest running against a parent that will never collect it.
+			.authz("manage", ({ rootRunId }: { rootRunId: string }) => ({
+				kind: RUN_KIND,
+				id: rootRunId,
+			}))
+			.handler(async (args: { rootRunId: string }, caller?: ClawApiCaller) => {
+				const store = input.store();
+				const engine = input.engine();
+				const stamp = input.now();
+				// THE ROOT TOO, not just its descendants. `tree` returns edges, and the root has none —
+				// it is somebody's parent, not somebody's child. Cancelling every child and leaving the
+				// run that started them going is the shape of this that looks right and is not.
+				const edges = await store.tree(args.rootRunId);
+				const runIds = [args.rootRunId, ...edges.map((edge) => edge.id)];
+
+				let cancelled = 0;
+				for (const runId of runIds) {
+					// COOPERATIVE. `controlRun` latches the intent; a run with nothing in flight settles
+					// synchronously and a running one stops at its next control point. `accepted: false`
+					// means it had already finished, which is not a failure — it is the common case for
+					// the children that did their job before anyone asked.
+					const result = await engine.controlRun?.({
+						runId,
+						intent: "stop",
+						...(caller?.principal !== undefined
+							? { requestedBy: caller.principal }
+							: {}),
+						reason: `subtree of ${args.rootRunId} cancelled`,
+					});
+					if (result?.accepted === true) cancelled += 1;
+				}
+
+				// AND THE BARRIERS THEY WERE WAITING ON. A cancelled parent still owns an open join, and
+				// nothing else will ever close it: its children are stopping, so no arrival meets the
+				// threshold, and the reconciler would keep examining it every tick until the deadline
+				// finally timed it out — then try to wake a run that is already terminal.
+				let joins = 0;
+				for (const runId of runIds) {
+					for (const join of await store.openJoinsForOwner(runId)) {
+						if (
+							(await store.settleJoin({
+								joinId: join.id,
+								to: "cancelled",
+								now: stamp,
+							})) !== null
+						) {
+							joins += 1;
+						}
+					}
+				}
+				return { runs: runIds.length, cancelled, joins };
+			}),
 	});
 }

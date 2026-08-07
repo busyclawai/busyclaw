@@ -57,6 +57,19 @@ export type SpawnEngine = {
 			threadId?: string;
 		} | null>;
 	};
+	/**
+	 * Ask a run to stop. OPTIONAL, because the shape is structural and a test double need not have it.
+	 *
+	 * The intent is LATCHED, not applied: a run with nothing in flight settles synchronously, a running
+	 * one stops at its next control point. So `accepted` means "there was something to stop", never
+	 * "it has stopped" — the distinction the engine's own result type is careful about.
+	 */
+	controlRun?: (input: {
+		runId: string;
+		intent: "suspend" | "stop" | "abort";
+		requestedBy?: Principal;
+		reason?: string;
+	}) => Promise<{ accepted: boolean; settled: boolean }>;
 };
 
 /** The thread store, narrowed to what a spawn needs. */
