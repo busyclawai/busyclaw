@@ -112,6 +112,19 @@ export const runParkedEvent = ark({
 	"usage?": runtimeModelUsage.or("undefined"),
 });
 
+// A run stopped to wait on something OUTSIDE this system, and nothing was enqueued — so unlike every
+// other stop, no drain will find it. This event is the only announcement that a run is waiting and
+// what token wakes it; a subsystem that misses it has no other way to learn.
+export const runAwaitingEvent = ark({
+	...runtimeEventBaseShape,
+	type: "'run.awaiting'",
+	steps: "number",
+	checkpointId: "string",
+	waitId: "string",
+	"text?": "string | undefined",
+	"usage?": runtimeModelUsage.or("undefined"),
+});
+
 export const runDeniedEvent = ark({
 	...runtimeEventBaseShape,
 	type: "'run.denied'",
@@ -210,6 +223,7 @@ export const runtimeEvent = runStartedEvent
 	.or(runWaitingApprovalEvent)
 	.or(runYieldedEvent)
 	.or(runParkedEvent)
+	.or(runAwaitingEvent)
 	.or(runDeniedEvent)
 	.or(toolCalledEvent)
 	.or(toolCompletedEvent)

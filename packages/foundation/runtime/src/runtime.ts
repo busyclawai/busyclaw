@@ -466,12 +466,41 @@ export const RuntimeParkedResult = ark({
 });
 export type RuntimeParkedResult = typeof RuntimeParkedResult.infer;
 
+/**
+ * The run stopped to WAIT ON SOMETHING OUTSIDE ITSELF, and only that thing can wake it.
+ *
+ * The fifth way a run can stop, and the first whose waker is not part of this system. An approval
+ * waits on a person, a yield waits on the clock, a park waits on an operator — each has a door that
+ * already knows how to resume it. This one waits on a `waitId` some other subsystem holds, and it
+ * enqueues NOTHING: no continuation task, no due row, nothing a drain could pick up. A run in this
+ * state costs a row and no scheduler attention until somebody says the wait is over.
+ *
+ * That is the whole point and also the whole danger. A waiter nobody wakes is a run that never ends,
+ * so whoever creates the wait owns a deadline for it — this type deliberately does not carry one,
+ * because a deadline the RUNTIME enforced would be a second timer beside the one the waiting
+ * subsystem already needs.
+ *
+ * `waitId` is opaque here. The runtime never interprets it; it is the token the waker presents.
+ */
+export const RuntimeAwaitingResult = ark({
+	status: "'awaiting'",
+	/** What the model had said before it stopped — same reason as the yield's and the park's. */
+	text: "string",
+	steps: "number",
+	/** The transcript to resume from, exactly as a yield leaves one. */
+	checkpointId: "string",
+	/** The token whoever is being waited on will present to wake this run. Opaque to the runtime. */
+	waitId: "string",
+});
+export type RuntimeAwaitingResult = typeof RuntimeAwaitingResult.infer;
+
 export const RuntimeResult = RuntimeCompletedResult.or(
 	RuntimeWaitingApprovalResult,
 )
 	.or(RuntimeDeniedResult)
 	.or(RuntimeYieldedResult)
-	.or(RuntimeParkedResult);
+	.or(RuntimeParkedResult)
+	.or(RuntimeAwaitingResult);
 export type RuntimeResult = typeof RuntimeResult.infer;
 
 export type RunContext<Config extends RuntimeConfig> = InferContext<Config>;
@@ -1285,6 +1314,16 @@ export function createRuntime<const Config extends RuntimeConfig>(
 					text: result.text,
 					type: "run.parked",
 					usage,
+				});
+				return;
+			case "awaiting":
+				await emitEvent(context, {
+					checkpointId: result.checkpointId,
+					steps: result.steps,
+					text: result.text,
+					type: "run.awaiting",
+					usage,
+					waitId: result.waitId,
 				});
 				return;
 			case "denied":

@@ -124,6 +124,15 @@ export type WorkerTickResult =
 			checkpointId: string;
 			reason: RunParkReason;
 	  }
+	/** Waiting on something OUTSIDE the engine, with nothing enqueued. Distinct from `parked`:
+	 *  a park is somebody stopping this run, an await is this run choosing to wait — and the
+	 *  `waitId` belongs to whoever it waits on, which is the only thing that can wake it. */
+	| {
+			status: "awaiting";
+			task: RuntimeTask;
+			checkpointId: string;
+			waitId: string;
+	  }
 	/** Torn down mid-step by an abort. Distinct from `parked` because there is NO checkpoint: the
 	 *  step was cancelled in flight, so there is no resumable point to have written. */
 	| { status: "cancelled"; task: RuntimeTask }
@@ -707,6 +716,13 @@ async function emitSliceEnd(input: {
 			// "somebody stopped this" want different things from the person reading.
 			case "parked":
 				return { event: "parked", reason: result.reason };
+			// A PARK TO THE WATCHER, because that is what it looks like from outside — the turn has
+			// stopped and will not resume on its own. The reason is what the reader can act on, and
+			// here they cannot: nothing they do ends this wait, only whatever the run is waiting on.
+			// Saying "children" rather than "approval" is the difference between "go click approve"
+			// and "this is running elsewhere".
+			case "awaiting":
+				return { event: "parked", reason: "awaiting" };
 			// Also a park, and the one where the reason matters most: this is the state where the
 			// reader is the person who can end it.
 			case "waiting_approval":
@@ -1270,6 +1286,64 @@ async function driveClaimSlice(
 					status: "waiting_approval",
 					task,
 					approvalIds: result.approvalIds ?? [],
+				};
+			});
+		}
+
+		if (result.status === "awaiting") {
+			// AWAITING, and like a park it enqueues NOTHING — but for a different reason worth keeping
+			// apart. A park is somebody stopping this run; an await is this run choosing to wait on
+			// something else, and the token that wakes it (`waitId`) belongs to whoever it is waiting
+			// on. Nothing here interprets it.
+			//
+			// The run goes `waiting`, the checkpoint stays `pending`, and no due row exists — so no
+			// drain will ever find this run again. That is the design and also its only failure mode:
+			// a waiter nobody wakes never ends. The deadline belongs to whoever created the wait,
+			// because a timer here would be a second one beside the one they already need.
+			return store.transaction(async (tx) => {
+				const task = await tx.completeTask({
+					taskId: claim.task.id,
+					leaseToken: claim.leaseToken,
+					output: { result },
+				});
+				if (!task)
+					return {
+						status: "failed",
+						task: null,
+						reason: stateError("lease lost before await transition", {
+							taskId: claim.task.id,
+						}).message,
+					};
+				// CONDITIONAL, like every other transition out of a live run: a stop can land while the
+				// last step is still running, and the loser must report the winner rather than
+				// relabelling it.
+				const settled = await tx.updateRunIfStatus(task.runId, {
+					from: NON_TERMINAL_RUN_STATUSES,
+					patch: { status: "waiting" },
+				});
+				if (!settled) {
+					const current = await tx.getRun(task.runId);
+					return {
+						status: "skipped",
+						task,
+						reason: `run already ${current?.status ?? "terminal"}`,
+					};
+				}
+				await tx.appendEvent({
+					runId: task.runId,
+					type: "run.awaiting",
+					payload: {
+						taskId: task.id,
+						checkpointId: result.checkpointId,
+						waitId: result.waitId,
+						steps: result.steps,
+					},
+				});
+				return {
+					status: "awaiting",
+					task,
+					checkpointId: result.checkpointId,
+					waitId: result.waitId,
 				};
 			});
 		}

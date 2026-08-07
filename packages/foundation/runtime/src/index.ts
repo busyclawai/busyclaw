@@ -59,6 +59,7 @@ export {
 	parseRuntimeYieldMetadata,
 	RUNTIME_CALLER_OPTION,
 	RunParkReason,
+	RuntimeAwaitingResult,
 	RuntimeCompletedResult,
 	RuntimeDeniedResult,
 	RuntimeParkedResult,
