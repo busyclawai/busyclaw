@@ -223,6 +223,12 @@ export type CreateRunInput = {
 	runMode?: RunMode;
 };
 
+/** The wake task's id, derived from the checkpoint it resumes — so two racing wakers enqueue one
+ *  task and the loser is a database conflict rather than a second resume of one transcript. */
+export function resumeTaskId(checkpointId: string): string {
+	return hashText(`resume\u0000${checkpointId}`);
+}
+
 export type EnqueueTaskInput = {
 	id?: string;
 	runId: string;

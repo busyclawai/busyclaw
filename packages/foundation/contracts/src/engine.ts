@@ -44,6 +44,26 @@ export type EngineRecording = {
 	originMessageId?: string;
 };
 
+/**
+ * Wake a run that stopped `awaiting`, by naming the checkpoint it left behind.
+ *
+ * The one door onto the fifth park. Nothing else can reach an awaiting run: it enqueued no task and
+ * carries no due row, so no drain will ever find it — the whole state exists to cost nothing until
+ * somebody says the wait is over.
+ *
+ * `dueAt` is the DEADLINE ARM: enqueue the wake for later rather than now, so a wait that nobody
+ * satisfies still ends. Whoever created the wait owns that arm AND its retirement — a late arm
+ * firing against a run that already resumed would resurrect a finished run, so the subsystem that
+ * fires early must also kill the timer.
+ */
+export type EngineResumeRunInput = {
+	runId: string;
+	checkpointId: string;
+	ctx?: JsonObject;
+	dueAt?: string;
+	maxAttempts?: number;
+};
+
 export type EngineStartRunInput = {
 	prompt: string;
 	ctx?: JsonObject;
@@ -347,6 +367,11 @@ export type ClawEngineHandle<WorkResult = EngineWorkResult> = {
 	 *  here — same claim, lease and terminal transitions a worker uses, because there is no
 	 *  caller-driven versus worker-driven, only who holds the lease right now. */
 	startRun: (input: EngineStartRunInput) => Promise<EngineStartRunResult>;
+	/**
+	 * Resume a run parked `awaiting`. OPTIONAL, like `work`: an engine whose backend owns its own
+	 * waiting has no queue to put a wake on.
+	 */
+	resumeRun?: (input: EngineResumeRunInput) => Promise<EngineRunHandle>;
 	/**
 	 * Advance an EXISTING parked run. Admits one durable work item and returns; nothing executes
 	 * here. Idempotent per (runId, proceed) — a duplicate loses the insert and gets the same handle.

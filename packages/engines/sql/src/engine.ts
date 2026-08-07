@@ -28,7 +28,12 @@ import type { Runtime, RuntimeResult } from "@busyclaw/runtime";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { sqlEngineModels } from "./schema";
-import { addMs, messageRowId, type SqlEngineStore } from "./store";
+import {
+	addMs,
+	messageRowId,
+	resumeTaskId,
+	type SqlEngineStore,
+} from "./store";
 import type {
 	SqlEngineWorkerConfig,
 	WorkerTickOptions,
@@ -137,6 +142,7 @@ function createSqlEngineHandle(input: {
 	// ONE resolved id for both drivers. `workerId` is forensic — the lease is fenced on
 	// `leaseId`/`tokenHash`, never on this — but a caller driving its own run and the cron drain must
 	// not disagree about what to record, so the default is resolved once here rather than twice.
+	const engineStore = input.config.store;
 	const workerId = input.config.workerId ?? "busyclaw-worker";
 	// REFUSED, not clamped. A fractional or zero concurrency is a typo, and silently rounding it to
 	// something that works hides the fact that the number the host wrote is not the number running.
@@ -588,6 +594,57 @@ function createSqlEngineHandle(input: {
 				messages: swept.messages,
 				runIds: swept.runIds,
 			};
+		},
+		/**
+		 * Wake a run parked `awaiting` — enqueue the resume task nothing else will.
+		 *
+		 * The SAME task kind a yield enqueues, deliberately: the worker already knows how to claim a
+		 * checkpoint, resume the transcript and report a lost claim as `skipped`, and a second kind
+		 * doing the same thing would be a second place that logic could drift.
+		 *
+		 * The enqueue is IDEMPOTENT on the checkpoint. Two wakers — the thing being waited on and the
+		 * deadline arm — race by construction, and without this both would enqueue and the run would
+		 * resume twice from one transcript. The task id is derived from the checkpoint, so the second
+		 * insert loses at the database; `claim` then finds it spent and the duplicate is a no-op.
+		 */
+		resumeRun: async (resume) => {
+			const run = await engineStore.getRun(resume.runId);
+			// A run that is not waiting has nothing to wake. Refused rather than enqueued: a wake
+			// against a finished run would claim its checkpoint and resume a transcript that already
+			// reached an end — which is the deadline-arm hazard stated as a rule rather than left to
+			// each caller to remember.
+			if (run === null) {
+				throw stateError("no such run to resume", { runId: resume.runId });
+			}
+			if (run.status !== "waiting") {
+				throw stateError("run is not waiting", {
+					runId: resume.runId,
+					status: run.status,
+				});
+			}
+			try {
+				await engineStore.enqueueTask({
+					// DERIVED FROM THE CHECKPOINT, so the enqueue is idempotent. Two wakers race by
+					// construction — whatever is being waited on, and the deadline arm — and without a
+					// fixed id both would enqueue and the run would resume twice from one transcript.
+					id: resumeTaskId(resume.checkpointId),
+					kind: RUNTIME_RESUME_RUN_TASK,
+					runId: resume.runId,
+					payload: {
+						checkpointId: resume.checkpointId,
+						...(resume.ctx !== undefined ? { ctx: resume.ctx } : {}),
+					},
+					...(resume.dueAt !== undefined ? { dueAt: resume.dueAt } : {}),
+					...(resume.maxAttempts !== undefined
+						? { maxAttempts: resume.maxAttempts }
+						: {}),
+				});
+			} catch (error) {
+				// The other waker got here first. Its task resumes the same checkpoint, so this call
+				// has nothing left to do and saying so would be inventing a failure.
+				if (!isConflict(error)) throw error;
+			}
+			return { id: resume.runId };
 		},
 		work: (options?: WorkerTickOptions) => worker.tick(options),
 		workMany: (options?: WorkerTickOptions) =>

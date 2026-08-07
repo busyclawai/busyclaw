@@ -22,6 +22,7 @@ import {
 	createSqlEngineStore,
 	createSqlEngineWorker,
 	type SqlEngineStore,
+	sqlEngine,
 	sqlEngineSchema,
 } from "../src/index";
 
@@ -259,5 +260,88 @@ describe("two workers on one queue", () => {
 		expect(seen).toHaveLength(6);
 		const runIds = drove.map((r) => ("task" in r ? r.task?.runId : undefined));
 		expect(new Set(runIds).size).toBe(6);
+	});
+});
+
+describe("waking a run that parked awaiting", () => {
+	const awaitingRuntime = (waitId: string): Runtime =>
+		({
+			generate: async () => ({
+				status: "awaiting" as const,
+				text: "",
+				steps: 1,
+				checkpointId: "cp-1",
+				waitId,
+			}),
+			stream: () => {
+				throw new Error("unused");
+			},
+			continueRun: async () => null,
+			resumeRun: async () => null,
+			catalog: { tools: [], find: () => undefined },
+		}) as unknown as Runtime;
+
+	it("parks with NOTHING enqueued, and the run reads `waiting`", async () => {
+		// The whole point of the fifth park: no continuation task, no due row. A run in this state
+		// costs a row and no scheduler attention until somebody says the wait is over — which is also
+		// why a waiter nobody wakes never ends.
+		const built = await harness(slowModel(0));
+		const [runId] = await seed(built.store, 1);
+		if (runId === undefined) throw new Error("expected a run");
+
+		const [result] = await createSqlEngineWorker({
+			store: built.store,
+			runtime: awaitingRuntime("wait-1"),
+			workerId: "w1",
+		}).tickMany({ max: 1 });
+
+		expect(result).toMatchObject({ status: "awaiting", waitId: "wait-1" });
+		expect((await built.store.getRun(runId))?.status).toBe("waiting");
+		// Nothing left for any drain to find.
+		expect(await built.store.claimDueTasks({ workerId: "w2", max: 5 })).toEqual(
+			[],
+		);
+	});
+
+	it("enqueues ONE wake when two wakers race", async () => {
+		// Two wakers race by construction — whatever is being waited on, and the deadline arm. The
+		// task id is derived from the checkpoint so the second insert loses at the database; without
+		// that, the run resumes twice from one transcript.
+		const built = await harness(slowModel(0));
+		const [runId] = await seed(built.store, 1);
+		if (runId === undefined) throw new Error("expected a run");
+		await createSqlEngineWorker({
+			store: built.store,
+			runtime: awaitingRuntime("wait-1"),
+			workerId: "w1",
+		}).tickMany({ max: 1 });
+
+		const engine = sqlEngine({ store: built.store, cron: false }).create(
+			built.runtime,
+		).engine;
+		await Promise.all([
+			engine.resumeRun?.({ runId, checkpointId: "cp-1" }),
+			engine.resumeRun?.({ runId, checkpointId: "cp-1" }),
+		]);
+
+		const due = await built.store.claimDueTasks({ workerId: "w3", max: 5 });
+		expect(due).toHaveLength(1);
+	});
+
+	it("refuses to wake a run that is not waiting", async () => {
+		// A late deadline arm firing against a run that already resumed would claim its checkpoint and
+		// continue a transcript that reached an end — the arm hazard, stated as a rule here rather
+		// than left to every caller to remember.
+		const built = await harness(slowModel(0));
+		const [runId] = await seed(built.store, 1);
+		if (runId === undefined) throw new Error("expected a run");
+		await worker(built).tickMany({ max: 1 });
+
+		const engine = sqlEngine({ store: built.store, cron: false }).create(
+			built.runtime,
+		).engine;
+		await expect(
+			engine.resumeRun?.({ runId, checkpointId: "cp-1" }),
+		).rejects.toThrow(/not waiting/);
 	});
 });

@@ -197,6 +197,9 @@ describe("createClaw engine", () => {
 			// owns its own durability prunes differently or not at all — and the api says so loudly
 			// rather than reporting a zero that reads like "nothing to do".
 			"pruneRuns",
+			// The wake for the fifth park. OPTIONAL on the handle, like `work`: an engine whose backend
+			// owns its own waiting has no queue to put a wake on.
+			"resumeRun",
 			// Declared even when false — a door deciding what a departing reader means has to be able
 			// to read "nothing will resume this", and an absent property and a false one would have to
 			// be treated identically anyway.
