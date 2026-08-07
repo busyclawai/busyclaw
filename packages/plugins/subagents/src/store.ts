@@ -58,6 +58,12 @@ export type SubagentStore = {
 	}) => Promise<void>;
 	/** Every edge under one root — the subtree, in one indexed query rather than a recursive walk. */
 	tree: (rootRunId: string) => Promise<readonly AgentEdge[]>;
+	/** WHERE a subtree's placeholders live, deduplicated. The reader the edge's container columns were
+	 *  recorded for: a claw-less parent gives each child its own `("run", childId)` container, and
+	 *  these rows are the only place those ids survive. */
+	treeContainers: (
+		rootRunId: string,
+	) => Promise<readonly { containerKind: string; containerId: string }[]>;
 	/** Resolve an alias the OWNER was introduced under. `null` ⇒ this run may not name that peer. */
 	resolve: (
 		ownerRunId: string,
@@ -272,6 +278,26 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 				sortBy: { field: "createdAt", direction: "asc" },
 			});
 			return rows.map(asEdge);
+		},
+
+		async treeContainers(rootRunId) {
+			const rows = await db.findMany({
+				model: "agent_edge",
+				where: [{ field: "rootRunId", value: rootRunId }],
+				sortBy: { field: "createdAt", direction: "asc" },
+			});
+			// DEDUPLICATED, because the common case collapses to one: every child of a claw-backed parent
+			// shares that claw's container, which is what makes token coherence across a subtree work.
+			// The list is long only in the claw-less case, which is exactly the case nothing else can
+			// enumerate.
+			const seen = new Map<string, { containerKind: string; containerId: string }>();
+			for (const row of rows) {
+				seen.set(`${row.containerKind}\u0000${row.containerId}`, {
+					containerKind: row.containerKind,
+					containerId: row.containerId,
+				});
+			}
+			return [...seen.values()];
 		},
 
 		async countChildren(parentRunId) {

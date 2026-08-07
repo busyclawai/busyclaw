@@ -62,6 +62,12 @@ const agentsOf = (claw: unknown) =>
 							threadId?: string;
 						}[];
 					}>;
+					containers: (
+						i: { rootRunId: string },
+						c?: { principal?: string },
+					) => Promise<{
+						containers: { containerKind: string; containerId: string }[];
+					}>;
 					cancelTree: (
 						i: { rootRunId: string },
 						c?: { principal?: string },
@@ -321,5 +327,108 @@ describe("cancelTree is honest about what it did not stop", () => {
 
 		expect(result.cancelled).toBe(2);
 		expect(result.stillSpending).toEqual([]);
+	});
+});
+
+describe("claw.api.agents.containers", () => {
+	it("collapses to the claw when the parent has one", async () => {
+		// The ordinary case, and the reason token coherence across a subtree works: a recorded run's
+		// container IS its claw, so every child shares it and a data-subject request against the claw
+		// already reaches all of them. Nothing to enumerate.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const parentRunId = await claw.openRun(alice, "claw-1");
+		for (const alias of ["a", "b"]) {
+			await agentsOf(claw).spawn(
+				{ parentRunId, alias, prompt: "go" },
+				{ principal: alice },
+			);
+		}
+
+		const { containers } = await agentsOf(claw).containers(
+			{ rootRunId: parentRunId },
+			{ principal: alice },
+		);
+		expect(containers).toEqual([
+			{ containerKind: "claw", containerId: "claw-1" },
+		]);
+	});
+
+	it("names every per-child container when the parent has NO claw", async () => {
+		// THE CASE THESE COLUMNS EXIST FOR. A claw-less parent gives each child its own
+		// `("run", childId)` container. Those runs are unrecorded — no thread, no claw — so nothing
+		// else in the system holds a reference by which erasure could find them, and a data-subject
+		// request would silently miss every one. The edge rows are the only survivors.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const parentRunId = await claw.openRun(alice);
+		const made: string[] = [];
+		for (const alias of ["a", "b"]) {
+			const { childRunId } = await agentsOf(claw).spawn(
+				{ parentRunId, alias, prompt: "go" },
+				{ principal: alice },
+			);
+			made.push(childRunId);
+		}
+
+		const { containers } = await agentsOf(claw).containers(
+			{ rootRunId: parentRunId },
+			{ principal: alice },
+		);
+		expect(containers).toEqual(
+			made.map((id) => ({ containerKind: "run", containerId: id })),
+		);
+	});
+
+	it("is DECIDED — an anonymous call is refused", async () => {
+		const { claw } = await harness();
+		const rootRunId = await claw.openRun(userPrincipal("alice"));
+		await expect(agentsOf(claw).containers({ rootRunId })).rejects.toThrow(
+			/app-authz denied/,
+		);
+	});
+
+	it("is a READ, reachable by someone who may see the tree but not manage it", async () => {
+		// PINS THE LEVEL, which an owner-only test cannot: alice has `manage` too, so every gate from
+		// `read` upward passes for her and a tightened door would look identical. This is metadata of
+		// the same kind `tree` serves — no content, no erasure — so gating it at `manage` would lock out
+		// a legitimate reader while protecting nothing.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const bob = userPrincipal("bob");
+		const rootRunId = await claw.openRun(alice, "claw-1");
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "a", prompt: "go" },
+			{ principal: alice },
+		);
+		await (
+			claw as unknown as {
+				api: {
+					shareResource: (
+						i: {
+							resourceKind: string;
+							resourceId: string;
+							principalRef: string;
+							permission: string;
+						},
+						c: { principal: string },
+					) => Promise<unknown>;
+				};
+			}
+		).api.shareResource(
+			{
+				resourceKind: "run",
+				resourceId: rootRunId,
+				principalRef: bob,
+				permission: "read",
+			},
+			{ principal: alice },
+		);
+
+		await expect(
+			agentsOf(claw).containers({ rootRunId }, { principal: bob }),
+		).resolves.toMatchObject({
+			containers: [{ containerKind: "claw", containerId: "claw-1" }],
+		});
 	});
 });

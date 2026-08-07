@@ -183,6 +183,29 @@ export function buildAgentsApi(input: {
 						message: args.message,
 					}),
 			),
+		containers: route
+			.input(treeInput)
+			// READ ON THE ROOT, like `tree`, because that is what this is: a list of where the subtree's
+			// placeholders live. It erases nothing and returns no content — and deliberately does NOT
+			// erase, which is the whole shape of this door.
+			//
+			// A `forgetTree` that shredded them itself would substitute ONE `manage` on the root for a
+			// `manage` on each container, which is a real weakening: `claw.api.forgetSubject` authorizes
+			// per container precisely because erasure is irreversible. So the plugin answers the question
+			// only it can — WHICH containers — and the caller passes each to the door that already
+			// decides whether they may erase it.
+			.authz("read", ({ rootRunId }: { rootRunId: string }) => ({
+				kind: RUN_KIND,
+				id: rootRunId,
+			}))
+			.handler(async (args: { rootRunId: string }) => ({
+				// THE READER THE EDGE'S CONTAINER COLUMNS EXIST FOR. Under a claw-backed parent every
+				// child shares the claw's container and this collapses to one entry — the case that needs
+				// no help. Under a CLAW-LESS parent each child gets its own `("run", childId)`, and these
+				// rows are the only place those ids survive: the runs are unrecorded, so nothing else in
+				// the system holds a reference by which erasure could find them.
+				containers: await input.store().treeContainers(args.rootRunId),
+			})),
 		cancelTree: route
 			.input(treeInput)
 			// MANAGE ON THE ROOT, like `spawn` and unlike `tree`. Stopping work is not reading it, and
