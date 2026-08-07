@@ -59,6 +59,7 @@ export function buildAgentsApi(input: {
 	threads: () => SpawnThreads;
 	store: () => SubagentStore;
 	limits: SpawnLimits;
+	joinTimeoutMs: number;
 	now: () => string;
 }) {
 	const capabilityFor = (
@@ -89,6 +90,9 @@ export function buildAgentsApi(input: {
 			threads: input.threads(),
 			store: input.store(),
 			limits: input.limits,
+			// Carried for shape, unreachable in practice: `awaitChildren` refuses a context with no
+			// `requestAwait`, and there is no loop behind an api call to park.
+			joinTimeoutMs: input.joinTimeoutMs,
 			now: input.now,
 		});
 	};

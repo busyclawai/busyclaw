@@ -51,9 +51,21 @@ export type SpawnRequest = {
 	parentRunId?: string;
 	/** Replay-stable, and part of the derived child id. */
 	step?: number;
+	/** Withhold `requestAwait`, the way an ad-hoc `generate` with no loop does. */
+	canPark?: boolean;
 };
 
 export type SpawningClaw = {
+	plugin: ReturnType<typeof subagents>;
+	adapter: Adapter;
+	/** Every waitId the capability asked to park on, in order. */
+	parkRequests: string[];
+	/** One reconciler pass. */
+	runCron: (limit?: number) => Promise<{
+		processed?: number;
+		status?: string;
+		data?: unknown;
+	}>;
 	api: {
 		getRun: (
 			input: { id: string },
@@ -76,6 +88,7 @@ export type SpawningClaw = {
 		principal: Principal;
 		parentRunId?: string;
 		step?: number;
+		canPark?: boolean;
 	}) => AgentCapability;
 	statusFrom: (input: {
 		principal: Principal;
@@ -99,9 +112,28 @@ export function spawningClaw(
 			? { maxChildren: options.maxChildren }
 			: {}),
 	});
+	// The runtime half the ASSEMBLY builds — captured on the way past, because `createClaw` merges it
+	// into its own private plugin list and hands nothing back. Wrapping `configure` is the only seam
+	// that sees the real context (clawsStore, engine, checkpoints) rather than one a test invented.
+	let runtimeHalf:
+		| { cron?: readonly { handler: (ctx: never) => unknown }[] }
+		| undefined;
+	const observed = {
+		...plugin,
+		configure(context: Parameters<NonNullable<typeof plugin.configure>>[0]) {
+			const half = plugin.configure?.(context);
+			runtimeHalf = half as typeof runtimeHalf;
+			return half;
+		},
+	};
+
 	const claw = createClaw({
 		database: adapter,
 		model: idleModel(),
+		// REQUIRED now, because the plugin declares `$HasCron`. The reconciler is the only thing that
+		// ever learns a child failed, so a host that installs subagents and schedules nothing has parents
+		// that park and never wake. These suites drive it by hand rather than on a timer.
+		cronHandler: { secret: "test-cron-secret" },
 		engine: sqlEngine({
 			store: createSqlEngineStore(adapter),
 			workerId: "w1",
@@ -111,8 +143,13 @@ export function spawningClaw(
 		// container crossing is exercised through an injected `translate` instead. A database-backed
 		// claw must say which posture it wants, and "raw" is the honest one here.
 		redaction: { posture: "raw" },
-		plugins: [plugin],
+		plugins: [observed],
 	} as Parameters<typeof createClaw>[0]);
+
+	// WHAT THE LOOP WOULD HAVE DONE. The runtime binds `requestAwait` to its own run state and parks at
+	// the next step boundary; here it just records the token, so a suite can assert that `await` asked
+	// to park without standing up a whole model loop to watch it happen.
+	const parkRequests: string[] = [];
 
 	const capabilityFor = (input: SpawnRequest): AgentCapability => {
 		const factory = plugin.capabilities?.agent;
@@ -122,11 +159,36 @@ export function spawningClaw(
 			runId: input.parentRunId ?? "run-parent",
 			principal: input.principal,
 			step: input.step ?? 0,
+			...(input.canPark === false
+				? {}
+				: {
+						requestAwait: (waitId: string) => {
+							parkRequests.push(waitId);
+						},
+					}),
 		}) as AgentCapability;
 	};
 
 	return {
 		...claw,
+		plugin,
+		adapter,
+		parkRequests,
+		/**
+		 * One reconciler pass, invoked the way an adapter's cron trigger would.
+		 *
+		 * Through the runtime half the ASSEMBLY built, captured above — not by calling `configure` a
+		 * second time with a hand-made context. That second call would rebind the plugin to a context
+		 * missing `clawsStore` and the engine, and every later assertion would be measuring a
+		 * differently-wired plugin than the one the claw is using.
+		 */
+		async runCron(limit?: number) {
+			const entry = runtimeHalf?.cron?.[0];
+			if (entry === undefined) throw new Error("no reconciler registered");
+			return entry.handler(
+				(limit !== undefined ? { limit } : {}) as never,
+			) as Promise<{ processed?: number; status?: string; data?: unknown }>;
+		},
 		async openRun(principal: Principal, clawId?: string) {
 			// A parent WITH a claw is what the descendant stamp needs to inherit. Written through the
 			// engine's own input rather than the door, because the door only ever derives it.
@@ -192,6 +254,7 @@ export function spawningClaw(
 			principal: Principal;
 			parentRunId?: string;
 			step?: number;
+			canPark?: boolean;
 		}) {
 			return capabilityFor({
 				principal: input.principal,
@@ -201,6 +264,7 @@ export function spawningClaw(
 					? { parentRunId: input.parentRunId }
 					: {}),
 				...(input.step !== undefined ? { step: input.step } : {}),
+				...(input.canPark !== undefined ? { canPark: input.canPark } : {}),
 			});
 		},
 		async statusFrom(input: { principal: Principal; parentRunId?: string }) {

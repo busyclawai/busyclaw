@@ -1,4 +1,5 @@
-// The two tables a spawn writes, and the ids that fence them.
+// The plugin's five tables, and the ids that fence them. Two are written by a spawn (the edge and the
+// address book); three by a parent that stops to wait (the barrier, its arrivals, and the park).
 //
 // EVERY UNIQUENESS FENCE HERE IS A HASHED NUL-JOINED NATURAL KEY IN `id`, never a `uniques: [[…]]`
 // declaration. A plugin model's `uniques` never reach a generator, so declaring one is worse than
@@ -90,6 +91,127 @@ export const agentLinkFields = {
 
 export const agentLinkEntity = entity("agent_link", agentLinkFields);
 
+/**
+ * The barrier: how many children a parent is waiting for, and whether that number has arrived.
+ *
+ * `threshold` rather than "wait for all", because `all`, `any` and `k-of-n` are the same question
+ * asked with different numbers, and a boolean would have to grow a second column the first time
+ * somebody wanted `any`.
+ */
+export const agentJoinFields = {
+	/** = sha256(ownerRunId ‖ NUL ‖ waitId). Derived so an arm that crashed halfway re-derives its own
+	 *  join instead of opening a second one beside it. */
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
+	ownerRunId: field.string({ required: true, index: true, immutable: true }),
+	/** The token the parked run carries out. What a waker presents, and the only name the runtime
+	 *  knows this barrier by. */
+	waitId: field.string({ required: true, index: true, immutable: true }),
+	/** How many children this join names. Recorded so the reconciler knows what it is looking for
+	 *  without re-deriving the parent's intent from the arrivals it happens to find. */
+	expected: field.number({ required: true, immutable: true }),
+	/** How many must arrive: all ⇒ expected, any ⇒ 1, k ⇒ k. */
+	threshold: field.number({ required: true, immutable: true }),
+	status: field.enum(
+		["waiting", "fired", "timed_out", "cancelled"] as const,
+		{ required: true, index: true },
+	),
+	/**
+	 * REQUIRED, and the schema is where that gets enforced rather than the caller.
+	 *
+	 * `maxAttempts` defaults to 1, so a child whose process dies dead-letters, never retries, and
+	 * writes no arrival. A parent that could wait forever is the default failure of this whole
+	 * architecture — not an edge case — so the row must not be able to express one.
+	 */
+	deadlineAt: field.string({ required: true, index: true, immutable: true }),
+	createdAt: field.string({ required: true, immutable: true }),
+	updatedAt: field.string({ required: true }),
+} as const;
+
+export const agentJoinEntity = entity("agent_join", agentJoinFields);
+
+/**
+ * One child landed. The row IS the counter.
+ *
+ * A counter column would need `$inc`, which the update patch has no arithmetic for and Mongo's
+ * `assertUpdateKeys` blocks outright. CAS-on-the-counter is expressible but costs two round trips per
+ * attempt and O(N) retries under simultaneous completion — worse in exactly the regime that provokes
+ * it. Counting rows is exact and portable, and the primary key makes redelivery free.
+ */
+export const agentJoinArrivalFields = {
+	/** = sha256(joinId ‖ NUL ‖ childRunId). THE IDEMPOTENCE FENCE: the fast path and the reconciler
+	 *  both record arrivals, and they routinely record the same one. */
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
+	joinId: field.string({ required: true, index: true, immutable: true }),
+	childRunId: field.string({ required: true, index: true, immutable: true }),
+	/**
+	 * How the child ended. Recorded because the parent has to be able to tell "it answered" from "it
+	 * died", and by the time the parent reads this the run row may have been pruned.
+	 *
+	 * The child's TEXT is deliberately not copied here. It lives in the child's thread, behind
+	 * `listMessages` — a door that already audits and `view`-gates. A copy would be a second home for
+	 * tokenized content in a table with no `pii` annotation on it.
+	 */
+	outcome: field.enum(
+		["completed", "failed", "cancelled", "timed_out"] as const,
+		{ required: true, immutable: true },
+	),
+	arrivedAt: field.string({ required: true, immutable: true }),
+} as const;
+
+export const agentJoinArrivalEntity = entity(
+	"agent_join_arrival",
+	agentJoinArrivalFields,
+);
+
+/**
+ * The park itself — one row per parked run, and the thing that knows how to wake it.
+ *
+ * `arming → armed` is what stamps `checkpointId`, because the tool that requests the wait cannot know
+ * it: the loop persists the checkpoint AFTER the tool returns. The plugin's event sink learns it from
+ * `run.awaiting` and completes the arm. A wait still `arming` when its join fires is not lost — the
+ * reconciler resolves a checkpoint from the run itself.
+ */
+export const agentWaitFields = {
+	/** = waitId. The token the run carries out of the loop, so the row is addressable by exactly what
+	 *  a waker holds. */
+	id: field.string({
+		required: true,
+		primaryKey: true,
+		unique: true,
+		immutable: true,
+	}),
+	runId: field.string({ required: true, index: true, immutable: true }),
+	reason: field.enum(["children", "inbox", "paused"] as const, {
+		required: true,
+		immutable: true,
+	}),
+	joinId: field.string({ index: true, immutable: true }),
+	/** Stamped by the arm, absent until then. Not `required`: the row is written by the tool, and the
+	 *  checkpoint does not exist yet at that moment. */
+	checkpointId: field.string({ index: true }),
+	status: field.enum(["arming", "armed", "fired", "cancelled"] as const, {
+		required: true,
+		index: true,
+	}),
+	deadlineAt: field.string({ required: true, index: true, immutable: true }),
+	armedAt: field.string({}),
+	firedAt: field.string({}),
+	createdAt: field.string({ required: true, immutable: true }),
+	updatedAt: field.string({ required: true }),
+} as const;
+
+export const agentWaitEntity = entity("agent_wait", agentWaitFields);
+
 /** The models the plugin contributes via `plugin.schema`. */
 export const subagentModels: Record<
 	string,
@@ -97,6 +219,9 @@ export const subagentModels: Record<
 > = {
 	[agentEdgeEntity.name]: { fields: agentEdgeEntity.fields },
 	[agentLinkEntity.name]: { fields: agentLinkEntity.fields },
+	[agentJoinEntity.name]: { fields: agentJoinEntity.fields },
+	[agentJoinArrivalEntity.name]: { fields: agentJoinArrivalEntity.fields },
+	[agentWaitEntity.name]: { fields: agentWaitEntity.fields },
 };
 
 /**
@@ -144,6 +269,30 @@ export function childThreadId(childRunId: string): string {
 /** The address-book row id — one alias per owner. */
 export function agentLinkId(ownerRunId: string, alias: string): string {
 	return bytesToHex(sha256(utf8ToBytes(`${ownerRunId}\u0000${alias}`)));
+}
+
+/**
+ * The wait token a parked run carries out: `sha256(runId ‖ NUL ‖ step)`.
+ *
+ * KEYED ON THE STEP, which is replay-stable — a resumed run re-enters the loop at the step its
+ * checkpoint named, so an `await` re-called in that step derives the wait it already armed rather
+ * than a second one. A random token would mint a fresh wait per attempt and leave the first armed,
+ * parked against a checkpoint nothing is going to resume.
+ */
+export function agentWaitId(input: { runId: string; step: number }): string {
+	return bytesToHex(
+		sha256(utf8ToBytes(`wait\u0000${input.runId}\u0000${input.step}`)),
+	);
+}
+
+/** The barrier's id — one join per wait, derived so a half-written arm re-derives its own. */
+export function agentJoinId(ownerRunId: string, waitId: string): string {
+	return bytesToHex(sha256(utf8ToBytes(`${ownerRunId}\u0000${waitId}`)));
+}
+
+/** The arrival fence — one row per (join, child), whichever path records it. */
+export function agentArrivalId(joinId: string, childRunId: string): string {
+	return bytesToHex(sha256(utf8ToBytes(`${joinId}\u0000${childRunId}`)));
 }
 
 /** The alias a child always knows its parent by. Reserved: a spawn may not claim it. */

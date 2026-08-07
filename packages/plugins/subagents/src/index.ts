@@ -1,10 +1,19 @@
-// subagents() — a run spawns child runs.
+// subagents() — a run spawns child runs, and can stop to wait for them.
 //
-// One line of host wiring. The plugin owns two tables, registers one capability, and contributes two
-// model-facing tools. Everything that decides anything is either a database row or the governance
-// floor; nothing here holds authority of its own.
+// One line of host wiring. The plugin owns five tables, registers one capability, and contributes
+// three model-facing tools. Everything that decides anything is either a database row or the
+// governance floor; nothing here holds authority of its own.
+//
+// It reaches OUTWARD in exactly two places, and both are scheduled rather than called: an event sink
+// that hears a child end, and a cron reconciler that goes and asks. Neither is optional — see
+// `$HasCron` — because the fast one cannot see a failure and the slow one is the only thing that can.
 
-import type { BusyclawPlugin, CapabilityContext } from "@busyclaw/contracts";
+import type {
+	BusyclawCronContext,
+	BusyclawPlugin,
+	BusyclawPluginConfigureContext,
+	CapabilityContext,
+} from "@busyclaw/contracts";
 import { configurationError, govern } from "@busyclaw/contracts";
 import { jsonSchema, tool } from "ai";
 import { buildAgentsApi } from "./api";
@@ -12,8 +21,11 @@ import {
 	type AgentCapability,
 	createAgentCapability,
 	type SpawnEngine,
+	type SpawnMessages,
 	type SpawnThreads,
 } from "./capability";
+import type { JoinCheckpoints, JoinEngine } from "./join";
+import { onRunEvent, reconcileJoins } from "./reconcile";
 import { subagentModels } from "./schema";
 import { createSubagentStore, type SubagentStore } from "./store";
 
@@ -26,21 +38,59 @@ export type SubagentsConfig = {
 	maxDepth?: number;
 	/** How many children one run may have. Counted over edge rows, so it holds across processes. */
 	maxChildren?: number;
+	/**
+	 * How long a parent may stay parked on its children before the reconciler wakes it with whatever
+	 * landed. Default 15 minutes.
+	 *
+	 * There is no "no deadline" — the schema makes one required. A crashed child dead-letters without
+	 * writing an arrival, so a parent with no deadline is a run that never ends, and that is this
+	 * architecture's default failure rather than an unlucky case.
+	 */
+	joinTimeoutMs?: number;
+	/**
+	 * How many barriers one reconciler pass examines. Default 100.
+	 *
+	 * A bound rather than "all of them", because this runs on a cron tick that something is waiting
+	 * for. Whatever is left waits for the next pass, which is the same latency the deadline already
+	 * promises.
+	 */
+	reconcileBatch?: number;
 };
 
 export type { AgentTreeNode } from "./api";
-export type { AgentCapability, AgentChildStatus } from "./capability";
+export type {
+	AgentAwaitResult,
+	AgentCapability,
+	AgentChildResult,
+	AgentChildStatus,
+} from "./capability";
+export type { JoinCheckpoints, JoinEngine } from "./join";
+export { arrivalOutcome, settleIfMet } from "./join";
+export type { ReconcileReport } from "./reconcile";
+export { onRunEvent, reconcileJoins } from "./reconcile";
 export {
+	agentArrivalId,
 	agentEdgeEntity,
 	agentEdgeFields,
+	agentJoinArrivalEntity,
+	agentJoinEntity,
+	agentJoinId,
 	agentLinkEntity,
 	agentLinkFields,
 	agentLinkId,
+	agentWaitEntity,
+	agentWaitId,
 	childRunId,
 	PARENT_ALIAS,
 	subagentModels,
 } from "./schema";
-export type { AgentEdge, SubagentStore } from "./store";
+export type {
+	AgentArrival,
+	AgentEdge,
+	AgentJoin,
+	AgentWait,
+	SubagentStore,
+} from "./store";
 export { createSubagentStore } from "./store";
 
 /** The name the stamped tools ask for, and the name the plugin registers under. */
@@ -63,15 +113,48 @@ const spawnInput = jsonSchema<{ alias: string; prompt: string }>({
 	required: ["alias", "prompt"],
 });
 
-export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
+const awaitInput = jsonSchema<{ aliases?: string[]; mode?: "all" | "any" }>({
+	type: "object",
+	properties: {
+		aliases: {
+			type: "array",
+			items: { type: "string" },
+			description:
+				"Which of your subagents to wait for, by the aliases you gave them. Omit to wait for all of them.",
+		},
+		mode: {
+			type: "string",
+			enum: ["all", "any"],
+			description:
+				"`all` (the default) comes back when every one has finished; `any` comes back as soon as the first does.",
+		},
+	},
+});
+
+// ANNOTATED `BusyclawPlugin<"has-cron">`, not the bare `BusyclawPlugin` this used to say. The bare
+// one widens the phantom to the whole flag union, and the phantom is the entire mechanism by which a
+// host is made to supply a `cronHandler` — under the wide annotation the requirement is a comment.
+// (Inferring the return type would carry it too, but the inferred type cannot be named without
+// reaching into the AI SDK's internals, so it has to be written down.)
+export function subagents(
+	config: SubagentsConfig = {},
+): BusyclawPlugin<"has-cron"> {
 	const limits = {
 		maxDepth: config.maxDepth ?? 3,
 		maxChildren: config.maxChildren ?? 8,
 	};
+	const joinTimeoutMs = config.joinTimeoutMs ?? 15 * 60 * 1000;
+	const reconcileBatch = config.reconcileBatch ?? 100;
 	// Filled by `configure`, read at CALL time. This is the binding the static-registration rule
 	// exists for: the capability needs the assembled claw, which is being built around this plugin.
 	let wired:
-		| { engine: () => SpawnEngine; threads: SpawnThreads; store: SubagentStore }
+		| {
+				engine: () => SpawnEngine & JoinEngine;
+				threads: SpawnThreads;
+				messages?: SpawnMessages;
+				checkpoints?: JoinCheckpoints;
+				store: SubagentStore;
+		  }
 		| undefined;
 	const now = () => new Date().toISOString();
 
@@ -85,18 +168,29 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 		return wired;
 	};
 
-	const capability = (ctx: CapabilityContext): AgentCapability =>
-		createAgentCapability({
+	const capability = (ctx: CapabilityContext): AgentCapability => {
+		const bound = requireWired();
+		return createAgentCapability({
 			ctx,
-			engine: requireWired().engine(),
-			threads: requireWired().threads,
-			store: requireWired().store,
+			engine: bound.engine(),
+			threads: bound.threads,
+			...(bound.messages !== undefined ? { messages: bound.messages } : {}),
+			store: bound.store,
 			limits,
+			joinTimeoutMs,
 			now,
 		});
+	};
 
 	return {
 		id: "subagents",
+		// A parent that waits needs something that runs later. The event sink covers the endings the
+		// runtime announces, and a child that CRASHED announces none of them — it returns through the
+		// worker's catch, and the two dead-letter paths emit nothing at all. So without a scheduled
+		// reconciler a parent parked on a dead child waits out its whole deadline, and a deployment that
+		// never ticks leaves it parked for good. Declared rather than documented: the host is made to
+		// supply a `cronHandler` at compile time.
+		$HasCron: "has-cron",
 		$RequiresDatabase: true,
 		schema: subagentModels,
 		// STATIC, read before `configure`. See the field's own doc: the factory closes over `wired`,
@@ -131,8 +225,44 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 					}),
 					{ capability: AGENT_CAPABILITY, access: "read" },
 				),
+				await: govern(
+					tool({
+						description:
+							"Wait for subagents you started to finish, and read what they answered. If they are not done, your turn STOPS here and resumes automatically once they are — so call this and say nothing after it. When you come back, call it again to collect the answers.",
+						inputSchema: awaitInput,
+						execute: async (args, options) =>
+							capabilityFrom(options).awaitChildren(
+								args as { aliases?: string[]; mode?: "all" | "any" },
+							),
+					}),
+					// READ. Waiting for a child and creating one are different permissions, and the
+					// dangerous one is `spawn`: this reads results from runs the caller already parents.
+					{ capability: AGENT_CAPABILITY, access: "read" },
+				),
 			},
 		},
+		// STATIC, like the capability map and for the same reason: sinks are read off the raw plugin
+		// before `configure` runs. It closes over `wired`, which `configure` fills — and it is only ever
+		// called at runtime, by which time it is set.
+		eventSinks: [
+			{
+				emit: async (event: { type: string; runId?: string }) => {
+					// A claw with no database never wired this plugin, so there is nothing to record into
+					// and nothing to wake. Silent rather than loud: a sink that throws is warned and
+					// dropped, and this one would do it on every event of every run.
+					if (wired === undefined) return;
+					await onRunEvent({
+						store: wired.store,
+						engine: wired.engine(),
+						...(wired.checkpoints !== undefined
+							? { checkpoints: wired.checkpoints }
+							: {}),
+						event: event as { type: string; runId?: string },
+						now: now(),
+					});
+				},
+			},
+		],
 		api: () =>
 			({
 				agents: buildAgentsApi({
@@ -140,10 +270,11 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 					threads: () => requireWired().threads,
 					store: () => requireWired().store,
 					limits,
+					joinTimeoutMs,
 					now,
 				}),
 			}) as never,
-		configure(context) {
+		configure(context: BusyclawPluginConfigureContext) {
 			const adapter = context.adapter;
 			if (adapter === undefined) {
 				throw configurationError("subagents() requires a database", {
@@ -168,11 +299,54 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 				});
 			}
 			wired = {
-				engine: () => resolveEngine() as SpawnEngine,
+				engine: () => resolveEngine() as SpawnEngine & JoinEngine,
 				threads: threads as SpawnThreads,
+				// OPTIONAL, both of them, and they degrade to different things. Without `messages` a join
+				// returns outcomes but no text; without `checkpoints` a wait that the sink never armed
+				// cannot be woken by the reconciler either, because neither knows where the parent parked.
+				...(context.clawsStore?.messages !== undefined
+					? { messages: context.clawsStore.messages as SpawnMessages }
+					: {}),
+				...(context.clawsStore?.checkpoints !== undefined
+					? { checkpoints: context.clawsStore.checkpoints as JoinCheckpoints }
+					: {}),
 				store: createSubagentStore(adapter),
 			};
-			return undefined;
+			return {
+				// THE AUTHORITATIVE PASS. Registered here rather than statically because it is the runtime
+				// half — and it must run, on some schedule, on any deployment where a parent can wait: it
+				// is the only thing that ever learns a child failed.
+				cron: [
+					{
+						id: "subagents.reconcile",
+						handler: async (ctx: BusyclawCronContext) => {
+							const bound = requireWired();
+							const report = await reconcileJoins({
+								store: bound.store,
+								engine: bound.engine(),
+								...(bound.checkpoints !== undefined
+									? { checkpoints: bound.checkpoints }
+									: {}),
+								limit: ctx.limit ?? reconcileBatch,
+								now: now(),
+							});
+							return {
+								processed: report.examined,
+								// `limit` says "there was more waiting" — the caller's cue to tick again rather
+								// than wait a whole interval. A full batch that reported `processed` would look
+								// identical to a quiet one that happened to fill.
+								status:
+									report.deferred > 0
+										? "limit"
+										: report.examined === 0
+											? "idle"
+											: "processed",
+								data: report,
+							};
+						},
+					},
+				],
+			};
 		},
 	};
 }

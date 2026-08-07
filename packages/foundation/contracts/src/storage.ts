@@ -137,6 +137,25 @@ export type Adapter = {
 		select?: string[];
 	}) => Promise<unknown[]>;
 	count: (data: { model: string; where?: Where[] }) => Promise<number>;
+	/**
+	 * Update ONE matching row and return it — or `null` when the `where` matched nothing.
+	 *
+	 * THAT RETURN IS A CONTRACT, not an implementation detail, and it is what makes this the
+	 * compare-and-swap primitive. Put the expected state in the `where` (`{id}` AND
+	 * `{status: "waiting"}`) and exactly one concurrent caller gets a row back; every other one gets
+	 * `null` and knows it lost. Several mechanisms are built on precisely that — a task claim, a
+	 * conditional run transition, a subagent barrier electing the single waker that resumes a parked
+	 * parent. Without it they would all have to read-then-write, which is the race they exist to avoid.
+	 *
+	 * Written down HERE because it used to live only in adapter behaviour and one atomicity test
+	 * (`packages/storage/drizzle/tests/mysql-atomicity.test.ts` — eight concurrent claims, one winner).
+	 * A new adapter passing the shape tests could satisfy the types and quietly break every CAS in the
+	 * repo.
+	 *
+	 * `updateMany`'s COUNT is not a substitute: Mongo returns `modifiedCount`, so a patch that writes
+	 * an unchanged value returns 0 there and N on SQL — the same call answering "did I win" differently
+	 * per backend.
+	 */
 	update: (data: {
 		model: string;
 		where: Where[];

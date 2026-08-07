@@ -26,7 +26,14 @@ import {
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
-import { childRunId, childThreadId, PARENT_ALIAS } from "./schema";
+import { arrivalOutcome, settleIfMet } from "./join";
+import {
+	agentJoinId,
+	agentWaitId,
+	childRunId,
+	childThreadId,
+	PARENT_ALIAS,
+} from "./schema";
 import type { SubagentStore } from "./store";
 
 /**
@@ -96,6 +103,15 @@ async function openChildThread(input: {
 	return { clawId: input.clawId, threadId };
 }
 
+/** The transcript reader, narrowed to the one question a join asks: what did this child answer. */
+export type SpawnMessages = {
+	listForThread: (input: {
+		threadId: string;
+		runId?: string;
+		limit?: number;
+	}) => Promise<readonly { role: string; content: unknown }[]>;
+};
+
 /** What the stamped tool receives under the name it asked for. */
 export type AgentCapability = {
 	spawnChild: (input: {
@@ -103,6 +119,32 @@ export type AgentCapability = {
 		prompt: string;
 	}) => Promise<{ childRunId: string }>;
 	status: () => Promise<readonly AgentChildStatus[]>;
+	/**
+	 * Wait for children, and park the run if they are not done.
+	 *
+	 * TWO OUTCOMES, and the caller cannot tell which it will get: `settled` when the results were
+	 * already there (the run keeps going, having spent one tool call), `waiting` when it parked. That
+	 * asymmetry is deliberate — a model asking "are they done" and a model asking "wait for them" is
+	 * the same question, and making it one call means the answer cannot be raced between them.
+	 */
+	awaitChildren: (input: {
+		aliases?: readonly string[];
+		mode?: "all" | "any";
+	}) => Promise<AgentAwaitResult>;
+};
+
+export type AgentAwaitResult =
+	| { status: "settled"; results: readonly AgentChildResult[] }
+	| { status: "waiting"; waitId: string; pending: readonly string[] };
+
+export type AgentChildResult = {
+	alias: string;
+	childRunId: string;
+	/** How the run ended, as recorded at arrival — the run row may be gone by now. */
+	outcome: string;
+	/** The child's last words, read from its own thread. Absent for a child that never got to speak
+	 *  (a crash, a denial) — which is exactly when `outcome` is the part that matters. */
+	text?: string;
 };
 
 export type AgentChildStatus = {
@@ -130,8 +172,12 @@ export function createAgentCapability(input: {
 	ctx: CapabilityContext;
 	engine: SpawnEngine;
 	threads: SpawnThreads;
+	messages?: SpawnMessages;
 	store: SubagentStore;
 	limits: SpawnLimits;
+	/** How long a parent may wait before the reconciler gives up on it and wakes it with what landed.
+	 *  Required by the schema, so there is no shape in which a parent waits forever. */
+	joinTimeoutMs: number;
 	now: () => string;
 }): AgentCapability {
 	const { ctx, engine, store, limits } = input;
@@ -331,5 +377,172 @@ export function createAgentCapability(input: {
 			}
 			return out;
 		},
+
+		async awaitChildren({ aliases, mode }) {
+			const { runId: parentRunId } = requireRun();
+			// Named aliases, or every child this run has. `children` rather than `agent_link`, because a
+			// link is an introduction and an edge is parenthood: a run may be introduced to a sibling it
+			// has no business waiting on, and "wait for everyone I know" is not what `await` means.
+			const edges = await store.children(parentRunId);
+			const chosen =
+				aliases === undefined || aliases.length === 0
+					? edges
+					: edges.filter((edge) => aliases.includes(edge.alias));
+			if (chosen.length === 0) {
+				throw stateError("there is nothing to wait for", {
+					reason:
+						aliases === undefined || aliases.length === 0
+							? "this run has no children"
+							: `no child of this run is called ${aliases.join(", ")}`,
+				});
+			}
+			// REFUSED WITHOUT A LOOP TO PARK. A capability that armed a wait it could not park would
+			// leave a durable row nobody will ever answer, and the run would carry on as if it had asked
+			// for nothing — the worst of both.
+			if (ctx.requestAwait === undefined || ctx.step === undefined) {
+				throw stateError("this run cannot wait", {
+					reason:
+						"waiting means parking, and this invocation has no loop to park (an ad-hoc generate)",
+				});
+			}
+
+			const waitId = agentWaitId({ runId: parentRunId, step: ctx.step });
+			const joinId = agentJoinId(parentRunId, waitId);
+			const stamp = input.now();
+			const threshold = mode === "any" ? 1 : chosen.length;
+
+			// THE JOIN FIRST, because an arrival names one — and it is derived, so a retry of this exact
+			// step re-opens the join it already had rather than a second one beside it.
+			const join = await store.openJoin({
+				id: joinId,
+				ownerRunId: parentRunId,
+				waitId,
+				expected: chosen.length,
+				threshold,
+				// The schema will not hold a row without one. A parent that could wait forever is this
+				// architecture's default failure, not an edge case.
+				deadlineAt: new Date(
+					Date.parse(stamp) + input.joinTimeoutMs,
+				).toISOString(),
+				now: stamp,
+			});
+
+			// ALREADY SETTLED, and this is the path a resumed parent takes. It re-enters the step its
+			// checkpoint named and calls `await` again; the id is derived from (run, step), so it finds
+			// the barrier that WOKE it. Parking on that is the waiter-nobody-wakes case in its most
+			// ordinary form — the thing that would have sent the wake already sent it.
+			//
+			// Checked before anything else touches the barrier, because everything below assumes it is
+			// still open: recording arrivals into a fired join is noise, and `settleIfMet` correctly
+			// refuses to settle it twice — which is exactly what read as "not ready, park again".
+			if (join.status !== "waiting") {
+				return { status: "settled", results: await results(joinId, edges) };
+			}
+
+			// WHAT HAS ALREADY LANDED. Children finish while the parent is thinking, and a run that
+			// parked for results it already had would wait for a wake nobody is going to send: the sink
+			// fires on the transition, and these already happened.
+			for (const edge of chosen) {
+				const run = await engine.runs?.get(edge.id);
+				const outcome =
+					run === null || run === undefined
+						? // No run behind the edge. Either it was pruned or the spawn crashed between the
+							// edge and `startRun` — and both mean nothing is ever going to complete it, so
+							// counting it as failed is what stops the parent hanging on a child that does not
+							// exist.
+							("failed" as const)
+						: arrivalOutcome(run.status);
+				if (outcome === null) continue;
+				await store.recordArrival({
+					joinId,
+					childRunId: edge.id,
+					outcome,
+					now: stamp,
+				});
+			}
+
+			// SETTLE BEFORE PARKING, which is the synchronous return: if the threshold is already met,
+			// this fires the join and there is nothing to wait for. `woke` is false — there is no park
+			// yet — and that is the point.
+			const settled = await settleIfMet({
+				store,
+				engine,
+				joinId,
+				now: stamp,
+			});
+			if (settled.settled) {
+				return { status: "settled", results: await results(joinId, edges) };
+			}
+
+			// PARK. The wait row goes down BEFORE the request, so a crash between them leaves a durable
+			// row the reconciler can find rather than a parked run nothing knows about.
+			await store.openWait({
+				id: waitId,
+				runId: parentRunId,
+				reason: "children",
+				joinId,
+				deadlineAt: new Date(
+					Date.parse(stamp) + input.joinTimeoutMs,
+				).toISOString(),
+				now: stamp,
+			});
+			ctx.requestAwait(waitId);
+
+			const arrived = new Set(
+				(await store.arrivals(joinId)).map((a) => a.childRunId),
+			);
+			return {
+				status: "waiting",
+				waitId,
+				pending: chosen
+					.filter((edge) => !arrived.has(edge.id))
+					.map((edge) => edge.alias),
+			};
+		},
 	};
+
+	/** What each arrived child said, read from its own thread rather than copied at arrival. */
+	async function results(
+		joinId: string,
+		edges: readonly { id: string; alias: string }[],
+	): Promise<readonly AgentChildResult[]> {
+		const byRun = new Map(edges.map((edge) => [edge.id, edge.alias]));
+		const out: AgentChildResult[] = [];
+		for (const arrival of await store.arrivals(joinId)) {
+			const text = await lastAssistantText(arrival.childRunId);
+			out.push({
+				alias: byRun.get(arrival.childRunId) ?? arrival.childRunId,
+				childRunId: arrival.childRunId,
+				outcome: arrival.outcome,
+				...(text !== undefined ? { text } : {}),
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * The child's last words.
+	 *
+	 * From the child's THREAD, not from the arrival row and not from the run's events. The thread is a
+	 * door that already audits and `view`-gates; copying the text onto the arrival would put tokenized
+	 * content in a second table with no `pii` annotation, and the run's `run.completed` payload is
+	 * allowlisted precisely so it does not serve content.
+	 */
+	async function lastAssistantText(
+		childRunId: string,
+	): Promise<string | undefined> {
+		const rows = await input.messages?.listForThread({
+			threadId: childThreadId(childRunId),
+			runId: childRunId,
+		});
+		if (rows === undefined) return undefined;
+		for (let i = rows.length - 1; i >= 0; i -= 1) {
+			const row = rows[i];
+			if (row?.role !== "assistant") continue;
+			return typeof row.content === "string"
+				? row.content
+				: JSON.stringify(row.content);
+		}
+		return undefined;
+	}
 }
