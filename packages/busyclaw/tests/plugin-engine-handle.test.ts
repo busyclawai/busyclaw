@@ -48,12 +48,15 @@ async function originOf(
 /** A plugin that captures the engine thunk, the way subagents does. */
 function capture() {
 	let resolve: (() => unknown) | undefined;
+	let threads: { create: (i: unknown) => Promise<unknown> } | undefined;
 	const plugin = {
 		id: "keeper",
 		configure(ctx: BusyclawPluginConfigureContext) {
 			// STORED, NOT CALLED. The handle does not exist yet — the runtime is built from these
 			// plugins and the engine from that runtime.
 			resolve = ctx.engine;
+			// The BOUND store view, not the shared one — this is what stamps the plugin's origin.
+			threads = ctx.clawsStore?.threads as typeof threads;
 			return undefined;
 		},
 	};
@@ -61,12 +64,17 @@ function capture() {
 		if (resolve === undefined) throw new Error("configure never ran");
 		return resolve() as PluginEngine;
 	};
-	return { engine, plugin, sawThunk: () => resolve !== undefined };
+	return {
+		engine,
+		plugin,
+		sawThunk: () => resolve !== undefined,
+		threads: () => threads,
+	};
 }
 
 function harness() {
 	const adapter = memoryAdapter();
-	const { engine, plugin, sawThunk } = capture();
+	const { engine, plugin, sawThunk, threads } = capture();
 	const claw = owned({
 		cronHandler: false,
 		database: adapter,
@@ -81,7 +89,7 @@ function harness() {
 		redaction: { posture: "raw" },
 		plugins: [plugin],
 	} as Parameters<typeof owned>[0]);
-	return { claw, engine, sawThunk };
+	return { claw, engine, sawThunk, threads };
 }
 
 describe("a plugin's engine handle", () => {
@@ -205,5 +213,85 @@ describe("a plugin's engine handle", () => {
 		// happened to be set.
 		expect(seen?.input).toEqual({});
 		expect(JSON.stringify(seen)).not.toContain("account number");
+	});
+});
+
+describe("core stamps its own work", () => {
+	it("stamps `core` on a run a CHAT TURN created", async () => {
+		// The commonest way a run is created, and the one that was missed: `sendMessage` builds its
+		// engine input separately from the `startRun` door, so stamping only the door left
+		// `run.origin` empty on nearly every row while the column claimed to answer "who started
+		// this". Found by asking the question, not by reading the code.
+		const { claw } = harness();
+		const agent = await (
+			claw as unknown as {
+				api: {
+					createClaw: (i: {
+						id: string;
+						name: string;
+					}) => Promise<{ id: string }>;
+					createThread: (i: {
+						id: string;
+						clawId: string;
+					}) => Promise<{ id: string }>;
+					sendMessage: (i: {
+						clawId: string;
+						threadId: string;
+						message: string;
+					}) => Promise<{ runId: string }>;
+				};
+			}
+		).api.createClaw({ id: "claw-chat", name: "Assistant" });
+		const api = (
+			claw as unknown as {
+				api: {
+					createThread: (i: {
+						id: string;
+						clawId: string;
+					}) => Promise<{ id: string }>;
+					sendMessage: (i: {
+						clawId: string;
+						threadId: string;
+						message: string;
+					}) => Promise<{ runId: string }>;
+				};
+			}
+		).api;
+		await api.createThread({ id: "thread-chat", clawId: agent.id });
+		const sent = await api.sendMessage({
+			clawId: agent.id,
+			threadId: "thread-chat",
+			message: "hello",
+		});
+
+		expect(await originOf(claw, sent.runId)).toBe("core");
+	});
+
+	it("stamps `core` on a thread the api opened, and the plugin's id on one it opened", async () => {
+		const { claw, threads } = harness();
+		const agent = (
+			claw as unknown as {
+				api: {
+					createClaw: (i: {
+						id: string;
+						name: string;
+					}) => Promise<{ id: string }>;
+					createThread: (i: {
+						id: string;
+						clawId: string;
+					}) => Promise<{ id: string }>;
+					listThreads: (i: { clawId: string }) => Promise<{ id: string }[]>;
+				};
+			}
+		).api;
+		const made = await agent.createClaw({ id: "claw-t", name: "A" });
+		await agent.createThread({ id: "t-core", clawId: made.id });
+
+		// The plugin opens one through its own bound store view — the thing that stamps its id.
+		await threads()?.create({ id: "t-plugin", clawId: made.id });
+
+		// The default list is the conversations a person started — the plugin's is not in it.
+		const listed = await agent.listThreads({ clawId: made.id });
+		expect(listed.map((t) => t.id)).toEqual(["t-core"]);
 	});
 });

@@ -231,9 +231,6 @@ export function createClawsStore(
 					data: {
 						...valid,
 						id: valid.id ?? newId(),
-						// A thread nobody attributed is one a person started. The per-plugin store view
-						// overrides this; nothing else has an origin to claim.
-						origin: valid.origin ?? "core",
 						status: "active",
 						currentSequence: 0,
 						createdAt: ts,
