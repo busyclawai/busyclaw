@@ -204,8 +204,9 @@ export function buildAgentsApi(input: {
 				const runIds = [args.rootRunId, ...edges.map((edge) => edge.id)];
 
 				let cancelled = 0;
+				const stillSpending: string[] = [];
 				for (const runId of runIds) {
-					// COOPERATIVE. `controlRun` latches the intent; a run with nothing in flight settles
+					// COOPERATIVE. `controlRun` LATCHES the intent; a run with nothing in flight settles
 					// synchronously and a running one stops at its next control point. `accepted: false`
 					// means it had already finished, which is not a failure — it is the common case for
 					// the children that did their job before anyone asked.
@@ -217,7 +218,14 @@ export function buildAgentsApi(input: {
 							: {}),
 						reason: `subtree of ${args.rootRunId} cancelled`,
 					});
-					if (result?.accepted === true) cancelled += 1;
+					if (result?.accepted !== true) continue;
+					cancelled += 1;
+					// LATCHED BUT NOT HONOURED YET, and the caller is told so by name. This run holds a
+					// lease and keeps spending — tokens, and whatever its in-flight tool call is doing —
+					// until it reaches its next control point, which is after the model call it is
+					// already inside. Reporting only a count would say "cancelled" about work that is
+					// still running, which is the one thing a cancel must not lie about.
+					if (result.settled !== true) stillSpending.push(runId);
 				}
 
 				// AND THE BARRIERS THEY WERE WAITING ON. A cancelled parent still owns an open join, and
@@ -238,7 +246,7 @@ export function buildAgentsApi(input: {
 						}
 					}
 				}
-				return { runs: runIds.length, cancelled, joins };
+				return { runs: runIds.length, cancelled, joins, stillSpending };
 			}),
 	});
 }

@@ -65,7 +65,12 @@ const agentsOf = (claw: unknown) =>
 					cancelTree: (
 						i: { rootRunId: string },
 						c?: { principal?: string },
-					) => Promise<{ runs: number; cancelled: number; joins: number }>;
+					) => Promise<{
+						runs: number;
+						cancelled: number;
+						joins: number;
+						stillSpending: string[];
+					}>;
 				};
 			};
 		}
@@ -289,5 +294,32 @@ describe("claw.api.agents.cancelTree", () => {
 		await expect(
 			agentsOf(claw).cancelTree({ rootRunId }, { principal: bob }),
 		).rejects.toThrow(/app-authz denied/);
+	});
+});
+
+describe("cancelTree is honest about what it did not stop", () => {
+	it("names the runs still spending, rather than counting them as cancelled", async () => {
+		// A CANCEL MUST NOT LIE. `controlRun` LATCHES the intent — a run holding a lease keeps going,
+		// and keeps spending, until it reaches its next control point, which is after the model call it
+		// is already inside. A count alone would report "cancelled: 3" about work that is still running.
+		//
+		// Here nothing is in flight, so every stop settles synchronously and the list is empty — which
+		// is the assertion that the field means what it says rather than being decoration. The
+		// limitation is stated by the SHAPE, so a caller cannot fail to see it.
+		const { claw } = await harness();
+		const alice = userPrincipal("alice");
+		const rootRunId = await claw.openRun(alice);
+		await agentsOf(claw).spawn(
+			{ parentRunId: rootRunId, alias: "a", prompt: "go" },
+			{ principal: alice },
+		);
+
+		const result = await agentsOf(claw).cancelTree(
+			{ rootRunId },
+			{ principal: alice },
+		);
+
+		expect(result.cancelled).toBe(2);
+		expect(result.stillSpending).toEqual([]);
 	});
 });
