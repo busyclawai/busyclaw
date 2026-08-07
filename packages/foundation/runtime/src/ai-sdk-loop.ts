@@ -450,7 +450,7 @@ export async function runAiSdkLoop(
 	// are byte-identical.
 	const parkHere = async (
 		step: number,
-		reason: RunParkReason | "deadline" | "handover",
+		reason: RunParkReason | "deadline" | "handover" | { awaiting: string },
 	): Promise<AiSdkLoopResult> => {
 		if (!input.persistYieldCheckpoint) {
 			throw configurationError(
@@ -464,22 +464,54 @@ export async function runAiSdkLoop(
 			messages,
 			deliveredThrough,
 		});
-		// The two differ in ONE thing, and it is the thing the worker branches on: a yield leaves a
-		// continuation behind, a park does not. Same checkpoint, same transcript, different answer to
-		// "does this run come back on its own?".
+		// THREE ANSWERS TO ONE QUESTION — "does this run come back on its own?" — off one checkpoint.
 		//
-		// A HANDOVER answers yes, which is why it lands here rather than beside the suspends: the run
-		// is not waiting for anybody, it is continuing under a different principal. The engine holds
-		// who; this loop never learns that principals exist.
-		return reason === "deadline" || reason === "handover"
-			? {
+		// An AWAIT answers "only if somebody presents the token", and it is the one whose stop nothing
+		// downstream can reconstruct: a yield's continuation is already enqueued and a park's run is
+		// findable by an operator, but an awaiting run has no due row at all. So it carries the waitId
+		// out with it.
+		//
+		// NARROWED ON THE KEY, not on `typeof`. `typeof reason === "object"` alone would claim every
+		// object shape this union ever grows: a second object reason added later lands in this branch,
+		// reads `.awaiting` as undefined, and parks with an empty waitId — a run waiting on a token
+		// nobody minted, and nothing throws. Asking for the key sends that shape to the guard instead,
+		// where it stops being a runtime mystery and starts being a compile error.
+		if (typeof reason === "object") {
+			if (!("awaiting" in reason)) {
+				const unreachable: never = reason;
+				throw stateError("unhandled park reason", { reason: unreachable });
+			}
+			return {
+				status: "awaiting",
+				text: textSoFar(),
+				steps: step,
+				checkpointId,
+				waitId: reason.awaiting,
+				usage: runUsage,
+			};
+		}
+		// The string reasons, switched rather than compared, for the same reason: a fifth one added to
+		// the union without a decision here is a compile error at `unreachable`, not a run that quietly
+		// reports `parked` because that is what the last branch happened to be.
+		switch (reason) {
+			// A yield leaves a continuation behind, a park does not — that is the thing the worker
+			// branches on. Same checkpoint, same transcript.
+			//
+			// A HANDOVER leaves one too, which is why it sits here rather than beside the suspends: the
+			// run is not waiting for anybody, it is continuing under a different principal. The engine
+			// holds who; this loop never learns that principals exist.
+			case "deadline":
+			case "handover":
+				return {
 					status: "yielded",
 					text: textSoFar(),
 					steps: step,
 					checkpointId,
 					usage: runUsage,
-				}
-			: {
+				};
+			case "suspended":
+			case "stopped":
+				return {
 					status: "parked",
 					text: textSoFar(),
 					steps: step,
@@ -487,6 +519,11 @@ export async function runAiSdkLoop(
 					reason,
 					usage: runUsage,
 				};
+			default: {
+				const unreachable: never = reason;
+				throw stateError("unhandled park reason", { reason: unreachable });
+			}
+		}
 	};
 
 	let step = startStep;
@@ -517,6 +554,29 @@ export async function runAiSdkLoop(
 				}
 			}
 			if (verdict.park) return parkHere(step, verdict.park);
+		}
+
+		// A CAPABILITY ASKED TO WAIT, during the step that just ended.
+		//
+		// Here rather than where the tool ran, and that placement is the whole safety argument: at this
+		// point every tool result of that step is in `messages` and no call is pending, so the
+		// checkpoint is a legal resume point by construction — the same property the control park above
+		// relies on. Parking inside the tool would persist a transcript with a call outstanding.
+		//
+		// AFTER the control point, so an operator's stop outranks a run's own wait: somebody asking for
+		// this run to end should not have to wait for a subagent to finish first. And BEFORE the
+		// deadline arm, because a deadline yield would enqueue a continuation that resumes only to park
+		// here anyway — a wake, a model-less slice and a second checkpoint, for the same outcome.
+		//
+		// NOT CLEARED after reading, because there is nothing to clear it for: the loop returns here, and
+		// the `RunState` holding the latch is built per entry point (four `createRunState()` sites, one
+		// each for generate/stream/resume/approval-resume). A resumed slice therefore starts with an
+		// empty latch and parks again only if a tool asks again. A clear was written here first and
+		// deleted — no test could tell it apart from its absence, which is what dead code looks like
+		// when it is spelled as a safety measure.
+		const awaitingWaitId = input.state.awaitingWaitId;
+		if (awaitingWaitId !== undefined) {
+			return parkHere(step, { awaiting: awaitingWaitId });
 		}
 
 		// The deadline arm lives here too, so there is one park site rather than two. It requires

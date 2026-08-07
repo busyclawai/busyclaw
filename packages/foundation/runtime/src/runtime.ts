@@ -1680,6 +1680,12 @@ export function createRuntime<const Config extends RuntimeConfig>(
 								// child being pointed at somebody else's identity (D7).
 								principal: state.authority?.principal,
 								step: state.currentStep,
+								// The park REQUEST — a latch the loop reads at the top of the next step, never a
+								// park performed here. Bound to this run's state, so a capability can only ever
+								// stop the run it was built for; it holds no reference by which to name another.
+								requestAwait: (waitId: string) => {
+									state.awaitingWaitId = waitId;
+								},
 							});
 				// A tool asking for a capability nobody registered is a MISCONFIGURATION, not a tool that
 				// runs with one fewer argument. Silently omitting it means the tool discovers the absence

@@ -52,6 +52,24 @@ export type CapabilityContext = {
 	/** Which step of the loop is calling. REPLAY-STABLE, unlike a provider's tool-call id: a resume
 	 *  re-calls the tool and gets a new one, so anything derived from a call id forks on retry. */
 	readonly step: number | undefined;
+	/**
+	 * Ask this run to stop after the current step and wait for `waitId`.
+	 *
+	 * A REQUEST, not a park. It sets a latch the loop reads at the top of the next step — where every
+	 * tool result is already in the transcript and no call is outstanding, so the checkpoint it writes
+	 * is a legal resume point. A capability that could park where it stands would checkpoint a
+	 * transcript with a call in flight, and the resumed model would answer a question nobody asked.
+	 *
+	 * THE CALLER OWNS THE WAKE, and the runtime holds nothing to help: it never interprets `waitId`,
+	 * writes no timer, and enqueues nothing. A run parked this way is invisible to every drain until
+	 * whoever created the wait presents the token. So arm the wake BEFORE calling this — a durable row
+	 * somebody will find — or the request is a leak with a run attached.
+	 *
+	 * Absent when there is no loop to park: an ad-hoc `generate` outside a run, or any host whose
+	 * capability context was assembled without one. A capability that needs it must say so and refuse,
+	 * rather than arming a wait nothing will ever answer.
+	 */
+	readonly requestAwait?: (waitId: string) => void;
 };
 
 export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";

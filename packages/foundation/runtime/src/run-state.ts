@@ -26,6 +26,18 @@ export type RunState = {
 	currentMessages: ModelMessage[];
 	currentStep: number;
 	currentApprovalWaitId?: string;
+	/**
+	 * A capability asked this run to STOP AND WAIT, and this is the token whoever wakes it will present.
+	 *
+	 * Set through `CapabilityContext.requestAwait`, which is the only writer — a tool cannot reach this
+	 * object. Read at the top of the next step, where the transcript is a legal resume point by
+	 * construction: every tool result of the step that armed the wait is already in `messages` and no
+	 * call is pending. Parking inside the tool would checkpoint a transcript with a call outstanding.
+	 *
+	 * NOTHING CLEARS IT, and nothing needs to: this object is built per entry point, so a resumed slice
+	 * starts with an empty latch and parks again only if a tool asks again.
+	 */
+	awaitingWaitId?: string;
 	currentEffectId?: string;
 	runInstanceId?: string;
 	/** The run's identity — the engine run id when it has one (stable across attempts and yield
