@@ -108,7 +108,16 @@ export type ClawStore = {
 export type ThreadStore = {
 	create: (input: CreateThreadInput) => Promise<ThreadRecord>;
 	get: (id: string) => Promise<ThreadRecord | null>;
-	listForClaw: (clawId: string) => Promise<ThreadRecord[]>;
+	/**
+	 * The claw's threads. `"core"` ONLY by default — the conversations a person started.
+	 *
+	 * A plugin that opens threads for its own work (a subagent's transcript) tags them with its own
+	 * origin, and they stay out of this list unless asked for. `origin: "any"` returns everything for
+	 * an operator; a specific origin returns one subsystem's, which is what a plugin's own walk reads.
+	 */
+	listForClaw: (
+		input: string | { clawId: string; origin?: string | "any" },
+	) => Promise<ThreadRecord[]>;
 	archive: (id: string) => Promise<ThreadRecord | null>;
 };
 

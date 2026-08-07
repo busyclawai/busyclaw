@@ -1454,54 +1454,6 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		return ctx;
 	};
 
-	/**
-	 * Move a value out of one run's redaction container and into another's.
-	 *
-	 * REHYDRATE THERE, RE-REDACT HERE — the two halves are the whole point. A placeholder is only
-	 * meaningful inside the container that minted it, so handing a child a token the parent minted
-	 * gives it a string that resolves to nothing: it reaches the child's tool as the literal
-	 * `{{pii:…}}` text, with nothing thrown anywhere. Nothing in the tree crossed two containers
-	 * before this, so there is no prior art to have copied and no existing bug to have noticed.
-	 *
-	 * `subjectIds` has to ride along because token coherence does NOT survive the crossing: the two
-	 * containers mint different placeholders for the same person, so the destination's mapping has to
-	 * be told whose data it is or a later erasure request cannot reach the copy it just made.
-	 *
-	 * No `from`. The source is whatever container the CALLING run is in, pinned here — making a
-	 * foreign source unrepresentable rather than validating it, which is the same rule the plugin
-	 * `redact` door already holds ("ONLY within its own container").
-	 */
-	const translateInto =
-		(state: RunState, redactor: Redactor | undefined) =>
-		async <T>(
-			value: T,
-			to: { runId: string; subjectIds?: readonly string[] },
-		): Promise<T> => {
-			// No redactor ⇒ nothing was ever tokenized, so there is nothing to translate and the value
-			// is already what it appears to be.
-			if (redactor === undefined) return value;
-			// The SAME decision the context stamp makes, from the same function — not re-derived, and
-			// not read back out of the untyped context bag through `typeof` guards. That shape looks
-			// defensive and is the opposite: a container failing the guard would be silently dropped, the
-			// rehydrate would run UNCONTAINED, and the value would come back as the placeholder it went in
-			// as with nothing thrown — the precise failure this crossing exists to prevent, reintroduced
-			// inside the fix for it. `undefined` is a real answer here (an uncontained run mints
-			// uncontained) and it is reached deliberately, not by a guard falling through.
-			const plain = await redactor.rehydrateValue(
-				value,
-				runContainer(state.recording, state.runId),
-			);
-			return redactor.redactValue(plain, {
-				// The destination is a RUN container. A child has its own (D10) — it is not inside the
-				// parent's claw, which is what stops a token minted for one subtree resolving in another.
-				containerKind: "run",
-				containerId: to.runId,
-				...(to.subjectIds !== undefined
-					? { subjectIds: [...to.subjectIds] }
-					: {}),
-			});
-		};
-
 	const createRunCore = (
 		state: RunState,
 		approvalStoreOverride = approvalStore,
@@ -1689,7 +1641,6 @@ export function createRuntime<const Config extends RuntimeConfig>(
 								// child being pointed at somebody else's identity (D7).
 								principal: state.authority?.principal,
 								step: state.currentStep,
-								translate: translateInto(state, redactor),
 							});
 				// A tool asking for a capability nobody registered is a MISCONFIGURATION, not a tool that
 				// runs with one fewer argument. Silently omitting it means the tool discovers the absence

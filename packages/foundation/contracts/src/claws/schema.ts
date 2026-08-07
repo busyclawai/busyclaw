@@ -110,6 +110,23 @@ export const threadFields = {
 		doc: "The owning claw, fixed at create — a thread's access is its claw's (threads carry no scope columns of their own).",
 	}),
 	title: field.string(),
+	/**
+	 * WHICH SUBSYSTEM opened this thread — `"core"` for one a person started, else a plugin's id.
+	 *
+	 * The same word `run.origin` uses, deliberately: core learns "who made this" and nothing else. It
+	 * does NOT learn that subagents exist, that threads nest, or that there is a tree — a plugin that
+	 * opens threads for its own work owns whatever structure those threads have, and exposes its own
+	 * walk over them.
+	 *
+	 * What core does with it is one thing: `listForClaw` returns `"core"` threads by default. Without
+	 * that, a plugin opening a thread per unit of work fills a chat list with transcripts nobody
+	 * started, and every consumer has to remember to filter them out.
+	 */
+	origin: field.string({
+		index: true,
+		immutable: true,
+		doc: 'Which subsystem opened this thread — "core", or a plugin id. listForClaw returns "core" threads unless asked otherwise.',
+	}),
 	status: field.enum(threadStatusValues, { required: true }),
 	currentMessageId: field.string({
 		doc: "Id of the newest appended message — advanced by the store inside the append transaction; a new message's parentMessageId defaults to it.",

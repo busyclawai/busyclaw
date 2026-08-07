@@ -89,13 +89,7 @@ export type SpawningClaw = {
 // `ClawSchemaConfig`, which is not nameable from here — so an inferred signature is not portable and
 // tsc says so. The tests need four members; this names them.
 export function spawningClaw(
-	options: {
-		adapter?: Adapter;
-		maxDepth?: number;
-		maxChildren?: number;
-		/** Stand in for the runtime's container crossing. Identity unless a test supplies one. */
-		translate?: CapabilityContext["translate"];
-	} = {},
+	options: { adapter?: Adapter; maxDepth?: number; maxChildren?: number } = {},
 ): SpawningClaw {
 	const adapter = options.adapter;
 	if (adapter === undefined) throw new Error("harness needs an adapter");
@@ -120,9 +114,6 @@ export function spawningClaw(
 		plugins: [plugin],
 	} as Parameters<typeof createClaw>[0]);
 
-	const translate =
-		options.translate ?? (async <T>(value: T) => value satisfies T as T);
-
 	const capabilityFor = (input: SpawnRequest): AgentCapability => {
 		const factory = plugin.capabilities?.agent;
 		if (factory === undefined)
@@ -131,7 +122,6 @@ export function spawningClaw(
 			runId: input.parentRunId ?? "run-parent",
 			principal: input.principal,
 			step: input.step ?? 0,
-			translate,
 		}) as AgentCapability;
 	};
 

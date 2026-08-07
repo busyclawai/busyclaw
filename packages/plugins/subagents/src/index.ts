@@ -12,6 +12,7 @@ import {
 	type AgentCapability,
 	createAgentCapability,
 	type SpawnEngine,
+	type SpawnThreads,
 } from "./capability";
 import { subagentModels } from "./schema";
 import { createSubagentStore, type SubagentStore } from "./store";
@@ -69,7 +70,9 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 	};
 	// Filled by `configure`, read at CALL time. This is the binding the static-registration rule
 	// exists for: the capability needs the assembled claw, which is being built around this plugin.
-	let wired: { engine: () => SpawnEngine; store: SubagentStore } | undefined;
+	let wired:
+		| { engine: () => SpawnEngine; threads: SpawnThreads; store: SubagentStore }
+		| undefined;
 	const now = () => new Date().toISOString();
 
 	const requireWired = () => {
@@ -86,6 +89,7 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 		createAgentCapability({
 			ctx,
 			engine: requireWired().engine(),
+			threads: requireWired().threads,
 			store: requireWired().store,
 			limits,
 			now,
@@ -133,6 +137,7 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 			({
 				agents: buildAgentsApi({
 					engine: () => requireWired().engine(),
+					threads: () => requireWired().threads,
 					store: () => requireWired().store,
 					limits,
 					now,
@@ -155,8 +160,16 @@ export function subagents(config: SubagentsConfig = {}): BusyclawPlugin {
 			// THE THUNK IS STORED, NOT CALLED. The handle does not exist yet — the runtime is built
 			// from these plugins and the engine from that runtime — so this resolves at spawn time,
 			// long after assembly finished.
+			const threads = context.clawsStore?.threads;
+			if (threads === undefined) {
+				throw configurationError("subagents() requires a claws store", {
+					reason:
+						"a child gets its own thread so its answer is readable; without one there is nowhere to open it",
+				});
+			}
 			wired = {
 				engine: () => resolveEngine() as SpawnEngine,
+				threads: threads as SpawnThreads,
 				store: createSubagentStore(adapter),
 			};
 			return undefined;

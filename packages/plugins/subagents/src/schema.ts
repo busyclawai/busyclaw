@@ -130,6 +130,17 @@ export function childRunId(input: {
 	);
 }
 
+/**
+ * The child's THREAD id, derived from its run.
+ *
+ * Idempotent for the same reason the run id is: a spawn that crashed between opening the thread and
+ * starting the run re-runs both, and a second thread would leave the first orphaned in the claw with
+ * nothing able to say which one the child writes to.
+ */
+export function childThreadId(childRunId: string): string {
+	return bytesToHex(sha256(utf8ToBytes(`thread\u0000${childRunId}`)));
+}
+
 /** The address-book row id — one alias per owner. */
 export function agentLinkId(ownerRunId: string, alias: string): string {
 	return bytesToHex(sha256(utf8ToBytes(`${ownerRunId}\u0000${alias}`)));

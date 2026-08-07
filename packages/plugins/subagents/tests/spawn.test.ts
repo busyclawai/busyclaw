@@ -233,40 +233,41 @@ describe("the claw follows the tree", () => {
 			{ principal: userPrincipal("alice") },
 		);
 		expect(childRun?.clawId).toBe("claw-1");
-		// And no thread: it belongs to the claw without writing into anyone's conversation.
-		expect(childRun?.threadId).toBeUndefined();
+		// AND ITS OWN THREAD, in that claw. It used to have none — which left its answer readable
+		// through no door at all — and the thread's `origin` is what keeps it out of the claw's
+		// default list rather than out of the database.
+		expect(childRun?.threadId).toEqual(expect.any(String));
 	});
 });
 
-describe("the prompt crosses into the CHILD's container", () => {
-	it("translates it, rather than handing over a placeholder the child cannot resolve", async () => {
-		// The parent tokenized this prompt in ITS container. A placeholder means nothing outside the
-		// container that minted it, so handing it over unchanged reaches the child's tools as the
-		// literal `{{pii:…}}` text — with nothing thrown, which is why it needs a test rather than a
-		// comment.
-		const crossings: { value: unknown; toRunId: string }[] = [];
-		const { claw } = await harness({
-			translate: async <T>(
-				value: T,
-				to: { runId: string; subjectIds?: readonly string[] },
-			) => {
-				crossings.push({ value, toRunId: to.runId });
-				return `translated:${String(value)}` as T;
-			},
-		});
-
+describe("the child shares the parent's PII container", () => {
+	it("resolves a placeholder the PARENT minted", async () => {
+		// Token coherence across the tree is what makes a subtree's conversation legible. Under
+		// separate containers the parent says `{{pii:email:swift-otter}}` and the child, handed the
+		// same person, mints a different code — so when it reports back, nothing can tell the two
+		// refer to one person. Sharing the claw's container is what a subagent talking ABOUT what its
+		// parent mentioned requires.
+		const { claw, store } = await harness();
+		const parentRunId = await claw.openRun(userPrincipal("alice"), "claw-1");
 		const { childRunId: child } = await claw.spawnFrom({
-			parentRunId: await claw.openRun(userPrincipal("alice")),
+			parentRunId,
 			principal: userPrincipal("alice"),
 			alias: "researcher",
-			prompt: "write to {{pii:parent-token}}",
+			prompt: "go",
 		});
 
-		// It went through, and it was addressed to the CHILD — not re-minted in the parent's own
-		// container, which would be a no-op wearing the shape of a crossing.
-		expect(crossings).toEqual([
-			{ value: "write to {{pii:parent-token}}", toRunId: child },
-		]);
+		// The edge records where the child's PII lives, and it is the CLAW — not its own run.
+		expect(await store.edge(child)).toMatchObject({
+			parentRunId,
+			alias: "researcher",
+		});
+		const childRun = await claw.api.getRun(
+			{ id: child },
+			{ principal: userPrincipal("alice") },
+		);
+		// Recorded into the claw, which is what makes the container shared AND the answer readable.
+		expect(childRun?.clawId).toBe("claw-1");
+		expect(childRun?.threadId).toEqual(expect.any(String));
 	});
 });
 

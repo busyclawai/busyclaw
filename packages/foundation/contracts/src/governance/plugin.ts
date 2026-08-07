@@ -52,22 +52,6 @@ export type CapabilityContext = {
 	/** Which step of the loop is calling. REPLAY-STABLE, unlike a provider's tool-call id: a resume
 	 *  re-calls the tool and gets a new one, so anything derived from a call id forks on retry. */
 	readonly step: number | undefined;
-	/**
-	 * Move a value out of THIS run's redaction container and into another run's.
-	 *
-	 * The first thing in the tree that crosses two containers. Rehydrate in the source, re-redact in
-	 * the destination — so a value the parent tokenized arrives in the child as the child's own
-	 * placeholder, resolvable there. Without it the naive path is silent: a foreign placeholder
-	 * resolves to nothing and passes through as the literal `{{pii:…}}` text with nothing thrown.
-	 *
-	 * `subjectIds` rides along because token coherence does NOT survive the crossing — the two
-	 * containers mint different placeholders for one person — so erasure has to be told who the value
-	 * is about on the way over, or the copy in the destination is unreachable by their request.
-	 */
-	readonly translate: <T>(
-		value: T,
-		to: { runId: string; subjectIds?: readonly string[] },
-	) => Promise<T>;
 };
 
 export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";

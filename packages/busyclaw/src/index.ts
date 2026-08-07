@@ -523,7 +523,7 @@ function collectPluginTools(input: {
  *  plugin's own ("plugin", id) containerKind, never a shared bucket. */
 type PluginBoundContext = Pick<
 	BusyclawPluginConfigureContext,
-	"events" | "redact" | "rehydrate"
+	"clawsStore" | "engine" | "events" | "redact" | "rehydrate"
 >;
 
 function configurePlugins(input: {
@@ -665,6 +665,17 @@ function contentFreeRuns(runs: ClawRunReadModel): ClawRunReadModel {
 						((await runs.listActiveForThread?.(input)) ?? []).map(strip),
 				}
 			: {}),
+	};
+}
+
+/** A claws store whose thread writes are attributed to one plugin. */
+function threadOriginStore(store: ClawsStore, pluginId: string): ClawsStore {
+	return {
+		...store,
+		threads: {
+			...store.threads,
+			create: (input) => store.threads.create({ ...input, origin: pluginId }),
+		},
 	};
 }
 
@@ -1135,6 +1146,13 @@ export function createClaw<
 			secrets,
 		},
 		bind: (plugin) => ({
+			// A PLUGIN'S THREADS CARRY ITS NAME. Same rule as `run.origin` and stamped the same way —
+			// by the door, so a plugin is never asked and cannot claim another's. What it buys is one
+			// thing: `listForClaw` returns `"core"` threads by default, so a plugin opening a thread
+			// per unit of work does not fill a person's chat list with transcripts nobody started.
+			...(clawsStore
+				? { clawsStore: threadOriginStore(clawsStore, plugin.id) }
+				: {}),
 			// PER PLUGIN, so the view can stamp `run.origin` with who is asking. Lazy for the same
 			// reason it always was: the handle does not exist until after the runtime, which is built
 			// from these very plugins.

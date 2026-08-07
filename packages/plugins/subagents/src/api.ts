@@ -19,6 +19,7 @@ import {
 	createAgentCapability,
 	type SpawnEngine,
 	type SpawnLimits,
+	type SpawnThreads,
 } from "./capability";
 import type { SubagentStore } from "./store";
 
@@ -43,6 +44,7 @@ export type AgentTreeNode = {
 
 export function buildAgentsApi(input: {
 	engine: () => SpawnEngine;
+	threads: () => SpawnThreads;
 	store: () => SubagentStore;
 	limits: SpawnLimits;
 	now: () => string;
@@ -68,16 +70,11 @@ export function buildAgentsApi(input: {
 			// costs nothing — a host spawn and a model spawn naming the same alias under the same
 			// parent are the same child, which is the correct answer to both.
 			step: undefined,
-			// IDENTITY, and that is not a shortcut. `translate` moves a value out of one run's
-			// redaction container into another's; a host-supplied prompt was never in a container, so
-			// there is nothing to move and rehydrating it would look up placeholders it does not have.
-			// Tokenizing it into the child's container is the run door's own business, not this
-			// crossing's.
-			translate: async (value) => value,
 		};
 		return createAgentCapability({
 			ctx,
 			engine: input.engine(),
+			threads: input.threads(),
 			store: input.store(),
 			limits: input.limits,
 			now: input.now,

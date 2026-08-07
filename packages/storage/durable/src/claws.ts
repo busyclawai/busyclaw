@@ -231,6 +231,9 @@ export function createClawsStore(
 					data: {
 						...valid,
 						id: valid.id ?? newId(),
+						// A thread nobody attributed is one a person started. The per-plugin store view
+						// overrides this; nothing else has an origin to claim.
+						origin: valid.origin ?? "core",
 						status: "active",
 						currentSequence: 0,
 						createdAt: ts,
@@ -246,10 +249,25 @@ export function createClawsStore(
 				});
 			},
 
-			listForClaw(clawId) {
+			listForClaw(input) {
+				const args = typeof input === "string" ? { clawId: input } : input;
+				const where: EntityWhere<typeof threadFields>[] = [
+					{ field: "clawId", value: args.clawId },
+				];
+				// `"core"` unless asked otherwise. This default is the whole point of the column: a
+				// plugin opening a thread per unit of work must not fill a chat list with transcripts
+				// nobody started, and a default that showed everything would put that burden on every
+				// consumer instead of on the one that knows.
+				if (args.origin !== "any") {
+					where.push({
+						field: "origin",
+						value: args.origin ?? "core",
+						connector: "AND",
+					});
+				}
 				return db.findMany({
 					model: "thread",
-					where: [{ field: "clawId", value: clawId }],
+					where,
 					sortBy: { field: "createdAt", direction: "asc" },
 				});
 			},
