@@ -2719,6 +2719,10 @@ export function createClawApi<Config extends RuntimeConfig>(input: {
 			return requireEngine(context.engine).startRun({
 				prompt: args.prompt,
 				ctx: args.ctx,
+				// THE PRODUCT API IS `"core"`. Stamped here, not defaulted in the store, so the two
+				// doors that can create a run each say which one they are rather than one of them
+				// inheriting the other's answer.
+				origin: "core",
 				run: {
 					id: args.run?.id,
 					principal: caller?.principal ?? SYSTEM_ANONYMOUS,

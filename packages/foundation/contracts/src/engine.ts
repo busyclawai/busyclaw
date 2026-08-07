@@ -50,6 +50,14 @@ export type EngineStartRunInput = {
 	run?: EngineRunMetadata;
 	recording?: EngineRecording;
 	/**
+	 * WHICH SUBSYSTEM is starting this run — `"core"` for the product api, else a plugin id.
+	 *
+	 * Backed by the `run.origin` column in the same commit, per the rule above. Set by the DOOR: the
+	 * per-plugin engine view closes over its own plugin id, and the api door writes `"core"`. A
+	 * plugin is never asked for it, so it cannot claim to be another.
+	 */
+	origin?: string;
+	/**
 	 * The claw an UNRECORDED run belongs to.
 	 *
 	 * Backed by the `run.clawId` column in the same commit, per the rule above. It exists because a

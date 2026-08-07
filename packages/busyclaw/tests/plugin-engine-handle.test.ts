@@ -30,6 +30,21 @@ type PluginEngine = {
 	};
 };
 
+/** The run's recorded attribution, read through the assembly's own read model. */
+async function originOf(
+	claw: unknown,
+	runId: string,
+): Promise<string | undefined> {
+	const row = await (
+		claw as {
+			$context: {
+				runs?: { get: (id: string) => Promise<{ origin?: string } | null> };
+			};
+		}
+	).$context.runs?.get(runId);
+	return row?.origin;
+}
+
 /** A plugin that captures the engine thunk, the way subagents does. */
 function capture() {
 	let resolve: (() => unknown) | undefined;
@@ -91,6 +106,57 @@ describe("a plugin's engine handle", () => {
 			run: { principal: userPrincipal("alice") },
 		});
 		expect(await engine().runs?.get(started.id)).not.toBeNull();
+	});
+
+	it("stamps the plugin's own id as the run's origin", async () => {
+		// Set by the DOOR, never asked of the plugin — a plugin that could name its own origin would
+		// be choosing its own attribution, which is the one thing the column is for. Nothing reads it
+		// to decide anything yet; it answers "who started this" for whoever is looking at a table of
+		// runs they do not recognise.
+		const { claw, engine } = harness();
+		const started = await engine().startRun({
+			prompt: "go",
+			run: { principal: userPrincipal("alice") },
+		});
+
+		expect(await originOf(claw, started.id)).toBe("keeper");
+	});
+
+	it("overrides an origin the plugin tried to name for itself", async () => {
+		// The stamp is applied LAST for exactly this. A plugin choosing its own attribution defeats
+		// the column, and the failure would be silent — a run filed under whoever it felt like.
+		const { claw, engine } = harness();
+		const started = await (
+			engine() as unknown as {
+				startRun: (i: {
+					prompt: string;
+					origin: string;
+					run?: { principal?: string };
+				}) => Promise<{ id: string }>;
+			}
+		).startRun({
+			prompt: "go",
+			origin: "somebody-else",
+			run: { principal: userPrincipal("alice") },
+		});
+
+		expect(await originOf(claw, started.id)).toBe("keeper");
+	});
+
+	it("stamps `core` for a run the product api started", async () => {
+		const { claw } = await harness();
+		const started = await (
+			claw as unknown as {
+				api: {
+					startRun: (
+						i: { prompt: string },
+						c: { principal: string },
+					) => Promise<{ id: string }>;
+				};
+			}
+		).api.startRun({ prompt: "go" }, { principal: userPrincipal("alice") });
+
+		expect(await originOf(claw, started.id)).toBe("core");
 	});
 
 	it("serves every run FACT and none of its CONTENT", async () => {

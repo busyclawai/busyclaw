@@ -4,6 +4,7 @@ import type {
 	ClawEngineFactory,
 	ClawEngineHandle,
 	ClawRunReadModel,
+	EngineStartRunInput,
 	JsonObject,
 	SchemaDeclaration,
 } from "@busyclaw/contracts";
@@ -1069,7 +1070,39 @@ export function createClaw<
 	const doorRedactor = redaction.armed ? redaction.redactor : undefined;
 	// Assigned once the engine exists and read only through the `engine()` thunk above — the binding
 	// that lets a plugin hold a handle built after it.
-	let assembledEngine: unknown;
+	let assembledEngine:
+		| { engine: ClawEngineHandle; runs?: ClawRunReadModel }
+		| undefined;
+
+	/**
+	 * The engine as ONE PLUGIN sees it: every verb, its own attribution stamped on what it creates,
+	 * and run facts without run content.
+	 *
+	 * The stamp is the whole reason this is per plugin rather than shared. `run.origin` has to be set
+	 * by the door, never asked of the caller — a plugin that could name its own origin would be
+	 * choosing its own attribution, which is the one thing the column is for.
+	 */
+	const pluginEngine = (pluginId: string) => {
+		if (assembledEngine === undefined) {
+			throw configurationError(
+				"the engine was read before it finished assembling",
+				{
+					reason:
+						"a plugin called context.engine() during configure; store the thunk and call it when it actually creates or reads a run",
+					plugin: pluginId,
+				},
+			);
+		}
+		const { engine: handle, runs } = assembledEngine;
+		return {
+			...handle,
+			// LAST, so it wins. Spread the other way and a plugin passing its own `origin` would
+			// choose its own attribution — the one thing this column exists to prevent.
+			startRun: (input: EngineStartRunInput) =>
+				handle.startRun({ ...input, origin: pluginId }),
+			...(runs ? { runs: contentFreeRuns(runs) } : {}),
+		};
+	};
 	const configuredPlugins = configurePlugins({
 		context: {
 			// The resolved adapter, wrapped ONCE with the merged models (better-auth builds its adapter
@@ -1085,23 +1118,12 @@ export function createClaw<
 			clawsStore,
 			effects: effectsStore,
 			secrets,
-			// LAZY, and it has to be: this context is built while the claw is still assembling, and
-			// the engine handle does not exist until after the runtime, which needs these very
-			// plugins. A plugin stores the thunk and calls it when it acts.
-			engine: () => {
-				if (assembledEngine === undefined) {
-					throw configurationError(
-						"the engine was read before it finished assembling",
-						{
-							reason:
-								"a plugin called context.engine() during configure; store the thunk and call it when it actually creates or reads a run",
-						},
-					);
-				}
-				return assembledEngine;
-			},
 		},
 		bind: (plugin) => ({
+			// PER PLUGIN, so the view can stamp `run.origin` with who is asking. Lazy for the same
+			// reason it always was: the handle does not exist until after the runtime, which is built
+			// from these very plugins.
+			engine: () => pluginEngine(plugin.id),
 			events: pluginEventSink(
 				eventFanout,
 				doorRedactor
@@ -1179,12 +1201,15 @@ export function createClaw<
 	// failure this codebase keeps paying for: an optional chain over an absent thing, no throw, a
 	// status that reads "unknown" forever. `plugins` and `$HasCron` stay out; they are the assembly's
 	// business, not a plugin's.
+	// The binding `pluginEngine` reads. Set the moment the handle exists, which is as early as the
+	// construction order allows. Kept as the PAIR — handle plus read model — because `runs` lives on
+	// the instance and the verbs on the handle, and a plugin orchestrating runs needs both.
 	assembledEngine =
 		engine === undefined
 			? undefined
 			: {
-					...engine.engine,
-					...(engine.runs ? { runs: contentFreeRuns(engine.runs) } : {}),
+					engine: engine.engine,
+					...(engine.runs ? { runs: engine.runs } : {}),
 				};
 	const newId = config.environment?.newId ?? defaultRuntimeNewId;
 	const plugins: BusyclawPlugin<BusyclawCronFlag>[] = [
