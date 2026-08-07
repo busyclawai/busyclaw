@@ -166,6 +166,7 @@ describe("the reconciler is the only thing that sees a failure", () => {
 			waitId: agentWaitId({ runId: parentRunId, step: 0 }),
 			expected: 1,
 			threshold: 1,
+			members: ["child-that-never-ran"],
 			deadlineAt: new Date(Date.now() + 60_000).toISOString(),
 			now,
 		});
@@ -195,6 +196,7 @@ describe("the reconciler is the only thing that sees a failure", () => {
 			waitId,
 			expected: 1,
 			threshold: 1,
+			members: (await ctx.store.children(parentRunId)).map((e) => e.id),
 			// Already past.
 			deadlineAt: new Date(Date.now() - 60_000).toISOString(),
 			now,
@@ -221,6 +223,7 @@ describe("the reconciler is the only thing that sees a failure", () => {
 			waitId,
 			expected: 2,
 			threshold: 2,
+			members: (await ctx.store.children(parentRunId)).map((e) => e.id),
 			deadlineAt: new Date(Date.now() + 60_000).toISOString(),
 			now,
 		});
@@ -243,6 +246,7 @@ describe("the reconciler is the only thing that sees a failure", () => {
 				waitId,
 				expected: 1,
 				threshold: 1,
+				members: [],
 				deadlineAt: new Date(Date.now() + 60_000).toISOString(),
 				now,
 			});
@@ -277,6 +281,7 @@ describe("the barrier elects exactly one waker", () => {
 			waitId,
 			expected: 2,
 			threshold: 2,
+			members: (await ctx.store.children(parentRunId)).map((e) => e.id),
 			deadlineAt: new Date(Date.now() + 60_000).toISOString(),
 			now,
 		});
@@ -302,6 +307,7 @@ describe("the barrier elects exactly one waker", () => {
 			waitId,
 			expected: 2,
 			threshold: 2,
+			members: (await ctx.store.children(parentRunId)).map((e) => e.id),
 			deadlineAt: new Date(Date.now() + 60_000).toISOString(),
 			now,
 		});
@@ -469,5 +475,162 @@ describe("agents talk to each other by alias", () => {
 
 		expect(sent.delivered).toBe(false);
 		expect(sent.bounced).toBe("completed");
+	});
+});
+
+describe("a barrier is about WHICH children, not how many", () => {
+	let ctx: ReturnType<typeof setup>;
+	beforeEach(() => {
+		ctx = setup();
+	});
+
+	it("is not satisfied by a sibling the parent never asked about", async () => {
+		// THE BUG THIS EXISTS FOR. The join recorded `expected: 1` and nothing about WHICH one, while
+		// both writers walked the OWNER's children — so a parent that awaited `a` was released by `b`
+		// finishing, woken, and handed a result set claiming its wait was satisfied. `await(["a"])` on a
+		// parent that also spawned `b` simply cannot be expressed as a count.
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		for (const alias of ["a", "b"]) {
+			await ctx.claw.spawnFrom({
+				principal: alice,
+				alias,
+				prompt: "go",
+				parentRunId,
+			});
+		}
+		const waiting = await ctx.claw
+			.capability({ principal: alice, parentRunId, step: 0 })
+			.awaitChildren({ aliases: ["a"] });
+		expect(waiting.status).toBe("waiting");
+
+		const joinId = agentJoinId(
+			parentRunId,
+			agentWaitId({ runId: parentRunId, step: 0 }),
+		);
+		const edges = await ctx.store.children(parentRunId);
+		const sibling = edges.find((edge) => edge.alias === "b");
+		if (sibling === undefined) throw new Error("no sibling");
+
+		// The sibling lands — recorded straight into the table, which is the worst case: it models both
+		// a writer that forgot the rule and a redelivery from a path that predates it.
+		await ctx.store.recordArrival({
+			joinId,
+			childRunId: sibling.id,
+			outcome: "completed",
+			now: new Date().toISOString(),
+		});
+		await ctx.claw.runCron();
+
+		// Still waiting, because `a` has not finished.
+		expect((await ctx.store.join(joinId))?.status).toBe("waiting");
+	});
+
+	it("records the children it named, so a later reader can tell", async () => {
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const made: string[] = [];
+		for (const alias of ["a", "b"]) {
+			const { childRunId } = await ctx.claw.spawnFrom({
+				principal: alice,
+				alias,
+				prompt: "go",
+				parentRunId,
+			});
+			made.push(childRunId);
+		}
+		await ctx.claw
+			.capability({ principal: alice, parentRunId, step: 0 })
+			.awaitChildren({ aliases: ["b"] });
+
+		const joinId = agentJoinId(
+			parentRunId,
+			agentWaitId({ runId: parentRunId, step: 0 }),
+		);
+		expect((await ctx.store.join(joinId))?.members).toEqual([made[1]]);
+	});
+});
+
+describe("a barrier's arrival table stays about its own members", () => {
+	it("writes no row for a sibling that finished but was never named", async () => {
+		// The count is guarded (see above), so a stray row changes no outcome — which is exactly why
+		// this needs asserting rather than assuming. Both writers filter by membership, and without a
+		// test that reads the table they are unfalsifiable: a barrier accumulating arrivals for runs it
+		// never asked about is a record that lies to whoever reads it next, even while deciding right.
+		const ctx = setup();
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const spawned: Record<string, string> = {};
+		for (const alias of ["a", "b"]) {
+			const { childRunId } = await ctx.claw.spawnFrom({
+				principal: alice,
+				alias,
+				prompt: "go",
+				parentRunId,
+			});
+			spawned[alias] = childRunId;
+		}
+		await ctx.claw
+			.capability({ principal: alice, parentRunId, step: 0 })
+			.awaitChildren({ aliases: ["a"] });
+
+		// BOTH children run to completion — so the sink sees `b` end while a join naming only `a` is
+		// open, which is the moment the filter exists for.
+		await drain(ctx.claw);
+		await ctx.claw.runCron();
+
+		const joinId = agentJoinId(
+			parentRunId,
+			agentWaitId({ runId: parentRunId, step: 0 }),
+		);
+		expect(
+			(await ctx.store.arrivals(joinId)).map((a) => a.childRunId),
+		).toEqual([spawned.a]);
+	});
+
+	it("does not collect a finished sibling into a barrier that stays open", async () => {
+		// THE RECONCILER'S OWN FILTER, which the test above cannot reach: the sink fires that join
+		// before any cron pass runs, and a fired join leaves the batch. The window this guards is a
+		// parent awaiting a SLOW child while a fast sibling finishes and cron ticks in between.
+		//
+		// Constructed with a threshold its membership can never meet, which is the smallest way to hold
+		// a barrier open while a sibling finishes. Artificial, and the alternative is two filters no
+		// test can falsify — both are unreachable once a barrier fires, which is what happens on the
+		// ordinary path before any sibling gets a chance to land.
+		const ctx = setup();
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const spawned: Record<string, string> = {};
+		for (const alias of ["a", "b"]) {
+			const { childRunId } = await ctx.claw.spawnFrom({
+				principal: alice,
+				alias,
+				prompt: "go",
+				parentRunId,
+			});
+			spawned[alias] = childRunId;
+		}
+		const waitId = agentWaitId({ runId: parentRunId, step: 9 });
+		const joinId = agentJoinId(parentRunId, waitId);
+		await ctx.store.openJoin({
+			id: joinId,
+			ownerRunId: parentRunId,
+			waitId,
+			expected: 1,
+			// Unmeetable by one member, so the barrier survives the pass and the pass's writes are
+			// what the assertion reads.
+			threshold: 2,
+			members: [spawned.a as string],
+			deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+			now: new Date().toISOString(),
+		});
+
+		// OPENED BEFORE THE DRAIN, so BOTH writers meet the window: the sink sees `b` end while this
+		// barrier is open, and the cron pass then examines the same still-open barrier. Opened after,
+		// the sink has already fired every barrier and neither filter is reachable at all.
+		await drain(ctx.claw);
+		await ctx.claw.runCron();
+
+		expect((await ctx.store.join(joinId))?.status).toBe("waiting");
+		// `b` finished and is a child of the same parent — and is not in this barrier's table.
+		expect(
+			(await ctx.store.arrivals(joinId)).map((a) => a.childRunId),
+		).toEqual([spawned.a]);
 	});
 });

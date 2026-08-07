@@ -87,6 +87,8 @@ export type SubagentStore = {
 		waitId: string;
 		expected: number;
 		threshold: number;
+		/** The child run ids this join is about — see the schema for why a count is not enough. */
+		members: readonly string[];
 		deadlineAt: string;
 		now: string;
 	}) => Promise<AgentJoin>;
@@ -170,6 +172,7 @@ export type AgentJoin = {
 	waitId: string;
 	expected: number;
 	threshold: number;
+	members: readonly string[];
 	status: "waiting" | "fired" | "timed_out" | "cancelled";
 	deadlineAt: string;
 };
@@ -188,6 +191,15 @@ export type AgentWait = {
 	status: "arming" | "armed" | "fired" | "cancelled";
 	deadlineAt: string;
 };
+
+/** The stored `{ ids }` envelope, read back defensively — a jsonObject column is `unknown` at the
+ *  adapter edge, and a join with no readable membership must behave as naming NOBODY rather than
+ *  as naming everybody. */
+function memberIds(value: unknown): readonly string[] {
+	if (typeof value !== "object" || value === null) return [];
+	const ids = (value as { ids?: unknown }).ids;
+	return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
 
 export function createSubagentStore(adapter: Adapter): SubagentStore {
 	const db = entityView(adapter, {
@@ -220,6 +232,7 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 		waitId: string;
 		expected: number;
 		threshold: number;
+		members?: unknown;
 		status: string;
 		deadlineAt: string;
 	}): AgentJoin => ({
@@ -228,6 +241,7 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 		waitId: row.waitId,
 		expected: row.expected,
 		threshold: row.threshold,
+		members: memberIds(row.members),
 		status: row.status as AgentJoin["status"],
 		deadlineAt: row.deadlineAt,
 	});
@@ -378,6 +392,7 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 						waitId: input.waitId,
 						expected: input.expected,
 						threshold: input.threshold,
+						members: { ids: [...input.members] },
 						status: "waiting",
 						deadlineAt: input.deadlineAt,
 						createdAt: input.now,

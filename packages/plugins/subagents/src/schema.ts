@@ -114,6 +114,17 @@ export const agentJoinFields = {
 	/** How many children this join names. Recorded so the reconciler knows what it is looking for
 	 *  without re-deriving the parent's intent from the arrivals it happens to find. */
 	expected: field.number({ required: true, immutable: true }),
+	/**
+	 * WHICH children, by run id. Not merely how many.
+	 *
+	 * A count alone is not a barrier, it is a tally, and both writers walk the OWNER's children — so a
+	 * parent awaiting one named child was released by a SIBLING finishing, and told the child it asked
+	 * about was done when it was still running. `expected` cannot express `await(["a"])` on a parent
+	 * that also spawned `b`; only the membership can.
+	 *
+	 * Bounded by `maxChildren` (8 by default), so it is a short list rather than a table.
+	 */
+	members: field.jsonObject({ required: true, immutable: true }),
 	/** How many must arrive: all ⇒ expected, any ⇒ 1, k ⇒ k. */
 	threshold: field.number({ required: true, immutable: true }),
 	status: field.enum(

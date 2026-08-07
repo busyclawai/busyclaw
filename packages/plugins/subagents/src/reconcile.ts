@@ -87,6 +87,9 @@ export async function onRunEvent(input: {
 	const joins = await store.openJoinsForOwner(edge.parentRunId);
 	let recorded = false;
 	for (const join of joins) {
+		// ONLY A JOIN THAT NAMED THIS CHILD. Its owner may be waiting on a different subset entirely,
+		// and an arrival recorded into that join is a sibling answering a question nobody asked it.
+		if (!join.members.includes(runId)) continue;
 		const outcome =
 			event.type === "run.denied"
 				? ("failed" as const)
@@ -150,13 +153,15 @@ export async function reconcileJoins(input: {
 	};
 
 	for (const join of batch) {
-		const children = await store.children(join.ownerRunId);
 		const seen = new Set(
 			(await store.arrivals(join.id)).map((arrival) => arrival.childRunId),
 		);
-		for (const edge of children) {
-			if (seen.has(edge.id)) continue;
-			const run = await input.engine.runs?.get(edge.id);
+		// THE JOIN'S OWN MEMBERS, not every child its owner happens to have. A parent that spawned three
+		// and awaited one is waiting on that one; walking the owner's children let a SIBLING's
+		// completion meet the threshold and wake it with an answer about a run still in flight.
+		for (const childRunId of join.members) {
+			if (seen.has(childRunId)) continue;
+			const run = await input.engine.runs?.get(childRunId);
 			// NO RUN BEHIND THE EDGE. Pruned, or a spawn that crashed between writing the edge and
 			// starting the run. Either way nothing is ever going to finish it, and leaving it unrecorded
 			// is how a parent waits out its whole deadline for a child that does not exist.
@@ -168,7 +173,7 @@ export async function reconcileJoins(input: {
 			if (
 				await store.recordArrival({
 					joinId: join.id,
-					childRunId: edge.id,
+					childRunId,
 					outcome,
 					now: input.now,
 				})

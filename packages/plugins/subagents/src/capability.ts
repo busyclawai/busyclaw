@@ -465,6 +465,10 @@ export function createAgentCapability(input: {
 				waitId,
 				expected: chosen.length,
 				threshold,
+				// WHICH children, not just how many. `await(["a"])` on a parent that also spawned `b` is
+				// unrepresentable as a count, and both writers walk the owner's children — so without
+				// this, `b` finishing released a parent that had asked about `a`.
+				members: chosen.map((edge) => edge.id),
 				// The schema will not hold a row without one. A parent that could wait forever is this
 				// architecture's default failure, not an edge case.
 				deadlineAt: new Date(

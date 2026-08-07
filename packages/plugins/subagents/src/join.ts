@@ -78,7 +78,14 @@ export async function settleIfMet(input: {
 	}
 	const as = input.as ?? "fired";
 	if (as === "fired") {
-		const arrived = await store.countArrivals(joinId);
+		// COUNTED OVER MEMBERS, not over the table. The write paths already refuse to record a
+		// non-member, but the count is what actually decides — and a barrier whose correctness depends
+		// on every writer having remembered a rule is one bad caller away from waking a parent with an
+		// answer about a run it never asked about. The intersection makes it true by construction.
+		const members = new Set(join.members);
+		const arrived = (await store.arrivals(joinId)).filter((arrival) =>
+			members.has(arrival.childRunId),
+		).length;
 		if (arrived < join.threshold) {
 			return { settled: false, reason: "below-threshold" };
 		}
