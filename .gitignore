@@ -10,3 +10,19 @@ coverage/
 
 # generated prisma test database (pretest db push creates it)
 packages/storage/prisma/prisma/test.db
+
+# NOT PUBLISHED. This repo is public; everything below is working notes, agent
+# configuration or vendored reference material, and none of it is part of the package.
+# `docs/` was purged from history once, came back through a FEATURE commit that happened
+# to include it, and was purged again — which is what this guard exists to stop, because
+# the mistake is never deliberate and `git add -A` is all it takes.
+docs/
+.claude/
+.agents/
+AGENTS.md
+CLAUDE.md
+Next-Move-Theory-Canon/
+NextMoveTheory-README.md
+orchestrator-desc.md
+.nmt-version
+.posthog-events.json
