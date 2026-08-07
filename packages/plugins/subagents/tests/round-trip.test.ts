@@ -294,3 +294,69 @@ describe("which of the three tools reaches the context window", () => {
 		expect(offered).toContain("busyclaw__search");
 	});
 });
+
+describe("a message to a parked peer", () => {
+	it("brings it back, because nothing else ever will", async () => {
+		// A run parked `awaiting` has NO due row — no drain will find it again — so a message to it
+		// would sit undelivered until its barrier's deadline. That is also the deadlock: a child needing
+		// something from a parent parked on that very child, with both sides waiting on the other.
+		const h = harness();
+		await h.claw.api.createClaw(
+			{ id: "claw-1", name: "P" },
+			{ principal: alice },
+		);
+		await h.claw.api.createThread(
+			{ id: "thread-1", clawId: "claw-1" },
+			{ principal: alice },
+		);
+		const sent = await h.claw.api.sendMessage(
+			{ threadId: "thread-1", clawId: "claw-1", message: "BE A PARENT" },
+			{ principal: alice },
+		);
+		expect(sent.result?.status).toBe("awaiting");
+		const parent = sent.runId;
+		expect(
+			(await h.claw.api.getRun({ id: parent }, { principal: alice }))?.status,
+		).toBe("waiting");
+
+		// The child speaks upward while the parent is parked ON IT.
+		const agents = (
+			h.claw as unknown as {
+				api: {
+					agents: {
+						tree: (
+							i: { rootRunId: string },
+							c: { principal: typeof alice },
+						) => Promise<{ nodes: { childRunId: string }[] }>;
+						send: (
+							i: { fromRunId: string; to: string; message: string },
+							c: { principal: typeof alice },
+						) => Promise<{ delivered: boolean; woke?: boolean }>;
+					};
+				};
+			}
+		).api.agents;
+		const { nodes } = await agents.tree(
+			{ rootRunId: parent },
+			{ principal: alice },
+		);
+		const child = nodes[0]?.childRunId;
+		if (child === undefined) throw new Error("no child");
+
+		const delivered = await agents.send(
+			{ fromRunId: child, to: "parent", message: "I need a decision" },
+			{ principal: alice },
+		);
+
+		expect(delivered).toMatchObject({ delivered: true, woke: true });
+
+		// THE RUN IS BACK ON THE QUEUE, which is the claim — and it is asserted by draining rather than
+		// by reading the status, because `resumeRun` enqueues the task and leaves the row `waiting`
+		// until a worker claims it. A parked run and a woken-but-unclaimed one read the same; what
+		// tells them apart is that one has work waiting for it and the other has nothing at all.
+		expect(await h.drain()).toBeGreaterThan(0);
+		expect(
+			(await h.claw.api.getRun({ id: parent }, { principal: alice }))?.status,
+		).not.toBe("waiting");
+	});
+});

@@ -34,6 +34,15 @@ const spawnInput = type({
 
 const treeInput = type({ rootRunId: "string" }).onUndeclaredKey("reject");
 
+// `fromRunId`, not a principal: this door speaks AS a run in the tree, and the alias it addresses is
+// resolved in that run's own address book. A caller naming a run they do not manage is refused by the
+// PEP before the address book is ever consulted.
+const sendInput = type({
+	fromRunId: "string",
+	to: "string",
+	message: "string",
+}).onUndeclaredKey("reject");
+
 export type AgentTreeNode = {
 	childRunId: string;
 	parentRunId: string;
@@ -154,6 +163,26 @@ export function buildAgentsApi(input: {
 				}
 				return { nodes };
 			}),
+		send: route
+			.input(sendInput)
+			// MANAGE ON THE SENDER, and the sender is the run the message comes FROM. A host steering a
+			// subagent is speaking as the parent it manages, so the gate is on that run — not on the
+			// child, which the caller may well not manage directly, and not on the pair, which would
+			// make "who is talking" a caller-chosen fact.
+			.authz("manage", ({ fromRunId }: { fromRunId: string }) => ({
+				kind: RUN_KIND,
+				id: fromRunId,
+			}))
+			.handler(
+				async (
+					args: { fromRunId: string; to: string; message: string },
+					caller?: ClawApiCaller,
+				) =>
+					capabilityFor(args.fromRunId, caller).send({
+						to: args.to,
+						message: args.message,
+					}),
+			),
 		cancelTree: route
 			.input(treeInput)
 			// MANAGE ON THE ROOT, like `spawn` and unlike `tree`. Stopping work is not reading it, and

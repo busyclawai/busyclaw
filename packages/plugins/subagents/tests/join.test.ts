@@ -366,3 +366,108 @@ describe("await, called again on a barrier that already fired", () => {
 		expect(second.results.map((r) => r.alias)).toEqual(["a"]);
 	});
 });
+
+describe("agents talk to each other by alias", () => {
+	let ctx: ReturnType<typeof setup>;
+	beforeEach(() => {
+		ctx = setup();
+	});
+
+	it("delivers a message attributed in the RECEIVER's vocabulary", async () => {
+		// The two runs do not share a name for each other: the parent says `researcher`, the child says
+		// `parent`. The engine cannot bridge that — it records a `sender` PRINCIPAL, and a child's
+		// authority is COPIED from its parent, so the two are literally the same string there.
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const { childRunId } = await ctx.claw.spawnFrom({
+			principal: alice,
+			alias: "researcher",
+			prompt: "go",
+			parentRunId,
+		});
+
+		const sent = await ctx.claw
+			.capability({ principal: alice, parentRunId })
+			.send({ to: "researcher", message: "focus on 2024" });
+
+		expect(sent.delivered).toBe(true);
+		const inbox = await ctx.claw.inboxOf(childRunId);
+		// Attribution rides IN `text`, because that is the only key the engine's drain shows a model.
+		expect(inbox[0]?.text).toBe("Message from parent: focus on 2024");
+	});
+
+	it("lets a child answer upward without knowing its parent's id", async () => {
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const { childRunId } = await ctx.claw.spawnFrom({
+			principal: alice,
+			alias: "researcher",
+			prompt: "go",
+			parentRunId,
+		});
+
+		await ctx.claw
+			.capability({ principal: alice, parentRunId: childRunId })
+			.send({ to: "parent", message: "found it" });
+
+		const inbox = await ctx.claw.inboxOf(parentRunId);
+		expect(inbox[0]?.text).toBe("Message from researcher: found it");
+	});
+
+	it("refuses an alias nobody introduced", async () => {
+		// THE ADDRESS BOOK IS THE GATE — not "does that run exist". A run that could name any run id
+		// could talk to any run in the claw, and sharing a tree should not confer that.
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		await ctx.claw.spawnFrom({
+			principal: alice,
+			alias: "researcher",
+			prompt: "go",
+			parentRunId,
+		});
+
+		await expect(
+			ctx.claw
+				.capability({ principal: alice, parentRunId })
+				.send({ to: "somebody-elses-agent", message: "hello" }),
+		).rejects.toThrow(/have not been introduced/);
+	});
+
+	it("sends once when the same step runs twice", async () => {
+		// Replay stability, the same argument the child id rests on: a resumed parent re-calling `send`
+		// must not put a second copy of one message in somebody's context window.
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		const { childRunId } = await ctx.claw.spawnFrom({
+			principal: alice,
+			alias: "researcher",
+			prompt: "go",
+			parentRunId,
+		});
+		const capability = ctx.claw.capability({
+			principal: alice,
+			parentRunId,
+			step: 2,
+		});
+
+		await capability.send({ to: "researcher", message: "focus on 2024" });
+		await capability.send({ to: "researcher", message: "focus on 2024" });
+
+		expect(await ctx.claw.inboxOf(childRunId)).toHaveLength(1);
+	});
+
+	it("bounces off a peer that already finished", async () => {
+		// A sender left believing a dead run received its message waits on an answer nobody will write.
+		const parentRunId = await ctx.claw.openRun(alice, "claw-1");
+		await ctx.claw.spawnFrom({
+			principal: alice,
+			alias: "researcher",
+			prompt: "go",
+			parentRunId,
+		});
+		await drain(ctx.claw);
+
+		const sent = await ctx.claw
+			.capability({ principal: alice, parentRunId })
+			.send({ to: "researcher", message: "too late" });
+
+		expect(sent.delivered).toBe(false);
+		expect(sent.bounced).toBe("completed");
+	});
+});

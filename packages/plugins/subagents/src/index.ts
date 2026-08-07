@@ -131,6 +131,22 @@ const awaitInput = jsonSchema<{ aliases?: string[]; mode?: "all" | "any" }>({
 	},
 });
 
+const sendInput = jsonSchema<{ to: string; message: string }>({
+	type: "object",
+	properties: {
+		to: {
+			type: "string",
+			description:
+				"Who to speak to, by the alias you know them by. Use `parent` for whoever started you.",
+		},
+		message: {
+			type: "string",
+			description: "What to say. They read it at their next step.",
+		},
+	},
+	required: ["to", "message"],
+});
+
 // ANNOTATED `BusyclawPlugin<"has-cron">`, not the bare `BusyclawPlugin` this used to say. The bare
 // one widens the phantom to the whole flag union, and the phantom is the entire mechanism by which a
 // host is made to supply a `cronHandler` — under the wide annotation the requirement is a comment.
@@ -252,6 +268,25 @@ export function subagents(
 					// transcript containing its own earlier `await` call — so repeating it is the obvious
 					// move. Discoverable, that emits a name the provider rejects as an unavailable tool, and
 					// the model has to work out for itself that the route is now `busyclaw__execute`.
+					{ presence: "always" },
+				),
+				send: govern(
+					tool({
+						description:
+							"Send a message to an agent you know: a subagent you started, or `parent` for whoever started you. They read it at their next step. Use it to steer work already under way, to answer a question, or to report back without waiting to finish.",
+						inputSchema: sendInput,
+						execute: async (args, options) =>
+							capabilityFrom(options).send(
+								args as { to: string; message: string },
+							),
+					}),
+					// READ, like `await`. Speaking to a peer you were introduced to creates nothing, and
+					// the address book is what bounds it: an alias you were never given resolves to
+					// nothing, whatever the floor says.
+					{ capability: AGENT_CAPABILITY, access: "read" },
+					// PRESENT. A child cannot ask its parent a question it has to go searching for first,
+					// and the parent is the one peer EVERY child has — this is the tool that makes the
+					// relationship two-way rather than fire-and-forget.
 					{ presence: "always" },
 				),
 			},

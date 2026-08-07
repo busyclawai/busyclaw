@@ -60,6 +60,8 @@ export type SpawningClaw = {
 	adapter: Adapter;
 	/** Every waitId the capability asked to park on, in order. */
 	parkRequests: string[];
+	/** The undelivered messages sitting in a run's engine inbox. */
+	inboxOf: (runId: string) => Promise<{ text?: string }[]>;
 	/** One reconciler pass. */
 	runCron: (limit?: number) => Promise<{
 		processed?: number;
@@ -174,6 +176,23 @@ export function spawningClaw(
 		plugin,
 		adapter,
 		parkRequests,
+		async inboxOf(runId: string) {
+			const rows = await adapter.findMany({
+				model: "run_message",
+				where: [{ field: "toRunId", value: runId }],
+				sortBy: { field: "seq", direction: "asc" },
+			});
+			// PARSED HERE, because this reads the RAW adapter rather than an entity view — a typed JSON
+			// column is still a string in the column, and the entity layer is what would parse it. Read
+				// raw on purpose: the point is to see exactly what the engine stored.
+			return (rows as { body?: unknown }[]).map((row) => {
+				const body =
+					typeof row.body === "string"
+						? (JSON.parse(row.body) as { text?: string })
+						: (row.body as { text?: string } | undefined);
+				return { ...(body?.text !== undefined ? { text: body.text } : {}) };
+			});
+		},
 		/**
 		 * One reconciler pass, invoked the way an adapter's cron trigger would.
 		 *

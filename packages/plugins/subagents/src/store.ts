@@ -63,6 +63,15 @@ export type SubagentStore = {
 		ownerRunId: string,
 		alias: string,
 	) => Promise<{ peerRunId: string; relation: string } | null>;
+	/**
+	 * The alias the OWNER knows this peer by — the reverse of `resolve`.
+	 *
+	 * A message has to arrive attributed in the RECEIVER's vocabulary. The two runs do not share one:
+	 * a parent calls its child `researcher` while that child calls it `parent`, and the engine cannot
+	 * bridge them because it records a `sender` PRINCIPAL and a child's authority is copied from its
+	 * parent — so the two are literally the same string there.
+	 */
+	linkTo: (ownerRunId: string, peerRunId: string) => Promise<string | null>;
 
 	// ── the barrier ───────────────────────────────────────────────────────────────────────────────
 	/** Open a barrier, or find the one this arm already opened. Idempotent on the derived id. */
@@ -126,6 +135,10 @@ export type SubagentStore = {
 	}) => Promise<AgentWait>;
 	wait: (waitId: string) => Promise<AgentWait | null>;
 	waitForJoin: (joinId: string) => Promise<AgentWait | null>;
+	/** The park a run is currently sitting in — what an inbox wake has to find, since a message names
+	 *  a RUN and the wake needs the checkpoint that run parked against. `armed` only: a wait still
+	 *  `arming` has no checkpoint to resume from. */
+	waitForRun: (runId: string) => Promise<AgentWait | null>;
 	/** The `arming → armed` transition, stamping the checkpoint the tool could not know. */
 	armWait: (input: {
 		waitId: string;
@@ -318,6 +331,17 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 				: { peerRunId: row.peerRunId, relation: row.relation };
 		},
 
+		async linkTo(ownerRunId, peerRunId) {
+			const row = await db.findOne({
+				model: "agent_link",
+				where: [
+					{ field: "ownerRunId", value: ownerRunId },
+					{ field: "peerRunId", value: peerRunId, connector: "AND" },
+				],
+			});
+			return row === null ? null : row.alias;
+		},
+
 		async openJoin(input) {
 			try {
 				const row = await db.create({
@@ -488,6 +512,17 @@ export function createSubagentStore(adapter: Adapter): SubagentStore {
 			const row = await db.findOne({
 				model: "agent_wait",
 				where: [{ field: "joinId", value: joinId }],
+			});
+			return row === null ? null : asWait(row);
+		},
+
+		async waitForRun(runId) {
+			const row = await db.findOne({
+				model: "agent_wait",
+				where: [
+					{ field: "runId", value: runId },
+					{ field: "status", value: "armed", connector: "AND" },
+				],
 			});
 			return row === null ? null : asWait(row);
 		},

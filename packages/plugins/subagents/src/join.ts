@@ -115,6 +115,40 @@ export async function settleIfMet(input: {
 }
 
 /**
+ * Bring a parked run back because something arrived in its inbox.
+ *
+ * A run parked `awaiting` has no due row — nothing will ever look at it again — so a message to it
+ * would sit undelivered until its barrier's deadline. This is also the deadlock escape: a child that
+ * needs to ask its parent something, while the parent is parked on that very child, would otherwise
+ * have both sides waiting on the other.
+ *
+ * The barrier is deliberately NOT settled. The parent comes back, reads its message, and if its
+ * children are still going it asks again — opening a fresh barrier at its new step, and closing the
+ * one it left behind (see `awaitChildren`'s one-open-join rule).
+ */
+export async function wakeForInbox(input: {
+	store: SubagentStore;
+	engine: JoinEngine;
+	runId: string;
+	now: string;
+}): Promise<boolean> {
+	const run = await input.engine.runs?.get(input.runId);
+	// ONLY A PARKED RUN. A queued or running one will reach its own control point and drain the inbox
+	// itself; resuming it would be a second slice over one transcript.
+	if (run?.status !== "waiting") return false;
+	const wait = await input.store.waitForRun(input.runId);
+	if (wait?.checkpointId === undefined) return false;
+	return wakeArmedWait({
+		store: input.store,
+		engine: input.engine,
+		waitId: wait.id,
+		runId: input.runId,
+		checkpointId: wait.checkpointId,
+		now: input.now,
+	});
+}
+
+/**
  * Spend the park and resume the run. The one place a wake happens.
  *
  * Two callers: a barrier that just fired, and an arm that discovered its barrier had already fired

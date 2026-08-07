@@ -26,7 +26,7 @@ import {
 	stateError,
 	validationError,
 } from "@busyclaw/contracts";
-import { arrivalOutcome, settleIfMet } from "./join";
+import { arrivalOutcome, settleIfMet, wakeForInbox } from "./join";
 import {
 	agentJoinId,
 	agentWaitId,
@@ -57,6 +57,19 @@ export type SpawnEngine = {
 			threadId?: string;
 		} | null>;
 	};
+	/**
+	 * Put a message in a run's durable inbox — drained at that run's next control point.
+	 *
+	 * The body's `text` is what the model actually reads: the drain shows that key and JSON-stringifies
+	 * anything else, so attribution has to be composed into it rather than sat beside it.
+	 */
+	deliverMessage?: (input: {
+		toRunId: string;
+		body: Record<string, unknown>;
+		mode: "at_turn_end" | "next_step" | "interrupt";
+		sender: Principal;
+		idempotencyKey: string;
+	}) => Promise<{ admitted: boolean; bounced?: string }>;
 	/**
 	 * Ask a run to stop. OPTIONAL, because the shape is structural and a test double need not have it.
 	 *
@@ -144,6 +157,26 @@ export type AgentCapability = {
 		aliases?: readonly string[];
 		mode?: "all" | "any";
 	}) => Promise<AgentAwaitResult>;
+	/**
+	 * Say something to a peer you were introduced to.
+	 *
+	 * ADDRESSED BY ALIAS, never by run id, and the address book is the gate: a run may speak only to
+	 * peers a spawn introduced it to. That makes lateral child-to-child traffic something somebody
+	 * decided rather than a consequence of sharing a tree.
+	 */
+	send: (input: {
+		to: string;
+		message: string;
+	}) => Promise<AgentSendResult>;
+};
+
+export type AgentSendResult = {
+	/** False when the peer had already finished — the message bounced rather than hanging on it. */
+	delivered: boolean;
+	/** The peer's terminal status, present only on a bounce. */
+	bounced?: string;
+	/** True when the peer was parked and this message brought it back. */
+	woke?: boolean;
 };
 
 export type AgentAwaitResult =
@@ -440,6 +473,23 @@ export function createAgentCapability(input: {
 				now: stamp,
 			});
 
+			// ONE OPEN BARRIER PER RUN, enforced here rather than assumed. A run can be parked on exactly
+			// one thing at a time, so a second open join owned by it is by definition stale — left over
+			// from a wait that something else spent, which is what happens when an inbox message wakes a
+			// parent mid-await and it comes back and asks again at a later step.
+			//
+			// Left alone, the stale one is not a hang (the reconciler times it out) but it is a barrier
+			// that keeps being examined, keeps recording arrivals, and reads to anyone looking as a
+			// parent still waiting. Closing it turns a leak into an invariant.
+			for (const stale of await store.openJoinsForOwner(parentRunId)) {
+				if (stale.id === joinId) continue;
+				await store.settleJoin({
+					joinId: stale.id,
+					to: "cancelled",
+					now: stamp,
+				});
+			}
+
 			// ALREADY SETTLED, and this is the path a resumed parent takes. It re-enters the step its
 			// checkpoint named and calls `await` again; the id is derived from (run, step), so it finds
 			// the barrier that WOKE it. Parking on that is the waiter-nobody-wakes case in its most
@@ -511,6 +561,68 @@ export function createAgentCapability(input: {
 					.filter((edge) => !arrived.has(edge.id))
 					.map((edge) => edge.alias),
 			};
+		},
+		async send({ to, message }) {
+			const { runId: fromRunId, principal } = requireRun();
+			// THE ADDRESS BOOK IS THE GATE. Not "does that run exist" — "were you introduced". A run that
+			// can name any run id can talk to any run in the claw, and nothing about sharing a tree
+			// should confer that.
+			const peer = await store.resolve(fromRunId, to);
+			if (peer === null) {
+				throw stateError("you have not been introduced to that agent", {
+					alias: to,
+					reason: `nothing you started is called "${to}", and "${PARENT_ALIAS}" is the only other name you have`,
+				});
+			}
+			if (engine.deliverMessage === undefined) {
+				throw stateError("this claw cannot pass messages between runs", {
+					reason: "the engine has no durable inbox",
+				});
+			}
+
+			// HOW THE RECEIVER KNOWS ME. Their vocabulary, not mine: a parent calls its child
+			// `researcher` and that child calls it `parent`. The engine cannot supply this — it records
+			// a `sender` PRINCIPAL, and a child's authority is COPIED from its parent, so parent and
+			// child are the same string there and "who sent this" is unrecoverable.
+			const fromAlias = (await store.linkTo(peer.peerRunId, fromRunId)) ?? "an agent";
+
+			const result = await engine.deliverMessage({
+				toRunId: peer.peerRunId,
+				// `text` is what the model reads — the engine's drain shows that key and nothing else, so
+				// the attribution has to be IN it. The rest is stored beside it for anyone reading rows.
+				body: {
+					text: `Message from ${fromAlias}: ${message}`,
+					fromRunId,
+					fromAlias,
+				},
+				// NEXT STEP, not `interrupt`. Steering arrives at the receiver's next control point,
+				// between steps, where the transcript is coherent. An interrupt tears down a model call
+				// in flight, which is a much sharper instrument than "I have something to add".
+				mode: "next_step",
+				sender: principal,
+				// DERIVED FROM (sender, step, recipient), so a replayed step delivers the message it
+				// already sent rather than a second copy in somebody's context window. The same
+				// replay-stability argument the child id rests on.
+				idempotencyKey: `${fromRunId} ${ctx.step ?? 0} ${peer.peerRunId}`,
+			});
+
+			// BOUNCED. The peer finished before this arrived, and saying so is the whole point: a sender
+			// left believing a dead run received its message waits on an answer nobody will write.
+			if (result.bounced !== undefined) {
+				return { delivered: false, bounced: result.bounced };
+			}
+
+			// AND WAKE IT IF IT IS PARKED. A run parked `awaiting` has no due task — nothing will look at
+			// it again — so a message to it would sit undelivered until its deadline. This is also what
+			// keeps a child asking its parent something from deadlocking against a parent parked on that
+			// very child.
+			const woke = await wakeForInbox({
+				store,
+				engine,
+				runId: peer.peerRunId,
+				now: input.now(),
+			});
+			return { delivered: true, ...(woke ? { woke } : {}) };
 		},
 	};
 
