@@ -152,6 +152,14 @@ export function cedarMapCall(
 				// runMode is — an absent base errors, and an erroring policy is skipped.
 				scopes,
 				roles,
+				// PLUGIN-CONTRIBUTED FACTS, as tags: `<plugin>.<key>` and `<plugin>.<key>:<value>`. A SET
+				// rather than a record because a Cedar schema declares named attributes and cannot
+				// validate an open map — the same constraint that makes `scopes`/`roles` flat sets.
+				//
+				// ALWAYS PRESENT, empty when nothing contributed, for the same reason `runMode` and
+				// `scopes` are: cedar-wasm errors on an absent BASE and an erroring policy is SKIPPED,
+				// which takes a `forbid` down with it. Empty makes `contains` answer false.
+				facts: facts.facts ?? [],
 				...(server !== undefined ? { server } : {}),
 			},
 		};

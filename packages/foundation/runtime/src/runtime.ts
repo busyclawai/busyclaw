@@ -3,6 +3,7 @@ import type {
 	AuditSink,
 	BusyclawPlugin,
 	CapabilityContext,
+	RunFactResolver,
 	EffectStore,
 	InferContext,
 	JsonObject,
@@ -20,12 +21,14 @@ import {
 	asPrincipal,
 	BusyclawError,
 	CLAW_ID_CONTEXT_KEY,
+	FACTS_CONTEXT_KEY,
 	configurationError,
 	jsonValue as jsonValueSchema,
 	PII_CONTAINER_ID_CONTEXT_KEY,
 	PII_CONTAINER_KIND_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
+	runFactTags,
 	RUN_MODE_CONTEXT_KEY,
 	redactionContextFrom,
 	stampRunActions,
@@ -384,6 +387,18 @@ export type RuntimeConfig = {
 	 * own plugin fills later.
 	 */
 	capabilities?: Record<string, (ctx: CapabilityContext) => unknown>;
+	/**
+	 * Per-run facts plugins contribute to the policy context, each tagged with the plugin that owns it.
+	 *
+	 * Pre-namespaced by the ASSEMBLY rather than here: the runtime is handed `{ pluginId, resolve }`
+	 * pairs and prefixes the keys, so a plugin cannot answer under another's name and the runtime never
+	 * has to know which plugins exist. See `RunFactResolver` for why the fact is derived server-side
+	 * instead of carried on the run's ctx.
+	 */
+	runFacts?: readonly {
+		pluginId: string;
+		resolve: RunFactResolver;
+	}[];
 };
 
 /**
@@ -1508,6 +1523,61 @@ export function createRuntime<const Config extends RuntimeConfig>(
 		const runActions = toolDescriptors(runTools).filter(
 			(descriptor) => staticTools[descriptor.path] === undefined,
 		);
+		/**
+		 * Every plugin's facts for this run, resolved ONCE and shared by every door.
+		 *
+		 * The promise is cached, not the value: several tool calls can reach this before the first
+		 * resolution settles, and caching the result would run every resolver once per racer. Same
+		 * reasoning as `authority` being resolved at the entry point and stamped thereafter (R-H03) — a
+		 * resolver re-run per door can answer differently per door.
+		 *
+		 * NAMESPACED BY PLUGIN ID, so `agentDepth` from `subagents` lands as `subagents.agentDepth` and
+		 * one plugin cannot answer for another. A resolver that throws is WARNED and dropped rather than
+		 * failing the call: these are additive facts, and a policy that needs one is guarded on `has`,
+		 * so a missing fact denies nothing that was not already denied.
+		 */
+		const pluginFactsFor = (
+			runState: RunState,
+			runId: string | undefined,
+		): Promise<string[]> => {
+			if (runState.pluginFacts !== undefined) return runState.pluginFacts;
+			const principal = runState.authority?.principal;
+			const resolvers = config.runFacts ?? [];
+			// Nothing to ask, or nothing to ask ABOUT. A resolver is handed a run id and answers from
+			// its own rows; without one there is no row to find.
+			if (
+				resolvers.length === 0 ||
+				runId === undefined ||
+				principal === undefined
+			) {
+				runState.pluginFacts = Promise.resolve([]);
+				return runState.pluginFacts;
+			}
+			runState.pluginFacts = (async () => {
+				const facts: string[] = [];
+				for (const entry of resolvers) {
+					try {
+						for (const [key, value] of Object.entries(
+							await entry.resolve({ runId, principal }),
+						)) {
+							// TWO TAGS PER FACT: the key alone (does this run have it) and the key with its
+							// value. Only the first is knowable to a policy that does not already know the
+							// answer — "is this a subagent" cannot be asked by value.
+							facts.push(...runFactTags(entry.pluginId, key, value));
+						}
+					} catch (error) {
+						warn(
+							`plugin "${entry.pluginId}" could not resolve its run facts: ${
+								error instanceof Error ? error.message : String(error)
+							}`,
+						);
+					}
+				}
+				return facts;
+			})();
+			return runState.pluginFacts;
+		};
+
 		const resolveGovernanceContext = async (
 			ctx: Record<string, unknown>,
 		): Promise<Record<string, unknown>> => {
@@ -1560,6 +1630,15 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			// on and the parked approval records the same value.
 			const runId = state.recording?.runId ?? state.runId;
 			if (runId !== undefined) resolved[RUN_ID_CONTEXT_KEY] = runId;
+			// WHAT A PLUGIN KNOWS THAT THE RUNTIME CANNOT SEE. A subagent is a run like any other from
+			// here — same principal, same tools, same claw — and what makes it one is a row in a
+			// plugin's table. Without this, no policy could tell a child from its parent.
+			//
+			// ALWAYS STAMPED, even empty, and that is not tidiness: an ABSENT base makes cedar-wasm
+			// error, which SKIPS the policy rather than failing it, so an unguarded `forbid` written
+			// against these would fail OPEN. Present-and-empty makes `context.facts has "x"` answer
+			// false instead of exploding. The same lesson `clawId` taught this tree twice.
+			resolved[FACTS_CONTEXT_KEY] = await pluginFactsFor(state, runId);
 			return resolved;
 		};
 		const core = createGovernance({

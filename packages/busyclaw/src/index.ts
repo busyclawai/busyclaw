@@ -1211,6 +1211,17 @@ export function createClaw<
 		// AFTER the spread, and merged host-last so a host can override a plugin's capability by name
 		// — the same precedence `tools` uses, for the same reason: the host wrote the assembly.
 		capabilities: { ...pluginCapabilities, ...(config.capabilities ?? {}) },
+		// PER-RUN POLICY FACTS, tagged with the plugin that owns each so the runtime can namespace them
+		// without knowing which plugins exist.
+		//
+		// Read STATICALLY off the raw plugin, like `eventSinks` and `capabilities` and for the same
+		// reason: the runtime is being built here, and a resolver needing configure-time state closes
+		// over a binding its own `configure` fills later. It is only ever CALLED at run time.
+		runFacts: pluginList.flatMap((plugin) =>
+			plugin.runFacts !== undefined
+				? [{ pluginId: plugin.id, resolve: plugin.runFacts }]
+				: [],
+		),
 	} as ResolvedConfig<Config>);
 	// SERVICES the factory could not have known at config time. A host writes `sqlEngine({ store })`
 	// long before this line decides where live deltas go, so without handing it over a host-supplied

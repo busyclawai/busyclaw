@@ -38,6 +38,17 @@ export type RunState = {
 	 * starts with an empty latch and parks again only if a tool asks again.
 	 */
 	awaitingWaitId?: string;
+	/**
+	 * Plugin-contributed policy facts for this run — the memoized PROMISE, not the value.
+	 *
+	 * ONCE PER SLICE, which this object's lifetime already is (one `createRunState()` per entry point).
+	 * Caching the promise rather than the result is what makes that true under concurrency: several
+	 * tool calls can reach the governance door before the first resolution settles, and a
+	 * value-cache would run every resolver once per racer.
+	 *
+	 * Lazy, so a run that never makes a gated call never pays for it.
+	 */
+	pluginFacts?: Promise<string[]>;
 	currentEffectId?: string;
 	runInstanceId?: string;
 	/** The run's identity — the engine run id when it has one (stable across attempts and yield

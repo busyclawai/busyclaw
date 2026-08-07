@@ -321,6 +321,8 @@ export type {
 export {
 	APPROVED_BY_CONTEXT_KEY,
 	CLAW_ID_CONTEXT_KEY,
+	FACTS_CONTEXT_KEY,
+	runFactTags,
 	CONFIG_SCOPE_CONTEXT_KEY,
 	CONFIG_SCOPE_ID_CONTEXT_KEY,
 	gateDecision,
@@ -383,6 +385,7 @@ export type {
 	BusyclawRouteRequest,
 	BusyclawRouteResult,
 	CapabilityContext,
+	RunFactResolver,
 	InferContext,
 	InferPluginApi,
 	InferPluginSchema,

@@ -291,6 +291,35 @@ export function subagents(
 				),
 			},
 		},
+		/**
+		 * WHAT MAKES A CHILD A CHILD, told to the policy engine.
+		 *
+		 * A subagent is otherwise indistinguishable from its parent at the floor: authority is COPIED,
+		 * so the principal is the same string; it runs in the same claw with the same tools. The only
+		 * thing that says "this is a subordinate" is an `agent_edge` row, and the runtime cannot read
+		 * plugin tables. So `forbid(... ) when { a subagent }` was simply unwriteable.
+		 *
+		 * READ FROM THE EDGE, which is the point. The obvious alternative is to carry depth on the run's
+		 * `ctx` or its task payload — but those are channels a caller writes, and a fact the caller can
+		 * set is not a control: a child would claim depth 0 and the rule would evaporate. The edge is
+		 * written by this plugin, keyed on the child's own run id, and nothing outside can forge one.
+		 *
+		 * ABSENT, not zero, for a run that is nobody's child. A policy guards on
+		 * `context.facts has "subagents.agentDepth"` and that reads as "is this a subagent at all" —
+		 * where a defaulted 0 would make every run in the deployment look like one.
+		 */
+		runFacts: async ({
+			runId,
+		}): Promise<Record<string, string | number | boolean>> => {
+			const edge = await requireWired().store.edge(runId);
+			if (edge === null) return {};
+			return {
+				agentDepth: edge.depth,
+				// The subtree this run belongs to, so a policy can scope a rule to one delegation rather
+				// than to subagents in general.
+				agentRoot: edge.rootRunId,
+			};
+		},
 		// STATIC, like the capability map and for the same reason: sinks are read off the raw plugin
 		// before `configure` runs. It closes over `wired`, which `configure` fills — and it is only ever
 		// called at runtime, by which time it is set.

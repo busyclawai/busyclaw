@@ -180,6 +180,31 @@ export const MEMBERSHIPS_CONTEXT_KEY = "busyclaw__memberships";
 export const CLAW_ID_CONTEXT_KEY = "busyclaw__clawId";
 export const THREAD_ID_CONTEXT_KEY = "busyclaw__threadId";
 export const RUN_ID_CONTEXT_KEY = "busyclaw__runId";
+/**
+ * The plugin-contributed fact bag — see `RunFactResolver`.
+ *
+ * ONE RESERVED KEY HOLDING A RECORD, rather than letting plugins stamp `busyclaw__*` keys of their
+ * own. Those are the runtime's own namespace and are STRIPPED from caller input on the way in; a
+ * plugin writing there would be indistinguishable from a caller trying to forge one, and could shadow
+ * `busyclaw__principal`. Inside the bag a plugin can only collide with itself.
+ */
+export const FACTS_CONTEXT_KEY = "busyclaw__facts";
+
+/**
+ * One fact → the tags a policy can match on: the key alone, and the key with its value.
+ *
+ * Both, because they answer different questions and only one of them is knowable in advance. "Is this
+ * a subagent at all" is `contains("subagents.agentDepth")` — the asker does not know the depth. "Is it
+ * a direct child" is `contains("subagents.agentDepth:1")`.
+ */
+export function runFactTags(
+	pluginId: string,
+	key: string,
+	value: string | number | boolean,
+): [string, string] {
+	const name = `${pluginId}.${key}`;
+	return [name, `${name}:${String(value)}`];
+}
 export const SUBJECT_CONTEXT_KEY = "busyclaw__subjectId";
 // The run's CONFIG SCOPE — the opaque `(scope, scopeId)` boundary its durable config belongs to (registered
 // tools, policy slices, the facts overlay). Was a single `busyclaw__organizationId`, which made core
@@ -282,6 +307,10 @@ export type StampedFacts = {
 	configScope?: string;
 	configScopeId?: string;
 	runMode?: RunMode;
+	/** Plugin-contributed tags: `<pluginId>.<key>` and `<pluginId>.<key>:<value>`. See
+	 *  `RunFactResolver`. A SET because a Cedar schema cannot declare an open record — the same reason
+	 *  `memberships` reaches a policy as flat `scopes`/`roles`. */
+	facts?: readonly string[];
 };
 
 /**
@@ -303,6 +332,12 @@ export const stampedFacts = type({
 	"busyclaw__configScope?": "string",
 	"busyclaw__configScopeId?": "string",
 	"busyclaw__runMode?": "'interactive' | 'autonomous'",
+	// A SET OF TAGS, not a record, and that is forced by Cedar rather than chosen: a schema declares
+	// named attributes, so an open string-keyed map cannot be validated. `scopes` and `roles` are the
+	// same shape for the same reason — open-ended values the runtime cannot name in advance, projected
+	// into `Set<String>`. Each fact appears twice: `<plugin>.<key>` (it exists) and
+	// `<plugin>.<key>:<value>` (what it is).
+	"busyclaw__facts?": "string[]",
 }).pipe(
 	(stamps): StampedFacts => ({
 		...(stamps.busyclaw__memberships !== undefined
@@ -319,6 +354,9 @@ export const stampedFacts = type({
 			: {}),
 		...(stamps.busyclaw__runMode !== undefined
 			? { runMode: stamps.busyclaw__runMode }
+			: {}),
+		...(stamps.busyclaw__facts !== undefined
+			? { facts: stamps.busyclaw__facts }
 			: {}),
 	}),
 );

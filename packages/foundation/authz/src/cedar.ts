@@ -33,8 +33,11 @@ export type CedarSchemaOptions = {
 // the run has no memberships) — the same belt-and-braces `runMode` gets, and for the same reason: a
 // policy reading an ABSENT base errors, and an erroring policy is skipped, which takes a `forbid` down
 // with it. Always-present means `context.scopes.contains(…)` needs no `has` guard to be safe.
+// `facts` is a plugin-contributed Set<String> for the same reason `scopes`/`roles` are: a Cedar schema
+// declares NAMED attributes, so an open record keyed by whatever a plugin knows cannot be validated.
+// Tags read `<plugin>.<key>` and `<plugin>.<key>:<value>` — see `runFactTags`.
 const CONTEXT_FIELDS =
-	"confirmationUsed: Bool, clawId?: String, configScope?: String, configScopeId?: String, roles?: Set<String>, runMode?: String, scopes?: Set<String>, server?: String";
+	"confirmationUsed: Bool, clawId?: String, configScope?: String, configScopeId?: String, facts?: Set<String>, roles?: Set<String>, runMode?: String, scopes?: Set<String>, server?: String";
 
 function renderAction(
 	action: ActionDef,

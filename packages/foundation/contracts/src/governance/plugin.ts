@@ -72,6 +72,35 @@ export type CapabilityContext = {
 	readonly requestAwait?: (waitId: string) => void;
 };
 
+/**
+ * What a plugin knows about a run that the runtime cannot see, offered to the policy engine as facts.
+ *
+ * THE PROBLEM THIS SOLVES. A subagent is a run like any other — same principal (authority is COPIED
+ * from its parent), same tools, same claw. What makes it a subagent is a row in a PLUGIN's table, and
+ * the runtime cannot read plugin tables. So no policy could distinguish a child from its parent, and
+ * "a subagent may not send email" was unwriteable.
+ *
+ * DERIVED SERVER-SIDE, FROM DURABLE STATE, and that is the whole security argument. The obvious
+ * alternative — carry depth on the run's `ctx` or the task payload — puts the fact on a channel the
+ * caller writes, and a fact the caller can set is not a control: a child would simply claim depth 0.
+ * This resolver is handed a run id and nothing else, and answers from its own rows.
+ *
+ * RESOLVED ONCE PER SLICE, not per call, for the reason `authority` is: a resolver reading a mutable
+ * store and re-run at every boundary door answers differently per door, and the tool closure captured
+ * a different answer than any of them (R-H03). Facts about a run do not change mid-run.
+ *
+ * The keys a plugin returns are NAMESPACED with its id by the assembly, so `agentDepth` from
+ * `subagents` reaches a policy as `context.facts["subagents.agentDepth"]` and no plugin can shadow
+ * another — or shadow the runtime's own stamps, which live outside this bag entirely.
+ *
+ * Values are scalars because Cedar matches on scalars. A plugin needing structure should flatten it
+ * into several facts rather than hiding a shape a policy cannot destructure.
+ */
+export type RunFactResolver = (input: {
+	runId: string;
+	principal: Principal;
+}) => Promise<Record<string, string | number | boolean>>;
+
 export type BusyclawHttpMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
 export type BusyclawRouteRequest = {
@@ -465,6 +494,14 @@ export type BusyclawPlugin<
 	boundaryGates?: BoundaryGate[];
 	/** After-gates this plugin installs (observe). */
 	afterGates?: AfterGate[];
+	/**
+	 * Per-run facts this plugin offers the policy engine — see {@link RunFactResolver}.
+	 *
+	 * Read STATICALLY off the raw plugin object (like `eventSinks`/`policies`), so the runtime is built
+	 * knowing who to ask; the resolver closes over whatever `configure` binds later. Its keys are
+	 * namespaced with this plugin's id, so a policy reads `context.facts["<id>.<key>"]`.
+	 */
+	runFacts?: RunFactResolver;
 	/** Operational event sinks this plugin contributes — OBSERVE-ONLY by construction (`EventSink.emit`
 	 *  returns void: nothing to veto, nothing to rewrite; decisions belong to gates). Sinks receive the
 	 *  same merged stream as host sinks (runtime lifecycle events + plugin-emitted) and join the
