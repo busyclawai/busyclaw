@@ -41,7 +41,7 @@ const usage = {
  * The child runs the SAME model — it just has no children of its own, so it falls through to the
  * text branch immediately. One model, two roles, because the child is a real run on the same claw.
  */
-function parentModel(): V2Model {
+function parentModel(offered?: string[]): V2Model {
 	const seen: string[] = [];
 	return {
 		specificationVersion: "v4",
@@ -49,6 +49,11 @@ function parentModel(): V2Model {
 		modelId: "mock",
 		supportedUrls: {},
 		doGenerate: async (options) => {
+			if (offered !== undefined && offered.length === 0) {
+				offered.push(
+					...((options.tools ?? []) as { name: string }[]).map((t) => t.name),
+				);
+			}
 			const text = JSON.stringify(options.prompt);
 			const isParent = text.includes("BE A PARENT");
 			if (!isParent) {
@@ -126,7 +131,7 @@ const permitsWrites = {
 	],
 };
 
-function harness() {
+function harness(offered?: string[]) {
 	const adapter = memoryAdapter();
 	const plugin = subagents({ joinTimeoutMs: 60_000 });
 	let runtimeHalf:
@@ -142,7 +147,7 @@ function harness() {
 	};
 	const claw = createClaw({
 		database: adapter,
-		model: parentModel(),
+		model: parentModel(offered),
 		cronHandler: { secret: "test-cron-secret" },
 		engine: sqlEngine({
 			store: createSqlEngineStore(adapter),
@@ -255,5 +260,37 @@ describe("a parent waits for a child, for real", () => {
 		// loses at the database — and a reconciler pass over a settled barrier finds nothing to do.
 		const report = (await h.runCron()).data as { fired: number; examined: number };
 		expect(report).toMatchObject({ examined: 0, fired: 0 });
+	});
+});
+
+describe("which of the three tools reaches the context window", () => {
+	it("offers spawn and await by name, and leaves status to discovery", async () => {
+		// PRESENCE IS CONTEXT-WINDOW POLICY, and the two that opt in do so for different reasons.
+		// `spawn`, because nobody searches a catalog for a capability they do not know exists — left
+		// discoverable it ships a feature most deployments never see used. `await`, because a resumed
+		// parent comes back to a transcript holding its own earlier call and repeating it is the obvious
+		// move: discoverable, that emits a name the provider rejects outright.
+		const offered: string[] = [];
+		const h = harness(offered);
+		await h.claw.api.createClaw(
+			{ id: "claw-1", name: "P" },
+			{ principal: alice },
+		);
+		await h.claw.api.createThread(
+			{ id: "thread-1", clawId: "claw-1" },
+			{ principal: alice },
+		);
+		await h.claw.api.sendMessage(
+			{ threadId: "thread-1", clawId: "claw-1", message: "BE A PARENT" },
+			{ principal: alice },
+		);
+
+		expect(offered).toContain("subagents__agent__spawn");
+		expect(offered).toContain("subagents__agent__await");
+		// Meaningful only to a run that already spawned — which has the namespace in its own
+		// transcript and can search precisely.
+		expect(offered).not.toContain("subagents__agent__status");
+		// And the discovery route is still there for it.
+		expect(offered).toContain("busyclaw__search");
 	});
 });

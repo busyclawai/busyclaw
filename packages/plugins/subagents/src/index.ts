@@ -213,6 +213,11 @@ export function subagents(
 					// Not `invoker`. That bit gates arbitrary governed tool invocation as well, and "may
 					// create a subordinate" is a different permission from "may call anything directly".
 					{ capability: AGENT_CAPABILITY },
+					// PRESENT, against the plugin default. Delegating is a strategic choice a model makes
+					// when it notices work that splits — and nobody searches a catalog for a capability
+					// they do not know exists. Left discoverable, this ships a feature most deployments
+					// would never see used, which is a worse trade than one tool's context.
+					{ presence: "always" },
 				),
 				status: govern(
 					tool({
@@ -223,6 +228,10 @@ export function subagents(
 							children: await capabilityFrom(options).status(),
 						}),
 					}),
+					// DISCOVERABLE, the plugin default, and the only one of the three left there. It is
+					// meaningful solely to a run that already spawned something — which is a run that has
+					// the namespace in its own transcript and can search precisely. The two that carry the
+					// context cost are the two a model cannot get to any other way.
 					{ capability: AGENT_CAPABILITY, access: "read" },
 				),
 				await: govern(
@@ -238,6 +247,12 @@ export function subagents(
 					// READ. Waiting for a child and creating one are different permissions, and the
 					// dangerous one is `spawn`: this reads results from runs the caller already parents.
 					{ capability: AGENT_CAPABILITY, access: "read" },
+					// PRESENT, and this one is a correctness argument rather than a discovery one. Its whole
+					// contract is "call me again when you come back", and a resumed parent comes back to a
+					// transcript containing its own earlier `await` call — so repeating it is the obvious
+					// move. Discoverable, that emits a name the provider rejects as an unavailable tool, and
+					// the model has to work out for itself that the route is now `busyclaw__execute`.
+					{ presence: "always" },
 				),
 			},
 		},
