@@ -3,7 +3,6 @@ import type {
 	AuditSink,
 	BusyclawPlugin,
 	CapabilityContext,
-	RunFactResolver,
 	EffectStore,
 	InferContext,
 	JsonObject,
@@ -11,6 +10,7 @@ import type {
 	Principal,
 	Redactor,
 	RunCheckpointStore,
+	RunFactResolver,
 	RunMode,
 	TextDeltaStream,
 	ToolDefinitionSet,
@@ -21,16 +21,16 @@ import {
 	asPrincipal,
 	BusyclawError,
 	CLAW_ID_CONTEXT_KEY,
-	FACTS_CONTEXT_KEY,
 	configurationError,
+	FACTS_CONTEXT_KEY,
 	jsonValue as jsonValueSchema,
 	PII_CONTAINER_ID_CONTEXT_KEY,
 	PII_CONTAINER_KIND_CONTEXT_KEY,
 	RESERVED_CONTEXT_PREFIX,
 	RUN_ID_CONTEXT_KEY,
-	runFactTags,
 	RUN_MODE_CONTEXT_KEY,
 	redactionContextFrom,
+	runFactTags,
 	stampRunActions,
 	stateError,
 	THREAD_ID_CONTEXT_KEY,
@@ -373,6 +373,12 @@ export type RuntimeConfig = {
 	warn?: (message: string) => void;
 	plugins?: readonly BusyclawPlugin[];
 	maxSteps?: number;
+	/** Wall-clock bound for ONE model call, in ms. Default
+	 *  {@link DEFAULT_MODEL_CALL_TIMEOUT_MS} — deliberately generous, because it exists to bound an
+	 *  unbounded wait rather than to police latency. A provider that never answers used to hold its
+	 *  task forever: the engine heartbeat renews the lease on its own timer regardless of whether the
+	 *  call is progressing, and `deadlineAt` is only read between steps. */
+	modelCallTimeoutMs?: number;
 	/**
 	 * Named capabilities a `capability`-stamped tool receives, built fresh for each call.
 	 *
@@ -602,8 +608,40 @@ function stripReserved(ctx: Record<string, unknown>): Record<string, unknown> {
 	return out;
 }
 
+/**
+ * JSON with object keys in a fixed order, so the same value always produces the same text.
+ *
+ * `JSON.stringify` preserves INSERTION order, and for tool arguments that order comes from the JSON
+ * the model emitted — it is a property of one generation, not of the value. That was harmless while
+ * the hash only had to match another hash taken inside the same attempt. It stops being harmless the
+ * moment the hash becomes part of an effect's IDENTITY: a replay whose model emits the same
+ * arguments in a different order would mint a different id and re-run an effect that already
+ * committed, which is the exact failure {@link hashEffectInput}'s caller now exists to prevent.
+ */
+function canonicalJson(value: unknown): string {
+	if (value === null || typeof value !== "object") {
+		return JSON.stringify(value) ?? "null";
+	}
+	if (Array.isArray(value)) {
+		return `[${value.map(canonicalJson).join(",")}]`;
+	}
+	// A value with its own serialization (a Date, or anything else defining toJSON) keeps it: sorting
+	// the keys of something that does not serialize as a plain object would change what it means.
+	if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+		return JSON.stringify(value) ?? "null";
+	}
+	const entries = Object.entries(value as Record<string, unknown>)
+		// Dropped rather than serialized, matching JSON.stringify — an absent key and one set to
+		// undefined are the same value and must not hash differently.
+		.filter(([, entry]) => entry !== undefined)
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	return `{${entries
+		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+		.join(",")}}`;
+}
+
 function hashEffectInput(value: unknown): string {
-	return bytesToHex(sha256(utf8ToBytes(JSON.stringify(value))));
+	return bytesToHex(sha256(utf8ToBytes(canonicalJson(value))));
 }
 
 function errorPayload(err: unknown): Record<string, unknown> {
@@ -1841,11 +1879,31 @@ export function createRuntime<const Config extends RuntimeConfig>(
 						{ toolName: call.name },
 					);
 				}
-				state.currentEffectId ??= `run:${state.runId ?? state.recording?.runId ?? state.runInstanceId ?? newId("run")}:tool:${state.currentToolCallId || call.name}`;
 				const inputHash = hashEffectInput({
 					toolName: call.name,
 					args: call.args,
 				});
+				// RE-DERIVABLE BY A LATER ATTEMPT. This used to key on the provider's `toolCallId`, which
+				// is a nonce: a run that failed mid-flight and was re-claimed replayed from its prompt,
+				// the model emitted fresh call ids, every effect missed its own record, and the ledger
+				// admitted a second charge or a second send as if it were the first. `idempotency:
+				// "required"` did not help — the lookup is by id, and the id was different.
+				//
+				// Every component is something the SAME run can produce again. `runId` is stable across
+				// attempts and slices; `currentStep` is a clean ordinal because the loop refuses more than
+				// one tool call per step; the hash is canonical (see {@link canonicalJson}) so key order
+				// cannot change it. A replay that reaches the same step with the same call therefore finds
+				// the completed record and returns its stored output instead of acting twice.
+				//
+				// THE RESIDUAL, stated: if the model diverges and makes that call at a different step, the
+				// ids differ and it runs again. That is a narrower hole than the one it replaces — it needs
+				// the model to change its mind, not merely to be re-run — and closing it entirely means
+				// keying on an occurrence counter rather than the step, which buys little while a step and
+				// a tool call are the same thing.
+				//
+				// The `newId` fallback keeps its old meaning: a run with no identity at all has nothing
+				// stable to key on, so its effects are unique by construction and dedupe nothing.
+				state.currentEffectId ??= `run:${state.runId ?? state.recording?.runId ?? state.runInstanceId ?? newId("run")}:step:${state.currentStep}:${call.name}:${inputHash}`;
 				const claim = await effectStore.claim({
 					id: state.currentEffectId,
 					toolName: call.name,
@@ -2227,6 +2285,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			core,
 			state,
 			maxSteps,
+			...(config.modelCallTimeoutMs !== undefined
+				? { modelCallTimeoutMs: config.modelCallTimeoutMs }
+				: {}),
 			now,
 			abortSignal: options?.abortSignal,
 			deadlineAt: options?.deadlineAt,
@@ -2589,6 +2650,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 				core: createRunCore(resumeState, approvalStore, runTools),
 				state: resumeState,
 				maxSteps,
+				...(config.modelCallTimeoutMs !== undefined
+					? { modelCallTimeoutMs: config.modelCallTimeoutMs }
+					: {}),
 				now,
 				abortSignal: loopSignal,
 				deadlineAt: options?.deadlineAt,
@@ -2744,6 +2808,9 @@ export function createRuntime<const Config extends RuntimeConfig>(
 			core: createRunCore(state, approvalStore, runTools),
 			state,
 			maxSteps,
+			...(config.modelCallTimeoutMs !== undefined
+				? { modelCallTimeoutMs: config.modelCallTimeoutMs }
+				: {}),
 			now,
 			abortSignal: options?.abortSignal,
 			deadlineAt: options?.deadlineAt,

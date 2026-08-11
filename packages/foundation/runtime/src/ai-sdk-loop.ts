@@ -22,6 +22,31 @@ import type {
 	RuntimeResult,
 } from "./runtime";
 
+/**
+ * Wall-clock bound for ONE model call. GENEROUS BY DESIGN — this exists to bound an unbounded wait,
+ * not to police latency, so it sits far above any healthy call.
+ *
+ * Without it a hung connection is held forever: the engine's heartbeat renews the task lease on its
+ * own timer whether or not the call is progressing, so nothing lapses and nothing reaps it, and the
+ * loop's `deadlineAt` is only read at the top of a step — it cannot fire during the call it would
+ * need to interrupt. The only thing that ended such a run was the process dying.
+ */
+export const DEFAULT_MODEL_CALL_TIMEOUT_MS = 300_000;
+
+/**
+ * Retries INSIDE one model call, on the AI SDK's own retryable-error classification.
+ *
+ * Deliberately not 0. A transient provider error that escapes this loop fails the run, and the
+ * engine's answer to a failed run is to re-claim the task — which is a far more expensive retry
+ * than re-sending the request, and (before the effect id became replay-stable) a much more
+ * dangerous one. Retrying the cheap way here is what keeps that path rare.
+ *
+ * Each attempt re-enters `wrapGenerate`, so every one of them is separately gated and audited —
+ * three attempts are three provider egresses and the record says so. The number is stated here
+ * because a governance-relevant default should be one this codebase chose, not one it inherited.
+ */
+export const MODEL_CALL_MAX_RETRIES = 2;
+
 export type AiSdkLoopInput = {
 	model: RuntimeModel;
 	/** The selected model opted out of PII redaction: the model boundary rehydrates the prompt for
@@ -62,6 +87,9 @@ export type AiSdkLoopInput = {
 	core: Governance;
 	state: RunState;
 	maxSteps: number;
+	/** Wall-clock bound for one model call, in ms. See {@link DEFAULT_MODEL_CALL_TIMEOUT_MS} for why
+	 *  a run must never be allowed to wait on a provider indefinitely. */
+	modelCallTimeoutMs?: number;
 	now: () => string;
 	abortSignal?: RuntimeAbortSignal;
 	/**
@@ -202,34 +230,57 @@ function isAborted(signal: RuntimeAbortSignal | undefined): boolean {
 }
 
 /**
- * One step's interrupt handle, or undefined when nothing can interrupt.
+ * Everything that may cut one step's model call short, as the single signal the provider gets.
  *
- * The signal handed to the provider must abort on EITHER the run's own signal or this interrupt, so
- * the two are combined — and only when both are real platform signals, because `AbortSignal.any`
- * needs real ones. On a host whose run signal is the cooperative shim, interrupt degrades to
- * arriving at the next control point, which is the same honest degradation `abort` already makes.
+ * Three sources, and they are combined only when they are real platform signals, because
+ * `AbortSignal.any` needs real ones. On a host whose run signal is the cooperative shim, that shim
+ * is passed through untouched and both the interrupt and the timeout degrade to arriving at the next
+ * control point — the same honest degradation `abort` already makes.
+ *
+ * THE TIMEOUT IS BUILT HERE RATHER THAN HANDED TO THE VENDOR, and that is not a style choice. The AI
+ * SDK's own `timeout` option arms a plain `setTimeout`, which REFS the event loop until it is
+ * cleared; every path that fails to clear one leaves the process (a test worker, a serverless
+ * invocation) held open for the whole budget. `AbortSignal.timeout` is unref'd by construction, so
+ * it bounds the wait without ever being the reason something stays alive. It is also the form that
+ * survives replacing this vendor — a hand-rolled fetch loop wants a signal, not an SDK option.
+ *
+ * What that costs, stated: the SDK's `chunkMs` — "abort if no stream chunk for N" — has no signal
+ * equivalent, so a stream that goes quiet is caught by the call-wide bound instead of sooner. Still
+ * bounded, just less promptly.
  */
-function armStepInterrupt(
+function armStepSignal(
 	input: AiSdkLoopInput,
-): { signal: AbortSignal; fired: () => boolean } | undefined {
-	if (!input.armInterrupt) return undefined;
+	timeoutMs: number,
+): {
+	signal: AbortSignal | RuntimeAbortSignal | undefined;
+	interruptFired: () => boolean;
+} {
 	const Controller = (
 		globalThis as { AbortController?: typeof AbortController }
 	).AbortController;
-	if (!Controller) return undefined;
-	const controller = new Controller();
-	input.armInterrupt(() => controller.abort());
-	const run = input.abortSignal;
-	const combinable =
-		typeof AbortSignal !== "undefined" &&
-		typeof AbortSignal.any === "function" &&
-		run instanceof AbortSignal;
-	return {
-		signal: combinable
-			? AbortSignal.any([run as AbortSignal, controller.signal])
-			: controller.signal,
-		fired: () => controller.signal.aborted,
-	};
+	const hasAbortSignal = typeof AbortSignal !== "undefined";
+	const interrupt =
+		input.armInterrupt && Controller ? new Controller() : undefined;
+	if (interrupt) input.armInterrupt?.(() => interrupt.abort());
+
+	const parts: AbortSignal[] = [];
+	if (hasAbortSignal && typeof AbortSignal.timeout === "function") {
+		parts.push(AbortSignal.timeout(timeoutMs));
+	}
+	if (interrupt) parts.push(interrupt.signal);
+	if (input.abortSignal instanceof AbortSignal) parts.push(input.abortSignal);
+
+	const interruptFired = (): boolean => interrupt?.signal.aborted === true;
+	// Nothing real to hand over: fall back to whatever the caller gave us, shim included, which is
+	// exactly what this did before any of the three existed.
+	if (parts.length === 0) {
+		return { signal: input.abortSignal, interruptFired };
+	}
+	if (parts.length === 1) return { signal: parts[0], interruptFired };
+	if (typeof AbortSignal.any !== "function") {
+		return { signal: parts[0], interruptFired };
+	}
+	return { signal: AbortSignal.any(parts), interruptFired };
 }
 
 async function redact<T>(input: AiSdkLoopInput, value: T): Promise<T> {
@@ -530,10 +581,13 @@ export async function runAiSdkLoop(
 	while (step < input.maxSteps) {
 		abortIfNeeded(input.abortSignal);
 
-		// A FRESH controller per step: an AbortController fires once, and the step after an interrupt
-		// must be interruptible too. Armed here and never handed to a tool — an interrupt that could
-		// tear through a running effect would be a different and much worse primitive.
-		const interrupt = armStepInterrupt(input);
+		// A FRESH signal per step: an AbortController fires once and a timeout is per call, so the step
+		// after an interrupt must be armed again. Never handed to a tool — an interrupt that could tear
+		// through a running effect would be a different and much worse primitive.
+		const stepSignal = armStepSignal(
+			input,
+			input.modelCallTimeoutMs ?? DEFAULT_MODEL_CALL_TIMEOUT_MS,
+		);
 
 		// THE CONTROL POINT — one await, and only when a control seam was supplied. Messages first,
 		// then the park: a suspend that arrives together with a message should carry that message into
@@ -606,11 +660,12 @@ export async function runAiSdkLoop(
 			instructions: input.system,
 			messages,
 			stopWhen: isStepCount(1),
-			...(interrupt?.signal
-				? { abortSignal: interrupt.signal as never }
-				: input.abortSignal
-					? { abortSignal: input.abortSignal as never }
-					: {}),
+			// STATED, not inherited. Left unset the SDK applies its own default (2), and a number this
+			// governance-relevant should not be a vendor's choice — see {@link MODEL_CALL_MAX_RETRIES}.
+			maxRetries: MODEL_CALL_MAX_RETRIES,
+			// The run's abort, the interrupt, and the call timeout, already merged — see
+			// {@link armStepSignal} for why the timeout rides this rather than the SDK's own option.
+			...(stepSignal.signal ? { abortSignal: stepSignal.signal as never } : {}),
 		};
 		// Streaming and non-streaming converge on the same normalized result (usage / finishReason /
 		// response.messages / toolCalls / text) — so the whole tool-governance loop below is shared.
@@ -663,13 +718,45 @@ export async function runAiSdkLoop(
 			// rather than as a provider error. Nothing was pushed to `messages` yet (that happens
 			// after the call returns), so the partial response is simply discarded and the transcript
 			// never contains a half-written assistant turn.
-			if (interrupt?.fired() && !isAborted(input.abortSignal)) {
+			if (stepSignal.interruptFired() && !isAborted(input.abortSignal)) {
 				await input.emitEvent?.({
 					durationMs: Date.now() - modelStartedAt,
 					step,
 					type: "model.interrupted",
 				});
 				continue;
+			}
+			// A FAILED CALL IS STILL A RESUMABLE POINT, and this is the only place that can record it.
+			// Nothing from this step has been pushed — `messages` still ends at the previous step's tool
+			// results and no call is pending — so the transcript here is a legal resume point by exactly
+			// the argument `parkHere` makes for a park.
+			//
+			// Without this the engine's next claim finds no checkpoint and re-drives the run FROM ITS
+			// PROMPT: every step paid for twice, and a fresh chance for the model to diverge. A
+			// replay-stable effect id keeps such a replay from ACTING twice; this keeps it from happening
+			// at all. It is also what makes a timeout survivable — a slow provider costs one step rather
+			// than the whole run.
+			//
+			// WRITTEN BEFORE THE EVENT, because a recording sink's failures propagate: if the emit
+			// throws, the resume state is already safe.
+			//
+			// BEST EFFORT AND SILENT. The original failure is the one worth reporting, and a checkpoint
+			// that could not be written degrades to precisely the behaviour this had before it existed —
+			// a replay, which the ledger now makes safe. Nothing here may replace `err`.
+			//
+			// NOT ON AN ABORT: that tears down mid-step deliberately, and the worker records the run
+			// cancelled with no resumable point — "the cost the caller accepted by escalating past
+			// `stop`". A checkpoint written here would be one nothing ever retires.
+			if (input.persistYieldCheckpoint && !isAborted(input.abortSignal)) {
+				try {
+					await input.persistYieldCheckpoint({
+						nextStep: step,
+						messages,
+						deliveredThrough,
+					});
+				} catch {
+					// Deliberately swallowed — see above.
+				}
 			}
 			// Provider errors can echo prompt content — same redaction seam as tool.failed's error.
 			const redactedError = await redact(input, errorEventPayload(err));
