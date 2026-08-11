@@ -24,8 +24,33 @@ export type WhereOperator =
 	| "starts_with"
 	| "ends_with";
 
-/** One predicate against a column. Empty-list semantics are fixed across adapters:
- *  `in []` matches nothing, `not_in []` matches everything. */
+/**
+ * One predicate against a column. Empty-list semantics are fixed across adapters:
+ * `in []` matches nothing, `not_in []` matches everything.
+ *
+ * NULL COMPARISON IS SQL'S, and it is fixed here rather than left to each adapter, because it was
+ * left to each adapter and they answered differently: `ne` against a null column excluded the row on
+ * kysely/drizzle/prisma and INCLUDED it on mongo and the memory adapter. Code written against one
+ * pair silently did the other thing on the other. The rules:
+ *
+ *   - `value: null` is the NULL TEST, not a comparison. `eq null` matches a column that is null, and
+ *     a column that was never written is the same state (the memory adapter's absent key, mongo's
+ *     missing field). `ne null` matches a column that has any value. No other operator accepts
+ *     `null` — an adapter throws rather than inventing a meaning for `lt null`.
+ *   - EVERY OTHER OPERATOR EXCLUDES A NULL ROW. A null is not equal to `x`, and it is not unequal to
+ *     `x` either; both comparisons are unknown, and a row is returned only when its predicate is
+ *     TRUE. So `ne "x"`, `not_in ["x"]`, `contains "x"` and the ordering operators all skip a row
+ *     whose column is null. This is the one that surprises people: filtering for "not x" does not
+ *     return the rows that have no value at all. Ask for those explicitly with an `or` group and an
+ *     `eq null`.
+ *   - `not_in []` still matches EVERYTHING, null rows included. It is a constant, not a comparison —
+ *     the empty-list rule above wins, and an adapter emits `1 = 1` rather than a real `NOT IN`.
+ *
+ * SQL's reading is the one adopted because three of the five backends are SQL and cannot be talked
+ * out of it: making them match mongo would mean rewriting every `ne` as `(col <> v OR col IS NULL)`,
+ * which changes which index the planner picks and reads as a lie to anyone who opens the query log.
+ * The two backends that CAN be moved were moved.
+ */
 export type WhereClause = {
 	field: string;
 	// `boolean[]` belongs here for the same reason `boolean` does: a declared boolean column is
@@ -46,11 +71,28 @@ export type WhereClause = {
 	connector?: "AND" | "OR";
 	/**
 	 * Case sensitivity for string comparisons — applies to `eq`/`ne` and the pattern operators
-	 * (`contains`/`starts_with`/`ends_with`) when the value is a string. Default "sensitive".
-	 * Portability notes: SQL backends implement "insensitive" via `lower()`, so non-ASCII semantics
-	 * follow the database's collation; prisma forwards its native `mode` (connector-dependent); and
-	 * the pattern operators' DEFAULT sensitivity follows the database — sqlite's LIKE is
-	 * ASCII-case-insensitive unless the host sets `PRAGMA case_sensitive_like`.
+	 * (`contains`/`starts_with`/`ends_with`) when the value is a string.
+	 *
+	 * WHAT IS GUARANTEED: `mode: "insensitive"` matches regardless of case FOR ASCII, on every
+	 * backend. An adapter that cannot express it on its connector REFUSES — it never quietly answers
+	 * the case-sensitive question instead.
+	 *
+	 * WHAT IS NOT, and cannot be:
+	 *   - THE DEFAULT. `"sensitive"` is the default in the sense that nothing is added to the query,
+	 *     and on a SQL backend what you then get is the COLUMN'S COLLATION. SQLite's LIKE is
+	 *     ASCII-case-insensitive unless the host sets `PRAGMA case_sensitive_like`; MySQL's default
+	 *     `utf8mb4_0900_ai_ci` is case- and accent-insensitive; Postgres is sensitive. A comparison
+	 *     that must be sensitive has to say so with a collation on the column — an adapter that forced
+	 *     it per-query would fold both sides of every default `contains` and throw away the index the
+	 *     query exists to use.
+	 *   - NON-ASCII FOLDING under `"insensitive"`. SQL backends fold with `lower()`, which is
+	 *     ASCII-only on SQLite and ICU-aware on Postgres; the memory adapter uses JS `toLowerCase()`
+	 *     (full Unicode) and mongo a Unicode-aware regex. So `Ä` and `ä` compare equal on some
+	 *     deployments and not others, and no adapter-side rewrite fixes that without the same
+	 *     index-destroying cost.
+	 *
+	 * The practical reading: `mode` is for ASCII case-folding, which is what nearly every caller means.
+	 * Anything stricter belongs in the schema, as a collation.
 	 */
 	mode?: "sensitive" | "insensitive";
 };

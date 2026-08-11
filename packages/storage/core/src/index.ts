@@ -70,10 +70,68 @@ function stringsOf(
 		: { row: v, value: clause.value };
 }
 
+/**
+ * NULL and "never written" are ONE state, the way every database reads them.
+ *
+ * The memory adapter stores plain objects, so a column nobody set has no key and reads `undefined`,
+ * while a column set to null reads `null`. To SQL and to mongo those are the same row. Collapsing
+ * them here is what stops `eq null` from finding the explicitly-nulled rows and silently missing the
+ * ones that were simply never written — two states the caller has no way to tell apart and never
+ * meant to distinguish.
+ */
+const isNull = (v: unknown): boolean => v === null || v === undefined;
+
+/**
+ * A TOTAL ORDER over two column values, nulls included — what `Array.prototype.sort` requires and
+ * what this did not previously provide.
+ *
+ * The old comparator was `av < bv ? -1 : av > bv ? 1 : 0` over raw values. Both comparisons are
+ * false against `undefined`, so a null column compared EQUAL to every value it met, which makes the
+ * relation intransitive: `a < d` and `d = NULL` and `NULL = b` cannot all hold while `a < b` does.
+ * A comparator like that does not merely misplace the nulls — `sort` is free to emit any
+ * permutation, and it did: with the null between them, `d` came back after `e`.
+ *
+ * Nulls sort FIRST on ascending, which is what SQLite and Mongo do. Postgres puts them last, so this
+ * is one of the places where "portable" is not available and the majority behaviour is the honest
+ * choice; a query that cares must say so with an explicit sort on a non-null column.
+ */
+function compareForSort(a: unknown, b: unknown): number {
+	const aNull = isNull(a);
+	const bNull = isNull(b);
+	if (aNull || bNull) return aNull && bNull ? 0 : aNull ? -1 : 1;
+	// Relational comparison on `unknown`: the same JS ordering the adapter has always applied to
+	// whatever the caller stored, now reached only for values that are genuinely present.
+	const left = a as number;
+	const right = b as number;
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function matchOne(row: Record<string, unknown>, w: WhereClause): boolean {
 	const v = row[w.field];
+	const op = w.operator ?? "eq";
+	// THE NULL TEST — `value: null` asks about presence, it does not compare. Matches kysely and
+	// drizzle, which both special-case it to `is null` / `is not null` and throw for anything else;
+	// the throw is here for the same reason it is there, so `lt null` fails at the call site instead
+	// of quietly matching nothing forever.
+	if (w.value === null) {
+		if (op === "eq") return isNull(v);
+		if (op === "ne") return !isNull(v);
+		throw configurationError(
+			`@busyclaw/storage-core: where operator "${op}" cannot compare null`,
+			{ field: w.field, operator: op },
+		);
+	}
+	// SQL'S THREE-VALUED LOGIC, and the whole reason this line exists: a null row's comparison is
+	// UNKNOWN, and a row is returned only when its predicate is TRUE. `ne` is the one that catches
+	// people out — "not pending" does not include the rows with no status — but the alternative is
+	// for this adapter to disagree with every database it stands in for, which is what it did.
+	// `in`/`not_in` land here too: `not_in []` never does, because the empty-list constant is handled
+	// below without ever reaching a comparison.
+	if (isNull(v)) {
+		return op === "not_in" && Array.isArray(w.value) && w.value.length === 0;
+	}
 	const s = stringsOf(v, w);
-	switch (w.operator ?? "eq") {
+	switch (op) {
 		case "eq":
 			return s ? s.row === s.value : v === w.value;
 		case "ne":
@@ -298,9 +356,7 @@ export function memoryAdapter(): Adapter {
 					// Multi-column: compare by each sort in order, first non-tie wins.
 					rows = [...rows].sort((a, b) => {
 						for (const { field, direction } of sorts) {
-							const av = a[field] as number;
-							const bv = b[field] as number;
-							const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+							const cmp = compareForSort(a[field], b[field]);
 							if (cmp !== 0) return direction === "desc" ? -cmp : cmp;
 						}
 						return 0;

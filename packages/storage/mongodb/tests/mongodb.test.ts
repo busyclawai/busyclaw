@@ -6,8 +6,18 @@ import { mongoAdapter, toFilter } from "../src/index";
 describe("@busyclaw/storage-mongodb — Where → Mongo filter", () => {
 	it("eq, operators, in, contains", () => {
 		expect(toFilter([{ field: "id", value: "x" }])).toEqual({ id: "x" });
+		// A NEGATIVE CARRIES A NULL NARROWING. Mongo's bare `$ne` matches a document whose field is
+		// MISSING; the storage contract fixes NULL comparison as SQL's, where a null row satisfies
+		// neither `= x` nor `<> x`. `{ $ne: null }` is Mongo's spelling of "present and not null", so
+		// the pair is the translation of one predicate rather than two.
 		expect(toFilter([{ field: "seq", operator: "ne", value: 1 }])).toEqual({
-			seq: { $ne: 1 },
+			$and: [{ seq: { $ne: 1 } }, { seq: { $ne: null } }],
+		});
+		// The NULL TEST is unaffected: `value: null` asks about presence, and Mongo already reads a
+		// bare `null` as "null or missing" — the single state the contract recognises.
+		expect(toFilter([{ field: "seq", value: null }])).toEqual({ seq: null });
+		expect(toFilter([{ field: "seq", operator: "ne", value: null }])).toEqual({
+			seq: { $ne: null },
 		});
 		expect(toFilter([{ field: "seq", operator: "gt", value: 1 }])).toEqual({
 			seq: { $gt: 1 },
@@ -46,9 +56,15 @@ describe("@busyclaw/storage-mongodb — Where → Mongo filter", () => {
 				{ $and: [{ scope: "organization" }, { scopeId: "org" }] },
 			],
 		});
+		// Same null narrowing as `ne`, reached through the other negative operator.
 		expect(
 			toFilter([{ field: "s", operator: "not_in", value: ["a"] }]),
-		).toEqual({ s: { $nin: ["a"] } });
+		).toEqual({ $and: [{ s: { $nin: ["a"] } }, { s: { $ne: null } }] });
+		// EXCEPT when the list is empty. The contract fixes `not_in []` as match-EVERYTHING, null rows
+		// included — a constant rather than a comparison — so it must not pick up the narrowing.
+		expect(toFilter([{ field: "s", operator: "not_in", value: [] }])).toEqual({
+			s: { $nin: [] },
+		});
 		expect(
 			toFilter([{ field: "n", operator: "starts_with", value: "a.b" }]),
 		).toEqual({ n: { $regex: "^a\\.b" } });
