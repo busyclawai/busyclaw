@@ -987,7 +987,24 @@ export function createSqlEngineStore(
 				update: { expiresAt, lastHeartbeatAt: ts },
 			});
 			if (!updated) return null;
-			await db.update({
+			// THE TASK WRITE IS THE FENCE, so its result is the answer — this used to be issued and
+			// ignored, and the LEASE row returned as success regardless.
+			//
+			// A live lease can sit beside a task that no longer names it. The reaper selects leases by
+			// `expiresAt <= ts` and then compare-and-sets the TASK on `status` + `leaseId` only, never
+			// re-reading expiry; this heartbeat checks expiry, then captures its own `ts`, then renews
+			// against that earlier instant. A sweep beginning in the gap makes both writes succeed — the
+			// task goes back to `pending` for anyone to claim while the lease it just shed is renewed.
+			//
+			// The worker reads a non-null answer here as "you still hold this, keep going" and aborts
+			// the runtime when it goes null. Returning the lease row without asking about the task told
+			// a driver to keep working on a slice another host was already free to claim: two model
+			// calls billed, two sets of tool effects, and the loser's terminal write refused after the
+			// side effects had happened.
+			//
+			// Reached without any race at all through `attemptClaim`'s stop path, which retires a task to
+			// `dead` and clears its `leaseId` — a heartbeat against explicitly abandoned work.
+			const stillHeld = await db.update({
 				model: "runtime_task",
 				where: [
 					{ field: "id", value: lease.taskId },
@@ -997,6 +1014,17 @@ export function createSqlEngineStore(
 				],
 				update: { leasedUntil: expiresAt, updatedAt: ts },
 			});
+			if (!stillHeld) {
+				// The lease names a task that has stopped naming it back, so it is litter by definition.
+				// Dropped here rather than left for a sweep, because this call just pushed its expiry an
+				// entire TTL into the future — the same unwind `attemptClaim` performs when its own task
+				// CAS loses.
+				await db.delete({
+					model: "lease",
+					where: [{ field: "id", value: input.leaseId }],
+				});
+				return null;
+			}
 			return updated;
 		},
 
