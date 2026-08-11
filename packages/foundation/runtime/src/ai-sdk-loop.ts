@@ -297,7 +297,17 @@ function errorEventPayload(err: unknown): RuntimeEventError {
 	return {
 		message: err.message,
 		name: err.name,
-		reasonCode: typeof reasonCode === "string" ? reasonCode : undefined,
+		// OMITTED WHEN ABSENT, never present-and-undefined — the same rule the engine already applies
+		// to a DENIED result's optional fields, arrived at here the expensive way.
+		//
+		// A key holding `undefined` survives the runtime event schema (`events.ts` declares
+		// `"reasonCode?": "string | undefined"`), then gets walked by the redactor on its way to
+		// storage and comes out as the literal STRING "undefined", which `createToolResult`'s record
+		// schema rejects. The whole of that happened on the most ordinary path there is — a tool
+		// raising a plain `Error` — so every throwing tool killed its run with
+		// `[BUSYCLAW_VALIDATION_FAILED] create tool result input invalid` instead of recording the
+		// failure the tool actually had, and spent all three error attempts re-doing it.
+		...(reasonCode !== undefined ? { reasonCode } : {}),
 	};
 }
 
