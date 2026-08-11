@@ -7,17 +7,34 @@ export type BusyclawErrorCode =
 	| "BUSYCLAW_UNSUPPORTED_OPERATION"
 	| "BUSYCLAW_VALIDATION_FAILED";
 
+/**
+ * The structured detail bag an error carries.
+ *
+ * OPEN, because a call site attaches whatever it knows and no central type could enumerate that.
+ * `reasonCode` is the exception: it is pinned to `string` because it is the one key that is READ BACK
+ * — a governed "no" surfaces as a throw, and telemetry uses this key to tell a policy decision from
+ * infrastructure breaking.
+ *
+ * Pinning it here is what keeps the narrowing at the WRITE side, where the type is already known
+ * (a gate's `reasonCode` is declared `string`), instead of at every read. Without it the key went
+ * into an open record, came back out as `unknown`, and each reader re-established by hand what the
+ * writer had never actually lost.
+ */
+export type BusyclawErrorDetails = Record<string, unknown> & {
+	reasonCode?: string;
+};
+
 export type BusyclawErrorInput = {
 	code: BusyclawErrorCode;
 	message: string;
-	details?: Record<string, unknown>;
+	details?: BusyclawErrorDetails;
 	cause?: unknown;
 };
 
 export class BusyclawError extends Error {
 	override name = "BusyclawError";
 	readonly code: BusyclawErrorCode;
-	readonly details?: Record<string, unknown>;
+	readonly details?: BusyclawErrorDetails;
 
 	constructor(input: BusyclawErrorInput) {
 		super(`[${input.code}] ${input.message}`, { cause: input.cause });
@@ -78,7 +95,7 @@ export function safeFailureMessage(
 export function validationError(
 	label: string,
 	summary: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_VALIDATION_FAILED",
@@ -89,7 +106,7 @@ export function validationError(
 
 export function configurationError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_CONFIGURATION_ERROR",
@@ -100,7 +117,7 @@ export function configurationError(
 
 export function stateError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_STATE_ERROR",
@@ -111,7 +128,7 @@ export function stateError(
 
 export function unsupportedOperationError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_UNSUPPORTED_OPERATION",
@@ -125,7 +142,7 @@ export function unsupportedOperationError(
  *  like the tool-gate denials: a product-API caller learns they were denied, never a silent null. */
 export function authorizationError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_AUTHORIZATION_DENIED",
@@ -149,7 +166,7 @@ export function authorizationError(
  */
 export function conflictError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_CONFLICT",
@@ -168,7 +185,7 @@ export function conflictError(
  */
 export function limitError(
 	message: string,
-	details?: Record<string, unknown>,
+	details?: BusyclawErrorDetails,
 ): BusyclawError {
 	return new BusyclawError({
 		code: "BUSYCLAW_LIMIT_EXCEEDED",

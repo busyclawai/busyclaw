@@ -2,7 +2,11 @@
 // entity schema DSL, and the port/schema definitions every busyclaw package speaks. One explicit
 // public surface (no `export *`); the engine that runs these contracts is @busyclaw/core.
 
-export type { BusyclawErrorCode, BusyclawErrorInput } from "@busyclaw/errors";
+export type {
+	BusyclawErrorCode,
+	BusyclawErrorDetails,
+	BusyclawErrorInput,
+} from "@busyclaw/errors";
 export {
 	authorizationError,
 	BusyclawError,
