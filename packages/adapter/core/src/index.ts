@@ -1089,7 +1089,13 @@ function pluginEndpointRoutes(claw: Claw): ResolvedRoute[] {
 				method: route.method,
 				path,
 				handler: async ({ request, caller }) => {
-					const valid = route.input(await readInput(request, route.method));
+					// The route's own schema goes in, for the same reason the api routes hand over theirs:
+					// a GET carries its input in the query string, which has only strings, so a declared
+					// number is unreachable without it. Wiring it once and not twice is exactly how this
+					// door ended up different from the other one.
+					const valid = route.input(
+						await readInput(request, route.method, route.input),
+					);
 					if (valid instanceof type.errors) {
 						throw validationError(
 							`claw.api.${namespace.name}.${route.name} input`,
