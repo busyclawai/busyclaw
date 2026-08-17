@@ -23,10 +23,10 @@
 import type {
 	Adapter,
 	BusyclawPlugin,
+	Detector,
 	SchemaDeclaration,
 	ToolDefinition,
 } from "@busyclaw/contracts";
-import { createStoredRedactor } from "@busyclaw/core";
 import {
 	createSqlEngineStore,
 	type SqlEngineHandle,
@@ -38,7 +38,6 @@ import {
 	memorySecondaryStorage,
 	secondaryStorageStream,
 } from "@busyclaw/storage-core";
-import { createPiiMappingStore } from "@busyclaw/storage-durable";
 import { kyselyAdapter, planMigrations } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
 import { type Claw, createClaw } from "busyclaw";
@@ -55,7 +54,7 @@ export type WorldOptions = {
 	model: RuntimeModel;
 	tools?: Record<string, ToolDefinition>;
 	/** Tokenize PII with this detector. Omit for a claw that stores raw. */
-	detector?: Parameters<typeof createStoredRedactor>[0]["detector"];
+	detector?: Detector;
 	/** Dedup key for placeholders. Without it the redactor mints one per occurrence — which is
 	 *  documented behaviour, and never what a scenario means. */
 	indexKey?: string;
@@ -153,20 +152,22 @@ export async function world(options: WorldOptions): Promise<World> {
 	// A database-backed claw must SAY what it does with PII — `createClaw` refuses to boot otherwise,
 	// which is the right call and worth stating here: a scenario with no detector is declaring that it
 	// stores raw, not quietly getting away without deciding.
+	//
+	// THE BUILT-IN FORM, not the `redactor` escape hatch. Handing over a pre-built redactor makes the
+	// claw a consumer of somebody else's mapping store, and `forgetSubject` then refuses — per-subject
+	// erasure needs the store the claw OWNS. Configuring detectors is also what a deployment actually
+	// writes, so a scenario using it exercises the assembly rather than going around it.
 	const redaction =
 		options.detector === undefined
 			? { posture: "raw" as const }
 			: {
-					redactor: createStoredRedactor({
-						detector: options.detector,
-						mappings: createPiiMappingStore(db),
-						// Without this the redactor has no hash to look a value up by and mints a fresh
-						// placeholder per occurrence. A scenario asserting coreference would then be
-						// measuring its own setup.
-						...(options.indexKey !== undefined
-							? { indexKey: options.indexKey }
-							: {}),
-					}),
+					detectors: [options.detector],
+					// Without this the redactor has no hash to look a value up by and mints a fresh
+					// placeholder per occurrence. A scenario asserting coreference would then be
+					// measuring its own setup.
+					...(options.indexKey !== undefined
+						? { indexKey: options.indexKey }
+						: {}),
 				};
 
 	/**
