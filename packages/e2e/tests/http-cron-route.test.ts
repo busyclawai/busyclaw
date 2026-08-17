@@ -10,10 +10,16 @@
  * to be alarming". A hatch like that earns a test proving it does what its name says — both that it
  * genuinely opens the door, and that nothing else does.
  *
- * NOT TESTED HERE, deliberately: the secret is compared with `!==` rather than a constant-time
- * equality. That is uniform across the codebase (channels compares its webhook secret the same way,
- * and there is no timing-safe helper anywhere), so it is a standing choice rather than an oversight
- * on this route, and inventing a finding out of it would be manufacturing one.
+ * THE SECRET IS COMPARED IN CONSTANT TIME, and the history of that line is worth keeping. It used to
+ * be `!==`, and this file first recorded that as a standing choice on the grounds that no timing-safe
+ * helper existed anywhere in the codebase. That was wrong — the grep behind it was case-sensitive and
+ * missed `constantTimeEquals`, which telegram's webhook `verify` had been using all along, with a
+ * comment explaining that `===` "turns a secret into something an attacker can walk out one character
+ * at a time given enough requests".
+ *
+ * So it was never a considered choice: the project had already decided this question for one shared
+ * secret in a header, and the other one simply never got the decision. The helper now lives in core
+ * and both doors use it.
  */
 
 import { afterEach, expect, it } from "vitest";

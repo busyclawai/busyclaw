@@ -3,6 +3,7 @@ import {
 	errorMessage,
 	validationError,
 } from "@busyclaw/contracts";
+import { constantTimeEquals } from "@busyclaw/core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
@@ -84,26 +85,6 @@ export type TelegramConfig =
 			/** Secret name this named bot's token resolves under — required so two named bots never collide. */
 			tokenRef: string;
 	  });
-
-/**
- * Compare a presented webhook secret against the expected one WITHOUT leaking, through timing, how
- * much of a guess was right. `===` on strings short-circuits at the first differing byte, which turns
- * a secret into something an attacker can walk out one character at a time given enough requests.
- *
- * Both sides are hashed to a fixed 32 bytes first, so the comparison length is constant and reveals
- * nothing about the secret's own length either; the XOR-accumulate then always reads every byte.
- */
-function constantTimeEquals(
-	presented: string | null,
-	expected: string,
-): boolean {
-	if (presented === null) return false;
-	const a = sha256(utf8ToBytes(presented));
-	const b = sha256(utf8ToBytes(expected));
-	let diff = 0;
-	for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-	return diff === 0;
-}
 
 /**
  * The webhook secret for a bot — derived from its token (domain-separated hash), so verification

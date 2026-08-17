@@ -9,6 +9,7 @@ export {
 	headOf,
 	verifyAuditChain,
 } from "./audit";
+export { constantTimeEquals } from "./credentials";
 export type { Context, Governance, GovernanceConfig } from "./governance";
 export { createGovernance } from "./governance";
 export {

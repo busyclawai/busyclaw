@@ -20,6 +20,7 @@ import {
 	validationError,
 } from "@busyclaw/contracts";
 import {
+	constantTimeEquals,
 	MAX_REQUEST_BODY_BYTES,
 	parseRequestBody,
 	readRequestBody,
@@ -776,9 +777,16 @@ function baseRoutes(
 						handler: async ({ claw, request }) => {
 							const headerName =
 								cronHandler.headerName ?? "x-busyclaw-cron-secret";
+							// CONSTANT-TIME, like the webhook secret it is a sibling of. `!==` short-circuits
+							// at the first differing byte, which is what lets a secret be walked out one
+							// character at a time; the codebase had already decided that for channels and
+							// this door simply never got the decision.
 							if (
 								"secret" in cronHandler &&
-								request.headers.get(headerName) !== cronHandler.secret
+								!constantTimeEquals(
+									request.headers.get(headerName),
+									cronHandler.secret,
+								)
 							) {
 								return {
 									status: 401,
