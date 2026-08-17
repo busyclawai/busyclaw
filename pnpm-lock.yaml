@@ -274,6 +274,9 @@ importers:
 
   packages/e2e:
     devDependencies:
+      '@busyclaw/adapter-core':
+        specifier: workspace:*
+        version: link:../adapter/core
       '@busyclaw/contracts':
         specifier: workspace:*
         version: link:../foundation/contracts

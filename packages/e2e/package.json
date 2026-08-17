@@ -11,6 +11,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
+		"@busyclaw/adapter-core": "workspace:*",
 		"@busyclaw/contracts": "workspace:*",
 		"@busyclaw/core": "workspace:*",
 		"@busyclaw/engine-sql": "workspace:*",

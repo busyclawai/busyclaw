@@ -386,12 +386,17 @@ describe("@busyclaw/storage-core — schema adapter", () => {
 		await expect(
 			db.create({ model: "claw", data: { id: "missing-organization" } }),
 		).rejects.toThrow(/ownerId.*required/);
+		// ASSERTED ON THE CODE, not the wording, because the code is what the HTTP boundary turns into a
+		// status and the wording is not. A payload naming a field this model does not have is the
+		// CALLER's mistake — the same audience as the immutable-field check below — so it must not
+		// arrive as a configuration error, which the adapter reports as a 500 and which pages somebody
+		// for a stray body key.
 		await expect(
 			db.create({
 				model: "claw",
 				data: { id: "bad-field", ownerId: "t", unknown: true },
 			}),
-		).rejects.toThrow(/unknown field/);
+		).rejects.toMatchObject({ code: "BUSYCLAW_VALIDATION_FAILED" });
 		await expect(
 			db.update({
 				model: "claw",

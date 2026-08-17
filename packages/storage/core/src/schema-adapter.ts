@@ -200,6 +200,14 @@ function ensureKnownModel(input: {
 	return mapping;
 }
 
+/**
+ * The payload actions — the ones whose field names came from a CALLER rather than from product code.
+ *
+ * `create` and `update` carry a body somebody sent. `select`/`where`/`sortBy` are written by the code
+ * doing the query, so a name it gets wrong is a deployment that does not match its own schema.
+ */
+const PAYLOAD_ACTIONS = new Set(["create", "update"]);
+
 function ensureKnownField(input: {
 	model: ModelMapping;
 	field: string;
@@ -208,11 +216,31 @@ function ensureKnownField(input: {
 }): FieldMapping | undefined {
 	const mapping = input.model.fields[input.field];
 	if (!mapping && input.strict) {
-		throw configurationError("storage schema unknown field", {
+		const details = {
 			action: input.action,
 			model: input.model.logical,
 			field: input.field,
-		});
+		};
+		// WHOSE MISTAKE IT WAS decides which error this is, because the error code is what the HTTP
+		// boundary turns into a status. An undeclared key in a payload is the CALLER's — every api
+		// input arrives here eventually, and reporting a stray body field as a configuration error made
+		// it a 500: on-call paged for somebody's typo, the client told to retry a request that can never
+		// succeed, and a genuine server fault buried in the noise. `limitError` states the rule this
+		// broke — "it is also never a 500: refusing is the system working".
+		//
+		// The immutable-field check a few lines below already raises `validationError` for exactly this
+		// audience; this is the same judgement applied to the sibling branch.
+		//
+		// A query path keeps the configuration error, and should: nobody outside the codebase chose
+		// those names, so a wrong one means the code and the schema have drifted apart.
+		if (PAYLOAD_ACTIONS.has(input.action)) {
+			throw validationError(
+				`storage ${input.model.logical}`,
+				`has no field "${input.field}"`,
+				details,
+			);
+		}
+		throw configurationError("storage schema unknown field", details);
 	}
 	return mapping;
 }
