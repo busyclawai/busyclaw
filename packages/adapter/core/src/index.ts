@@ -26,7 +26,13 @@ import {
 } from "@busyclaw/core";
 import { watchToUIMessageStreamResponse } from "@busyclaw/vendors/ai-sdk";
 import { type } from "arktype";
-import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "busyclaw";
+import type {
+	Claw,
+	ClawApi,
+	ClawApiHttpMethod,
+	ClawApiInputSchema,
+	ClawApiMethod,
+} from "busyclaw";
 import { clawApiRouteList, parseClawApiInput } from "busyclaw";
 import { mountedEndpointNamespaces } from "./endpoints";
 import { type ClawOpenApiOptions, clawOpenApi } from "./openapi";
@@ -468,9 +474,94 @@ function assertJsonContentType(
 	);
 }
 
+/**
+ * A query string carries only strings, so a route declaring a NUMBER cannot be called through the
+ * flat-pair form without this.
+ *
+ * `readInput` accepts two representations of the same GET input — an `input=<json>` blob and flat
+ * query pairs — and they were not equivalent: `?limit=2` arrived as `"2"` and was refused with "limit
+ * must be a number", which is a confusing thing to tell somebody who sent 2. `listMessages` is the
+ * route that has it, and pagination is exactly what its own docs say to use rather than "read the
+ * whole transcript to reach the last two rows".
+ *
+ * COERCED ONLY WHERE THE SCHEMA LEAVES NO CHOICE — a property that permits a number and NOT a string.
+ * Then a string is definitely not what the field wants, and the caller can only have meant the
+ * declared type. A field accepting `string | number` is left alone, because there the string might be
+ * exactly what was intended and guessing would change meaning. That rule is why this reads the
+ * route's own schema instead of sniffing values: `?id=123` on a string field stays the string "123".
+ */
+function coerceQueryInput(
+	input: Record<string, string>,
+	schema: ClawApiInputSchema | undefined,
+): Record<string, unknown> {
+	if (schema === undefined) return input;
+	const properties = declaredProperties(schema);
+	if (properties === undefined) return input;
+	const out: Record<string, unknown> = { ...input };
+	for (const [key, value] of Object.entries(input)) {
+		const wants = permitted(properties[key]);
+		if (wants.has("string")) continue;
+		if (wants.has("number") || wants.has("integer")) {
+			const asNumber = Number(value);
+			if (value.trim() !== "" && Number.isFinite(asNumber)) out[key] = asNumber;
+			continue;
+		}
+		if (wants.has("boolean") && (value === "true" || value === "false")) {
+			out[key] = value === "true";
+		}
+	}
+	return out;
+}
+
+/**
+ * The route schema's properties, as JSON Schema — or nothing, when it cannot say.
+ *
+ * `ClawApiInputSchema` is declared as a plain validating function, so `toJsonSchema` is not on the
+ * type even though every schema the route table holds is an arktype Type that has it. Detected
+ * rather than asserted: a schema that cannot describe itself simply gets no coercion, which is the
+ * behaviour this had before and the safe direction to fail in.
+ */
+function declaredProperties(
+	schema: ClawApiInputSchema,
+): Record<string, unknown> | undefined {
+	if (!("toJsonSchema" in schema)) return undefined;
+	const render = schema.toJsonSchema;
+	if (typeof render !== "function") return undefined;
+	try {
+		const json: unknown = render.call(schema, { fallback: () => ({}) });
+		if (json === null || typeof json !== "object") return undefined;
+		const properties = (json as { properties?: unknown }).properties;
+		return properties !== null && typeof properties === "object"
+			? (properties as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The JSON-Schema types a property permits, flattened across `anyOf` (how arktype renders a union
+ *  with `undefined`). An unrenderable branch contributes nothing, which is the safe direction. */
+function permitted(property: unknown): Set<string> {
+	const found = new Set<string>();
+	const visit = (node: unknown): void => {
+		if (node === null || typeof node !== "object") return;
+		const shape = node as { type?: unknown; anyOf?: unknown };
+		if (typeof shape.type === "string") found.add(shape.type);
+		if (Array.isArray(shape.type)) {
+			for (const entry of shape.type)
+				if (typeof entry === "string") found.add(entry);
+		}
+		if (Array.isArray(shape.anyOf))
+			for (const branch of shape.anyOf) visit(branch);
+	};
+	visit(property);
+	return found;
+}
+
 async function readInput(
 	request: BusyclawRouteRequest,
 	method: ClawHttpMethod,
+	schema?: ClawApiInputSchema,
 ): Promise<unknown> {
 	if (method === "GET") {
 		const search = new URL(request.url).searchParams;
@@ -512,7 +603,7 @@ async function readInput(
 				`repeated query parameters (${[...new Set(duplicated)].join(", ")})`,
 			);
 		}
-		return Object.fromEntries(search.entries());
+		return coerceQueryInput(Object.fromEntries(search.entries()), schema);
 	}
 	// Read FIRST, then judge: the check needs to know whether a body actually arrived, and only the
 	// read can answer that (content-length is absent under chunked encoding). Safe to do in this
@@ -618,7 +709,10 @@ function apiRoutes(): ResolvedRoute[] {
 						},
 					};
 				}
-				const input = parseClawApiInput(name, await readInput(request, method));
+				const input = parseClawApiInput(
+					name,
+					await readInput(request, method, apiRoute.inputSchema),
+				);
 				// The resolved caller rides at arg index 1 (the WithCaller contract) so a governed method
 				// gets its authenticated principal over the wire — identity beside the input, never in it.
 				const data = await (
