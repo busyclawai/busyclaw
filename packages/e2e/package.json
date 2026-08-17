@@ -1,0 +1,27 @@
+{
+	"name": "@busyclaw/e2e",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "End-to-end scenarios: a real claw on a real database, driven by real workers.",
+	"license": "MIT",
+	"author": "Konstantin Ponomarev",
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@busyclaw/contracts": "workspace:*",
+		"@busyclaw/core": "workspace:*",
+		"@busyclaw/engine-sql": "workspace:*",
+		"@busyclaw/runtime": "workspace:*",
+		"@busyclaw/storage-core": "workspace:*",
+		"@busyclaw/storage-durable": "workspace:*",
+		"@busyclaw/storage-kysely": "workspace:*",
+		"@types/better-sqlite3": "7.6.13",
+		"ai": "7.0.22",
+		"better-sqlite3": "12.11.1",
+		"busyclaw": "workspace:*",
+		"kysely": "0.29.2"
+	}
+}
