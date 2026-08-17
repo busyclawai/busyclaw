@@ -19,7 +19,11 @@ import {
 	parseClawResponseEnvelope,
 	validationError,
 } from "@busyclaw/contracts";
-import { MAX_REQUEST_BODY_BYTES, readRequestBody } from "@busyclaw/core";
+import {
+	MAX_REQUEST_BODY_BYTES,
+	parseRequestBody,
+	readRequestBody,
+} from "@busyclaw/core";
 import { watchToUIMessageStreamResponse } from "@busyclaw/vendors/ai-sdk";
 import { type } from "arktype";
 import type { Claw, ClawApi, ClawApiHttpMethod, ClawApiMethod } from "busyclaw";
@@ -516,7 +520,11 @@ async function readInput(
 	// not by anything downstream of it.
 	const text = await readRequestBody(request);
 	assertJsonContentType(request, text.length > 0);
-	return text ? (JSON.parse(text) as unknown) : {};
+	// Bounded on DEPTH as well as bytes, and for the same reason: a body can be too much without
+	// being long. `parseRequestBody` refuses a nested one before the value reaches anything that
+	// walks it recursively — schema validation clones the input, and a deep enough body exhausted
+	// the stack there and surfaced as a 500 on a request somebody chose to send.
+	return text ? parseRequestBody(text) : {};
 }
 
 /**

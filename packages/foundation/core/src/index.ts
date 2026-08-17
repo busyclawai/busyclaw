@@ -25,5 +25,7 @@ export {
 } from "./redact";
 export {
 	MAX_REQUEST_BODY_BYTES,
+	MAX_REQUEST_BODY_DEPTH,
+	parseRequestBody,
 	readRequestBody,
 } from "./request-body";

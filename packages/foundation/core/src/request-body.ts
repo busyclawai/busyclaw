@@ -99,3 +99,65 @@ export async function readRequestBody(
 		if (overLimit) await body.cancel().catch(() => {});
 	}
 }
+
+/**
+ * How deeply a request body may nest.
+ *
+ * SIZE IS NOT THE ONLY WAY A BODY CAN BE TOO MUCH. Forty kilobytes of `[[[[…]]]]` sits comfortably
+ * under the byte ceiling and still costs more than any real payload: the value meets several
+ * RECURSIVE walkers on its way in — schema validation clones it, the canonical-JSON hash walks it —
+ * and each of them is a stack frame per level. The first one to run out of stack turns a request
+ * somebody chose into a 500.
+ *
+ * Sixty-four is far past anything these routes carry (a prompt, a set of ids, a webhook payload nest
+ * a handful of levels) and far below where any of those walkers is in trouble.
+ */
+export const MAX_REQUEST_BODY_DEPTH = 64;
+
+/**
+ * Parse a request body, refusing one nested past `maxDepth`.
+ *
+ * THE CHECK IS ITERATIVE, and that is the whole point rather than a style preference: a recursive
+ * depth check overflows on exactly the input it exists to refuse, so it would fail in the same way
+ * as the walkers it is protecting — only sooner, and while claiming to be the guard.
+ *
+ * `limitError` for the same reason the byte ceiling uses it: its own doc names this case ("too big,
+ * too deep, or too many"), and it is what lets an adapter answer 413 rather than 400 — a caller who
+ * sent something structurally too large should be told to stop, not sent hunting for a syntax error.
+ * A `RangeError` out of `JSON.parse` itself is the same refusal arriving from the parser instead.
+ */
+export function parseRequestBody(
+	text: string,
+	maxDepth: number = MAX_REQUEST_BODY_DEPTH,
+): unknown {
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch (error) {
+		if (error instanceof RangeError) throw tooDeep(maxDepth);
+		throw error;
+	}
+	// Depth-first with an explicit stack. Each entry is a value and the depth it sits at, so the walk
+	// costs one array rather than one frame per level.
+	const pending: { value: unknown; depth: number }[] = [{ value, depth: 0 }];
+	while (pending.length > 0) {
+		const next = pending.pop();
+		if (next === undefined) break;
+		if (next.depth > maxDepth) throw tooDeep(maxDepth);
+		const candidate = next.value;
+		if (candidate === null || typeof candidate !== "object") continue;
+		const children = Array.isArray(candidate)
+			? candidate
+			: Object.values(candidate);
+		for (const child of children) {
+			pending.push({ value: child, depth: next.depth + 1 });
+		}
+	}
+	return value;
+}
+
+function tooDeep(maxDepth: number): Error {
+	return limitError(`request body nests deeper than ${maxDepth} levels`, {
+		limit: maxDepth,
+	});
+}
