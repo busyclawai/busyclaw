@@ -457,8 +457,21 @@ function assertJsonContentType(
 	// user: exactly the shape the guard exists to remove, reachable by leaving something OUT.
 	//
 	// So the question is asked about what arrived, not about what was claimed.
-	if (!hasBody) return;
 	const header = request.headers.get("content-type");
+	// A DECLARED TYPE IS ANSWERED FOR EVEN WHEN THE BODY IS EMPTY, which is the half this missed.
+	//
+	// Returning early on "no bytes arrived" reasoned that nothing was parsed as a body. True, and
+	// beside the point: the ROUTE still runs, with `{}` as its input, and a method whose fields are
+	// all optional then performs its action. `createClaw` is exactly that method — so a cross-site
+	// `<form method=post>` with no fields created a claw as the logged-in user. No script, no
+	// preflight, because form-urlencoded is a simple request.
+	//
+	// An HTML form cannot omit its encoding; submitting one always declares
+	// `application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`. So the presence of a
+	// content type is what separates "a browser sent this" from "a client POSTed nothing", and the
+	// check follows that line: a declared type is checked whatever the body length, and a request with
+	// neither header nor body stays uncollateralised — which is what the case below is about.
+	if (!hasBody && (header === null || header === "")) return;
 	if (header === null || header === "") {
 		throw validationError(
 			"unsupported content type",
