@@ -40,7 +40,7 @@ import {
 } from "@busyclaw/storage-core";
 import { kyselyAdapter, planMigrations } from "@busyclaw/storage-kysely";
 import Database from "better-sqlite3";
-import { type Claw, createClaw } from "busyclaw";
+import { type Claw, type ClawCronHandlerConfig, createClaw } from "busyclaw";
 import { Kysely, SqliteDialect } from "kysely";
 
 /** Which store the whole stack sits on for this run of the scenario. */
@@ -62,6 +62,9 @@ export type WorldOptions = {
 	principal?: string;
 	/** Plugins to assemble into the claw — policy slices, tools, event sinks. */
 	plugins?: readonly BusyclawPlugin[];
+	/** Mount `POST /cron`. Default `false` — a scenario ticks its own hosts, so the route exists only
+	 *  where the scenario is ABOUT it. */
+	cronHandler?: ClawCronHandlerConfig;
 };
 
 export type World = {
@@ -189,7 +192,7 @@ export async function world(options: WorldOptions): Promise<World> {
 		const factory = sqlEngine({ store, workerId, cron: false, runStream });
 		let engine: SqlEngineHandle | undefined;
 		const claw = createClaw({
-			cronHandler: false,
+			cronHandler: options.cronHandler ?? false,
 			database: db,
 			engine: {
 				...factory,
