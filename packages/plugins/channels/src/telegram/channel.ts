@@ -3,7 +3,7 @@ import {
 	errorMessage,
 	validationError,
 } from "@busyclaw/contracts";
-import { constantTimeEquals } from "@busyclaw/core";
+import { constantTimeEquals, parseRequestBody } from "@busyclaw/core";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { type } from "arktype";
@@ -318,7 +318,11 @@ export function telegram(
 		parseInbound({ request }) {
 			let body: unknown;
 			try {
-				body = JSON.parse(request.rawBody);
+				// DEPTH-BOUNDED, not just byte-bounded. The webhook read already refuses an over-long
+				// body; this refuses an over-NESTED one, which is cheap to send and expensive to walk —
+				// `parseUpdate` validates the result and the redaction seam walks it, and both recurse.
+				// The api routes got this bound when it was added; this parse is the sibling that did not.
+				body = parseRequestBody(request.rawBody);
 			} catch (err) {
 				// a validation error, not a raw SyntaxError — junk bytes are the caller's fault, not a crash
 				throw validationError(

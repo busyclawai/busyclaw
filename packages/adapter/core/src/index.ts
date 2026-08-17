@@ -659,7 +659,20 @@ function sseResponse(events: AsyncIterable<ServerSentEvent>): Response {
 	});
 	return new Response(body, {
 		headers: {
-			"Cache-Control": "no-cache, no-transform",
+			// `no-store` for the reason L-11 gives about every other response here: a stream is a
+			// PER-CALLER answer — somebody's transcript, live — and a shared cache that keeps it is
+			// holding one user's conversation where another user's request may reach it. `no-cache`
+			// alone permits exactly that: it requires revalidation before REUSE, not refusal to STORE.
+			//
+			// The rule already had a considered exception (the OpenAPI document, which is the same for
+			// everyone and says `max-age` for itself). This path was not an exception, it was just the
+			// one built somewhere other than `json()`, which is where the rule was written down.
+			//
+			// The rest of the set stays as it was, and each earns its place: `no-cache` still stops a
+			// browser or CDN replaying a live stream, `no-transform` stops a proxy rewriting the frames,
+			// and `X-Accel-Buffering: no` is what keeps nginx from holding the response until it has
+			// enough bytes to be worth forwarding — which turns a live stream into a batch at the end.
+			"Cache-Control": "no-store, no-cache, no-transform",
 			Connection: "keep-alive",
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"X-Accel-Buffering": "no",
