@@ -694,6 +694,14 @@ function sseResponse(events: AsyncIterable<ServerSentEvent>): Response {
 }
 
 function resultToResponse(result: unknown): Response {
+	// A RAW `Response` OWNS ITSELF — headers, status and body — and neither the response ceiling nor
+	// the `no-store` default applies to it. That is the point of returning one: a download, a redirect,
+	// a content type this layer does not know about, a body streamed rather than assembled. Bounding a
+	// stream would mean buffering it, which is the opposite of what it was for.
+	//
+	// Stated here because it is otherwise invisible: a plugin handing back a `Response` has opted out
+	// of L-11 as well, so a per-caller answer sent this way needs its own `Cache-Control`. Everything
+	// built from `{ body, status, headers }` goes through `json()` and keeps both guarantees.
 	if (result instanceof Response) return result;
 	if (result && typeof result === "object" && "sse" in result) {
 		const streamed = (result as { sse?: AsyncIterable<ServerSentEvent> }).sse;
