@@ -105,8 +105,9 @@ function createWatch(options: ClawClientOptions, segment: "threads" | "runs") {
 				}
 				const body = response.body;
 				if (!body) throw new Error("busyclaw watch response has no body");
+				// `connected` says the server ANSWERED, which is what decides whether an error is worth
+				// retrying. It deliberately no longer resets `failures` — see the reset on delivery below.
 				connected = true;
-				failures = 0;
 
 				const reader = body.getReader();
 				const decoder = new TextDecoder();
@@ -123,6 +124,20 @@ function createWatch(options: ClawClientOptions, segment: "threads" | "runs") {
 							if (frame.event === "error") {
 								throw new Error(errorMessage(safeJson(frame.data)));
 							}
+							// BACKOFF RESETS ON PROGRESS, NOT ON CONNECTION, and the difference is the whole
+							// point of the counter. Resetting it when the response arrived meant a server
+							// that accepts a connection and delivers nothing — closing at once, or never
+							// completing a frame — never escalated past the first rung: reconnect, reset,
+							// reconnect, at four requests a second per client, forever. That is maximum
+							// retry pressure on a server precisely when it is least able to absorb it,
+							// which is the shape a backoff exists to prevent.
+							//
+							// A frame is the evidence the stream is doing its job, so it is what earns the
+							// reset. A healthy stream clears the counter on its first page and the short
+							// first delay above still does what its comment says for a proxy that timed out
+							// a working connection; an idle one that keeps being dropped now walks the
+							// ladder to 3s instead of hammering at 250ms.
+							failures = 0;
 							const page: RunStreamPage = {
 								chunks: (safeJson(frame.data) as RunStreamPage["chunks"]) ?? [],
 								cursor: cursor ?? "0",
