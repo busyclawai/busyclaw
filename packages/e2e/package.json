@@ -19,11 +19,13 @@
 		"@busyclaw/storage-core": "workspace:*",
 		"@busyclaw/storage-durable": "workspace:*",
 		"@busyclaw/storage-kysely": "workspace:*",
+		"@busyclaw/storage-mongodb": "workspace:*",
 		"@types/better-sqlite3": "7.6.13",
 		"ai": "7.0.22",
 		"arktype": "2.2.0",
 		"better-sqlite3": "12.11.1",
 		"busyclaw": "workspace:*",
-		"kysely": "0.29.2"
+		"kysely": "0.29.2",
+		"mongodb": "6.21.0"
 	}
 }

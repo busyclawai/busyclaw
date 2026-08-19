@@ -43,7 +43,14 @@ import Database from "better-sqlite3";
 import { type Claw, type ClawCronHandlerConfig, createClaw } from "busyclaw";
 import { Kysely, SqliteDialect } from "kysely";
 
-/** Which store the whole stack sits on for this run of the scenario. */
+/**
+ * Which store the whole stack sits on for this run of the scenario.
+ *
+ * NOT MONGO, and the reason is architectural rather than unfinished: `createSqlEngineStore` requires
+ * a transactional adapter and `mongoAdapter` implements no `transaction` at all, so a Mongo-backed
+ * claw refuses at construction. The engine is called `engine-sql` and says what it needs out loud —
+ * see `engine-transactions.test.ts`, which pins that refusal.
+ */
 export type Backend = "memory" | "sqlite";
 
 export type WorldOptions = {
