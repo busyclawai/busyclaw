@@ -23,6 +23,7 @@ import {
 	constantTimeEquals,
 	MAX_REQUEST_BODY_BYTES,
 	parseRequestBody,
+	readBoundedText,
 	readRequestBody,
 } from "@busyclaw/core";
 import { watchToUIMessageStreamResponse } from "@busyclaw/vendors/ai-sdk";
@@ -1030,7 +1031,21 @@ function parseEnvelope(text: string): ClawResponseEnvelope | undefined {
 }
 
 async function readClientResponse(response: Response): Promise<unknown> {
-	const envelope = parseEnvelope(await response.text());
+	// BOUNDED, through the same meter the request side uses. R-M12 capped what this server SENDS at
+	// `MAX_RESPONSE_BODY_BYTES`; reading a peer's answer with a bare `text()` meant the cap did not
+	// apply in the direction where the bytes are somebody else's choice. A server-to-server call is
+	// exactly where that matters — the peer is another deployment, not a browser this process serves.
+	//
+	// The ceiling is this server's own egress ceiling: a well-behaved busyclaw cannot exceed it, so a
+	// larger answer was never going to be usable. `readBoundedText` cancels at the limit, so an
+	// over-long body costs the limit rather than the body.
+	const envelope = parseEnvelope(
+		await readBoundedText(
+			response,
+			MAX_RESPONSE_BODY_BYTES,
+			"busyclaw response",
+		),
+	);
 	// R-M14. Same rule the browser client follows: a body that is not an envelope is not an answer, on
 	// any status. Returning `envelope?.data` for one meant a 200 carrying somebody else's JSON (a proxy
 	// page, a rewritten route) resolved as a successful `undefined`.

@@ -24,9 +24,11 @@ export {
 	type RoutingRedactorOptions,
 	type StoredRedactorOptions,
 } from "./redact";
+export type { BoundedBodySource } from "./request-body";
 export {
 	MAX_REQUEST_BODY_BYTES,
 	MAX_REQUEST_BODY_DEPTH,
 	parseRequestBody,
+	readBoundedText,
 	readRequestBody,
 } from "./request-body";

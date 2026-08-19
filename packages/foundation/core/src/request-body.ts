@@ -15,7 +15,10 @@
 // already where busyclaw decides what it will spend on untrusted input — see the redaction walk's
 // own budget in redact.ts.
 
-import type { BusyclawRouteRequest } from "@busyclaw/contracts";
+import type {
+	BusyclawRouteRequest,
+	RequestBodyStream,
+} from "@busyclaw/contracts";
 import { limitError } from "@busyclaw/errors";
 
 /**
@@ -25,11 +28,24 @@ import { limitError } from "@busyclaw/errors";
  */
 export const MAX_REQUEST_BODY_BYTES = 1_000_000;
 
-function tooLarge(maxBytes: number): Error {
-	return limitError(`request body exceeds ${maxBytes} bytes`, {
-		limit: maxBytes,
-	});
+function tooLarge(what: string, maxBytes: number): Error {
+	return limitError(`${what} exceeds ${maxBytes} bytes`, { limit: maxBytes });
 }
+
+/**
+ * The three things bounding a body actually needs — a declared length, the unread stream when there
+ * is one, and a buffered fallback when there is not.
+ *
+ * Narrower than `BusyclawRouteRequest` on purpose. A `Response` carries all three and none of the
+ * rest (it has no `method`), so naming only what the meter reads is what lets ONE meter serve both
+ * directions: what a host sends us, and what a peer sends back. The alternative was a second copy,
+ * and a limit re-implemented is a limit one side gets wrong.
+ */
+export type BoundedBodySource = {
+	headers: { get: (name: string) => string | null };
+	body?: RequestBodyStream | null;
+	text: () => Promise<string>;
+};
 
 /**
  * Read a request body as text, refusing to hold more than `maxBytes` of it.
@@ -49,26 +65,41 @@ export async function readRequestBody(
 	request: BusyclawRouteRequest,
 	maxBytes: number = MAX_REQUEST_BODY_BYTES,
 ): Promise<string> {
-	const declared = Number(request.headers.get("content-length"));
-	if (Number.isFinite(declared) && declared > maxBytes)
-		throw tooLarge(maxBytes);
+	return readBoundedText(request, maxBytes, "request body");
+}
 
-	const body = request.body;
+/**
+ * Read a body as text, refusing to hold more than `maxBytes` of it — the meter behind
+ * {@link readRequestBody}, and the one a caller reading a RESPONSE reaches for directly.
+ *
+ * `what` names the thing in the refusal, because "request body exceeds" is the wrong sentence when
+ * the thing that was too large came back rather than arrived.
+ */
+export async function readBoundedText(
+	source: BoundedBodySource,
+	maxBytes: number,
+	what: string,
+): Promise<string> {
+	const declared = Number(source.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > maxBytes)
+		throw tooLarge(what, maxBytes);
+
+	const body = source.body;
 	if (!body) {
-		const text = await request.text();
+		const text = await source.text();
 		// `length` counts UTF-16 units, so this UNDER-counts bytes for non-ASCII — a string under the
 		// limit can be up to three times it in bytes. Left approximate on purpose: the body is already
 		// resident by now, so the exact figure would buy nothing, and re-encoding to measure it would
 		// spend more memory than the check saves.
-		if (text.length > maxBytes) throw tooLarge(maxBytes);
+		if (text.length > maxBytes) throw tooLarge(what, maxBytes);
 		return text;
 	}
 
 	const reader = body.getReader();
 	// Per call, NOT shared. A streaming decoder carries the partial UTF-8 sequence it is waiting to
-	// complete, and these reads interleave at every await — two concurrent requests through one
-	// decoder would splice each other's characters together. An allocation per request is the price
-	// of that being impossible.
+	// complete, and these reads interleave at every await — two concurrent bodies through one decoder
+	// would splice each other's characters together. An allocation per call is the price of that
+	// being impossible.
 	const decoder = new TextDecoder();
 	let size = 0;
 	let text = "";
@@ -82,7 +113,7 @@ export async function readRequestBody(
 			size += chunk.byteLength;
 			if (size > maxBytes) {
 				overLimit = true;
-				throw tooLarge(maxBytes);
+				throw tooLarge(what, maxBytes);
 			}
 			// Decoded as we go rather than concatenated and decoded at the end: joining would hold the
 			// bytes AND the string at once, doubling the peak for no gain. `{ stream: true }` is what
