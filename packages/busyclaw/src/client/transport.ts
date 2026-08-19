@@ -66,6 +66,70 @@ export async function resolveHeaders(
 	return new Headers(typeof headers === "function" ? await headers() : headers);
 }
 
+/**
+ * How much of a response this client will hold before refusing it.
+ *
+ * THE MIRROR OF THE SERVER'S OWN CEILING. R-M12 bounded egress because "the cost of a request was
+ * set by how much data the caller already had, not by anything the caller sent" — and the same
+ * asymmetry runs one layer out: the server caps what it sends at 8MB, and the client capped nothing
+ * it read back. `response.text()` resolves only once the WHOLE body is in memory, so a peer that
+ * answers with more than it should — a compromised or simply broken server, a proxy substituting a
+ * large error page, a gateway streaming junk — decided how much memory this process spent.
+ *
+ * Matched to the server's egress ceiling rather than invented: a well-behaved busyclaw server cannot
+ * exceed it, so anything larger is not an answer this client was ever going to be able to use.
+ */
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/** Refused, rather than a body — kept distinct from an empty body, which is a legitimate answer. */
+const TOO_LARGE = Symbol("busyclaw:response-too-large");
+
+/**
+ * Read a response body as text, refusing to hold more than `maxBytes` of it.
+ *
+ * Metered while READING and cancelled at the limit, so an over-long body costs this client the limit
+ * rather than the body — the same shape the server's own `readRequestBody` uses on the way in. The
+ * `text()` fallback is for a fetch implementation that exposes no stream: the bytes are already
+ * bought by the time it resolves, so the check there only stops the parse and everything after it.
+ */
+async function readBoundedText(
+	response: Response,
+	maxBytes: number,
+): Promise<string | typeof TOO_LARGE> {
+	const declared = Number(response.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > maxBytes) {
+		await response.body?.cancel().catch(() => {});
+		return TOO_LARGE;
+	}
+	const body = response.body;
+	if (!body) {
+		const text = await response.text();
+		return text.length > maxBytes ? TOO_LARGE : text;
+	}
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let size = 0;
+	let text = "";
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > maxBytes) return TOO_LARGE;
+			// Decoded as it arrives rather than concatenated and decoded at the end, so the peak holds
+			// the string OR the bytes, never both. `stream: true` holds back a trailing partial
+			// sequence until the chunk completing it arrives.
+			text += decoder.decode(value, { stream: true });
+		}
+		return text + decoder.decode();
+	} finally {
+		reader.releaseLock();
+		// Tell the peer to stop sending the rest of a body already refused. Its own failure must not
+		// replace the refusal on the way out.
+		if (size > maxBytes) await body.cancel().catch(() => {});
+	}
+}
+
 function envelopeOf(text: string): ClawResponseEnvelope | undefined {
 	if (!text) return undefined;
 	try {
@@ -77,7 +141,8 @@ function envelopeOf(text: string): ClawResponseEnvelope | undefined {
 }
 
 async function readResult(response: Response): Promise<ClawResult<unknown>> {
-	const envelope = envelopeOf(await response.text());
+	const body = await readBoundedText(response, MAX_RESPONSE_BYTES);
+	const envelope = body === TOO_LARGE ? undefined : envelopeOf(body);
 	const fail = (message: string, code?: string): ClawResult<unknown> => ({
 		data: null,
 		error: {
@@ -91,6 +156,14 @@ async function readResult(response: Response): Promise<ClawResult<unknown>> {
 	// rewritten route's index page, a gateway that swallowed the call and answered 200) validated,
 	// reported `ok` as undefined, and reached the caller as a data-less SUCCESS. Callers then rendered
 	// "no results" for a request that never reached the server.
+	if (body === TOO_LARGE) {
+		// Named for what it is, so a caller can tell "the peer sent too much" from "the peer sent
+		// nonsense" — different problems with different fixes.
+		return fail(
+			`busyclaw response exceeds ${MAX_RESPONSE_BYTES} bytes`,
+			"BUSYCLAW_LIMIT_EXCEEDED",
+		);
+	}
 	if (envelope === undefined) {
 		return fail(
 			response.ok
